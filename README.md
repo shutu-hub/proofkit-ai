@@ -37,10 +37,35 @@ Plan and review a test:
 ```bash
 pnpm --filter @proofkit/cli dev -- plan \
   "Verify the resume page shows a successful result" \
+  --root /path/to/your/project \
   --url http://127.0.0.1:5173 \
   --expect "Resume ready" \
   --out resume-check.yaml
 ```
+
+For one-sentence planning with a local or OpenAI-compatible model, set `planning.provider: openai-compatible`, `planning.baseUrl`, and `planning.model` in the target project's `.proofkit/config.yaml`. The default planner stays deterministic. An optional `apiKeyEnv` names an environment variable; the key is never written to the config file.
+
+For asynchronous business outcomes, register a read-only status endpoint and terminal values in that same config:
+
+```yaml
+planning:
+  provider: openai-compatible
+  baseUrl: http://127.0.0.1:11434/v1
+  model: local-model
+oracles:
+  - name: resume-status
+    url: http://127.0.0.1:8080/api/v1/resume-status
+    query:
+      runId:
+        source: runId
+    statusPointer: /data/status
+    successValues: [complete]
+    failureValues: [failed]
+    intervalMs: 500
+    deadlineMs: 30000
+```
+
+Use `--oracle resume-status` with `plan` or `run`. The charter records the oracle name, and the runner waits for a declared terminal state. A project capability can also bind a sanitized ID from an earlier step into an oracle query parameter.
 
 Run it in Chromium:
 
@@ -118,6 +143,7 @@ Screenshots are supporting evidence. They do not override failed API, worker, fi
 
 - Use a dedicated test profile and test data. CDP attachment controls the selected browser session.
 - Keep CDP bound to loopback; never expose a debugging port to a public network.
+- MCP model planning and configured business oracles accept loopback endpoints only. Model-generated navigation stays within the configured or explicitly supplied Web origin; interactive model actions require `sideEffects: allow` in the project config.
 - ProofKit does not seed or mutate databases in the first release. Project-specific write operations must be explicit, typed capabilities in a later extension.
 - Authorization, cookies, passwords, secrets, tokens, and phone fields are redacted from structured evidence by default.
 - Do not use production accounts or real candidate data for exploratory runs.

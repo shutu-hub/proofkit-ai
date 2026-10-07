@@ -9,9 +9,9 @@ ProofKit is a local, evidence-driven acceptance runner for Web and Electron. A u
 | Working | Limit |
 | --- | --- |
 | Project scan, local config, Web/Electron Playwright/CDP execution | Project map is structural; it does not infer product invariants |
-| CLI, shared Local Runner, six-tool MCP interface | Model provider exists but CLI/MCP do not select it yet |
-| YAML Charter, validated actions/assertions, replay | Deterministic intent planner only scaffolds URL and visible-text checks |
-| Process health, browser events, read-only HTTP oracle, bounded polling | AIHR business integration is designed but not connected to a live test workspace |
+| CLI, shared Local Runner, six-tool MCP interface | Model planning is opt-in and requires an OpenAI-compatible endpoint |
+| YAML Charter, validated actions/assertions, replay | Generated plans still need measured quality and user review for consequential flows |
+| Process health, browser events, named HTTP oracles, bounded polling | AIHR business integration is designed but not connected to a live test workspace |
 | Programmatic project capabilities with schema, environment and timeout | CLI/CI project plugin loading and cleanup contract remain to build |
 | JSONL, artifact hashes, JSON/HTML report and four-way verdict | The report does not yet diagnose a likely code location or proposed fix |
 
@@ -31,7 +31,7 @@ The contracts package owns the Charter, run, event and verdict schema. Surface a
 
 ## Next three increments
 
-1. **Usable one-sentence planning:** wire an opt-in model provider to CLI/MCP, show the generated Charter before running writes, and evaluate generated cases against a fixed Web/Electron benchmark. Never let model text execute shell, SQL or JavaScript directly.
+1. **Trustworthy one-sentence planning:** evaluate opt-in generated Charters against a fixed Web/Electron benchmark, add a review gate for consequential actions, and report what the planner could not infer. Model text never executes shell, SQL or JavaScript directly.
 2. **AIHR vertical proof:** add a project-local integration loader, scoped test fixture and read-only observers for collection run, file, extraction, identity, job binding, assessment and billing. Run the same Charter through Web and Electron; require matching terminal facts and evidence links.
 3. **Trust and repeatability:** cancellation and total run deadline, isolated browser profiles, retry/idempotency checks, evidence-safe diagnostics and a first-failure report with likely owner and suggested repair backed by observed facts.
 

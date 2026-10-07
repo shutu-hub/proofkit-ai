@@ -35,6 +35,8 @@ Each capability must declare an input schema, output schema, environment allowli
 
 The first implementation can use a project-local read-only observer that calls existing gateway endpoints. It should correlate every observation with the ProofKit `runId`, AIHR collection run ID, file ID and client item key. Polling must be bounded and use the service's terminal statuses; arbitrary sleeps are not an oracle.
 
+ProofKit now supports a declarative HTTP status oracle with terminal values and JSON Pointer extraction. Its query bindings can use the ProofKit run ID or a sanitized scalar from a completed capability step. The actual AIHR endpoints, status vocabulary and identifiers still need to be verified against an isolated running AIHR test environment before this configuration can be treated as an AIHR integration.
+
 The minimum acceptance set is:
 
 - The uploaded file belongs to the expected test run and source channel.

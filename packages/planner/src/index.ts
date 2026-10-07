@@ -7,10 +7,12 @@ export type PlanOptions = {
   expect?: string[];
   mode?: RunMode;
   sideEffectPolicy?: SideEffectPolicy;
+  oracleNames?: string[];
 };
 
 export type PlannerConstraints = PlanOptions & {
   allowedActionKinds?: string[];
+  allowedOracleNames?: string[];
   requireAssertions?: boolean;
 };
 
@@ -39,6 +41,7 @@ export class IntentPlanner {
       preconditions: ["运行在隔离的测试环境", "使用可回滚的测试数据"],
       actions,
       assertions,
+      oracles: options.oracleNames,
       sideEffectPolicy: options.sideEffectPolicy ?? "confirm",
       metadata: { planner: "deterministic-v1", url: url ?? null },
     });
@@ -97,7 +100,7 @@ export class OpenAICompatiblePlannerProvider implements PlannerProvider {
           messages: [
             {
               role: "system",
-              content: "You generate only a ProofKit Test Charter JSON object. Never generate shell commands, SQL, arbitrary JavaScript, credentials, or actions outside the allowed schema. Include an assertion when the constraints require it.",
+              content: "You generate only a ProofKit Test Charter JSON object. Preserve the user's intent, the exact sideEffectPolicy constraint, and explicitly requested oracleNames. Use only allowedActionKinds and allowedOracleNames. Never generate shell commands, SQL, arbitrary JavaScript, or credentials. Include an assertion when the constraints require it.",
             },
             {
               role: "user",
@@ -129,6 +132,12 @@ export class StructuredPlanner {
     const charter = TestCharterSchema.parse(candidate);
     if (input.constraints.requireAssertions && charter.assertions.length === 0) {
       throw new Error("Planner output must include at least one assertion");
+    }
+    if (input.constraints.allowedActionKinds && charter.actions.some((action) => !input.constraints.allowedActionKinds?.includes(action.kind))) {
+      throw new Error("Planner output contains an action outside the allowed action kinds");
+    }
+    if (input.constraints.allowedOracleNames && charter.oracles?.some((name) => !input.constraints.allowedOracleNames?.includes(name))) {
+      throw new Error("Planner output references an unregistered oracle");
     }
     return TestCharterSchema.parse({
       ...charter,

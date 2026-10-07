@@ -33,13 +33,15 @@ The first implementation supports Web and Electron. Mobile, native desktop, prot
 
 ### Test Charter
 
-A charter is a versionable execution plan with intent, preconditions, typed actions, assertions, mode and side-effect policy. YAML is the human-editable encoding; Zod schemas are the runtime authority. The deterministic planner currently supports URL navigation and visible-text assertions. It deliberately does not claim that free-form natural language has been fully understood.
+A charter is a versionable execution plan with intent, preconditions, typed actions, assertions, named oracles, mode and side-effect policy. YAML is the human-editable encoding; Zod schemas are the runtime authority. The deterministic planner supports URL navigation and visible-text assertions. An opt-in OpenAI-compatible provider is connected to CLI and MCP through the same Local Runner. Its output is validated against action kind, registered oracle names, side-effect policy and approved navigation origin. Planning does not prove that free-form intent was understood correctly; the saved Charter remains reviewable.
 
 A `capability` action names a project-registered operation with schema-validated input and output. The Runner checks its environment allowlist, deadline and side-effect class. `write` requires both a Charter `allow` policy and a separate Runner `allowCapabilityWrites` opt-in, which defaults to false. Only the capability's evidence projection is persisted; a project integration must choose opaque IDs and sanitized facts. Registration is a programmatic Local Runner API today, not a CLI config import or a general MCP shell tool.
 
 ### Local Runner and MCP
 
 `@proofkit/local-runner` is the only application-level entry point for starting a run. It resolves a charter, selects a Web or Electron adapter, optionally starts the project, accepts registered business oracles/capabilities, and stores the result under the configured evidence directory. A run is addressable by its `runId`, so an interactive client can start it and poll status without holding an open browser tool call.
+
+Project configuration can register read-only HTTP oracles by name, JSON Pointer status path, terminal values, interval and deadline. Query bindings can carry the ProofKit `runId` or a sanitized scalar from an earlier capability step. The adapter never interprets these business facts. The URL is parsed and query parameters are encoded with the platform URL API.
 
 The first MCP server exposes only six tools: `discover_project`, `plan_test`, `start_run`, `get_run_status`, `get_evidence` and `replay_run`. MCP inputs are validated with Zod. The server is started against one configured local project; it does not accept arbitrary commands or paths. MCP runs cannot execute `project.start`; users start their test environment through the CLI or independently. This keeps MCP useful for exploration while leaving deterministic bulk execution to the CLI and CI.
 
@@ -109,7 +111,7 @@ We use these as compatible components or design references. We do not copy their
 ## Delivery sequence
 
 1. **Current:** Web/Electron adapters, project runtime, read-only HTTP oracle, evidence hashes, shared Local Runner, bounded MCP facade and validated Planner Provider interface.
-2. **Next:** connect an OpenAI-compatible or local model to CLI/MCP opt-in planning, then evaluate generated charters against real projects and add run timeout/cancellation.
+2. **Current:** opt-in OpenAI-compatible planning in CLI/MCP and named, bounded HTTP oracles in project config. The next quality gate is measuring generated Charters against real projects and adding run timeout/cancellation.
 3. **Then:** make project-local registrations easy to load from CLI/CI, add scoped test data, worker/file/candidate/billing observers, and require cleanup for write capabilities. The current programmatic registry does not yet provide a declarative project plugin loader.
 4. **After the Web/Electron slice is stable:** Maestro/Appium adapters for mobile, and Keploy-style traffic fixtures for deterministic backend replay.
 

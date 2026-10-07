@@ -2,9 +2,9 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { ElectronAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { TestCharterSchema, type ProofkitConfig, type ProjectMap, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter } from "@proofkit/contracts";
-import { httpOracle } from "@proofkit/oracles";
-import { IntentPlanner, loadCharter, type PlanOptions } from "@proofkit/planner";
+import { ProofkitConfigSchema, TestCharterSchema, type ProofkitConfig, type ProjectMap, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter } from "@proofkit/contracts";
+import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
+import { IntentPlanner, OpenAICompatiblePlannerProvider, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { loadConfig, scanProject } from "@proofkit/project";
 import { ExecutionRunner, type BusinessOracle, type CapabilityDefinition, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
@@ -22,6 +22,7 @@ export type LocalRunInput = {
   headful?: boolean;
   start?: boolean;
   expect?: string[];
+  oracleNames?: string[];
   mode?: RunMode;
   sideEffectPolicy?: SideEffectPolicy;
   oracleUrl?: string;
@@ -53,6 +54,7 @@ export type LocalRunnerOptions = {
   oracles?: BusinessOracle[];
   capabilities?: CapabilityDefinition<any, any>[];
   allowCapabilityWrites?: boolean;
+  plannerProvider?: PlannerProvider;
 };
 
 export class LocalRunnerService {
@@ -65,16 +67,18 @@ export class LocalRunnerService {
   private readonly oracles: BusinessOracle[];
   private readonly capabilities: CapabilityDefinition<any, any>[];
   private readonly allowCapabilityWrites: boolean;
+  private readonly plannerProvider?: PlannerProvider;
 
   constructor(options: LocalRunnerOptions) {
     this.root = resolve(options.root);
-    this.config = options.config ?? { ...loadConfigDefaults() };
+    this.config = ProofkitConfigSchema.parse(options.config ?? loadConfigDefaults());
     this.evidenceDir = resolve(this.root, options.evidenceDir ?? ".proofkit/runs");
     this.evidence = new EvidenceStore(this.evidenceDir);
     this.restrictWebOrigins = options.restrictWebOrigins ?? false;
     this.oracles = options.oracles ?? [];
     this.capabilities = options.capabilities ?? [];
     this.allowCapabilityWrites = options.allowCapabilityWrites ?? false;
+    this.plannerProvider = options.plannerProvider;
   }
 
   static async create(options: Omit<LocalRunnerOptions, "config"> & { config?: ProofkitConfig }): Promise<LocalRunnerService> {
@@ -85,13 +89,43 @@ export class LocalRunnerService {
     return scanProject(this.root);
   }
 
-  plan(intent: string, options: PlanOptions = {}): TestCharter {
-    return new IntentPlanner().plan(intent, {
+  async plan(intent: string, options: PlanOptions = {}): Promise<TestCharter> {
+    const policy = options.sideEffectPolicy ?? this.config.policies.sideEffects;
+    if (this.restrictWebOrigins && policy === "allow" && this.config.policies.sideEffects !== "allow") {
+      throw new Error("MCP interactive planning requires sideEffects=allow in project config");
+    }
+    const constraints = {
       url: options.url ?? this.config.surfaces.web?.baseUrl,
       expect: options.expect,
       mode: options.mode,
-      sideEffectPolicy: options.sideEffectPolicy ?? this.config.policies.sideEffects,
-    });
+      sideEffectPolicy: policy,
+      oracleNames: options.oracleNames,
+      allowedActionKinds: policy === "allow"
+        ? ["goto", "click", "fill", "press", "waitForText", "screenshot", "observe"]
+        : ["goto", "waitForText", "screenshot", "observe"],
+      allowedOracleNames: this.config.oracles.map((oracle) => oracle.name),
+    };
+    const provider = this.plannerProvider ?? this.createPlannerProvider();
+    const charter = provider
+      ? await new StructuredPlanner(provider).plan({ intent, projectMap: await this.discover(), constraints })
+      : new IntentPlanner().plan(intent, constraints);
+    if (charter.sideEffectPolicy !== constraints.sideEffectPolicy) throw new Error("Planner changed the side-effect policy");
+    if (charter.oracles?.some((name) => !constraints.allowedOracleNames.includes(name))) throw new Error("Planner referenced an unregistered oracle");
+    if (options.oracleNames && (charter.oracles?.length !== options.oracleNames.length || options.oracleNames.some((name) => !charter.oracles?.includes(name)))) {
+      throw new Error("Planner changed the requested business oracles");
+    }
+    if (provider && charter.actions.some((action) => action.kind === "goto")) {
+      const approvedUrl = constraints.url;
+      if (!approvedUrl) throw new Error("Model navigation requires a configured Web URL or --url");
+      const approvedOrigin = new URL(approvedUrl).origin;
+      for (const action of charter.actions) {
+        if (action.kind === "goto" && new URL(action.url).origin !== approvedOrigin) {
+          throw new Error(`Planner navigation is outside the approved origin: ${action.url}`);
+        }
+      }
+    }
+    this.validateWebOrigins(charter, { url: constraints.url });
+    return charter;
   }
 
   async start(input: LocalRunInput): Promise<LocalRunStatus> {
@@ -157,6 +191,9 @@ export class LocalRunnerService {
 
   private async execute(runId: string, input: LocalRunInput): Promise<RunSummary> {
     const charter = TestCharterSchema.parse(await this.resolveCharter(input));
+    if (this.restrictWebOrigins && charter.sideEffectPolicy === "allow" && this.config.policies.sideEffects !== "allow") {
+      throw new Error("MCP interactive runs require sideEffects=allow in project config");
+    }
     this.validateWebOrigins(charter, input);
     this.validateCdpEndpoint(input);
     if (this.restrictWebOrigins && this.config.project.start && input.start !== false) {
@@ -167,12 +204,20 @@ export class LocalRunnerService {
       if (!isLoopback(oracleHost)) throw new Error("Business oracle URL must use loopback");
     }
     const adapter = this.createAdapter(input);
+    const oracleNames = charter.oracles ?? [];
+    if (new Set(oracleNames).size !== oracleNames.length) throw new Error("Duplicate oracle name in Charter");
+    const configured = oracleNames.map((name) => {
+      const definition = this.config.oracles.find((oracle) => oracle.name === name);
+      if (!definition) throw new Error(`Oracle is not registered: ${name}`);
+      if (this.restrictWebOrigins && !isLoopback(new URL(definition.url).hostname)) throw new Error(`MCP oracle ${name} must use loopback`);
+      return configuredHttpOracle(definition);
+    });
     const oracles = input.oracleUrl
       ? [httpOracle({ name: input.oracleName ?? "http-check", url: input.oracleUrl })]
       : [];
     return new ExecutionRunner(adapter, {
       evidenceDir: this.evidenceDir,
-      oracles: [...this.oracles, ...oracles],
+      oracles: [...this.oracles, ...configured, ...oracles],
       capabilities: this.capabilities,
       environment: this.config.policies.environment,
       allowCapabilityWrites: this.allowCapabilityWrites,
@@ -202,7 +247,18 @@ export class LocalRunnerService {
       expect: input.expect,
       mode: input.mode,
       sideEffectPolicy: input.sideEffectPolicy,
+      oracleNames: input.oracleNames,
     });
+  }
+
+  private createPlannerProvider(): PlannerProvider | undefined {
+    const planning = this.config.planning;
+    if (planning.provider === "deterministic") return undefined;
+    if (!planning.baseUrl || !planning.model) throw new Error("OpenAI-compatible planning requires baseUrl and model");
+    if (this.restrictWebOrigins && !isLoopback(new URL(planning.baseUrl).hostname)) throw new Error("MCP planner endpoint must use loopback");
+    const apiKey = planning.apiKeyEnv ? process.env[planning.apiKeyEnv] : undefined;
+    if (planning.apiKeyEnv && !apiKey) throw new Error(`Planner API key environment variable is missing: ${planning.apiKeyEnv}`);
+    return new OpenAICompatiblePlannerProvider({ baseUrl: planning.baseUrl, model: planning.model, apiKey, timeoutMs: planning.timeoutMs });
   }
 
   private createAdapter(input: LocalRunInput): SurfaceAdapter {
@@ -274,6 +330,8 @@ function loadConfigDefaults(): ProofkitConfig {
   return {
     project: { root: ".", health: [], startupTimeoutMs: 60_000 },
     surfaces: {},
+    planning: { provider: "deterministic", timeoutMs: 30_000 },
+    oracles: [],
     policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false },
   };
 }

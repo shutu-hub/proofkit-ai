@@ -15,6 +15,8 @@ type PackageJson = {
 const DEFAULT_CONFIG: ProofkitConfig = {
   project: { root: ".", health: [], startupTimeoutMs: 60_000 },
   surfaces: {},
+  planning: { provider: "deterministic", timeoutMs: 30_000 },
+  oracles: [],
   policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false },
 };
 

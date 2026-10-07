@@ -14,7 +14,7 @@ describe("ProjectRuntime", () => {
     const events: string[] = [];
     const runtime = new ProjectRuntime({
       root: process.cwd(),
-      config: { project: { root: ".", health: [`http://127.0.0.1:${address.port}`], startupTimeoutMs: 1_000 }, surfaces: {}, policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false } },
+      config: { project: { root: ".", health: [`http://127.0.0.1:${address.port}`], startupTimeoutMs: 1_000 }, surfaces: {}, planning: { provider: "deterministic", timeoutMs: 30_000 }, oracles: [], policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false } },
       onEvent: (event) => events.push(event.type),
     });
     await runtime.start();

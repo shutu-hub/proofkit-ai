@@ -56,19 +56,23 @@ export function createProgram(): Command {
     .option("--root <path>", "project root", ".")
     .option("--url <url>", "entry URL")
     .option("--expect <text>", "visible text assertion", collect, [])
+    .option("--oracle <name>", "configured business oracle", collect, [])
     .option("--mode <mode>", "deterministic, guided or explore", "guided")
-    .option("--side-effects <policy>", "deny, confirm or allow", "confirm")
+    .option("--side-effects <policy>", "deny, confirm or allow")
     .option("--out <path>", "write YAML output")
     .action(async (intent: string, options: PlanCommandOptions) => {
+      const root = resolve(options.root);
+      const runner = await LocalRunnerService.create({ root });
       const planner = new IntentPlanner();
-      const charter = planner.plan(intent, {
+      const charter = await runner.plan(intent, {
         url: options.url,
         expect: options.expect,
+        oracleNames: options.oracle.length ? options.oracle : undefined,
         mode: options.mode as RunMode,
-        sideEffectPolicy: options.sideEffects as SideEffectPolicy,
+        sideEffectPolicy: options.sideEffects as SideEffectPolicy | undefined,
       });
       const output = planner.toYaml(charter);
-      if (options.out) await writeFile(resolve(options.root, options.out), output, "utf8");
+      if (options.out) await writeFile(resolve(root, options.out), output, "utf8");
       process.stdout.write(output);
     });
 
@@ -83,6 +87,7 @@ export function createProgram(): Command {
     .option("--headful", "launch a visible browser")
     .option("--no-start", "do not start the configured project command")
     .option("--expect <text>", "visible text assertion", collect, [])
+    .option("--oracle <name>", "configured business oracle", collect, [])
     .option("--mode <mode>", "deterministic, guided or explore", "guided")
     .option("--evidence-dir <path>", "run artifact directory", ".proofkit/runs")
     .option("--oracle-url <url>", "read-only HTTP endpoint used as a business oracle")
@@ -105,6 +110,7 @@ export function createProgram(): Command {
         headful: options.headful,
         start: options.start,
         expect: options.expect,
+        oracleNames: options.oracle.length ? options.oracle : undefined,
         mode: options.mode as RunMode,
         sideEffectPolicy: config.policies.sideEffects,
         oracleUrl: options.oracleUrl,
@@ -112,7 +118,7 @@ export function createProgram(): Command {
       });
       const summary = await runner.wait(started.runId);
       console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, report: resolve(root, options.evidenceDir, summary.runId, "report.html") }, null, 2));
-      if (summary.verdict === "failed" || summary.verdict === "blocked") process.exitCode = 1;
+      if (summary.verdict !== "passed") process.exitCode = 1;
     });
 
   program.command("report <runId>")
@@ -151,6 +157,7 @@ export function createProgram(): Command {
       });
       const summary = await runner.wait(started.runId);
       console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict }, null, 2));
+      if (summary.verdict !== "passed") process.exitCode = 1;
     });
 
   return program;
@@ -160,8 +167,9 @@ type PlanCommandOptions = {
   root: string;
   url?: string;
   expect: string[];
+  oracle: string[];
   mode: string;
-  sideEffects: string;
+  sideEffects?: string;
   out?: string;
 };
 

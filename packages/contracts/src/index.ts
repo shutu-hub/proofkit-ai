@@ -34,6 +34,7 @@ export const TestCharterSchema = z.object({
   preconditions: z.array(z.string()).default([]),
   actions: z.array(ActionSchema).default([]),
   assertions: z.array(AssertionSchema).default([]),
+  oracles: z.array(z.string().min(1)).optional(),
   sideEffectPolicy: SideEffectPolicySchema.default("confirm"),
   metadata: z.record(z.string(), z.unknown()).default({}),
 });
@@ -162,6 +163,27 @@ export const ProofkitConfigSchema = z.object({
       devtoolsActivePort: z.string().optional(),
     }).optional(),
   }).default({}),
+  planning: z.object({
+    provider: z.enum(["deterministic", "openai-compatible"]).default("deterministic"),
+    baseUrl: z.string().url().optional(),
+    model: z.string().min(1).optional(),
+    apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/).optional(),
+    timeoutMs: z.number().int().positive().max(120_000).default(30_000),
+  }).default({}),
+  oracles: z.array(z.object({
+    name: z.string().min(1),
+    url: z.string().url(),
+    query: z.record(z.discriminatedUnion("source", [
+      z.object({ source: z.literal("runId") }),
+      z.object({ source: z.literal("step"), stepId: z.string().regex(/^step-\d{3}$/), field: z.string().min(1) }),
+    ])).default({}),
+    statusPointer: z.string().startsWith("/"),
+    successValues: z.array(z.string().min(1)).min(1),
+    failureValues: z.array(z.string().min(1)).default([]),
+    expectedStatus: z.number().int().min(100).max(599).default(200),
+    intervalMs: z.number().int().positive().default(500),
+    deadlineMs: z.number().int().positive().default(30_000),
+  })).default([]),
   policies: z.object({
     environment: z.enum(["test", "staging", "local"]).default("test"),
     sideEffects: SideEffectPolicySchema.default("confirm"),

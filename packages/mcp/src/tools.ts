@@ -18,11 +18,12 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       intent: z.string().min(1),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
+      oracleNames: z.array(z.string().min(1)).optional(),
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
     },
-    async ({ intent, url, expect, mode, sideEffectPolicy }) => result({
-      charter: runner.plan(intent, { url, expect, mode, sideEffectPolicy }),
+    async ({ intent, url, expect, oracleNames, mode, sideEffectPolicy }) => result({
+      charter: await runner.plan(intent, { url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy }),
     }),
   );
 
@@ -35,17 +36,19 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       adapter: z.enum(["web", "electron"]).default("web"),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
+      oracleNames: z.array(z.string().min(1)).optional(),
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       startProject: z.boolean().default(false),
       oracleUrl: z.string().url().optional(),
       oracleName: z.string().min(1).optional(),
     },
-    async ({ intent, charter, adapter, url, expect, mode, startProject, oracleUrl, oracleName }) => result(await runner.start({
+    async ({ intent, charter, adapter, url, expect, oracleNames, mode, startProject, oracleUrl, oracleName }) => result(await runner.start({
       intent,
       charter,
       adapter,
       url: surfaceUrl(url, runner),
       expect,
+      oracleNames,
       mode,
       start: startProject,
       oracleUrl: localOnlyUrl(oracleUrl),
