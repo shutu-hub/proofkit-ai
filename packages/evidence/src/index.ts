@@ -85,15 +85,16 @@ export class EvidenceStore {
   async writeReport(summary: RunSummary): Promise<string> {
     const path = join(this.runDir(summary.runId), "report.html");
     const verdict = summary.verdict ?? "inconclusive";
-    const rows = summary.steps.map((step) => `<tr><td>${escapeHtml(step.stepId)}</td><td>${escapeHtml(step.action.kind)}</td><td>${escapeHtml(step.status)}</td><td>${escapeHtml(step.error ?? "")}</td></tr>`).join("");
+    const links = (items: string[]) => items.filter((item) => item.startsWith(`${summary.runId}/artifacts/`)).map((item) => `<a href="${escapeHtml(item.slice(summary.runId.length + 1))}">${escapeHtml(item.split("/").at(-1) ?? "evidence")}</a>`).join(" ");
+    const rows = summary.steps.map((step) => `<tr><td>${escapeHtml(step.stepId)}</td><td>${escapeHtml(step.action.kind)}</td><td>${escapeHtml(step.status)}</td><td>${links(step.artifacts)}</td><td>${escapeHtml(step.error ?? "")}</td></tr>`).join("");
     const assertions = summary.assertions.map((item) => `<li class="${item.passed ? "pass" : "fail"}">${escapeHtml(item.message)}</li>`).join("");
-    const oracles = summary.oracles.map((item) => `<li class="${item.passed ? "pass" : "fail"}">${escapeHtml(item.name)}: ${escapeHtml(item.message)}</li>`).join("");
+    const oracles = summary.oracles.map((item) => `<li class="${item.passed === true ? "pass" : item.passed === false ? "fail" : "meta"}">${escapeHtml(item.name)}: ${escapeHtml(item.message)} ${links(item.evidence)}</li>`).join("");
     const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>ProofKit ${escapeHtml(summary.runId)}</title>
 <style>body{font:14px system-ui,sans-serif;max-width:1100px;margin:40px auto;color:#172033}h1{margin-bottom:4px}.meta{color:#637083}.verdict{display:inline-block;padding:6px 10px;border-radius:5px;background:#edf1f7;font-weight:700}.pass{color:#087443}.fail{color:#b42318}table{border-collapse:collapse;width:100%;margin-top:20px}td,th{border-bottom:1px solid #dce2ea;padding:9px;text-align:left}</style></head>
 <body><h1>ProofKit run</h1><p class="meta">${escapeHtml(summary.charter.intent)}<br>${escapeHtml(summary.runId)}</p><p class="verdict">${escapeHtml(verdict)}</p>
-<h2>Steps</h2><table><thead><tr><th>Step</th><th>Action</th><th>Status</th><th>Error</th></tr></thead><tbody>${rows}</tbody></table>
-<h2>Assertions</h2><ul>${assertions || "<li>None declared; result remains inconclusive.</li>"}</ul>
+<h2>Steps</h2><table><thead><tr><th>Step</th><th>Action</th><th>Status</th><th>Evidence</th><th>Error</th></tr></thead><tbody>${rows}</tbody></table>
+<h2>Assertions</h2><ul>${assertions || "<li>No surface assertions declared.</li>"}</ul>
 <h2>Business oracles</h2><ul>${oracles || "<li>None registered.</li>"}</ul>
 <h2>Findings</h2><ul>${summary.findings.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>None</li>"}</ul></body></html>`;
     await writeFile(path, html, "utf8");

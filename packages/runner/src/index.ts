@@ -1,4 +1,5 @@
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
+import { z } from "zod";
 import type {
   Action,
   ActionReceipt,
@@ -42,8 +43,12 @@ export type CapabilityDefinition<Input = unknown, Output = unknown> = {
   name: string;
   description: string;
   sideEffect: "none" | "read" | "write";
-  inputSchema: Record<string, unknown>;
-  execute(input: Input): Promise<{ output: Output; evidence?: string[] }>;
+  environments: Array<"test" | "staging" | "local">;
+  timeoutMs: number;
+  inputSchema: z.ZodType<Input>;
+  outputSchema: z.ZodType<Output>;
+  execute(input: Input, context: { runId: string; signal: AbortSignal }): Promise<Output>;
+  evidence(output: Output): Record<string, string | number | boolean | null>;
 };
 
 export class BlockedError extends Error {
@@ -54,6 +59,9 @@ export type ExecutionOptions = {
   evidenceDir?: string;
   runId?: string;
   oracles?: BusinessOracle[];
+  capabilities?: CapabilityDefinition<any, any>[];
+  environment?: "test" | "staging" | "local";
+  allowCapabilityWrites?: boolean;
   setup?: (context: {
     runId: string;
     emit: (event: Omit<RunEvent, "runId">) => Promise<void>;
@@ -64,12 +72,19 @@ export class ExecutionRunner {
   private readonly store: EvidenceStore;
   private readonly adapter: SurfaceAdapter;
   private readonly oracles: BusinessOracle[];
+  private readonly capabilities: Map<string, CapabilityDefinition<any, any>>;
+  private readonly environment: "test" | "staging" | "local";
+  private readonly allowCapabilityWrites: boolean;
   private readonly setup?: ExecutionOptions["setup"];
 
   constructor(adapter: SurfaceAdapter, options: ExecutionOptions = {}) {
     this.adapter = adapter;
     this.store = new EvidenceStore(options.evidenceDir ?? ".proofkit/runs");
     this.oracles = options.oracles ?? [];
+    this.capabilities = new Map((options.capabilities ?? []).map((capability) => [capability.name, capability]));
+    if (this.capabilities.size !== (options.capabilities ?? []).length) throw new Error("Duplicate capability name");
+    this.environment = options.environment ?? "test";
+    this.allowCapabilityWrites = options.allowCapabilityWrites ?? false;
     this.setup = options.setup;
   }
 
@@ -109,19 +124,26 @@ export class ExecutionRunner {
         await this.emit({ runId, timestamp: new Date().toISOString(), type: "step.started", stepId, payload: { action } });
         const step: RunSummary["steps"][number] = { stepId, action, status: "passed", artifacts: [] };
         try {
-          const beforeSnapshot = await this.adapter.snapshot();
-          step.beforeSnapshot = beforeSnapshot;
-          step.artifacts.push(await this.store.writeJson(runId, `${stepId}-before`, beforeSnapshot));
-          const receipt = await this.adapter.act(action);
-          step.receipt = receipt;
-          const afterSnapshot = await this.adapter.snapshot();
-          step.afterSnapshot = afterSnapshot;
-          step.artifacts.push(await this.store.writeJson(runId, `${stepId}-after`, afterSnapshot));
-          try {
-            const screenshot = await this.adapter.capture(`${stepId}.png`);
-            if (screenshot) step.artifacts.push(await this.store.writeBuffer(runId, `${stepId}.png`, screenshot));
-          } catch (error) {
-            summary.findings.push(`${stepId}: screenshot unavailable (${toError(error).message})`);
+          if (action.kind === "capability") {
+            const { output, receipt } = await this.executeCapability(action, charter, runId);
+            step.receipt = receipt;
+            step.capabilityOutput = output;
+            step.artifacts.push(await this.store.writeJson(runId, `${stepId}-capability`, { name: action.name, output }));
+          } else {
+            const beforeSnapshot = await this.adapter.snapshot();
+            step.beforeSnapshot = beforeSnapshot;
+            step.artifacts.push(await this.store.writeJson(runId, `${stepId}-before`, beforeSnapshot));
+            const receipt = await this.adapter.act(action);
+            step.receipt = receipt;
+            const afterSnapshot = await this.adapter.snapshot();
+            step.afterSnapshot = afterSnapshot;
+            step.artifacts.push(await this.store.writeJson(runId, `${stepId}-after`, afterSnapshot));
+            try {
+              const screenshot = await this.adapter.capture(`${stepId}.png`);
+              if (screenshot) step.artifacts.push(await this.store.writeBuffer(runId, `${stepId}.png`, screenshot));
+            } catch (error) {
+              summary.findings.push(`${stepId}: screenshot unavailable (${toError(error).message})`);
+            }
           }
           summary.artifacts.push(...step.artifacts);
         } catch (error) {
@@ -145,6 +167,9 @@ export class ExecutionRunner {
         }
         for (const oracle of this.oracles) {
           const result = await oracle.check({ runId, charter, steps: summary.steps, assertions: summary.assertions });
+          const artifact = await this.store.writeJson(runId, `oracle-${summary.oracles.length + 1}`, result);
+          result.evidence.push(artifact);
+          summary.artifacts.push(artifact);
           summary.oracles.push(result);
           await this.emit({ runId, timestamp: new Date().toISOString(), type: "oracle.completed", payload: result });
         }
@@ -163,8 +188,14 @@ export class ExecutionRunner {
       ? executionError instanceof BlockedError ? "blocked" : "failed"
       : charter.assertions.length === 0 && this.oracles.length === 0
         ? "inconclusive"
-        : [...summary.assertions, ...summary.oracles].every((result) => result.passed) ? "passed" : "failed";
-    if (summary.verdict === "inconclusive") summary.findings.push("No executable business oracle was declared.");
+        : summary.assertions.some((result) => !result.passed) || summary.oracles.some((result) => result.passed === false)
+          ? "failed"
+          : summary.oracles.some((result) => result.passed === null) ? "inconclusive" : "passed";
+    if (summary.verdict === "inconclusive") summary.findings.push(
+      charter.assertions.length === 0 && this.oracles.length === 0
+        ? "No executable assertion or business oracle was declared."
+        : "A business oracle did not observe a terminal state within its deadline.",
+    );
     summary.status = "completed";
     summary.endedAt = new Date().toISOString();
     await this.store.writeSummary(summary);
@@ -175,6 +206,40 @@ export class ExecutionRunner {
 
   private async emit(event: RunEvent): Promise<void> {
     await this.store.appendEvent(event);
+  }
+
+  private async executeCapability(action: Extract<Action, { kind: "capability" }>, charter: TestCharter, runId: string): Promise<{ output: unknown; receipt: ActionReceipt }> {
+    const capability = this.capabilities.get(action.name);
+    if (!capability) throw new BlockedError(`Capability is not registered: ${action.name}`);
+    if (!capability.environments.includes(this.environment)) throw new BlockedError(`Capability ${action.name} is not allowed in ${this.environment}`);
+    if (capability.sideEffect === "write" && charter.sideEffectPolicy !== "allow") {
+      throw new BlockedError(`Capability ${action.name} requires sideEffectPolicy=allow`);
+    }
+    if (capability.sideEffect === "write" && !this.allowCapabilityWrites) {
+      throw new BlockedError(`Capability ${action.name} requires runner allowCapabilityWrites`);
+    }
+    if (charter.sideEffectPolicy === "deny" && capability.sideEffect !== "none" && capability.sideEffect !== "read") {
+      throw new BlockedError(`Capability ${action.name} is denied by the charter`);
+    }
+    const input = capability.inputSchema.parse(action.input);
+    const startedAt = new Date().toISOString();
+    const started = Date.now();
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const output = await Promise.race([
+        capability.execute(input, { runId, signal: controller.signal }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error(`Capability ${action.name} timed out`)); }, capability.timeoutMs); }),
+      ]);
+      const validated = capability.outputSchema.parse(output);
+      const evidence = z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).parse(capability.evidence(validated));
+      return {
+        output: evidence,
+        receipt: { actionId: `${action.name}-${started}`, kind: "capability", startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - started, metadata: { name: action.name } },
+      };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }
 

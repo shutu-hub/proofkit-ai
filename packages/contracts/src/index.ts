@@ -16,6 +16,7 @@ export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("press"), selector: z.string().min(1), key: z.string().min(1) }),
   z.object({ kind: z.literal("waitForText"), text: z.string().min(1), timeoutMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("screenshot"), name: z.string().min(1).optional() }),
+  z.object({ kind: z.literal("capability"), name: z.string().min(1), input: z.record(z.string(), z.unknown()).default({}) }),
   z.object({ kind: z.literal("observe") }),
 ]);
 export type Action = z.infer<typeof ActionSchema>;
@@ -70,7 +71,7 @@ export type AssertionResult = z.infer<typeof AssertionResultSchema>;
 
 export const OracleResultSchema = z.object({
   name: z.string().min(1),
-  passed: z.boolean(),
+  passed: z.boolean().nullable(),
   message: z.string(),
   evidence: z.array(z.string()).default([]),
   observedAt: z.string().optional(),
@@ -85,6 +86,7 @@ export const StepResultSchema = z.object({
   beforeSnapshot: SurfaceSnapshotSchema.optional(),
   afterSnapshot: SurfaceSnapshotSchema.optional(),
   artifacts: z.array(z.string()).default([]),
+  capabilityOutput: z.unknown().optional(),
   error: z.string().optional(),
 });
 export type StepResult = z.infer<typeof StepResultSchema>;

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@proofkit/contracts": "workspace:*",
-    "@proofkit/evidence": "workspace:*"
+    "@proofkit/evidence": "workspace:*",
+    "zod": "^3.25.76"
   }
 }

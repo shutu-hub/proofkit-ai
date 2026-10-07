@@ -6,7 +6,7 @@ import { TestCharterSchema, type ProofkitConfig, type ProjectMap, type RunMode, 
 import { httpOracle } from "@proofkit/oracles";
 import { IntentPlanner, loadCharter, type PlanOptions } from "@proofkit/planner";
 import { loadConfig, scanProject } from "@proofkit/project";
-import { ExecutionRunner, type SurfaceAdapter } from "@proofkit/runner";
+import { ExecutionRunner, type BusinessOracle, type CapabilityDefinition, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
 
 export type LocalAdapterName = "web" | "electron";
@@ -50,6 +50,9 @@ export type LocalRunnerOptions = {
   config?: ProofkitConfig;
   evidenceDir?: string;
   restrictWebOrigins?: boolean;
+  oracles?: BusinessOracle[];
+  capabilities?: CapabilityDefinition<any, any>[];
+  allowCapabilityWrites?: boolean;
 };
 
 export class LocalRunnerService {
@@ -59,6 +62,9 @@ export class LocalRunnerService {
   private readonly records = new Map<string, LocalRunRecord>();
   private readonly evidence: EvidenceStore;
   private readonly restrictWebOrigins: boolean;
+  private readonly oracles: BusinessOracle[];
+  private readonly capabilities: CapabilityDefinition<any, any>[];
+  private readonly allowCapabilityWrites: boolean;
 
   constructor(options: LocalRunnerOptions) {
     this.root = resolve(options.root);
@@ -66,6 +72,9 @@ export class LocalRunnerService {
     this.evidenceDir = resolve(this.root, options.evidenceDir ?? ".proofkit/runs");
     this.evidence = new EvidenceStore(this.evidenceDir);
     this.restrictWebOrigins = options.restrictWebOrigins ?? false;
+    this.oracles = options.oracles ?? [];
+    this.capabilities = options.capabilities ?? [];
+    this.allowCapabilityWrites = options.allowCapabilityWrites ?? false;
   }
 
   static async create(options: Omit<LocalRunnerOptions, "config"> & { config?: ProofkitConfig }): Promise<LocalRunnerService> {
@@ -163,7 +172,10 @@ export class LocalRunnerService {
       : [];
     return new ExecutionRunner(adapter, {
       evidenceDir: this.evidenceDir,
-      oracles,
+      oracles: [...this.oracles, ...oracles],
+      capabilities: this.capabilities,
+      environment: this.config.policies.environment,
+      allowCapabilityWrites: this.allowCapabilityWrites,
       setup: input.start !== false && this.config.project.start ? async ({ emit }) => {
         const runtime = new ProjectRuntime({
           root: this.root,

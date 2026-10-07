@@ -15,6 +15,8 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Executes Web and Electron actions through Playwright, including CDP attachment.
 - Starts local project processes with health checks and captures runtime events in the same run timeline.
 - Observes read-only business HTTP endpoints through a redacted oracle instead of treating a UI click as proof of success.
+- Accepts programmatically registered, schema-validated project capabilities; only an explicit evidence projection is persisted.
+- Polls asynchronous HTTP business state to a bounded terminal verdict; a timeout remains inconclusive.
 - Records action receipts, before/after snapshots, network and console events, screenshots, and a JSONL timeline.
 - Reports `passed`, `failed`, `blocked`, or `inconclusive`; missing evidence never becomes a pass.
 - Produces local JSON and HTML reports without a hosted service.
@@ -142,6 +144,7 @@ The Electron smoke test uses an isolated temporary profile. The Web smoke test s
 5. Keep the core deterministic and make AI planning an optional provider behind a validated schema.
 
 See [docs/architecture.md](docs/architecture.md) for package boundaries, extension points, and the first end-to-end vertical slice. See [docs/research.md](docs/research.md) for the open-source project comparison and reuse decisions. See [docs/aihr-resume-integration.md](docs/aihr-resume-integration.md) for the first business-flow integration contract.
+See [docs/product-direction.md](docs/product-direction.md) for the current status, adoption path, and next implementation decisions.
 
 ## License
 

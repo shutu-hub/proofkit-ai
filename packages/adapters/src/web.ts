@@ -81,6 +81,8 @@ export class WebAdapter implements SurfaceAdapter {
       case "screenshot":
       case "observe":
         break;
+      case "capability":
+        throw new Error("Capability actions are executed by the runner");
     }
     return {
       actionId: `${action.kind}-${started}`,

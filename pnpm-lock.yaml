@@ -116,6 +116,9 @@ importers:
       '@proofkit/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@proofkit/evidence':
+        specifier: workspace:*
+        version: link:../evidence
       '@proofkit/runner':
         specifier: workspace:*
         version: link:../runner
@@ -146,6 +149,9 @@ importers:
       '@proofkit/evidence':
         specifier: workspace:*
         version: link:../evidence
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
 
   packages/runtime:
     dependencies:
