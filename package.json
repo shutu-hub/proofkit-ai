@@ -1,0 +1,23 @@
+{
+  "name": "proofkit-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Evidence-driven AI system testing for web and Electron applications.",
+  "engines": { "node": ">=22" },
+  "type": "module",
+  "packageManager": "pnpm@10.10.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r build && pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:smoke:web": "pnpm build && node tests/web-smoke.mjs",
+    "test:smoke:electron": "pnpm build && node tests/electron-smoke.mjs",
+    "dev": "pnpm --filter @proofkit/cli dev"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}
