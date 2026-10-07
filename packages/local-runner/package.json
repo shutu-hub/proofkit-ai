@@ -1,23 +1,23 @@
 {
-  "name": "@proofkit/cli",
+  "name": "@proofkit/local-runner",
   "version": "0.1.0",
   "type": "module",
-  "bin": { "proofkit": "dist/main.js" },
-  "main": "dist/main.js",
-  "types": "dist/main.d.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
-    "dev": "tsx src/main.ts"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@proofkit/adapters": "workspace:*",
     "@proofkit/contracts": "workspace:*",
     "@proofkit/evidence": "workspace:*",
-    "@proofkit/local-runner": "workspace:*",
+    "@proofkit/oracles": "workspace:*",
     "@proofkit/planner": "workspace:*",
     "@proofkit/project": "workspace:*",
-    "commander": "^14.0.0",
-    "yaml": "^2.6.1"
+    "@proofkit/runner": "workspace:*",
+    "@proofkit/runtime": "workspace:*"
   }
 }

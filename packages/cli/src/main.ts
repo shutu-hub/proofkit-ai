@@ -1,15 +1,11 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Command } from "commander";
-import { stringify } from "yaml";
-import { ElectronAdapter, WebAdapter } from "@proofkit/adapters";
-import type { ProofkitConfig, RunMode, SideEffectPolicy } from "@proofkit/contracts";
+import type { RunMode, SideEffectPolicy } from "@proofkit/contracts";
 import { EvidenceStore } from "@proofkit/evidence";
-import { IntentPlanner, loadCharter } from "@proofkit/planner";
-import { httpOracle } from "@proofkit/oracles";
+import { IntentPlanner } from "@proofkit/planner";
+import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
 import { initProject, loadConfig, scanProject } from "@proofkit/project";
-import { ExecutionRunner, type SurfaceAdapter } from "@proofkit/runner";
-import { ProjectRuntime } from "@proofkit/runtime";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -94,34 +90,27 @@ export function createProgram(): Command {
     .action(async (intent: string, options: RunCommandOptions) => {
       const root = resolve(options.root);
       const config = await loadConfig(root);
-      const charter = options.charter
-        ? await loadCharter(resolve(root, options.charter))
-        : new IntentPlanner().plan(intent, {
-            url: options.url ?? config.surfaces.web?.baseUrl,
-            expect: options.expect,
-            mode: options.mode as RunMode,
-            sideEffectPolicy: config.policies.sideEffects,
-          });
-      const adapter = createAdapter(options, config);
-      const oracles = options.oracleUrl ? [httpOracle({ name: options.oracleName, url: options.oracleUrl })] : [];
-      const summary = await new ExecutionRunner(adapter, {
+      const runner = new LocalRunnerService({
+        root,
+        config,
         evidenceDir: resolve(root, options.evidenceDir),
-        oracles,
-        setup: options.start && config.project.start ? async ({ emit }) => {
-          const runtime = new ProjectRuntime({
-            root,
-            config,
-            onEvent: (event) => void emit({ timestamp: new Date().toISOString(), type: "adapter.event", payload: { source: "project-runtime", ...event } }),
-          });
-          try {
-            await runtime.start();
-          } catch (error) {
-            await runtime.stop();
-            throw error;
-          }
-          return () => runtime.stop();
-        } : undefined,
-      }).run(charter);
+      });
+      const started = await runner.start({
+        intent,
+        charterPath: options.charter,
+        adapter: options.adapter as LocalAdapterName,
+        url: options.url,
+        cdp: options.cdp,
+        devtoolsPortFile: options.devtoolsPortFile,
+        headful: options.headful,
+        start: options.start,
+        expect: options.expect,
+        mode: options.mode as RunMode,
+        sideEffectPolicy: config.policies.sideEffects,
+        oracleUrl: options.oracleUrl,
+        oracleName: options.oracleName,
+      });
+      const summary = await runner.wait(started.runId);
       console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, report: resolve(root, options.evidenceDir, summary.runId, "report.html") }, null, 2));
       if (summary.verdict === "failed" || summary.verdict === "blocked") process.exitCode = 1;
     });
@@ -153,8 +142,14 @@ export function createProgram(): Command {
         console.log(JSON.stringify({ runId: previous.runId, verdict: previous.verdict, charter: previous.charter, steps: previous.steps.length, artifacts: previous.artifacts.length }, null, 2));
         return;
       }
-      const adapter = createAdapter(options, await loadConfig(root));
-      const summary = await new ExecutionRunner(adapter, { evidenceDir: resolve(root, options.evidenceDir) }).run(previous.charter);
+      const runner = new LocalRunnerService({ root, config: await loadConfig(root), evidenceDir: resolve(root, options.evidenceDir) });
+      const started = await runner.replay(runId, {
+        adapter: options.adapter as LocalAdapterName,
+        cdp: options.cdp,
+        devtoolsPortFile: options.devtoolsPortFile,
+        headful: options.headful,
+      });
+      const summary = await runner.wait(started.runId);
       console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict }, null, 2));
     });
 
@@ -191,14 +186,6 @@ type ReplayOptions = {
   devtoolsPortFile?: string;
   headful?: boolean;
 };
-
-function createAdapter(options: { adapter: string; cdp?: string; devtoolsPortFile?: string; headful?: boolean; url?: string }, config: ProofkitConfig): SurfaceAdapter {
-  if (options.adapter === "electron") {
-    return new ElectronAdapter({ cdpUrl: options.cdp ?? config.surfaces.electron?.cdpUrl, devtoolsActivePortPath: options.devtoolsPortFile ?? config.surfaces.electron?.devtoolsActivePort });
-  }
-  if (options.adapter !== "web") throw new Error(`Unsupported adapter: ${options.adapter}`);
-  return new WebAdapter({ baseUrl: options.url ?? config.surfaces.web?.baseUrl, cdpUrl: options.cdp, headless: !options.headful });
-}
 
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];

@@ -36,9 +36,7 @@ export class ProjectRuntime {
       return;
     }
     if (this.running) throw new Error("Project runtime is already running");
-    const cwd = this.options.config.project.cwd
-      ? resolvePath(this.options.root, this.options.config.project.cwd)
-      : this.options.root;
+    const cwd = this.projectCwd();
     this.stopped = false;
     this.child = spawn(command, {
       cwd,
@@ -59,14 +57,25 @@ export class ProjectRuntime {
     if (!child || child.killed) return;
     this.stopped = true;
     if (this.options.config.project.stop) {
-      spawn(this.options.config.project.stop, { cwd: this.options.root, shell: true, windowsHide: true, stdio: "ignore" });
-    } else {
+      const stopper = spawn(this.options.config.project.stop, {
+        cwd: this.projectCwd(),
+        shell: true,
+        windowsHide: true,
+        stdio: "ignore",
+      });
+      await once(stopper, "exit").catch(() => undefined);
+    }
+    if (child.exitCode === null && child.signalCode === null) {
       child.kill();
-      if (!child.killed) {
-        await once(child, "exit").catch(() => undefined);
-      }
+      await once(child, "exit").catch(() => undefined);
     }
     this.child = undefined;
+  }
+
+  private projectCwd(): string {
+    return this.options.config.project.cwd
+      ? resolvePath(this.options.root, this.options.config.project.cwd)
+      : this.options.root;
   }
 
   private async waitForHealth(): Promise<void> {

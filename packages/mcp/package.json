@@ -1,0 +1,20 @@
+{
+  "name": "@proofkit/mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/server.js",
+  "types": "dist/server.d.ts",
+  "bin": { "proofkit-mcp": "dist/server.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "dev": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@proofkit/contracts": "workspace:*",
+    "@proofkit/local-runner": "workspace:*",
+    "zod": "^3.24.1"
+  }
+}

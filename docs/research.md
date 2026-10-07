@@ -2,6 +2,8 @@
 
 ProofKit uses mature engines for surface control and keeps its own value in project understanding, business oracles, evidence and diagnosis. The projects below were reviewed for architecture and integration patterns. Their code is not copied into this repository.
 
+The repository metadata and upstream READMEs were rechecked on 2026-10-07. The notes describe the current direction of the projects; their internal APIs can still change.
+
 ## ego-lite
 
 Repository: <https://github.com/citrolabs/ego-lite>
@@ -28,13 +30,13 @@ Playwright is the first execution engine because it already solves browser proce
 
 Repositories: <https://github.com/microsoft/playwright-mcp>, <https://github.com/microsoft/playwright-cli>
 
-They demonstrate persistent browser context, low-context tool calls and agent-friendly discovery. ProofKit takes the integration lesson: MCP is an alternate front end to one local Runner. It must not expose arbitrary shell, filesystem, database writes or unrestricted browser protocol calls as default tools.
+They demonstrate persistent browser context, low-context tool calls and agent-friendly discovery. The current README explicitly positions CLI + Skills for high-throughput coding-agent work and MCP for persistent state, exploration, self-healing and long-running workflows. ProofKit takes the integration lesson: MCP is an alternate front end to one local Runner. It must not expose arbitrary shell, filesystem, database writes or unrestricted browser protocol calls as default tools.
 
 ## Midscene
 
 Repository: <https://github.com/web-infra-dev/midscene>
 
-Midscene combines natural-language actions/assertions, YAML task descriptions, cross-surface adapters, reusable Nodes and HTML reports. ProofKit borrows the Node idea as typed Domain Capabilities and keeps YAML as a reviewable Test Charter. Model output must pass the same Zod schema as hand-written plans; a model cannot skip side-effect policy or evidence requirements.
+Midscene combines natural-language actions/assertions, YAML task descriptions, cross-surface adapters, reusable Nodes and HTML reports. Its current test-kit direction also includes lifecycle hooks, retries, project isolation/concurrency, API/data setup and cleanup, and generated Node references. ProofKit borrows the Node idea as typed Domain Capabilities and keeps YAML as a reviewable Test Charter. Model output must pass the same Zod schema as hand-written plans; a model cannot skip side-effect policy or evidence requirements.
 
 ## Autonoma
 
@@ -66,3 +68,16 @@ BrowserGym contributes task environments and evaluation thinking; ARTEMIS contri
 2. Copy concepts and contract shapes only when they fit ProofKit's evidence and safety model.
 3. Preserve upstream licenses and attribution for any future code dependency.
 4. Keep the product-specific layer in ProofKit: project map, charter, oracles, evidence, verdict and replay.
+
+## Selection matrix
+
+| Problem | Selected foundation | Reason | Explicit boundary |
+| --- | --- | --- | --- |
+| Web and Electron control | Playwright | Mature waits, locators, downloads, tracing and CDP | ProofKit does not fork browser mechanics |
+| Agent-facing exploration | ProofKit MCP over Local Runner | Persistent run IDs and evidence are more useful than raw browser tools | Six high-level tools; no arbitrary process or file access |
+| Natural-language UI actions | Optional Planner/GUI provider, informed by Midscene | Useful for discovery and visual cases | Model output must become a Test Charter or typed capability |
+| Browser session isolation | Future adapter-owned profiles, informed by ego-lite TaskSpace | Prevents user tabs and test state from colliding | CDP attach is supported now; isolated attach profiles remain open work |
+| Mobile UI | Maestro first, Appium compatibility layer later | Simple accessibility flows first; broad driver coverage later | Deferred until Web/Electron business slice is reliable |
+| Backend traffic fixtures | Keploy-style capture/replay later | Makes async workflows repeatable | It is an observer/fixture system, not the control plane |
+
+The key product choice is a local CLI-first install with MCP as an optional connection. A developer can run `proofkit run` in CI, while an AI client calls the same Local Runner without a hosted account or a second execution model.

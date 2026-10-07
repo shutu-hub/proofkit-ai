@@ -15,7 +15,6 @@ export class WebAdapter implements SurfaceAdapter {
   protected context?: BrowserContext;
   protected activePage?: Page;
   protected readonly options: WebAdapterOptions;
-  private ownsBrowser = false;
 
   constructor(options: WebAdapterOptions = {}) {
     this.options = options;
@@ -25,13 +24,11 @@ export class WebAdapter implements SurfaceAdapter {
     const { chromium } = await import("playwright-core");
     if (this.options.cdpUrl) {
       this.browser = await chromium.connectOverCDP(this.options.cdpUrl);
-      this.ownsBrowser = false;
     } else {
       this.browser = await chromium.launch({
         headless: this.options.headless ?? true,
         executablePath: this.options.executablePath,
       });
-      this.ownsBrowser = true;
     }
     this.context = this.browser.contexts()[0] ?? await this.browser.newContext();
     this.activePage = this.context.pages()[0] ?? await this.context.newPage();
@@ -138,12 +135,10 @@ export class WebAdapter implements SurfaceAdapter {
   }
 
   async close(): Promise<void> {
-    if (this.ownsBrowser) await this.browser?.close();
-    else (this.browser as unknown as { disconnect?: () => void }).disconnect?.();
+    await this.browser?.close();
     this.browser = undefined;
     this.context = undefined;
     this.activePage = undefined;
-    this.ownsBrowser = false;
   }
 
   protected page(): Page {
