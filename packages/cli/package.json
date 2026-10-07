@@ -17,7 +17,9 @@
     "@proofkit/evidence": "workspace:*",
     "@proofkit/planner": "workspace:*",
     "@proofkit/project": "workspace:*",
+    "@proofkit/oracles": "workspace:*",
     "@proofkit/runner": "workspace:*",
+    "@proofkit/runtime": "workspace:*",
     "commander": "^14.0.0",
     "yaml": "^2.6.1"
   }

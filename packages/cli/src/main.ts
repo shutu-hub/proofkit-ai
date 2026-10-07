@@ -6,8 +6,10 @@ import { ElectronAdapter, WebAdapter } from "@proofkit/adapters";
 import type { ProofkitConfig, RunMode, SideEffectPolicy } from "@proofkit/contracts";
 import { EvidenceStore } from "@proofkit/evidence";
 import { IntentPlanner, loadCharter } from "@proofkit/planner";
+import { httpOracle } from "@proofkit/oracles";
 import { initProject, loadConfig, scanProject } from "@proofkit/project";
 import { ExecutionRunner, type SurfaceAdapter } from "@proofkit/runner";
+import { ProjectRuntime } from "@proofkit/runtime";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -83,9 +85,12 @@ export function createProgram(): Command {
     .option("--cdp <url>", "CDP endpoint")
     .option("--devtools-port-file <path>", "Electron DevToolsActivePort path")
     .option("--headful", "launch a visible browser")
+    .option("--no-start", "do not start the configured project command")
     .option("--expect <text>", "visible text assertion", collect, [])
     .option("--mode <mode>", "deterministic, guided or explore", "guided")
     .option("--evidence-dir <path>", "run artifact directory", ".proofkit/runs")
+    .option("--oracle-url <url>", "read-only HTTP endpoint used as a business oracle")
+    .option("--oracle-name <name>", "business oracle name", "http-check")
     .action(async (intent: string, options: RunCommandOptions) => {
       const root = resolve(options.root);
       const config = await loadConfig(root);
@@ -98,7 +103,25 @@ export function createProgram(): Command {
             sideEffectPolicy: config.policies.sideEffects,
           });
       const adapter = createAdapter(options, config);
-      const summary = await new ExecutionRunner(adapter, { evidenceDir: resolve(root, options.evidenceDir) }).run(charter);
+      const oracles = options.oracleUrl ? [httpOracle({ name: options.oracleName, url: options.oracleUrl })] : [];
+      const summary = await new ExecutionRunner(adapter, {
+        evidenceDir: resolve(root, options.evidenceDir),
+        oracles,
+        setup: options.start && config.project.start ? async ({ emit }) => {
+          const runtime = new ProjectRuntime({
+            root,
+            config,
+            onEvent: (event) => void emit({ timestamp: new Date().toISOString(), type: "adapter.event", payload: { source: "project-runtime", ...event } }),
+          });
+          try {
+            await runtime.start();
+          } catch (error) {
+            await runtime.stop();
+            throw error;
+          }
+          return () => runtime.stop();
+        } : undefined,
+      }).run(charter);
       console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, report: resolve(root, options.evidenceDir, summary.runId, "report.html") }, null, 2));
       if (summary.verdict === "failed" || summary.verdict === "blocked") process.exitCode = 1;
     });
@@ -153,7 +176,10 @@ type RunCommandOptions = PlanCommandOptions & {
   cdp?: string;
   devtoolsPortFile?: string;
   headful?: boolean;
+  start: boolean;
   evidenceDir: string;
+  oracleUrl?: string;
+  oracleName: string;
 };
 
 type ReplayOptions = {

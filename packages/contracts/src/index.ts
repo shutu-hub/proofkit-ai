@@ -73,6 +73,7 @@ export const OracleResultSchema = z.object({
   passed: z.boolean(),
   message: z.string(),
   evidence: z.array(z.string()).default([]),
+  observedAt: z.string().optional(),
 });
 export type OracleResult = z.infer<typeof OracleResultSchema>;
 
@@ -144,7 +145,13 @@ export const ProofkitConfigSchema = z.object({
   project: z.object({
     root: z.string().default("."),
     start: z.string().optional(),
-    health: z.array(z.string()).default([]),
+    cwd: z.string().optional(),
+    stop: z.string().optional(),
+    health: z.array(z.union([
+      z.string(),
+      z.object({ url: z.string().url(), expectedStatus: z.number().int().min(100).max(599).default(200) }),
+    ])).default([]),
+    startupTimeoutMs: z.number().int().positive().default(60_000),
   }).default({}),
   surfaces: z.object({
     web: z.object({ baseUrl: z.string().url().optional() }).optional(),

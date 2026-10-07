@@ -44,6 +44,9 @@ importers:
       '@proofkit/evidence':
         specifier: workspace:*
         version: link:../evidence
+      '@proofkit/oracles':
+        specifier: workspace:*
+        version: link:../oracles
       '@proofkit/planner':
         specifier: workspace:*
         version: link:../planner
@@ -53,6 +56,9 @@ importers:
       '@proofkit/runner':
         specifier: workspace:*
         version: link:../runner
+      '@proofkit/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       commander:
         specifier: ^14.0.0
         version: 14.0.3
@@ -71,6 +77,15 @@ importers:
       '@proofkit/contracts':
         specifier: workspace:*
         version: link:../contracts
+
+  packages/oracles:
+    dependencies:
+      '@proofkit/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@proofkit/runner':
+        specifier: workspace:*
+        version: link:../runner
 
   packages/planner:
     dependencies:
@@ -98,6 +113,12 @@ importers:
       '@proofkit/evidence':
         specifier: workspace:*
         version: link:../evidence
+
+  packages/runtime:
+    dependencies:
+      '@proofkit/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
 packages:
 

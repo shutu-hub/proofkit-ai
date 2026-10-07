@@ -55,7 +55,9 @@ export class EvidenceStore {
   async writeJson(runId: string, name: string, value: unknown): Promise<string> {
     const path = join(this.runDir(runId), "artifacts", `${safeName(name)}.json`);
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${JSON.stringify(sanitizeEvidence(value), null, 2)}\n`, "utf8");
+    const content = `${JSON.stringify(sanitizeEvidence(value), null, 2)}\n`;
+    await writeFile(path, content, "utf8");
+    await this.recordArtifact(runId, path, Buffer.byteLength(content));
     return this.relativePath(path);
   }
 
@@ -63,6 +65,7 @@ export class EvidenceStore {
     const path = join(this.runDir(runId), "artifacts", safeName(name));
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, value, "utf8");
+    await this.recordArtifact(runId, path, Buffer.byteLength(value));
     return this.relativePath(path);
   }
 
@@ -70,6 +73,7 @@ export class EvidenceStore {
     const path = join(this.runDir(runId), "artifacts", safeName(name));
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, value);
+    await this.recordArtifact(runId, path, value.byteLength);
     return this.relativePath(path);
   }
 
@@ -102,6 +106,19 @@ export class EvidenceStore {
 
   private relativePath(path: string): string {
     return relative(this.rootDir, path).replaceAll("\\", "/");
+  }
+
+  private async recordArtifact(runId: string, path: string, bytes: number): Promise<void> {
+    await this.appendEvent({
+      runId,
+      timestamp: new Date().toISOString(),
+      type: "artifact.created",
+      payload: {
+        path: this.relativePath(path),
+        bytes,
+        sha256: sha256(await readFile(path)),
+      },
+    });
   }
 }
 

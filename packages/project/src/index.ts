@@ -13,7 +13,7 @@ type PackageJson = {
 };
 
 const DEFAULT_CONFIG: ProofkitConfig = {
-  project: { root: ".", health: [] },
+  project: { root: ".", health: [], startupTimeoutMs: 60_000 },
   surfaces: {},
   policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false },
 };

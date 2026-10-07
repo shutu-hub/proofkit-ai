@@ -54,17 +54,23 @@ export type ExecutionOptions = {
   evidenceDir?: string;
   runId?: string;
   oracles?: BusinessOracle[];
+  setup?: (context: {
+    runId: string;
+    emit: (event: Omit<RunEvent, "runId">) => Promise<void>;
+  }) => Promise<(() => void | Promise<void>) | undefined>;
 };
 
 export class ExecutionRunner {
   private readonly store: EvidenceStore;
   private readonly adapter: SurfaceAdapter;
   private readonly oracles: BusinessOracle[];
+  private readonly setup?: ExecutionOptions["setup"];
 
   constructor(adapter: SurfaceAdapter, options: ExecutionOptions = {}) {
     this.adapter = adapter;
     this.store = new EvidenceStore(options.evidenceDir ?? ".proofkit/runs");
     this.oracles = options.oracles ?? [];
+    this.setup = options.setup;
   }
 
   async run(charter: TestCharter, runId = createRunId()): Promise<RunSummary> {
@@ -85,8 +91,15 @@ export class ExecutionRunner {
 
     let executionError: Error | undefined;
     let unsubscribe: () => void | Promise<void> = () => {};
+    let cleanupSetup: () => void | Promise<void> = () => {};
     const pendingEvents: Promise<void>[] = [];
     try {
+      if (this.setup) {
+        cleanupSetup = await this.setup({
+          runId,
+          emit: (event) => this.emit({ ...event, runId }),
+        }) ?? (() => {});
+      }
       await this.adapter.connect();
       unsubscribe = await this.adapter.subscribeEvents((event) => {
         pendingEvents.push(this.emit({ runId, timestamp: new Date().toISOString(), type: "adapter.event", payload: { adapter: this.adapter.name, eventType: event.type, ...event.payload } }));
@@ -143,6 +156,7 @@ export class ExecutionRunner {
       try { await unsubscribe(); } catch (error) { summary.findings.push(`unsubscribe failed: ${toError(error).message}`); }
       try { await this.adapter.close(); } catch (error) { summary.findings.push(`adapter close failed: ${toError(error).message}`); }
       await Promise.all(pendingEvents);
+      try { await cleanupSetup(); } catch (error) { summary.findings.push(`runtime cleanup failed: ${toError(error).message}`); }
     }
 
     summary.verdict = executionError
