@@ -1,14 +1,18 @@
 import { access } from "node:fs/promises";
-import { extname, isAbsolute, relative, resolve } from "node:path";
+import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ProofkitConfig } from "@proofkit/contracts";
+import { resolveWithinWorkspace } from "@proofkit/project";
 import { z } from "@proofkit/runner";
 import type { ProjectIntegration } from "@proofkit/runner";
 
 const DEFAULT_INTEGRATION_PATH = ".proofkit/integration.mjs";
 
 export type ProjectIntegrationFactoryContext = {
+  /** Compatibility alias: directory containing integration and fixture paths. */
   root: string;
+  projectRoot: string;
+  workspaceRoot: string;
   config: ProofkitConfig;
   z: typeof z;
 };
@@ -17,10 +21,12 @@ export async function loadProjectIntegration(
   root: string,
   config: ProofkitConfig,
   explicitPath?: string,
+  workspaceRoot = root,
 ): Promise<ProjectIntegration | undefined> {
   const projectRoot = resolve(root);
   const configuredPath = explicitPath ?? config.integration.path ?? DEFAULT_INTEGRATION_PATH;
-  const path = resolveWithinRoot(projectRoot, configuredPath);
+  const workspace = resolve(workspaceRoot);
+  const path = resolveWithinWorkspace(workspace, configuredPath);
   if (!(await fileExists(path))) return undefined;
   if (![".mjs", ".js", ".cjs"].includes(extname(path).toLowerCase())) {
     throw new Error("ProofKit integrations must be JavaScript modules (.mjs, .js or .cjs)");
@@ -32,7 +38,7 @@ export async function loadProjectIntegration(
     createIntegration?: (context: ProjectIntegrationFactoryContext) => unknown | Promise<unknown>;
   };
   const candidate = loaded.createIntegration
-    ? await loaded.createIntegration({ root: projectRoot, config, z })
+    ? await loaded.createIntegration({ root: workspace, projectRoot, workspaceRoot: workspace, config, z })
     : loaded.default ?? loaded.integration;
   return validateIntegration(candidate, path);
 }
@@ -67,13 +73,6 @@ function validateIntegration(value: unknown, path: string): ProjectIntegration {
   const oracleNames = (integration.oracles ?? []).map((oracle) => oracle.name);
   if (new Set(oracleNames).size !== oracleNames.length) throw new Error(`Integration ${path} contains duplicate oracle names`);
   return integration as ProjectIntegration;
-}
-
-function resolveWithinRoot(root: string, candidate: string): string {
-  const absolute = isAbsolute(candidate) ? resolve(candidate) : resolve(root, candidate);
-  const rel = relative(root, absolute);
-  if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("Integration path must stay within the project root");
-  return absolute;
 }
 
 async function fileExists(path: string): Promise<boolean> {

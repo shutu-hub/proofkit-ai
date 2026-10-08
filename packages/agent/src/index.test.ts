@@ -180,6 +180,72 @@ describe("MissionAgent", () => {
     expect(result.findings.some((item) => item.message.includes("side effect"))).toBe(true);
   });
 
+  it("does not automatically replay an interrupted negative case with side effects", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-negative-recovery-write-"));
+    const store = new JsonMissionStore(root);
+    const calls: string[] = [];
+    const tools = new InMemoryMissionToolRegistry([
+      {
+        name: "surface.run-negative-charter",
+        description: "negative run",
+        sideEffect: "read",
+        environments: ["test"],
+        timeoutMs: 1000,
+        inputSchema: z.object({}).passthrough(),
+        execute: async () => { calls.push("negative"); return { verdict: "passed" as const }; },
+      },
+      {
+        name: "mission.verify",
+        description: "verify",
+        sideEffect: "none",
+        environments: ["test"],
+        timeoutMs: 1000,
+        inputSchema: z.object({}),
+        execute: async () => ({ verdict: "passed" as const }),
+      },
+    ]);
+    const agent = new MissionAgent({ store, tools });
+    const created = await agent.create({
+      intent: "recover duplicate upload test",
+      projectRoot: root,
+      surface: "web",
+      policy: { requireApproval: false },
+      charter: {
+        intent: "recover duplicate upload test",
+        level: "core",
+        mode: "deterministic",
+        preconditions: [],
+        actions: [],
+        assertions: [{ kind: "text-visible", text: "Ready" }],
+        sideEffectPolicy: "confirm",
+        metadata: {},
+        negativeCases: [{
+          caseId: "duplicate-upload",
+          title: "重复上传",
+          actions: [{ kind: "click", selector: "#upload" }],
+          assertions: [{ kind: "text-visible", text: "Already exists" }],
+          oracles: [],
+          sideEffectPolicy: "confirm",
+          metadata: {},
+        }],
+      },
+    });
+    const interrupted = await agent.load(created.missionId);
+    interrupted.status = "running";
+    interrupted.currentTaskId = "negative-duplicate-upload";
+    interrupted.plan.graph.tasks = interrupted.plan.graph.tasks.map((task) => task.taskId === "negative-duplicate-upload"
+      ? { ...task, status: "running" as const, attempts: 1, maxAttempts: 2 }
+      : { ...task, status: "passed" as const, attempts: 1 });
+    await store.save(interrupted);
+
+    const result = await agent.run(created.missionId);
+
+    expect(result.status).toBe("blocked");
+    expect(result.verdict).toBe("blocked");
+    expect(calls).toEqual([]);
+    expect(result.findings.some((item) => item.message.includes("side effect"))).toBe(true);
+  });
+
   it.each([
     ["quick", 3, ["web"], false],
     ["core", 3, ["electron"], false],
@@ -201,5 +267,75 @@ describe("MissionAgent", () => {
     expect(verify?.dependsOn).toEqual(requiresReplay
       ? ["replay-charter", "replay-charter-electron"]
       : ["execute-charter"]);
+  });
+
+  it("turns explicitly declared negative cases into auditable tasks", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-negative-plan-"));
+    const planner = new DeterministicMissionPlanner();
+    const plan = await planner.plan({
+      intent: "check duplicate resume upload",
+      projectRoot: root,
+      surface: "web",
+      policy: { level: "core", environment: "test", sideEffectPolicy: "deny", requireApproval: true, requireEvidence: true, maxSteps: 100, timeoutMs: 30_000 },
+      charter: {
+        intent: "check duplicate resume upload",
+        level: "core",
+        mode: "deterministic",
+        preconditions: [],
+        actions: [{ kind: "observe" }],
+        assertions: [{ kind: "text-visible", text: "Ready" }],
+        sideEffectPolicy: "deny",
+        metadata: {},
+        negativeCases: [{
+          caseId: "duplicate-upload",
+          title: "重复上传应被拒绝",
+          actions: [{ kind: "click", selector: "#upload" }],
+          assertions: [{ kind: "text-visible", text: "Already exists" }],
+          oracles: ["duplicate-upload-rejected"],
+          sideEffectPolicy: "deny",
+          metadata: { severity: "high" },
+        }],
+      },
+    });
+
+    expect(plan.executionProfile.declaredNegativeCases).toEqual(["duplicate-upload"]);
+    expect(plan.executionProfile.requireNegativeCases).toBe(true);
+    expect(plan.graph.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskId: "negative-duplicate-upload",
+        tool: "surface.run-negative-charter",
+        input: expect.objectContaining({ negativeCase: expect.objectContaining({ caseId: "duplicate-upload" }) }),
+        dependsOn: ["execute-charter"],
+      }),
+    ]));
+    expect(plan.graph.tasks.find((task) => task.taskId === "verify-result")?.dependsOn).toEqual([
+      "execute-charter",
+      "negative-duplicate-upload",
+    ]);
+  });
+
+  it("rejects duplicate negative case identifiers before task creation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-negative-duplicate-"));
+    const planner = new DeterministicMissionPlanner();
+    await expect(planner.plan({
+      intent: "duplicate negative cases",
+      projectRoot: root,
+      surface: "web",
+      policy: { level: "core", environment: "test", sideEffectPolicy: "deny", requireApproval: true, requireEvidence: true, maxSteps: 100, timeoutMs: 30_000 },
+      charter: {
+        intent: "duplicate negative cases",
+        level: "core",
+        mode: "deterministic",
+        preconditions: [],
+        actions: [],
+        assertions: [],
+        sideEffectPolicy: "deny",
+        metadata: {},
+        negativeCases: [
+          { caseId: "same", title: "first", actions: [], assertions: [], oracles: [], sideEffectPolicy: "deny", metadata: {} },
+          { caseId: "same", title: "second", actions: [], assertions: [], oracles: [], sideEffectPolicy: "deny", metadata: {} },
+        ],
+      },
+    })).rejects.toThrow("duplicate negative case IDs");
   });
 });

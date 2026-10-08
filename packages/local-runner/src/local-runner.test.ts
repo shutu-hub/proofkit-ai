@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ProofkitConfigSchema, type RunSummary, type TestCharter } from "@proofkit/contracts";
+import { ProofkitConfigSchema, type NegativeCase, type RunSummary, type TestCharter, type TestMission } from "@proofkit/contracts";
 import { ExecutionRunner, type SurfaceAdapter } from "@proofkit/runner";
 import { LocalRunnerService } from "./index.js";
 
@@ -19,7 +19,7 @@ describe("LocalRunnerService", () => {
   it("runs a mission through the existing deterministic run and keeps evidence references", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mission-run-"));
     roots.push(root);
-    const service = new LocalRunnerService({ root });
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
     const charter: TestCharter = { intent: "verify fixture", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], oracles: ["fixture-terminal"], sideEffectPolicy: "deny", metadata: {} };
     const summary: RunSummary = {
       runId: "fixture-run",
@@ -77,7 +77,7 @@ describe("LocalRunnerService", () => {
   it("does not report a core mission as passed without an independent business oracle", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-core-gate-"));
     roots.push(root);
-    const service = new LocalRunnerService({ root });
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
     const charter: TestCharter = { intent: "verify fixture", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny", metadata: {} };
     const summary: RunSummary = {
       runId: "core-gate-run",
@@ -108,7 +108,7 @@ describe("LocalRunnerService", () => {
   it("does not report a mission as passed without an observable assertion", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-assertion-gate-"));
     roots.push(root);
-    const service = new LocalRunnerService({ root });
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
     const charter: TestCharter = { intent: "verify fixture", level: "quick", mode: "deterministic", preconditions: [], actions: [], assertions: [], sideEffectPolicy: "deny", metadata: {} };
     const summary: RunSummary = {
       runId: "assertion-gate-run",
@@ -137,7 +137,7 @@ describe("LocalRunnerService", () => {
   it("keeps an explicitly requested quick level through the mission envelope", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-quick-level-"));
     roots.push(root);
-    const service = new LocalRunnerService({ root });
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
     const charter: TestCharter = { intent: "check login", level: "quick", mode: "deterministic", preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny", metadata: {} };
 
     const mission = await service.createMission({ intent: "check login", level: "quick", surface: "web", charter });
@@ -151,7 +151,7 @@ describe("LocalRunnerService", () => {
   it("runs and verifies the release matrix across Web and Electron with replay evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-release-matrix-"));
     roots.push(root);
-    const service = new LocalRunnerService({ root });
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
     const charter: TestCharter = {
       intent: "release fixture",
       level: "release",
@@ -213,10 +213,229 @@ describe("LocalRunnerService", () => {
     expect(completed.evidence.length).toBeGreaterThanOrEqual(3);
   });
 
+  it("executes an explicitly declared negative charter with independent inputs and evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-negative-run-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
+    const negativeCase: NegativeCase = {
+      caseId: "duplicate-upload",
+      title: "重复上传应被拒绝",
+      actions: [{ kind: "click", selector: "#upload" }],
+      assertions: [{ kind: "text-visible", text: "Already exists" }],
+      oracles: ["duplicate-upload-rejected"],
+      sideEffectPolicy: "deny" as const,
+      metadata: { category: "idempotency" },
+    };
+    const charter: TestCharter = {
+      intent: "verify resume upload",
+      level: "core",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [{ kind: "observe" }],
+      assertions: [{ kind: "text-visible", text: "Ready" }],
+      oracles: ["resume-terminal"],
+      sideEffectPolicy: "deny",
+      metadata: {},
+      negativeCases: [negativeCase],
+    };
+    const captured: TestCharter[] = [];
+    const summaries = new Map<string, RunSummary>();
+    let sequence = 0;
+    service.start = async (input) => {
+      if (!input.charter) throw new Error("Test fixture requires a charter");
+      captured.push(input.charter);
+      const runId = `negative-run-${++sequence}`;
+      const now = new Date().toISOString();
+      const summary: RunSummary = {
+        runId,
+        startedAt: now,
+        endedAt: now,
+        status: "completed",
+        verdict: "passed",
+        charter: input.charter,
+        steps: [],
+        assertions: input.charter.assertions.map((assertion) => ({
+          assertion,
+          passed: true,
+          message: "assertion passed",
+          evidence: [`${runId}/after.json`],
+        })),
+        oracles: (input.charter.oracles ?? []).map((name) => ({
+          name,
+          passed: true,
+          message: "oracle passed",
+          evidence: [`${runId}/oracle.json`],
+          observedAt: now,
+        })),
+        artifacts: [`${runId}/after.json`, `${runId}/oracle.json`],
+        findings: [],
+      };
+      summaries.set(runId, summary);
+      return { runId, status: "completed", verdict: "passed", summary };
+    };
+    service.wait = async (runId) => {
+      const summary = summaries.get(runId);
+      if (!summary) throw new Error(`Unknown fixture run ${runId}`);
+      return summary;
+    };
+
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    expect(created.plan.executionProfile).toMatchObject({
+      declaredNegativeCases: ["duplicate-upload"],
+      requireNegativeCases: true,
+    });
+    const started = await service.startMission(created.missionId, { approve: true });
+    const completed = await service.waitMission(started.mission.missionId);
+
+    expect(completed.status).toBe("completed");
+    expect(completed.verdict).toBe("passed");
+    expect(completed.plan.graph.tasks.every((task) => task.status === "passed")).toBe(true);
+    expect(captured).toHaveLength(2);
+    expect(captured[0]?.actions).toEqual(charter.actions);
+    expect(captured[1]?.actions).toEqual(negativeCase.actions);
+    expect(captured[1]?.assertions).toEqual(negativeCase.assertions);
+    expect(captured[1]?.oracles).toEqual(negativeCase.oracles);
+    expect(captured[1]?.metadata).toMatchObject({ negativeCaseId: "duplicate-upload" });
+
+    const surfaceRuns = completed.observations.filter((item) => item.kind === "surface.run");
+    expect(surfaceRuns).toHaveLength(2);
+    expect(surfaceRuns.find((item) => item.data.runKind === "negative")?.data).toMatchObject({
+      negativeCaseId: "duplicate-upload",
+      surface: "web",
+    });
+    expect(completed.evidence.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("returns an inconclusive mission when a declared negative run is missing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-negative-gate-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
+    const charter: TestCharter = {
+      intent: "verify duplicate upload handling",
+      level: "core",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [{ kind: "observe" }],
+      assertions: [{ kind: "text-visible", text: "Ready" }],
+      oracles: ["resume-terminal"],
+      sideEffectPolicy: "deny",
+      metadata: {},
+      negativeCases: [{
+        caseId: "duplicate-upload",
+        title: "重复上传应被拒绝",
+        actions: [{ kind: "click", selector: "#upload" }],
+        assertions: [{ kind: "text-visible", text: "Already exists" }],
+        oracles: [],
+        sideEffectPolicy: "deny",
+        metadata: {},
+      }],
+    };
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    const missionPath = join(root, ".proofkit", "missions", `${created.missionId}.json`);
+    const persisted = JSON.parse(await readFile(missionPath, "utf8")) as TestMission;
+    persisted.status = "approved";
+    persisted.plan.graph.tasks = persisted.plan.graph.tasks.map((task) => ({
+      ...task,
+      status: task.taskId === "verify-result" ? "pending" : "passed",
+      attempts: task.taskId === "verify-result" ? 0 : 1,
+    }));
+    persisted.observations = [{
+      observationId: "primary-run",
+      source: "surface",
+      kind: "surface.run",
+      data: { runId: "primary-run", surface: "web", runKind: "primary", verdict: "passed", assertions: 1, oracles: 1 },
+      evidence: [],
+      observedAt: new Date().toISOString(),
+    }];
+    persisted.evidence = [
+      { evidenceId: "primary-run:run.json", kind: "snapshot", path: "primary-run/run.json", description: "run", capturedAt: new Date().toISOString() },
+      { evidenceId: "primary-run/oracle.json", kind: "business", path: "primary-run/oracle.json", description: "oracle", capturedAt: new Date().toISOString() },
+    ];
+    persisted.verdict = undefined;
+    await writeFile(missionPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+
+    const started = await service.startMission(created.missionId);
+    const completed = await service.waitMission(started.mission.missionId);
+
+    expect(completed.status).toBe("completed");
+    expect(completed.verdict).toBe("inconclusive");
+    expect(completed.findings.some((finding) => finding.message.includes("负向场景 duplicate-upload"))).toBe(true);
+    expect(completed.firstFailure?.kind).toBe("evidence");
+  });
+
+  it("accepts an expected failed verdict for a negative case without creating a product finding", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-negative-expected-failure-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
+    const charter: TestCharter = {
+      intent: "verify unauthorized upload rejection",
+      level: "core",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [{ kind: "observe" }],
+      assertions: [{ kind: "text-visible", text: "Ready" }],
+      oracles: ["resume-terminal"],
+      sideEffectPolicy: "deny",
+      metadata: {},
+      negativeCases: [{
+        caseId: "unauthorized-upload",
+        title: "未授权上传应失败",
+        actions: [{ kind: "click", selector: "#upload" }],
+        assertions: [],
+        oracles: [],
+        expectedVerdict: "failed",
+        sideEffectPolicy: "deny",
+        metadata: {},
+      }],
+    };
+    const summaries = new Map<string, RunSummary>();
+    let sequence = 0;
+    service.start = async (input) => {
+      if (!input.charter) throw new Error("Test fixture requires a charter");
+      const negative = input.charter.metadata.negativeCaseId === "unauthorized-upload";
+      const runId = `expected-failure-run-${++sequence}`;
+      const now = new Date().toISOString();
+      const summary: RunSummary = {
+        runId,
+        startedAt: now,
+        endedAt: now,
+        status: "completed",
+        verdict: negative ? "failed" : "passed",
+        charter: input.charter,
+        steps: [],
+        assertions: negative ? [] : input.charter.assertions.map((assertion) => ({ assertion, passed: true, message: "passed", evidence: [`${runId}/after.json`] })),
+        oracles: negative ? [] : [{ name: "resume-terminal", passed: true, message: "passed", evidence: [`${runId}/oracle.json`], observedAt: now }],
+        artifacts: [`${runId}/after.json`, `${runId}/oracle.json`],
+        findings: negative ? ["expected authorization rejection"] : [],
+      };
+      summaries.set(runId, summary);
+      return { runId, status: "completed", verdict: summary.verdict, summary };
+    };
+    service.wait = async (runId) => {
+      const summary = summaries.get(runId);
+      if (!summary) throw new Error(`Unknown fixture run ${runId}`);
+      return summary;
+    };
+
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    const started = await service.startMission(created.missionId, { approve: true });
+    const completed = await service.waitMission(started.mission.missionId);
+
+    expect(completed.status).toBe("completed");
+    expect(completed.verdict).toBe("passed");
+    expect(completed.findings).toEqual([]);
+    expect(completed.observations.find((item) => item.data.runKind === "negative")?.data).toMatchObject({
+      verdict: "failed",
+      expectedVerdict: "failed",
+      outcomeMatched: true,
+      negativeCaseId: "unauthorized-upload",
+    });
+  });
+
   it("rejects a charter and requested level that disagree", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-level-conflict-"));
     roots.push(root);
-    const service = new LocalRunnerService({ root });
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
     const charter: TestCharter = { intent: "check login", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny", metadata: {} };
 
     await expect(service.createMission({ intent: "check login", level: "quick", surface: "web", charter })).rejects.toThrow("Charter level core does not match requested level quick");
@@ -334,7 +553,7 @@ describe("LocalRunnerService", () => {
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("No model server port");
     const config = ProofkitConfigSchema.parse({ planning: { provider: "openai-compatible", baseUrl: `http://127.0.0.1:${address.port}/v1`, model: "test-model" }, surfaces: { web: { baseUrl: "http://127.0.0.1:5173" } } });
-    const charter = await new LocalRunnerService({ root, config }).plan("check resume");
+    const charter = await new LocalRunnerService({ workspaceRoot: root, root, config }).plan("check resume");
     expect(modelCalled).toBe(true);
     expect(charter.assertions).toEqual([{ kind: "text-visible", text: "Resume ready" }]);
     expect(charter.metadata.planner).toBe("openai-compatible");
@@ -345,7 +564,7 @@ describe("LocalRunnerService", () => {
     roots.push(root);
     const config = ProofkitConfigSchema.parse({ surfaces: { web: { baseUrl: "http://127.0.0.1:5173" } }, oracles: [{ name: "resume", url: "http://127.0.0.1:8080/status", statusPointer: "/data/status", successValues: ["done"] }] });
     let actions: unknown[] = [{ kind: "goto", url: "http://127.0.0.1:5173/resumes" }, { kind: "observe" }];
-    const service = new LocalRunnerService({ root, config, plannerProvider: { name: "fake-model", async plan() { return { intent: "test resume", actions, assertions: [{ kind: "text-visible", text: "Resume ready" }], oracles: ["resume"], sideEffectPolicy: "confirm" }; } } });
+    const service = new LocalRunnerService({ workspaceRoot: root, root, config, plannerProvider: { name: "fake-model", async plan() { return { intent: "test resume", actions, assertions: [{ kind: "text-visible", text: "Resume ready" }], oracles: ["resume"], sideEffectPolicy: "confirm" }; } } });
     const valid = await service.plan("test resume");
     expect(valid.oracles).toEqual(["resume"]);
     expect(valid.metadata.planner).toBe("fake-model");
@@ -358,7 +577,7 @@ describe("LocalRunnerService", () => {
   it("rejects an unregistered charter oracle before browser execution", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-local-"));
     roots.push(root);
-    const service = new LocalRunnerService({ root });
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
     const started = await service.start({ charter: { intent: "check", level: "core", mode: "guided", preconditions: [], actions: [], assertions: [], oracles: ["unknown"], sideEffectPolicy: "deny", metadata: {} } });
     await expect(service.wait(started.runId)).rejects.toThrow("Oracle is not registered");
   });
@@ -366,7 +585,7 @@ describe("LocalRunnerService", () => {
   it("rejects untrusted model-authored actions before execution", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-local-"));
     roots.push(root);
-    const service = new LocalRunnerService({ root, restrictWebOrigins: true });
+    const service = new LocalRunnerService({ workspaceRoot: root, root, restrictWebOrigins: true });
     const started = await service.start({
       charter: { intent: "unsafe", level: "core", mode: "guided", preconditions: [], actions: [{ kind: "shell", command: "whoami" } as never], assertions: [], sideEffectPolicy: "deny", metadata: {} },
     });
@@ -378,7 +597,7 @@ describe("LocalRunnerService", () => {
   it("blocks off-origin navigation in MCP mode before creating evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-local-"));
     roots.push(root);
-    const service = new LocalRunnerService({ root, restrictWebOrigins: true });
+    const service = new LocalRunnerService({ workspaceRoot: root, root, restrictWebOrigins: true });
     const started = await service.start({ intent: "open external", url: "https://example.com" });
     await expect(service.wait(started.runId)).rejects.toThrow("outside the configured origin");
     await expect(readFile(join(root, ".proofkit", "runs", started.runId, "run.json"), "utf8")).rejects.toThrow();
@@ -388,6 +607,7 @@ describe("LocalRunnerService", () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-local-"));
     roots.push(root);
     const service = new LocalRunnerService({
+      workspaceRoot: root,
       root,
       restrictWebOrigins: true,
       config: {

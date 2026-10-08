@@ -41,6 +41,24 @@ export const AssertionSchema = z.discriminatedUnion("kind", [
 ]);
 export type Assertion = z.infer<typeof AssertionSchema>;
 
+/**
+ * A declared negative or recovery scenario. The scenario is intentionally
+ * explicit: ProofKit never invents destructive actions from a category label.
+ * Its assertions/oracles describe the expected safe rejection or recovery.
+ */
+export const NegativeCaseSchema = z.object({
+  caseId: z.string().regex(/^[a-zA-Z0-9._-]+$/),
+  title: z.string().min(1),
+  actions: z.array(ActionSchema).default([]),
+  assertions: z.array(AssertionSchema).default([]),
+  oracles: z.array(z.string().min(1)).default([]),
+  /** The run outcome that this negative/recovery scenario expects. */
+  expectedVerdict: VerdictSchema.optional(),
+  sideEffectPolicy: SideEffectPolicySchema.default("deny"),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+export type NegativeCase = z.infer<typeof NegativeCaseSchema>;
+
 export const TestCharterSchema = z.object({
   intent: z.string().min(1),
   level: TestLevelSchema.default("core"),
@@ -50,6 +68,9 @@ export const TestCharterSchema = z.object({
   actions: z.array(ActionSchema).default([]),
   assertions: z.array(AssertionSchema).default([]),
   oracles: z.array(z.string().min(1)).optional(),
+  // Optional for backward compatibility with existing charters. The planner
+  // normalizes an omitted value to an empty list before creating tasks.
+  negativeCases: z.array(NegativeCaseSchema).optional(),
   sideEffectPolicy: SideEffectPolicySchema.default("confirm"),
   metadata: z.record(z.string(), z.unknown()).default({}),
 });
@@ -109,6 +130,8 @@ export type StepResult = z.infer<typeof StepResultSchema>;
 
 export const RunSummarySchema = z.object({
   runId: z.string(),
+  projectRoot: z.string().min(1).optional(),
+  workspaceRoot: z.string().min(1).optional(),
   startedAt: z.string(),
   endedAt: z.string().optional(),
   status: z.enum(["running", "completed"]),
@@ -226,6 +249,7 @@ export type MissionSurface = z.infer<typeof MissionSurfaceSchema>;
 export const MissionExecutionProfileSchema = z.object({
   surfaceMatrix: z.array(MissionSurfaceSchema).min(1).default(["web"]),
   negativeCases: z.array(z.string().min(1)).default([]),
+  declaredNegativeCases: z.array(z.string().regex(/^[a-zA-Z0-9._-]+$/)).default([]),
   requireBusinessOracle: z.boolean().default(false),
   requireReplay: z.boolean().default(false),
   requireNegativeCases: z.boolean().default(false),
@@ -401,6 +425,7 @@ export const MissionPlanSchema = z.object({
   executionProfile: MissionExecutionProfileSchema.default({
     surfaceMatrix: ["web"],
     negativeCases: [],
+    declaredNegativeCases: [],
     requireBusinessOracle: false,
     requireReplay: false,
     requireNegativeCases: false,
@@ -414,6 +439,7 @@ export const TestMissionSchema = z.object({
   missionId: z.string().min(1),
   intent: z.string().min(1),
   projectRoot: z.string().min(1),
+  workspaceRoot: z.string().min(1).optional(),
   surface: MissionSurfaceSchema,
   level: TestLevelSchema.default("core"),
   levelSelection: TestLevelSelectionSchema.optional(),

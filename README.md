@@ -16,12 +16,13 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Starts local project processes with health checks and captures runtime events in the same run timeline.
 - Observes read-only business HTTP endpoints through a redacted oracle instead of treating a UI click as proof of success.
 - Accepts programmatically registered, schema-validated project capabilities; only an explicit evidence projection is persisted.
-- Loads an optional project-owned `.proofkit/integration.mjs` module for typed capabilities, business oracles, test setup and cleanup.
+- Keeps configuration, connectors, Missions and run evidence in an external test workspace for new projects, with compatibility for existing project-local layouts.
+- Loads an optional workspace-owned `.proofkit/integration.mjs` module for typed capabilities, business oracles, test setup and cleanup.
 - Enforces a total run deadline and supports cancellation from the CLI or MCP while preserving the evidence directory.
 - Polls asynchronous HTTP business state to a bounded terminal verdict; a timeout remains inconclusive.
 - Records action receipts, before/after snapshots, network and console events, screenshots, and a JSONL timeline.
 - Reports `passed`, `failed`, `blocked`, `cancelled`, or `inconclusive`; missing evidence never becomes a pass.
-- The default `core` mission runs one selected surface with an independent business Oracle. `release` creates Web/Electron primary runs plus replay runs and verifies the complete matrix; negative-path execution is planned but not enabled yet.
+- The default `core` mission runs one selected surface with an independent business Oracle. `release` creates Web/Electron primary runs plus replay runs and verifies the complete matrix; explicitly declared negative or recovery cases run on every required surface and are included in the evidence gate. A negative case can declare an expected `failed` or `blocked` outcome while retaining the raw run evidence.
 - Produces local JSON and HTML reports without a hosted service.
 
 ## Quick start
@@ -35,7 +36,9 @@ pnpm --filter @proofkit/cli dev -- init --root /path/to/your/project
 pnpm --filter @proofkit/cli dev -- doctor --root /path/to/your/project
 ```
 
-`proofkit init` also creates a starter `.proofkit/integration.mjs`. Leave its arrays empty for UI-only checks, or add typed business capabilities and independent oracles when a workflow needs backend proof.
+`--root` identifies the tested source. For a new project, ProofKit writes its test files to `~/.proofkit/workspaces/<project-name>-<path-hash>/.proofkit/`. Add `--workspace /path/to/test-workspace` to any command to select an explicit workspace. An existing source project's `.proofkit` keeps its legacy layout unless you supply `--workspace`.
+
+`proofkit init` also creates a starter integration module in that test workspace. Leave its arrays empty for UI-only checks, or add typed business capabilities and independent oracles when a workflow needs backend proof. Initialization does not add files to the source tree when an external workspace is selected.
 
 Plan and review a test:
 
@@ -48,7 +51,7 @@ pnpm --filter @proofkit/cli dev -- plan \
   --out resume-check.yaml
 ```
 
-For one-sentence planning with a local or OpenAI-compatible model, set `planning.provider: openai-compatible`, `planning.baseUrl`, and `planning.model` in the target project's `.proofkit/config.yaml`. The default planner stays deterministic. An optional `apiKeyEnv` names an environment variable; the key is never written to the config file.
+For one-sentence planning with a local or OpenAI-compatible model, set `planning.provider: openai-compatible`, `planning.baseUrl`, and `planning.model` in `<workspaceRoot>/.proofkit/config.yaml`. The default planner stays deterministic. An optional `apiKeyEnv` names an environment variable; the key is never written to the config file.
 
 For asynchronous business outcomes, register a read-only status endpoint and terminal values in that same config:
 
@@ -92,18 +95,18 @@ pnpm --filter @proofkit/cli dev -- run "resume check" \
   --devtools-port-file /path/to/user-data/DevToolsActivePort
 ```
 
-Runs are stored under `.proofkit/runs/<run-id>/` by default. Each run contains `run.json`, `events.jsonl`, artifacts, and `report.html`.
+Relative Charter and output paths resolve against the selected test workspace. Runs are stored under `<workspaceRoot>/.proofkit/runs/<run-id>/` by default. Each run contains `run.json`, `events.jsonl`, artifacts, and `report.html`.
 
 For an AI client, build and register the optional local MCP server. It exposes only project discovery, charter planning, run start, status, bounded evidence, and replay, and it uses the same Local Runner as the CLI. MCP does not execute the configured project start command; start your test environment first:
 
 ```bash
 pnpm --filter @proofkit/mcp build
-PROOFKIT_ROOT=/path/to/your/project node packages/mcp/dist/server.js
+PROOFKIT_ROOT=/path/to/your/project PROOFKIT_WORKSPACE_ROOT=/path/to/test-workspace node packages/mcp/dist/server.js
 ```
 
 The shortest agent workflow is `run_test({ intent, level, surface })`, followed by `get_mission_status` and `get_mission_evidence`. The supported levels are `quick` (fast observable path), `core` (the default, with an independent business Oracle), and `release` (pre-release regression scope). If no level is supplied, ProofKit selects `core` and records that decision in the Mission. See [docs/agent-integration.md](docs/agent-integration.md) for Codex, Claude Code and DeepSeek Harness usage.
 
-Project-specific capabilities can be kept in the project under `.proofkit/integration.mjs`. The module is trusted project code and may export a `name`, typed `capabilities`, business `oracles`, and a setup function that returns cleanup:
+Project-specific capabilities can live outside the tested source under `<workspaceRoot>/.proofkit/integration.mjs`. The module is trusted local code and may export a `name`, typed `capabilities`, business `oracles`, and a setup function that returns cleanup:
 
 ```js
 export default {
@@ -119,24 +122,28 @@ export default {
 };
 ```
 
-Set `run.timeoutMs` in `.proofkit/config.yaml` to bound the complete run. Press `Ctrl+C` during a CLI run or call the MCP `cancel_run` tool to cancel it; its report and evidence are retained with a `cancelled` verdict.
+Set `run.timeoutMs` in the workspace's `.proofkit/config.yaml` to bound the complete run. Press `Ctrl+C` during a CLI run or call the MCP `cancel_run` tool to cancel it; its report and evidence are retained with a `cancelled` verdict.
 
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
+  Host[Codex / Claude Code / MCP client] --> MCP[MCP facade]
   CLI[CLI / CI] --> Local[Local Runner]
-  MCP[MCP facade] --> Local
-  Local --> Runner[Execution Runner]
-  Runner --> Planner[Project Map + Test Charter]
-  Runner --> Web[Web Adapter]
-  Runner --> Electron[Electron CDP Adapter]
-  Web --> Events[Typed events + receipts]
-  Electron --> Events
-  Events --> Evidence[Evidence Store]
-  Events --> Oracle[Business assertions]
-  Evidence --> Verdict[Verdict + HTML/JSON report]
-  Oracle --> Verdict
+  MCP --> Local
+  Local --> Plan[Project Map + validated Test Charter]
+  Local --> Agent[Mission task graph + durable Agent Loop]
+  Agent --> Runs[Shared Local Runner run lifecycle]
+  Runs --> Runner[Execution Runner]
+  Runner --> Surfaces[Web / Electron adapters]
+  Runner --> Runtime[Project runtime + typed capabilities]
+  Runner --> Oracle[Independent business assertions]
+  Surfaces --> Evidence[Events + snapshots + evidence]
+  Runtime --> Evidence
+  Oracle --> Evidence
+  Runner --> Verdict[Run verdict]
+  Verdict --> Result[Mission verification + concise HTML/JSON result]
+  Evidence --> Result
 ```
 
 The repository is a pnpm workspace with explicit package boundaries:
@@ -146,8 +153,11 @@ The repository is a pnpm workspace with explicit package boundaries:
 | `@proofkit/contracts` | Runtime schemas for charters, actions, receipts, events, evidence and verdicts |
 | `@proofkit/project` | Project scan, `doctor` inputs, local configuration |
 | `@proofkit/planner` | Deterministic intent scaffolding and YAML charter validation |
+| `@proofkit/agent` | Mission task graphs, recoverable task scheduling, evidence gates and failure analysis |
 | `@proofkit/runner` | Execution lifecycle, step receipts, assertions and verdicts |
 | `@proofkit/adapters` | Playwright Web and Electron CDP surfaces |
+| `@proofkit/runtime` | Application process startup, health checks and runtime events |
+| `@proofkit/oracles` | Independent business checks and bounded read-only HTTP polling |
 | `@proofkit/evidence` | JSONL timeline, artifacts, redaction and static report data |
 | `@proofkit/local-runner` | Shared CLI/MCP/CI orchestration, status, replay and evidence lookup |
 | `@proofkit/mcp` | Narrow MCP facade over the shared Local Runner |

@@ -1,7 +1,12 @@
-import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { access, link, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
 import { parse, stringify } from "yaml";
 import { ProjectMapSchema, ProofkitConfigSchema, type ProjectMap, type ProofkitConfig } from "@proofkit/contracts";
+import { resolveProjectContext, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
+
+export { defaultWorkspaceRoot, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
 
 type PackageJson = {
   name?: string;
@@ -22,7 +27,7 @@ const DEFAULT_CONFIG: ProofkitConfig = {
   policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false },
 };
 
-const DEFAULT_INTEGRATION = `// Project-owned ProofKit capabilities and business oracles live here.\n// Keep writes limited to test data and always return cleanup from setup.\nexport default {\n  name: "project-integration",\n  version: "1",\n  capabilities: [],\n  oracles: [],\n};\n`;
+const DEFAULT_INTEGRATION = `// ProofKit capabilities and business oracles live in this test workspace.\n// Keep writes limited to test data and always return cleanup from setup.\nexport default {\n  name: "project-integration",\n  version: "1",\n  capabilities: [],\n  oracles: [],\n};\n`;
 
 export async function scanProject(projectRoot = process.cwd()): Promise<ProjectMap> {
   const root = resolve(projectRoot);
@@ -66,25 +71,52 @@ export async function scanProject(projectRoot = process.cwd()): Promise<ProjectM
   });
 }
 
-export async function initProject(projectRoot = process.cwd()): Promise<string> {
-  const root = resolve(projectRoot);
-  const configPath = join(root, ".proofkit", "config.yaml");
-  const integrationPath = join(root, ".proofkit", "integration.mjs");
-  await mkdir(join(root, ".proofkit"), { recursive: true });
-  if (!(await fileExists(configPath))) {
-    await writeFile(configPath, stringify(DEFAULT_CONFIG), "utf8");
-  }
-  if (!(await fileExists(integrationPath))) {
-    await writeFile(integrationPath, DEFAULT_INTEGRATION, "utf8");
-  }
-  return configPath;
+export async function initProject(projectRoot = process.cwd(), options: ProjectContextOptions = {}): Promise<string> {
+  const context = resolveProjectContext(projectRoot, options);
+  // Validate an existing binding before creating even the starter integration.
+  loadConfigForContext(context);
+  await mkdir(context.metadataDir, { recursive: true });
+  await writeIfMissing(context.configPath, stringify({ ...DEFAULT_CONFIG, project: { ...DEFAULT_CONFIG.project, root: context.projectRoot } }));
+  // Another initializer may have won the exclusive config creation.
+  loadConfigForContext(context);
+  await writeIfMissing(join(context.metadataDir, "integration.mjs"), DEFAULT_INTEGRATION);
+  return context.configPath;
 }
 
-export async function loadConfig(projectRoot = process.cwd()): Promise<ProofkitConfig> {
-  const configPath = join(resolve(projectRoot), ".proofkit", "config.yaml");
-  if (!(await fileExists(configPath))) return ProofkitConfigSchema.parse(DEFAULT_CONFIG);
-  const source = await readFile(configPath, "utf8");
-  return ProofkitConfigSchema.parse(parse(source));
+export async function loadConfig(projectRoot = process.cwd(), options: ProjectContextOptions = {}): Promise<ProofkitConfig> {
+  return loadConfigForContext(resolveProjectContext(projectRoot, options));
+}
+
+export function loadConfigForContext(context: ProjectContext, override?: ProofkitConfig): ProofkitConfig {
+  const stored = existsSync(context.configPath)
+    ? ProofkitConfigSchema.parse(parse(readFileSync(context.configPath, "utf8")))
+    : ProofkitConfigSchema.parse({ ...DEFAULT_CONFIG, project: { ...DEFAULT_CONFIG.project, root: context.projectRoot } });
+  assertConfigBinding(context, stored);
+  if (!override) return stored;
+  // Programmatic defaults still use '.', meaning the supplied source root.
+  const config = ProofkitConfigSchema.parse({ ...override, project: { ...override.project, root: override.project.root === "." ? context.projectRoot : override.project.root } });
+  assertConfigBinding(context, config);
+  return config;
+}
+
+function assertConfigBinding(context: ProjectContext, config: ProofkitConfig): void {
+  const boundRoot = resolve(context.workspaceRoot, config.project.root);
+  if (!sameProjectPath(boundRoot, context.projectRoot)) {
+    throw new Error(`ProofKit workspace is bound to another project: ${boundRoot}; requested ${context.projectRoot}`);
+  }
+}
+
+async function writeIfMissing(path: string, content: string): Promise<void> {
+  // Publish a complete file atomically without replacing another initializer's binding.
+  const temporary = join(dirname(path), `.${basename(path)}-${randomUUID()}.tmp`);
+  await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
+  try {
+    await link(temporary, path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  } finally {
+    await unlink(temporary);
+  }
 }
 
 async function findPackageJsons(root: string): Promise<string[]> {

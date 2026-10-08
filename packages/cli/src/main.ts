@@ -1,11 +1,11 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { Command } from "commander";
 import type { RunMode, SideEffectPolicy, TestLevel } from "@proofkit/contracts";
 import { EvidenceStore } from "@proofkit/evidence";
 import { IntentPlanner } from "@proofkit/planner";
 import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
-import { initProject, loadConfig, scanProject } from "@proofkit/project";
+import { initProject, loadConfig, resolveProjectContext, resolveWithinWorkspace, scanProject } from "@proofkit/project";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -15,21 +15,24 @@ export function createProgram(): Command {
     .version("0.1.0");
 
   program.command("init")
-    .description("Create a local ProofKit project configuration")
+    .description("Create a ProofKit test workspace bound to the source project")
     .option("--root <path>", "project root", ".")
-    .action(async ({ root }: { root: string }) => {
-      const path = await initProject(resolve(root));
+    .action(async ({ root, workspace }: RootOptions) => {
+      const path = await initProject(resolve(root), { workspaceRoot: workspace });
       console.log(`Created ${path}`);
     });
 
   program.command("doctor")
     .description("Inspect project entry points and local configuration")
     .option("--root <path>", "project root", ".")
-    .action(async ({ root }: { root: string }) => {
+    .action(async ({ root, workspace }: RootOptions) => {
       const project = await scanProject(resolve(root));
-      const config = await loadConfig(resolve(root));
+      const context = resolveProjectContext(root, { workspaceRoot: workspace });
+      const config = await loadConfig(root, { workspaceRoot: context.workspaceRoot });
       const checks: Array<[string, string]> = [
         ["project root", project.root],
+        ["test workspace", context.workspaceRoot],
+        ["config", context.configPath],
         ["package manager", project.packageManager ?? "unknown"],
         ["web surface", project.detected.web ? "detected" : "not detected"],
         ["electron surface", project.detected.electron ? "detected" : "not detected"],
@@ -44,10 +47,14 @@ export function createProgram(): Command {
     .description("Generate a project map for planning")
     .option("--root <path>", "project root", ".")
     .option("--out <path>", "write JSON output")
-    .action(async ({ root, out }: { root: string; out?: string }) => {
+    .action(async ({ root, workspace, out }: RootOptions & { out?: string }) => {
       const map = await scanProject(resolve(root));
       const output = `${JSON.stringify(map, null, 2)}\n`;
-      if (out) await writeFile(resolve(root, out), output, "utf8");
+      if (out) {
+        const context = resolveProjectContext(root, { workspaceRoot: workspace });
+        await initProject(root, { workspaceRoot: context.workspaceRoot });
+        await writeWorkspaceOutput(context.workspaceRoot, out, output);
+      }
       console.log(output);
     });
 
@@ -63,7 +70,7 @@ export function createProgram(): Command {
     .option("--out <path>", "write YAML output")
     .action(async (intent: string, options: PlanCommandOptions) => {
       const root = resolve(options.root);
-      const runner = await LocalRunnerService.create({ root });
+      const runner = await LocalRunnerService.create({ root, workspaceRoot: options.workspace });
       const planner = new IntentPlanner();
       const charter = await runner.plan(intent, {
         url: options.url,
@@ -74,7 +81,10 @@ export function createProgram(): Command {
         sideEffectPolicy: options.sideEffects as SideEffectPolicy | undefined,
       });
       const output = planner.toYaml(charter);
-      if (options.out) await writeFile(resolve(root, options.out), output, "utf8");
+      if (options.out) {
+        await initProject(root, { workspaceRoot: runner.workspaceRoot });
+        await writeWorkspaceOutput(runner.workspaceRoot, options.out, output);
+      }
       process.stdout.write(output);
     });
 
@@ -98,11 +108,10 @@ export function createProgram(): Command {
     .option("--allow-capability-writes", "allow explicitly declared write capabilities")
     .action(async (intent: string, options: RunCommandOptions) => {
       const root = resolve(options.root);
-      const config = await loadConfig(root);
       const runner = await LocalRunnerService.create({
         root,
-        config,
-        evidenceDir: resolve(root, options.evidenceDir),
+        workspaceRoot: options.workspace,
+        evidenceDir: options.evidenceDir,
         allowCapabilityWrites: options.allowCapabilityWrites,
       });
       const started = await runner.start({
@@ -118,7 +127,7 @@ export function createProgram(): Command {
         oracleNames: options.oracle.length ? options.oracle : undefined,
         mode: options.mode as RunMode,
         level: options.level as TestLevel,
-        sideEffectPolicy: config.policies.sideEffects,
+        sideEffectPolicy: runner.config.policies.sideEffects,
         oracleUrl: options.oracleUrl,
         oracleName: options.oracleName,
       });
@@ -130,7 +139,7 @@ export function createProgram(): Command {
       } finally {
         process.off("SIGINT", onSigint);
       }
-      console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, report: resolve(root, options.evidenceDir, summary.runId, "report.html") }, null, 2));
+      console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, report: resolve(runner.evidenceDir, summary.runId, "report.html") }, null, 2));
       if (summary.verdict !== "passed") process.exitCode = 1;
     });
 
@@ -147,7 +156,7 @@ export function createProgram(): Command {
     .option("--side-effects <policy>", "deny, confirm or allow")
     .action(async (intent: string, options: MissionCreateCommandOptions) => {
       const root = resolve(options.root);
-      const runner = await LocalRunnerService.create({ root });
+      const runner = await LocalRunnerService.create({ root, workspaceRoot: options.workspace });
       const created = await runner.createMission({
         intent,
         surface: options.surface as "web" | "electron",
@@ -164,8 +173,8 @@ export function createProgram(): Command {
   mission.command("approve <missionId>")
     .description("Approve a mission plan")
     .option("--root <path>", "project root", ".")
-    .action(async (missionId: string, options: { root: string }) => {
-      const runner = await LocalRunnerService.create({ root: resolve(options.root) });
+    .action(async (missionId: string, options: RootOptions) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       console.log(JSON.stringify(await runner.approveMission(missionId), null, 2));
     });
 
@@ -173,8 +182,8 @@ export function createProgram(): Command {
     .description("Run an approved mission and wait for its final verdict")
     .option("--root <path>", "project root", ".")
     .option("--approve", "approve the plan before starting")
-    .action(async (missionId: string, options: { root: string; approve?: boolean }) => {
-      const runner = await LocalRunnerService.create({ root: resolve(options.root) });
+    .action(async (missionId: string, options: RootOptions & { approve?: boolean }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       await runner.startMission(missionId, { approve: options.approve });
       const completed = await runner.waitMission(missionId);
       const evidence = await runner.missionEvidence(completed.missionId);
@@ -185,24 +194,24 @@ export function createProgram(): Command {
   mission.command("status <missionId>")
     .description("Read mission status and task graph")
     .option("--root <path>", "project root", ".")
-    .action(async (missionId: string, options: { root: string }) => {
-      const runner = await LocalRunnerService.create({ root: resolve(options.root) });
+    .action(async (missionId: string, options: RootOptions) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       console.log(JSON.stringify(await runner.missionStatus(missionId), null, 2));
     });
 
   mission.command("evidence <missionId>")
     .description("Read mission evidence references and findings")
     .option("--root <path>", "project root", ".")
-    .action(async (missionId: string, options: { root: string }) => {
-      const runner = await LocalRunnerService.create({ root: resolve(options.root) });
+    .action(async (missionId: string, options: RootOptions) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       console.log(JSON.stringify(await runner.missionEvidence(missionId), null, 2));
     });
 
   mission.command("replay <missionId>")
     .description("Replay a mission charter and wait for its final verdict")
     .option("--root <path>", "project root", ".")
-    .action(async (missionId: string, options: { root: string }) => {
-      const runner = await LocalRunnerService.create({ root: resolve(options.root) });
+    .action(async (missionId: string, options: RootOptions) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       const started = await runner.replayMission(missionId);
       const completed = await runner.waitMission(started.mission.missionId);
       console.log(JSON.stringify({ missionId: completed.missionId, status: completed.status, verdict: completed.verdict }, null, 2));
@@ -213,9 +222,10 @@ export function createProgram(): Command {
     .description("Regenerate a static report for a run")
     .option("--root <path>", "project root", ".")
     .option("--evidence-dir <path>", "run artifact directory", ".proofkit/runs")
-    .action(async (runId: string, options: { root: string; evidenceDir: string }) => {
-      const store = new EvidenceStore(resolve(options.root, options.evidenceDir));
-      const summary = await store.loadSummary(runId);
+    .action(async (runId: string, options: RootOptions & { evidenceDir: string }) => {
+      const runner = new LocalRunnerService({ root: options.root, workspaceRoot: options.workspace, evidenceDir: options.evidenceDir });
+      const store = new EvidenceStore(runner.evidenceDir);
+      const summary = await runner.wait(runId);
       console.log(await store.writeReport(summary));
     });
 
@@ -231,16 +241,16 @@ export function createProgram(): Command {
     .option("--allow-capability-writes", "allow explicitly declared write capabilities")
     .action(async (runId: string, options: ReplayOptions) => {
       const root = resolve(options.root);
-      const store = new EvidenceStore(resolve(root, options.evidenceDir));
-      const previous = await store.loadSummary(runId);
+      const reader = new LocalRunnerService({ root, workspaceRoot: options.workspace, evidenceDir: options.evidenceDir });
+      const previous = await reader.wait(runId);
       if (!options.rerun) {
         console.log(JSON.stringify({ runId: previous.runId, verdict: previous.verdict, charter: previous.charter, steps: previous.steps.length, artifacts: previous.artifacts.length }, null, 2));
         return;
       }
       const runner = await LocalRunnerService.create({
         root,
-        config: await loadConfig(root),
-        evidenceDir: resolve(root, options.evidenceDir),
+        workspaceRoot: options.workspace,
+        evidenceDir: options.evidenceDir,
         allowCapabilityWrites: options.allowCapabilityWrites,
       });
       const started = await runner.replay(runId, {
@@ -254,11 +264,19 @@ export function createProgram(): Command {
       if (summary.verdict !== "passed") process.exitCode = 1;
     });
 
+  // Every leaf command resolves the same source/workspace pair.
+  for (const command of [...program.commands, ...mission.commands]) {
+    if (command !== mission) command.option("--workspace <path>", "test workspace root; defaults to an external workspace or existing project .proofkit");
+  }
   return program;
 }
 
-type PlanCommandOptions = {
+type RootOptions = {
   root: string;
+  workspace?: string;
+};
+
+type PlanCommandOptions = RootOptions & {
   url?: string;
   expect: string[];
   oracle: string[];
@@ -285,8 +303,7 @@ type RunCommandOptions = PlanCommandOptions & {
   oracleName: string;
 };
 
-type ReplayOptions = {
-  root: string;
+type ReplayOptions = RootOptions & {
   evidenceDir: string;
   rerun?: boolean;
   adapter: string;
@@ -295,6 +312,12 @@ type ReplayOptions = {
   headful?: boolean;
   allowCapabilityWrites?: boolean;
 };
+
+async function writeWorkspaceOutput(workspaceRoot: string, path: string, output: string): Promise<void> {
+  const destination = resolveWithinWorkspace(workspaceRoot, path);
+  await mkdir(dirname(destination), { recursive: true });
+  await writeFile(destination, output, "utf8");
+}
 
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];

@@ -63,6 +63,7 @@ export type MissionTool<Input = unknown> = {
 export type MissionPlanInput = {
   intent: string;
   projectRoot: string;
+  workspaceRoot?: string;
   surface: TestMission["surface"];
   policy: MissionPolicy;
   charter?: TestMission["charter"];
@@ -83,6 +84,7 @@ function executionProfile(level: MissionPolicy["level"], surface: TestMission["s
       : level === "core"
         ? ["关键权限或输入边界"]
         : ["权限边界", "无效输入", "重试与恢复", "重复提交与幂等"],
+    declaredNegativeCases: [],
     requireBusinessOracle: level !== "quick",
     requireReplay: level === "release",
     requireNegativeCases: false,
@@ -95,6 +97,13 @@ export class DeterministicMissionPlanner implements MissionPlanner {
     const now = new Date().toISOString();
     const planId = `plan-${randomUUID().slice(0, 12)}`;
     const profile = executionProfile(input.policy.level, input.surface);
+    const negativeCases = input.charter?.negativeCases ?? [];
+    const negativeCaseIds = negativeCases.map((negativeCase) => negativeCase.caseId);
+    if (new Set(negativeCaseIds).size !== negativeCaseIds.length) {
+      throw new Error("Charter contains duplicate negative case IDs");
+    }
+    profile.declaredNegativeCases = negativeCaseIds;
+    profile.requireNegativeCases = negativeCases.length > 0;
     const primaryTasks = profile.surfaceMatrix.map((surface) => {
       const taskId = surface === input.surface ? "execute-charter" : `execute-charter-${surface}`;
       return TaskNodeSchema.parse({
@@ -120,9 +129,24 @@ export class DeterministicMissionPlanner implements MissionPlanner {
         maxAttempts: 1,
       });
     }) : [];
+    const negativeTasks = profile.surfaceMatrix.flatMap((surface) => negativeCases.map((negativeCase) => {
+      const taskId = surface === input.surface
+        ? `negative-${negativeCase.caseId}`
+        : `negative-${surface}-${negativeCase.caseId}`;
+      const primaryTaskId = surface === input.surface ? "execute-charter" : `execute-charter-${surface}`;
+      return TaskNodeSchema.parse({
+        taskId,
+        title: `${surface} 负向场景：${negativeCase.title}`,
+        objective: `验证负向场景 ${negativeCase.title} 按预期拒绝或恢复，并保存独立证据。`,
+        tool: "surface.run-negative-charter",
+        input: { negativeCase, adapter: surface },
+        dependsOn: [primaryTaskId],
+        maxAttempts: 1,
+      });
+    }));
     const verificationDependencies = profile.requireReplay
-      ? replayTasks.map((task) => task.taskId)
-      : primaryTasks.map((task) => task.taskId);
+      ? [...replayTasks.map((task) => task.taskId), ...negativeTasks.map((task) => task.taskId)]
+      : [...primaryTasks.map((task) => task.taskId), ...negativeTasks.map((task) => task.taskId)];
     const tasks: TaskNode[] = [
       TaskNodeSchema.parse({
         taskId: "reconnaissance",
@@ -134,6 +158,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       }),
       ...primaryTasks,
       ...replayTasks,
+      ...negativeTasks,
       TaskNodeSchema.parse({
         taskId: "verify-result",
         title: "验证业务终态和证据完整性",
@@ -244,6 +269,7 @@ export class MissionAgent {
       missionId: `mission-${randomUUID().slice(0, 12)}`,
       intent: input.intent,
       projectRoot: input.projectRoot,
+      workspaceRoot: input.workspaceRoot,
       surface: input.surface,
       level: policy.level,
       levelSelection: input.charter?.levelSelection,
@@ -581,6 +607,15 @@ function closeInterruptedAgentSteps(steps: AgentStep[], task: TaskNode, reason: 
 function isSafeToRecover(mission: TestMission, task: TaskNode, tool: MissionTool): boolean {
   if (tool.sideEffect === "write") return false;
   if ((task.tool === "surface.run-charter" || task.tool === "surface.replay-charter") && mission.charter?.sideEffectPolicy !== "deny") return false;
+  if (task.tool === "surface.run-negative-charter") {
+    const input = task.input as { negativeCase?: { caseId?: unknown; sideEffectPolicy?: unknown } };
+    const caseId = typeof input.negativeCase?.caseId === "string" ? input.negativeCase.caseId : undefined;
+    const declared = mission.charter?.negativeCases?.find((negativeCase) => negativeCase.caseId === caseId);
+    // A negative case can contain a capability or a UI operation with a
+    // product side effect. Only an explicitly deny-policy case is eligible
+    // for automatic replay after a process interruption.
+    if (!declared || declared.sideEffectPolicy !== "deny" || input.negativeCase?.sideEffectPolicy !== "deny") return false;
+  }
   return true;
 }
 

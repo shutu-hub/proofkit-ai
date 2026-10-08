@@ -29,6 +29,7 @@ describe("Oracle registration and selection", () => {
     const unrelated = vi.fn(async () => { throw new Error("Unrelated workflow must not execute"); });
     const cleanup = vi.fn();
     const service = new LocalRunnerService({
+      workspaceRoot: root,
       root,
       integration: {
         name: "fixture",
@@ -49,7 +50,7 @@ describe("Oracle registration and selection", () => {
   it("treats programmatic Oracles as a registry and executes only selected names", async () => {
     const root = await projectRoot();
     const check = vi.fn(async () => ({ name: "programmatic", passed: true, message: "terminal", evidence: [] }));
-    const service = new LocalRunnerService({ root, oracles: [{ name: "programmatic", check }] });
+    const service = new LocalRunnerService({ workspaceRoot: root, root, oracles: [{ name: "programmatic", check }] });
     const unselected = await service.start({ charter: charter([]) });
     expect((await service.wait(unselected.runId)).oracles).toEqual([]);
     expect(check).not.toHaveBeenCalled();
@@ -62,18 +63,18 @@ describe("Oracle registration and selection", () => {
   it("rejects ambiguous integration and programmatic registrations", async () => {
     const root = await projectRoot();
     const oracle = { name: "same", check: async () => ({ name: "same", passed: true, message: "ok", evidence: [] }) };
-    expect(() => new LocalRunnerService({ root, integration: { name: "fixture", oracles: [oracle] }, oracles: [oracle] })).toThrow("Duplicate oracle registration");
+    expect(() => new LocalRunnerService({ workspaceRoot: root, root, integration: { name: "fixture", oracles: [oracle] }, oracles: [oracle] })).toThrow("Duplicate oracle registration");
   });
 
   it("rejects declarative names that shadow a registered Oracle", async () => {
     const root = await projectRoot();
     const config = ProofkitConfigSchema.parse({ oracles: [{ name: "same", url: "http://127.0.0.1:8080/status", statusPointer: "/status", successValues: ["complete"] }] });
-    expect(() => new LocalRunnerService({ root, config, oracles: [{ name: "same", check: async () => ({ name: "same", passed: true, message: "ok", evidence: [] }) }] })).toThrow("Duplicate oracle registration");
+    expect(() => new LocalRunnerService({ workspaceRoot: root, root, config, oracles: [{ name: "same", check: async () => ({ name: "same", passed: true, message: "ok", evidence: [] }) }] })).toThrow("Duplicate oracle registration");
   });
 
   it("rejects an inline Oracle collision before connecting the browser", async () => {
     const root = await projectRoot();
-    const service = new LocalRunnerService({ root, oracles: [{ name: "selected", check: async () => ({ name: "selected", passed: true, message: "ok", evidence: [] }) }] });
+    const service = new LocalRunnerService({ workspaceRoot: root, root, oracles: [{ name: "selected", check: async () => ({ name: "selected", passed: true, message: "ok", evidence: [] }) }] });
     const started = await service.start({ charter: charter(["selected"]), oracleUrl: "http://127.0.0.1:8080/status", oracleName: "selected" });
     await expect(service.wait(started.runId)).rejects.toThrow("Duplicate oracle name");
     expect(WebAdapter.prototype.connect).not.toHaveBeenCalled();
@@ -82,7 +83,7 @@ describe("Oracle registration and selection", () => {
   it("checks configured Web CDP endpoints before connecting in MCP mode", async () => {
     const root = await projectRoot();
     const config = ProofkitConfigSchema.parse({ surfaces: { web: { cdpUrl: "http://example.com:9222" } } });
-    const service = new LocalRunnerService({ root, config, restrictWebOrigins: true });
+    const service = new LocalRunnerService({ workspaceRoot: root, root, config, restrictWebOrigins: true });
     const started = await service.start({ charter: charter([]) });
     await expect(service.wait(started.runId)).rejects.toThrow("CDP endpoint must use loopback");
     expect(WebAdapter.prototype.connect).not.toHaveBeenCalled();

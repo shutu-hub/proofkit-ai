@@ -6,6 +6,56 @@ ProofKit is a local-first, evidence-driven system verification tool. It connects
 
 The first implementation supports Web and Electron. Mobile, native desktop, protocol replay, cloud orchestration, and hosted device management are extension points, not first-release dependencies.
 
+## Current system shape
+
+```mermaid
+flowchart TD
+  User[User intent] --> Host[Codex / Claude Code / other MCP client]
+  Host --> MCP[MCP tools]
+  CLI[CLI / CI] --> Local[Local Runner]
+  MCP --> Local
+  Local --> Project[Project scan + workspace binding]
+  Local --> Planner[Validated Test Charter planner]
+  Local --> Agent[Mission task graph + recoverable agent loop]
+  Agent --> Runs[Local Runner run lifecycle]
+  Runs --> Kernel[Execution Runner]
+  Kernel --> Surface[Web / Electron adapters]
+  Kernel --> Runtime[Project process health + lifecycle]
+  Kernel --> Integration[Typed domain capabilities + business oracles]
+  Surface --> Evidence[Snapshots + events + evidence artifacts]
+  Runtime --> Evidence
+  Integration --> Evidence
+  Kernel --> Verdict[Run verdict]
+  Verdict --> Verify[Mission evidence gates + failure analysis]
+  Evidence --> Verify
+  Verify --> Result[Structured findings + HTML / JSON report]
+```
+
+The host coding agent supplies the user-facing reasoning and can inspect source code using its own tools. ProofKit's internal Mission Agent currently schedules a deterministic task graph; it is not a general model-driven exploration loop. The optional model provider generates a schema-validated Charter. The run kernel owns surface verdicts; mission verification aggregates them and enforces level-specific evidence requirements.
+
+The implementation uses Node.js 22+, TypeScript, a pnpm workspace, Zod contracts, Playwright Core, the MCP SDK, YAML Charters and local JSON/JSONL artifacts. The core requires no hosted service or database.
+
+## Source and test workspace
+
+`ProjectContext` separates `projectRoot` (the tested source and process working directory) from `workspaceRoot` (ProofKit configuration, connectors, plans, mission state and evidence). New projects default to `~/.proofkit/workspaces/<project-name>-<path-hash>/`; users can choose an explicit workspace through CLI `--workspace` or MCP `PROOFKIT_WORKSPACE_ROOT`. `PROOFKIT_WORKSPACE_HOME` selects the parent directory for automatic workspaces.
+
+```text
+<projectRoot>/                  # source scan and application startup
+<workspaceRoot>/
+  .proofkit/
+    config.yaml                 # bound to the source project
+    integration.mjs             # optional trusted business connector
+    charters/
+    missions/<mission-id>.json
+    runs/<run-id>/
+      run.json
+      events.jsonl
+      report.html
+      artifacts/
+```
+
+Initialization writes to the test workspace. If an existing source project already contains `.proofkit`, the resolver retains that legacy layout unless an explicit workspace is supplied. Config, Mission and Run reads validate the project/workspace binding. Connector and Charter paths are constrained to the workspace, including resolved symlinks. This is an ownership boundary, not a sandbox for trusted connector JavaScript or application startup commands.
+
 ## Why these boundaries
 
 - **CLI + Local Runner:** works without an Agent platform, cloud account, project code changes, or always-on service. CI can invoke the same deterministic command.
@@ -25,6 +75,8 @@ The first implementation supports Web and Electron. Mobile, native desktop, prot
 | `planner` | Intent scaffolding and charter parsing/validation | Unvalidated model-authored commands |
 | `runner` | Run lifecycle, step orchestration and verdict reduction | Browser-specific APIs |
 | `adapters` | Web/Electron interaction and surface event collection | Business pass/fail policy |
+| `runtime` | Local application process lifecycle, health checks and process events | Business pass/fail policy or arbitrary model-authored commands |
+| `oracles` | Independent business assertions and bounded read-only HTTP observation | Surface interaction or model-only success claims |
 | `evidence` | Run layout, timeline, redaction and report artifacts | Credentials or production data access |
 | `agent` | Mission, plan, task graph, tool policy, durable state and agent loop | Browser control, shell execution or business-specific assertions |
 | `local-runner` | CLI/MCP/CI shared orchestration, run registry, replay and bounded evidence lookup | New execution semantics or unrestricted project commands |
@@ -37,13 +89,13 @@ The first implementation supports Web and Electron. Mobile, native desktop, prot
 
 A charter is a versionable execution plan with intent, preconditions, typed actions, assertions, named oracles, mode and side-effect policy. YAML is the human-editable encoding; Zod schemas are the runtime authority. The deterministic planner supports URL navigation and visible-text assertions. An opt-in OpenAI-compatible provider is connected to CLI and MCP through the same Local Runner. Its output is validated against action kind, registered oracle names, side-effect policy and approved navigation origin. Planning does not prove that free-form intent was understood correctly; the saved Charter remains reviewable.
 
-A `capability` action names a project-registered operation with schema-validated input and output. The Runner checks its environment allowlist, deadline and side-effect class. `write` requires both a Charter `allow` policy and a separate Runner `allowCapabilityWrites` opt-in, which defaults to false. Only the capability's evidence projection is persisted; a project integration must choose opaque IDs and sanitized facts. A project-owned `.proofkit/integration.mjs` can now provide those capabilities, oracles and lifecycle hooks from inside the project root.
+A `capability` action names a project-registered operation with schema-validated input and output. The Runner checks its environment allowlist, deadline and side-effect class. `write` requires both a Charter `allow` policy and a separate Runner `allowCapabilityWrites` opt-in, which defaults to false. Only the capability's evidence projection is persisted; a project integration must choose opaque IDs and sanitized facts. An optional `<workspaceRoot>/.proofkit/integration.mjs` supplies those capabilities, oracles and lifecycle hooks without adding test code to the application's business modules.
 
 ### Test Mission and Agent Loop
 
-`TestMission` is the durable envelope for an AI-led test request. It records the user intent, selected surface, policy, generated `MissionPlan`, task graph, agent steps, tool calls, observations, evidence, findings, diagnosis and repair suggestions. The mission is saved at `<project-root>/.proofkit/missions/<mission-id>.json`, so a CLI or MCP client can disconnect and later inspect, cancel or replay the same work.
+`TestMission` is the durable envelope for an AI-led test request. It records the user intent, selected surface, policy, generated `MissionPlan`, task graph, agent steps, tool calls, observations, evidence, findings, diagnosis and repair suggestions. The mission is saved at `<workspaceRoot>/.proofkit/missions/<mission-id>.json`, so a CLI or MCP client can disconnect and later inspect, cancel or replay the same work.
 
-The first planner is deterministic and creates explicit tasks for `project.discover`, one or more `surface.run-charter` executions, optional `surface.replay-charter` executions, and `mission.verify`. `quick` and `core` use one selected surface. `release` creates a Web/Electron matrix, runs the primary Charter on both surfaces, replays both runs, and verifies the aggregate evidence. An LLM planner can be added behind the same `MissionPlanner` interface, but its output must still validate against `MissionPlanSchema`, `TaskNodeSchema` and the registered tool schemas. Model output never becomes a shell command, raw CDP call, SQL statement or arbitrary JavaScript execution.
+The first planner is deterministic and creates explicit tasks for `project.discover`, one or more `surface.run-charter` executions, optional `surface.replay-charter` executions, explicitly declared `surface.run-negative-charter` executions, and `mission.verify`. `quick` and `core` use one selected surface. `release` creates a Web/Electron matrix, runs the primary Charter on both surfaces, replays both runs, executes every declared negative or recovery case on each surface, and verifies the aggregate evidence. An LLM planner can be added behind the same `MissionPlanner` interface, but its output must still validate against `MissionPlanSchema`, `TaskNodeSchema` and the registered tool schemas. Model output never becomes a shell command, raw CDP call, SQL statement or arbitrary JavaScript execution.
 
 The Agent loop is deliberately narrow:
 
@@ -78,9 +130,9 @@ The mission protocol keeps five related records with separate responsibilities:
 
 ### Local Runner and MCP
 
-`@proofkit/local-runner` is the only application-level entry point for starting a run. It resolves a charter, selects a Web or Electron adapter, optionally starts the project, loads the project-owned `.proofkit/integration.mjs` module, accepts registered business oracles/capabilities, and stores the result under the configured evidence directory. A run is addressable by its `runId`, so an interactive client can start, cancel and poll status without holding an open browser tool call.
+`@proofkit/local-runner` is the only application-level entry point for starting a run. It resolves a charter, selects a Web or Electron adapter, optionally starts the project, loads the workspace's `.proofkit/integration.mjs` module, accepts registered business oracles/capabilities, and stores the result under the configured evidence directory. A run is addressable by its `runId`, so an interactive client can start, cancel and poll status without holding an open browser tool call.
 
-The integration module is trusted repository code, loaded only from inside the project root. It exports a name, optional typed capabilities, business oracles and a setup function that returns cleanup. The Local Runner composes integration cleanup with project process cleanup and adapter close. Cleanup failures prevent a green verdict.
+The integration module is trusted local code, loaded only from inside the selected test workspace. It exports a name, optional typed capabilities, business oracles and a setup function that returns cleanup. The Local Runner composes integration cleanup with project process cleanup and adapter close. Cleanup failures prevent a green verdict.
 
 Project configuration can register read-only HTTP oracles by name, JSON Pointer status path, terminal values, interval and deadline. Query bindings can carry the ProofKit `runId` or a sanitized scalar from an earlier capability step. The adapter never interprets these business facts. The URL is parsed and query parameters are encoded with the platform URL API.
 
@@ -105,7 +157,7 @@ Each run gets a unique directory with:
     step-001.png
 ```
 
-Mission state is separate from run artifacts:
+Mission state is separate from run artifacts under the selected workspace:
 
 ```text
 .proofkit/
@@ -137,9 +189,9 @@ Every natural-language request is resolved to one immutable `TestLevelSelection`
 | --- | --- | --- |
 | `quick` | Fast health check and shortest happy path | At least one executable assertion and traceable run evidence |
 | `core` | Default for feature work and the important module path | Assertions, an independent business Oracle, and traceable evidence |
-| `release` | Pre-release regression and cross-surface confidence | Core gates plus terminal evidence, replay inputs and the configured Web/Electron matrix; negative-path execution is planned and currently reported as a profile obligation only |
+| `release` | Pre-release regression and cross-surface confidence | Core gates plus terminal evidence, replay inputs and the configured Web/Electron matrix; every explicitly declared negative or recovery case must run on every required surface |
 
-The current kernel enforces the assertion and evidence gates for all levels and the independent Oracle gate for `core` and `release`. `release` now expands its surface matrix and replay requirement into separate task graph nodes and blocks verification when a surface or replay run is missing. Negative cases are recorded in the execution profile for planning and reporting, but `requireNegativeCases` is currently `false`; automatic negative-path generation and execution remain a later phase. A missing gate produces `inconclusive` with a first failure boundary of `evidence`, never a false `passed` verdict.
+The current Mission verifier enforces the assertion and evidence gates for all levels and the independent Oracle gate for `core` and `release`. The lower-level Execution Runner evaluates the assertions and oracles declared by its Charter; it does not independently enforce Mission-level coverage obligations. `release` expands its surface matrix and replay requirement into separate task graph nodes and marks verification incomplete when a surface or replay run is missing. A Charter may explicitly declare negative or recovery cases; ProofKit creates an isolated task for each case, preserves its `negativeCaseId` in observations and evidence, and marks verification incomplete when any declared case is missing. A case can also declare an `expectedVerdict` such as `failed` or `blocked`; the raw surface verdict remains in evidence while the Mission evaluates whether the expected outcome matched. ProofKit never invents destructive actions from a category label. A missing gate produces `inconclusive` with a first failure boundary of `evidence`, never a false `passed` verdict.
 
 ## First vertical slice
 
@@ -176,8 +228,8 @@ We use these as compatible components or design references. We do not copy their
 
 ## Delivery sequence
 
-1. **Current:** Web/Electron adapters, project runtime, read-only HTTP oracle, evidence hashes, shared Local Runner, bounded MCP facade, validated Planner Provider interface, project integration loading, run deadline and cancellation, the persisted Mission Agent loop, and the release Web/Electron primary-plus-replay task matrix.
-2. **Next:** measure generated Charters and Missions against real projects, implement scoped test data, and add worker/file/candidate/billing observers. Negative-path tasks are not yet generated automatically.
+1. **Current:** Web/Electron adapters, project runtime, read-only HTTP oracle, evidence hashes, shared Local Runner, bounded MCP facade, validated Planner Provider interface, project integration loading, run deadline and cancellation, the persisted Mission Agent loop, the release Web/Electron primary-plus-replay task matrix, and explicit negative/recovery case execution with evidence gates.
+2. **Next:** measure generated Charters and Missions against real projects, implement scoped test data, and add worker/file/candidate/billing observers. Negative and recovery cases still require explicit Charter declarations; ProofKit does not infer destructive actions from generic categories.
 3. **Later:** retry/idempotency classification, isolated browser profiles, first-failure diagnosis and evidence-backed repair suggestions.
 4. **After the Web/Electron slice is stable:** Maestro/Appium adapters for mobile, and Keploy-style traffic fixtures for deterministic backend replay.
 

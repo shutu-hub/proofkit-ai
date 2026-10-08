@@ -199,6 +199,8 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
         : ["start_mission", "get_mission_status"];
   return {
     missionId: mission.missionId,
+    projectRoot: mission.projectRoot,
+    workspaceRoot: mission.workspaceRoot,
     status: mission.status,
     running: started.running,
     verdict: mission.verdict,

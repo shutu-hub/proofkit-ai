@@ -84,6 +84,8 @@ export class RunTimeoutError extends Error {
 }
 
 export type ExecutionOptions = {
+  projectRoot?: string;
+  workspaceRoot?: string;
   evidenceDir?: string;
   runId?: string;
   oracles?: BusinessOracle[];
@@ -107,6 +109,8 @@ export class ExecutionRunner {
   private readonly signal?: AbortSignal;
   private readonly timeoutMs?: number;
   private readonly integration?: { name: string; version?: string };
+  private readonly projectRoot?: string;
+  private readonly workspaceRoot?: string;
 
   constructor(adapter: SurfaceAdapter, options: ExecutionOptions = {}) {
     this.adapter = adapter;
@@ -121,12 +125,16 @@ export class ExecutionRunner {
     this.signal = options.signal;
     this.timeoutMs = options.timeoutMs;
     this.integration = options.integration;
+    this.projectRoot = options.projectRoot;
+    this.workspaceRoot = options.workspaceRoot;
   }
 
   async run(charter: TestCharter, runId = createRunId()): Promise<RunSummary> {
     const startedAt = new Date().toISOString();
     const summary: RunSummary = {
       runId,
+      projectRoot: this.projectRoot,
+      workspaceRoot: this.workspaceRoot,
       startedAt,
       status: "running",
       charter,

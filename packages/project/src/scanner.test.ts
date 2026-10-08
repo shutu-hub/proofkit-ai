@@ -18,11 +18,11 @@ describe("scanProject", () => {
 
   it("creates a config and integration starter without overwriting either", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-init-"));
-    await initProject(root);
+    await initProject(root, { workspaceRoot: root });
     const integrationPath = join(root, ".proofkit", "integration.mjs");
     expect(await readFile(integrationPath, "utf8")).toContain("project-integration");
     await writeFile(integrationPath, "export default { name: 'custom' };", "utf8");
-    await initProject(root);
+    await initProject(root, { workspaceRoot: root });
     expect(await readFile(integrationPath, "utf8")).toContain("custom");
   });
 });

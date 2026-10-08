@@ -5,12 +5,14 @@ import { registerTools } from "./tools.js";
 
 export type McpServerOptions = {
   root?: string;
+  workspaceRoot?: string;
   evidenceDir?: string;
 };
 
 export async function createProofkitMcp(options: McpServerOptions = {}): Promise<McpServer> {
   const runner = await LocalRunnerService.create({
     root: options.root ?? process.env.PROOFKIT_ROOT ?? process.cwd(),
+    workspaceRoot: options.workspaceRoot ?? process.env.PROOFKIT_WORKSPACE_ROOT,
     evidenceDir: options.evidenceDir ?? process.env.PROOFKIT_EVIDENCE_DIR,
     restrictWebOrigins: true,
   });

@@ -160,7 +160,7 @@ function fixtureMission(status: TestMission["status"]): TestMission {
       successCriteria: [],
       assumptions: [],
       level: "core",
-      executionProfile: { surfaceMatrix: ["web"], negativeCases: ["关键权限或输入边界"], requireBusinessOracle: true, requireReplay: false, requireNegativeCases: false, minimumEvidence: 2 },
+      executionProfile: { surfaceMatrix: ["web"], negativeCases: ["关键权限或输入边界"], declaredNegativeCases: [], requireBusinessOracle: true, requireReplay: false, requireNegativeCases: false, minimumEvidence: 2 },
       createdAt: new Date().toISOString(),
     },
     agentSteps: [],

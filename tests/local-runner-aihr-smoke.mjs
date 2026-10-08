@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -15,11 +15,17 @@ import { loadCharter } from "../packages/planner/dist/index.js";
 const surface = process.argv[2] ?? "web";
 assert.ok(["web", "electron"].includes(surface), "Use web or electron");
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const root = join(repoRoot, ".proofkit", "local-runner-smoke", `${surface}-${Date.now()}`);
-await mkdir(join(root, ".proofkit", "fixtures"), { recursive: true });
-await copyFile(join(repoRoot, ".proofkit", "integration.mjs"), join(root, ".proofkit", "integration.mjs"));
+const caseRoot = join(repoRoot, ".proofkit", "local-runner-smoke", `${surface}-${Date.now()}`);
+const root = join(caseRoot, "source");
+const workspaceRoot = join(caseRoot, "test-workspace");
+await mkdir(root, { recursive: true });
+await writeFile(join(root, "package.json"), JSON.stringify({ name: "aihr-isolated-source", devDependencies: { vite: "1" } }));
+await mkdir(join(workspaceRoot, ".proofkit", "fixtures"), { recursive: true });
+await mkdir(join(workspaceRoot, ".proofkit", "charters"));
+await copyFile(join(repoRoot, ".proofkit", "integration.mjs"), join(workspaceRoot, ".proofkit", "integration.mjs"));
+await copyFile(join(repoRoot, ".proofkit", "charters", "aihr-resume-upload.yml"), join(workspaceRoot, ".proofkit", "charters", "aihr-resume-upload.yml"));
 const fixture = Buffer.from("%PDF-1.4 isolated ProofKit gateway fixture\n", "utf8");
-await writeFile(join(root, ".proofkit", "fixtures", "resume.pdf"), fixture);
+await writeFile(join(workspaceRoot, ".proofkit", "fixtures", "resume.pdf"), fixture);
 const fixtureSha256 = createHash("sha256").update(fixture).digest("hex");
 
 let mode = "success";
@@ -74,11 +80,12 @@ try {
     await waitForDevtools(portFile, () => spawnError ?? (electronChild.exitCode === null ? undefined : new Error("Electron exited before CDP was ready")));
     surfaces.electron = { devtoolsActivePort: portFile };
   }
-  const service = await LocalRunnerService.create({ root, config: ProofkitConfigSchema.parse({ surfaces, policies: { environment: "test", sideEffects: "allow" } }), allowCapabilityWrites: true });
+  const service = await LocalRunnerService.create({ root, workspaceRoot, config: ProofkitConfigSchema.parse({ surfaces, policies: { environment: "test", sideEffects: "allow" } }), allowCapabilityWrites: true });
+  assert.equal((await service.discover()).packageName, "aihr-isolated-source");
   const ordinary = await loadCharter(join(repoRoot, ".proofkit", "charters", "aihr-resume-upload.yml"));
 
   // Run the checked-in Charter unchanged, including env references and defaults.
-  const defaultRun = await service.start({ charter: ordinary, adapter: surface });
+  const defaultRun = await service.start({ charterPath: ".proofkit/charters/aihr-resume-upload.yml", adapter: surface });
   const defaultSummary = await service.wait(defaultRun.runId);
   assert.equal(defaultSummary.verdict, "passed", JSON.stringify(defaultSummary.findings));
   assert.equal(defaultSummary.oracles.length, 1);
@@ -111,7 +118,13 @@ try {
   assert.equal(unrelatedReads, 0);
   assert.deepEqual(fixtureErrors, []);
   for (const evidence of [...success.evidence, ...failed.evidence]) await readFile(evidence.path);
-  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, evidenceRoot: root, verified: ["default-charter", "multipart-run-binding", "surface-click", "core-mission", "stale-binding-detection", "selected-oracle-only"] }, null, 2));
+  const restarted = await LocalRunnerService.create({ root, workspaceRoot });
+  assert.equal((await restarted.missionEvidence(success.missionId)).verdict, "passed");
+  assert.equal((await restarted.status(failedRunId)).verdict, "failed");
+  assert.equal(defaultSummary.projectRoot, root);
+  assert.equal(defaultSummary.workspaceRoot, workspaceRoot);
+  assert.deepEqual(await readdir(root), ["package.json"]);
+  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "multipart-run-binding", "surface-click", "core-mission", "stale-binding-detection", "selected-oracle-only"] }, null, 2));
 } finally {
   if (electronChild && electronChild.exitCode === null) {
     const exited = new Promise((resolveExit) => electronChild.once("exit", resolveExit));
