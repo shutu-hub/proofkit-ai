@@ -130,6 +130,78 @@ export function createProgram(): Command {
       if (summary.verdict !== "passed") process.exitCode = 1;
     });
 
+  const mission = program.command("mission").description("Create and run an evidence-driven AI test mission");
+  mission.command("create <intent>")
+    .description("Create a reviewable mission plan from a natural-language intent")
+    .option("--root <path>", "project root", ".")
+    .option("--surface <surface>", "web or electron", "web")
+    .option("--url <url>", "entry URL")
+    .option("--expect <text>", "visible text assertion", collect, [])
+    .option("--oracle <name>", "configured business oracle", collect, [])
+    .option("--mode <mode>", "deterministic, guided or explore", "guided")
+    .option("--side-effects <policy>", "deny, confirm or allow")
+    .action(async (intent: string, options: MissionCreateCommandOptions) => {
+      const root = resolve(options.root);
+      const runner = await LocalRunnerService.create({ root });
+      const created = await runner.createMission({
+        intent,
+        surface: options.surface as "web" | "electron",
+        url: options.url,
+        expect: options.expect,
+        oracleNames: options.oracle.length ? options.oracle : undefined,
+        mode: options.mode as RunMode,
+        sideEffectPolicy: options.sideEffects as SideEffectPolicy | undefined,
+      });
+      console.log(JSON.stringify(created, null, 2));
+    });
+
+  mission.command("approve <missionId>")
+    .description("Approve a mission plan")
+    .option("--root <path>", "project root", ".")
+    .action(async (missionId: string, options: { root: string }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root) });
+      console.log(JSON.stringify(await runner.approveMission(missionId), null, 2));
+    });
+
+  mission.command("run <missionId>")
+    .description("Run an approved mission and wait for its final verdict")
+    .option("--root <path>", "project root", ".")
+    .option("--approve", "approve the plan before starting")
+    .action(async (missionId: string, options: { root: string; approve?: boolean }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root) });
+      await runner.startMission(missionId, { approve: options.approve });
+      const completed = await runner.waitMission(missionId);
+      console.log(JSON.stringify({ missionId: completed.missionId, status: completed.status, verdict: completed.verdict, findings: completed.findings, evidence: completed.evidence }, null, 2));
+      if (completed.verdict !== "passed") process.exitCode = 1;
+    });
+
+  mission.command("status <missionId>")
+    .description("Read mission status and task graph")
+    .option("--root <path>", "project root", ".")
+    .action(async (missionId: string, options: { root: string }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root) });
+      console.log(JSON.stringify(await runner.missionStatus(missionId), null, 2));
+    });
+
+  mission.command("evidence <missionId>")
+    .description("Read mission evidence references and findings")
+    .option("--root <path>", "project root", ".")
+    .action(async (missionId: string, options: { root: string }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root) });
+      console.log(JSON.stringify(await runner.missionEvidence(missionId), null, 2));
+    });
+
+  mission.command("replay <missionId>")
+    .description("Replay a mission charter and wait for its final verdict")
+    .option("--root <path>", "project root", ".")
+    .action(async (missionId: string, options: { root: string }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root) });
+      const started = await runner.replayMission(missionId);
+      const completed = await runner.waitMission(started.mission.missionId);
+      console.log(JSON.stringify({ missionId: completed.missionId, status: completed.status, verdict: completed.verdict }, null, 2));
+      if (completed.verdict !== "passed") process.exitCode = 1;
+    });
+
   program.command("report <runId>")
     .description("Regenerate a static report for a run")
     .option("--root <path>", "project root", ".")
@@ -186,6 +258,10 @@ type PlanCommandOptions = {
   mode: string;
   sideEffects?: string;
   out?: string;
+};
+
+type MissionCreateCommandOptions = PlanCommandOptions & {
+  surface: string;
 };
 
 type RunCommandOptions = PlanCommandOptions & {

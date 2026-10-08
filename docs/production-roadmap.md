@@ -15,6 +15,8 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - YAML Test Charter and schema validation.
 - JSONL events, snapshots, screenshots, reports and evidence verdicts.
 - Read-only HTTP oracles and bounded polling.
+- Persisted `TestMission` task graphs with approval, cancellation, replay and evidence references.
+- Mission-level MCP and CLI commands over the same Local Runner.
 
 **Gate:** local Web and Electron smoke flows pass with artifacts and CI can reproduce the run.
 
@@ -27,6 +29,8 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Enforce a total run deadline and external cancellation.
 - Expose cancellation through the CLI and MCP.
 - Treat adapter, process and integration cleanup failures as non-green results.
+- Keep Agent tool failures as suspected test findings until an independent product oracle confirms a defect.
+- Never let a rejected Mission promise leave a durable mission in an unexplained running state.
 
 **Gate:** a fixture integration is loaded without a hosted service; a slow run produces a `cancelled` verdict; cleanup runs on timeout and cancellation; Web/Electron smoke tests remain green.
 

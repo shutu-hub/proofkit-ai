@@ -13,6 +13,7 @@ The first implementation supports Web and Electron. Mobile, native desktop, prot
 - **Electron via CDP:** supports launching a test instance or attaching to an explicitly selected local instance. Loopback is required; an open remote debugging port is a powerful control surface.
 - **MCP as an adapter:** an MCP server should call the same Runner methods as the CLI. It must not create a second execution lifecycle or expose arbitrary shell/database writes.
 - **Local Runner as the control plane:** `@proofkit/local-runner` owns project configuration, adapter selection, run IDs, asynchronous status, replay and evidence lookup. It composes the lower-level Runner; it does not replace it.
+- **Mission Agent as the intent control plane:** `@proofkit/agent` turns a natural-language objective into a persisted, reviewable task graph. It can only invoke registered MissionTools, and it delegates surface execution to the existing Local Runner and ExecutionRunner.
 - **Capability extension:** domain operations can be exposed later through typed schemas with environment, side-effect and cleanup declarations.
 
 ## Package ownership
@@ -25,6 +26,7 @@ The first implementation supports Web and Electron. Mobile, native desktop, prot
 | `runner` | Run lifecycle, step orchestration and verdict reduction | Browser-specific APIs |
 | `adapters` | Web/Electron interaction and surface event collection | Business pass/fail policy |
 | `evidence` | Run layout, timeline, redaction and report artifacts | Credentials or production data access |
+| `agent` | Mission, plan, task graph, tool policy, durable state and agent loop | Browser control, shell execution or business-specific assertions |
 | `local-runner` | CLI/MCP/CI shared orchestration, run registry, replay and bounded evidence lookup | New execution semantics or unrestricted project commands |
 | `mcp` | Narrow Model Context Protocol facade over `local-runner` | Direct shell, filesystem, SQL, raw CDP or a second run lifecycle |
 | `cli` | Human and CI commands | Separate runner state or direct adapter internals |
@@ -37,6 +39,27 @@ A charter is a versionable execution plan with intent, preconditions, typed acti
 
 A `capability` action names a project-registered operation with schema-validated input and output. The Runner checks its environment allowlist, deadline and side-effect class. `write` requires both a Charter `allow` policy and a separate Runner `allowCapabilityWrites` opt-in, which defaults to false. Only the capability's evidence projection is persisted; a project integration must choose opaque IDs and sanitized facts. A project-owned `.proofkit/integration.mjs` can now provide those capabilities, oracles and lifecycle hooks from inside the project root.
 
+### Test Mission and Agent Loop
+
+`TestMission` is the durable envelope for an AI-led test request. It records the user intent, selected surface, policy, generated `MissionPlan`, task graph, tool calls, observations, evidence, findings, diagnosis and repair suggestions. The mission is saved at `<project-root>/.proofkit/missions/<mission-id>.json`, so a CLI or MCP client can disconnect and later inspect, cancel or replay the same work.
+
+The first planner is deterministic and creates three explicit tasks: `project.discover`, `surface.run-charter` and `mission.verify`. An LLM planner can be added behind the same `MissionPlanner` interface, but its output must still validate against `MissionPlanSchema`, `TaskNodeSchema` and the registered tool schemas. Model output never becomes a shell command, raw CDP call, SQL statement or arbitrary JavaScript execution.
+
+The Agent loop is deliberately narrow:
+
+1. Load the mission and select the next dependency-ready task.
+2. Check environment, side-effect policy, input schema and tool timeout.
+3. Execute one registered `MissionTool` with an abort signal.
+4. Append typed observations, evidence, findings and a `ToolCall` receipt.
+5. Persist a new revision before selecting the next task.
+6. Reduce the terminal mission status and verdict without overwriting a failed or blocked result with `passed`.
+
+`surface.run-charter` is the only surface tool in the first slice. It calls `LocalRunnerService.start()` and `wait()`, which in turn reuse the existing `ExecutionRunner`; the Agent does not create a second browser or Electron engine. This keeps natural-language use and deterministic CLI/CI use on one lifecycle and one evidence format.
+
+Mission status describes orchestration (`awaiting-approval`, `running`, `completed`, `failed`, `blocked`, or `cancelled`). The nested Run verdict describes the actual surface execution. A mission can therefore explain that a test was blocked by policy even when no product run was attempted.
+
+The high-level MCP tools are `create_test_mission`, `approve_test_plan`, `start_mission`, `get_mission_status`, `get_mission_evidence`, `cancel_mission` and `replay_mission`. The equivalent CLI is `proofkit mission create|approve|run|status|evidence|replay`. Existing run-level tools remain available for users who already have a charter.
+
 ### Local Runner and MCP
 
 `@proofkit/local-runner` is the only application-level entry point for starting a run. It resolves a charter, selects a Web or Electron adapter, optionally starts the project, loads the project-owned `.proofkit/integration.mjs` module, accepts registered business oracles/capabilities, and stores the result under the configured evidence directory. A run is addressable by its `runId`, so an interactive client can start, cancel and poll status without holding an open browser tool call.
@@ -45,7 +68,7 @@ The integration module is trusted repository code, loaded only from inside the p
 
 Project configuration can register read-only HTTP oracles by name, JSON Pointer status path, terminal values, interval and deadline. Query bindings can carry the ProofKit `runId` or a sanitized scalar from an earlier capability step. The adapter never interprets these business facts. The URL is parsed and query parameters are encoded with the platform URL API.
 
-The first MCP server exposes high-level tools: `discover_project`, `plan_test`, `start_run`, `get_run_status`, `cancel_run`, `get_evidence` and `replay_run`. MCP inputs are validated with Zod. The server is started against one configured local project; it does not accept arbitrary commands or paths. MCP runs cannot execute `project.start`; users start their test environment through the CLI or independently. This keeps MCP useful for exploration while leaving deterministic bulk execution to the CLI and CI.
+The MCP server exposes both run-level tools (`discover_project`, `plan_test`, `start_run`, `get_run_status`, `cancel_run`, `get_evidence`, `replay_run`) and mission-level tools (`create_test_mission`, `approve_test_plan`, `start_mission`, `get_mission_status`, `get_mission_evidence`, `cancel_mission`, `replay_mission`). MCP inputs are validated with Zod. The server is started against one configured local project; it does not accept arbitrary commands or paths. MCP runs cannot execute `project.start`; users start their test environment through the CLI or independently. Both surfaces call the same Local Runner and never create a second execution lifecycle.
 
 ### Surface Adapter
 
@@ -65,6 +88,16 @@ Each run gets a unique directory with:
     step-001-after.json
     step-001.png
 ```
+
+Mission state is separate from run artifacts:
+
+```text
+.proofkit/
+  missions/<mission-id>.json
+  runs/<run-id>/run.json
+```
+
+The mission references run evidence through typed `EvidenceRef` records. A mission file is orchestration state and can be replayed; a run directory is immutable execution evidence and remains the source of truth for what the surface actually did.
 
 Every event has a run ID and timestamp. Each step stores before/after snapshots and the action receipt. Optional evidence capture failures are recorded as findings and do not silently turn into business failures.
 
@@ -113,9 +146,9 @@ We use these as compatible components or design references. We do not copy their
 
 ## Delivery sequence
 
-1. **Current:** Web/Electron adapters, project runtime, read-only HTTP oracle, evidence hashes, shared Local Runner, bounded MCP facade, validated Planner Provider interface, project integration loading, run deadline and cancellation.
-2. **Next:** measure generated Charters against real projects and add scoped test data, worker/file/candidate/billing observers.
-3. **Later:** retry/idempotency classification, isolated browser profiles, first-failure diagnosis and repair suggestions.
+1. **Current:** Web/Electron adapters, project runtime, read-only HTTP oracle, evidence hashes, shared Local Runner, bounded MCP facade, validated Planner Provider interface, project integration loading, run deadline and cancellation, and the persisted Mission Agent loop.
+2. **Next:** measure generated Charters and Missions against real projects and add scoped test data, worker/file/candidate/billing observers.
+3. **Later:** retry/idempotency classification, isolated browser profiles, first-failure diagnosis and evidence-backed repair suggestions.
 4. **After the Web/Electron slice is stable:** Maestro/Appium adapters for mobile, and Keploy-style traffic fixtures for deterministic backend replay.
 
 Mobile and hosted device orchestration stay outside the first install. They can implement the same Surface Adapter and Evidence contracts without changing Test Charter or verdict semantics.

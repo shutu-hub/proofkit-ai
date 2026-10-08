@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@proofkit/agent": "workspace:*",
     "@proofkit/adapters": "workspace:*",
     "@proofkit/contracts": "workspace:*",
     "@proofkit/evidence": "workspace:*",

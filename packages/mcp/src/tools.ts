@@ -12,6 +12,63 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "create_test_mission",
+    "Create a reviewable AI test mission from a natural-language intent. The mission plans work without modifying the tested project.",
+    {
+      intent: z.string().min(1),
+      surface: z.enum(["web", "electron"]).default("web"),
+      url: z.string().url().optional(),
+      expect: z.array(z.string().min(1)).optional(),
+      oracleNames: z.array(z.string().min(1)).optional(),
+      mode: z.enum(["deterministic", "guided", "explore"]).optional(),
+      sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
+    },
+    async ({ intent, surface, url, expect, oracleNames, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy })),
+  );
+
+  server.tool(
+    "approve_test_plan",
+    "Approve a planned mission after reviewing its task graph and policy.",
+    { missionId: z.string().min(1) },
+    async ({ missionId }) => result(await runner.approveMission(missionId)),
+  );
+
+  server.tool(
+    "start_mission",
+    "Start a ProofKit mission. The mission executes registered tools and preserves deterministic run evidence.",
+    { missionId: z.string().min(1), approve: z.boolean().default(false) },
+    async ({ missionId, approve }) => result(await runner.startMission(missionId, { approve })),
+  );
+
+  server.tool(
+    "get_mission_status",
+    "Read mission status, task graph, verdict, findings, and evidence references.",
+    { missionId: z.string().min(1) },
+    async ({ missionId }) => result(await runner.missionStatus(missionId)),
+  );
+
+  server.tool(
+    "get_mission_evidence",
+    "Read bounded, traceable evidence references and findings for a mission.",
+    { missionId: z.string().min(1) },
+    async ({ missionId }) => result(await runner.missionEvidence(missionId)),
+  );
+
+  server.tool(
+    "cancel_mission",
+    "Cancel a running mission while retaining all evidence collected so far.",
+    { missionId: z.string().min(1), reason: z.string().min(1).optional() },
+    async ({ missionId, reason }) => result(await runner.cancelMission(missionId, reason)),
+  );
+
+  server.tool(
+    "replay_mission",
+    "Create a new mission from a previous mission charter and execute it for regression verification.",
+    { missionId: z.string().min(1) },
+    async ({ missionId }) => result(await runner.replayMission(missionId)),
+  );
+
+  server.tool(
     "plan_test",
     "Turn a natural-language intent into a validated, reviewable ProofKit Test Charter. Planning does not execute the project.",
     {

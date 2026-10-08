@@ -17,6 +17,13 @@ describe("ProofKit MCP tools", () => {
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       "discover_project",
+      "create_test_mission",
+      "approve_test_plan",
+      "start_mission",
+      "get_mission_status",
+      "get_mission_evidence",
+      "cancel_mission",
+      "replay_mission",
       "plan_test",
       "start_run",
       "get_run_status",

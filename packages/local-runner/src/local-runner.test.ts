@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ProofkitConfigSchema } from "@proofkit/contracts";
+import { ProofkitConfigSchema, type RunSummary, type TestCharter } from "@proofkit/contracts";
 import { ExecutionRunner, type SurfaceAdapter } from "@proofkit/runner";
 import { LocalRunnerService } from "./index.js";
 
@@ -16,6 +16,40 @@ afterEach(async () => {
 });
 
 describe("LocalRunnerService", () => {
+  it("runs a mission through the existing deterministic run and keeps evidence references", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-mission-run-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ root });
+    const charter: TestCharter = { intent: "verify fixture", mode: "deterministic", preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny", metadata: {} };
+    const summary: RunSummary = {
+      runId: "fixture-run",
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      status: "completed",
+      verdict: "passed",
+      charter,
+      steps: [],
+      assertions: [],
+      oracles: [],
+      artifacts: [],
+      findings: [],
+    };
+    service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
+    service.wait = async () => summary;
+
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    expect(created.status).toBe("awaiting-approval");
+    await service.approveMission(created.missionId);
+    await service.startMission(created.missionId);
+    const completed = await service.waitMission(created.missionId);
+
+    expect(completed.status).toBe("completed");
+    expect(completed.verdict).toBe("passed");
+    expect(completed.plan.graph.tasks.map((task) => task.status)).toEqual(["passed", "passed", "passed"]);
+    expect(completed.evidence.some((item) => item.path.endsWith(join("fixture-run", "report.html")))).toBe(true);
+    expect(completed.observations.some((item) => item.kind === "surface.run")).toBe(true);
+  });
+
   it("loads a project-local integration module without a hosted service", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-integration-"));
     roots.push(root);
