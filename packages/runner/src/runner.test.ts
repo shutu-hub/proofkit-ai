@@ -95,9 +95,10 @@ describe("ExecutionRunner", () => {
   it("turns a total run deadline into a cancelled verdict and still closes the adapter", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-timeout-"));
     let closed = false;
+    let cleaned = false;
     const adapter = new SlowAdapter();
     adapter.close = async () => { closed = true; };
-    const summary = await new ExecutionRunner(adapter, { evidenceDir: root, timeoutMs: 10 }).run({
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root, timeoutMs: 10, setup: async () => async () => { cleaned = true; } }).run({
       intent: "deadline",
       mode: "deterministic",
       preconditions: [],
@@ -109,6 +110,7 @@ describe("ExecutionRunner", () => {
     expect(summary.verdict).toBe("cancelled");
     expect(summary.findings.some((finding) => finding.includes("deadline"))).toBe(true);
     expect(closed).toBe(true);
+    expect(cleaned).toBe(true);
   });
 
   it("propagates external cancellation to a capability and runs cleanup", async () => {
