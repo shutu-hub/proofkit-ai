@@ -99,6 +99,7 @@ describe("ProofKit MCP tools", () => {
         levelSelection: mission.levelSelection,
         executionProfile: mission.plan.executionProfile,
         taskSummary: mission.plan.graph.tasks,
+        agentSteps: [],
         evidence: [{ evidenceId: "evidence-1", kind: "business", path: "runs/x/oracle.json", capturedAt: new Date().toISOString() }],
         findings: [],
         repairSuggestions: [],
@@ -115,6 +116,7 @@ describe("ProofKit MCP tools", () => {
       running: false,
       verdict: "passed",
       level: "core",
+      agentSteps: [],
       evidence: [expect.objectContaining({ kind: "business" })],
     });
 
@@ -161,6 +163,7 @@ function fixtureMission(status: TestMission["status"]): TestMission {
       executionProfile: { surfaceMatrix: ["web"], negativeCases: ["关键权限或输入边界"], requireBusinessOracle: true, requireReplay: false, requireNegativeCases: false, minimumEvidence: 2 },
       createdAt: new Date().toISOString(),
     },
+    agentSteps: [],
     toolCalls: [],
     observations: [],
     evidence: [],
@@ -172,8 +175,16 @@ function fixtureMission(status: TestMission["status"]): TestMission {
   };
 }
 
-function textContent(response: { content: Array<{ type: string; text?: string }> }): string {
-  const item = response.content.find((content) => content.type === "text" && typeof content.text === "string");
+function textContent(response: unknown): string {
+  const content = typeof response === "object" && response !== null && "content" in response
+    ? (response as { content?: unknown }).content
+    : undefined;
+  if (!Array.isArray(content)) throw new Error("MCP response did not contain text content");
+  const item = content.find((candidate): candidate is { type: string; text: string } => {
+    if (typeof candidate !== "object" || candidate === null) return false;
+    const value = candidate as { type?: unknown; text?: unknown };
+    return value.type === "text" && typeof value.text === "string";
+  });
   if (!item?.text) throw new Error("MCP response did not contain text content");
   return item.text;
 }

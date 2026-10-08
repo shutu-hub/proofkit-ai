@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   FindingSchema,
+  AgentStepSchema,
   DiagnosisSchema,
   FailureBoundarySchema,
   MissionPlanSchema,
@@ -15,6 +16,7 @@ import {
   TestMissionSchema,
   ToolCallSchema,
   type Finding,
+  type AgentStep,
   type Diagnosis,
   type FailureBoundary,
   type MissionPlan,
@@ -335,6 +337,7 @@ export class MissionAgent {
         recovered = {
           ...recovered,
           toolCalls: closeStartedCalls(recovered.toolCalls, task.taskId, reason),
+          agentSteps: closeInterruptedAgentSteps(recovered.agentSteps, task, reason, "cancelled"),
           findings: [...recovered.findings, finding(
             `mission-recovered-${task.taskId}-${task.attempts}`,
             "info",
@@ -357,6 +360,7 @@ export class MissionAgent {
       recovered = {
         ...recovered,
         toolCalls: closeStartedCalls(recovered.toolCalls, task.taskId, reason),
+        agentSteps: closeInterruptedAgentSteps(recovered.agentSteps, task, reason, "blocked"),
         status: "blocked",
         verdict: "blocked",
         findings: [...recovered.findings, finding(
@@ -376,6 +380,7 @@ export class MissionAgent {
     const tool = this.tools.get(task.tool);
     const startedAt = new Date().toISOString();
     const toolCallId = `tool-${randomUUID().slice(0, 12)}`;
+    const agentStepId = `agent-step-${randomUUID().slice(0, 12)}`;
     const runningTask = { ...task, status: "running" as const, attempts: task.attempts + 1 };
     const startedCall = ToolCallSchema.parse({
       toolCallId,
@@ -386,18 +391,31 @@ export class MissionAgent {
       status: "started",
       startedAt,
     });
+    const startedStep = AgentStepSchema.parse({
+      agentStepId,
+      sequence: mission.agentSteps.length + 1,
+      taskId: task.taskId,
+      phase: "execute",
+      tool: tool?.name ?? task.tool,
+      decision: `选择依赖已满足的任务 ${task.taskId} 并调用已注册工具。`,
+      input: task.input,
+      status: "running",
+      startedAt,
+      toolCallIds: [toolCallId],
+    });
     const startedMission = await this.save({
       ...updateTask(mission, runningTask, { currentTaskId: task.taskId }),
+      agentSteps: [...mission.agentSteps, startedStep],
       toolCalls: [...mission.toolCalls, startedCall],
     });
     if (!tool) {
-      return this.save(failTask(startedMission, task.taskId, toolCallId, startedAt, `Mission tool is not registered: ${task.tool}`, "blocked"));
+      return this.save(failTask(startedMission, task.taskId, toolCallId, agentStepId, startedAt, `Mission tool is not registered: ${task.tool}`, "blocked"));
     }
     if (!tool.environments.includes(mission.policy.environment)) {
-      return this.save(failTask(startedMission, task.taskId, toolCallId, startedAt, `Mission tool ${tool.name} is not allowed in ${mission.policy.environment}`, "blocked"));
+      return this.save(failTask(startedMission, task.taskId, toolCallId, agentStepId, startedAt, `Mission tool ${tool.name} is not allowed in ${mission.policy.environment}`, "blocked"));
     }
     if (tool.sideEffect === "write" && mission.policy.sideEffectPolicy !== "allow") {
-      return this.save(failTask(startedMission, task.taskId, toolCallId, startedAt, `Mission tool ${tool.name} requires sideEffectPolicy=allow`, "blocked"));
+      return this.save(failTask(startedMission, task.taskId, toolCallId, agentStepId, startedAt, `Mission tool ${tool.name} requires sideEffectPolicy=allow`, "blocked"));
     }
     const toolController = new AbortController();
     const detach = relayAbort(signal, toolController);
@@ -409,10 +427,20 @@ export class MissionAgent {
       const finishedAt = new Date().toISOString();
       const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status: "succeeded", startedAt, endedAt: finishedAt, durationMs: Date.now() - Date.parse(startedAt), evidence: result.evidence ?? [] });
       const failedVerdict = result.verdict === "failed" || result.verdict === "blocked" || result.verdict === "cancelled";
+      const agentStep = completeAgentStep(startedMission.agentSteps, agentStepId, {
+        status: failedVerdict ? result.verdict === "blocked" ? "blocked" : "failed" : "succeeded",
+        endedAt: finishedAt,
+        durationMs: Date.now() - Date.parse(startedAt),
+        output,
+        observationIds: (result.observations ?? []).map((item) => item.observationId),
+        evidence: result.evidence ?? [],
+        ...(failedVerdict ? { error: `Tool returned verdict ${result.verdict}` } : {}),
+      });
       const taskStatus = failedVerdict ? result.verdict === "blocked" ? "blocked" : "failed" : "passed";
       const taskUpdate = updateTask(startedMission, { ...runningTask, status: taskStatus, output, ...(failedVerdict ? { error: `Tool returned verdict ${result.verdict}` } : {}) }, { currentTaskId: undefined });
       return this.save({
         ...taskUpdate,
+        agentSteps: replaceAgentStep(startedMission.agentSteps, agentStep),
         toolCalls: replaceToolCall(startedMission.toolCalls, call),
         observations: [...startedMission.observations, ...(result.observations ?? []).map((item) => ObservationSchema.parse(item))],
         evidence: [...startedMission.evidence, ...(result.evidence ?? [])],
@@ -428,9 +456,16 @@ export class MissionAgent {
       const cancelled = toolController.signal.aborted && signal.aborted;
       const status = cancelled ? "cancelled" : "failed";
       const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: cause.message });
+      const agentStep = completeAgentStep(startedMission.agentSteps, agentStepId, {
+        status: status === "cancelled" ? "cancelled" : "failed",
+        endedAt: new Date().toISOString(),
+        durationMs: Date.now() - Date.parse(startedAt),
+        error: cause.message,
+      });
       const failedTask = updateTask(startedMission, { ...runningTask, status: status === "cancelled" ? "blocked" : "failed", error: cause.message }, { currentTaskId: task.taskId });
       return this.save({
         ...failedTask,
+        agentSteps: replaceAgentStep(startedMission.agentSteps, agentStep),
         toolCalls: replaceToolCall(startedMission.toolCalls, call),
         findings: [...startedMission.findings, finding(`task-${task.taskId}`, status === "cancelled" ? "info" : "medium", status === "cancelled" ? "environment" : "test", `Task ${task.taskId} did not complete`, cause.message, status === "cancelled" ? "confirmed" : "suspected")],
         status: status === "cancelled" ? "cancelled" : "failed",
@@ -458,12 +493,13 @@ function updateTask(mission: TestMission, task: TaskNode, options: { currentTask
   return { ...mission, currentTaskId: options.currentTaskId, plan: { ...mission.plan, graph: { ...mission.plan.graph, tasks: mission.plan.graph.tasks.map((candidate) => candidate.taskId === task.taskId ? TaskNodeSchema.parse(task) : candidate) } } };
 }
 
-function failTask(mission: TestMission, taskId: string, toolCallId: string, startedAt: string, error: string, status: "blocked" | "failed"): TestMission {
+function failTask(mission: TestMission, taskId: string, toolCallId: string, agentStepId: string, startedAt: string, error: string, status: "blocked" | "failed"): TestMission {
   const task = mission.plan.graph.tasks.find((candidate) => candidate.taskId === taskId);
   if (!task) throw new Error(`Task not found: ${taskId}`);
   const nextTask = { ...task, status, error } as TaskNode;
   const call = ToolCallSchema.parse({ toolCallId, taskId, tool: task.tool, attempt: task.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error });
-  return { ...updateTask(mission, nextTask, { currentTaskId: taskId }), status: status === "blocked" ? "blocked" : "failed", verdict: status === "blocked" ? "blocked" : "failed", toolCalls: replaceToolCall(mission.toolCalls, call), findings: [...mission.findings, finding(`task-${taskId}`, status === "blocked" ? "high" : "medium", status === "blocked" ? "environment" : "product", `Task ${taskId} did not complete`, error)] };
+  const agentStep = completeAgentStep(mission.agentSteps, agentStepId, { status, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error });
+  return { ...updateTask(mission, nextTask, { currentTaskId: taskId }), status: status === "blocked" ? "blocked" : "failed", verdict: status === "blocked" ? "blocked" : "failed", agentSteps: replaceAgentStep(mission.agentSteps, agentStep), toolCalls: replaceToolCall(mission.toolCalls, call), findings: [...mission.findings, finding(`task-${taskId}`, status === "blocked" ? "high" : "medium", status === "blocked" ? "environment" : "product", `Task ${taskId} did not complete`, error)] };
 }
 
 function replaceToolCall(calls: ToolCall[], next: ToolCall): ToolCall[] {
@@ -484,6 +520,41 @@ function closeStartedCalls(calls: ToolCall[], taskId: string, reason: string): T
       error: reason,
     });
   });
+}
+
+function replaceAgentStep(steps: AgentStep[], next: AgentStep): AgentStep[] {
+  const index = steps.findIndex((step) => step.agentStepId === next.agentStepId);
+  if (index < 0) return [...steps, next];
+  return steps.map((step, current) => current === index ? next : step);
+}
+
+function completeAgentStep(steps: AgentStep[], agentStepId: string, update: Partial<AgentStep>): AgentStep {
+  const current = steps.find((step) => step.agentStepId === agentStepId);
+  if (!current) throw new Error(`Agent step not found: ${agentStepId}`);
+  return AgentStepSchema.parse({ ...current, ...update });
+}
+
+function closeInterruptedAgentSteps(steps: AgentStep[], task: TaskNode, reason: string, status: "cancelled" | "blocked"): AgentStep[] {
+  const endedAt = new Date().toISOString();
+  const matching = steps.some((step) => step.taskId === task.taskId && step.status === "running");
+  const closed = steps.map((step) => step.taskId !== task.taskId || step.status !== "running"
+    ? step
+    : AgentStepSchema.parse({ ...step, status, endedAt, durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(step.startedAt)), error: reason }));
+  if (matching) return closed;
+  return [...closed, AgentStepSchema.parse({
+    agentStepId: `agent-step-recovered-${task.taskId}-${task.attempts}`,
+    sequence: closed.length + 1,
+    taskId: task.taskId,
+    phase: "recover",
+    tool: task.tool,
+    decision: `恢复任务 ${task.taskId} 时发现旧状态没有代理步骤记录，补写中断审计记录。`,
+    input: task.input,
+    status,
+    startedAt: endedAt,
+    endedAt,
+    durationMs: 0,
+    error: reason,
+  })];
 }
 
 function isSafeToRecover(mission: TestMission, task: TaskNode, tool: MissionTool): boolean {

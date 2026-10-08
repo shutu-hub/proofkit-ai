@@ -292,6 +292,31 @@ export const ToolCallSchema = z.object({
 });
 export type ToolCall = z.infer<typeof ToolCallSchema>;
 
+/**
+ * A durable control-loop step. AgentStep records the agent's decision and
+ * lifecycle around a task; ToolCall records the concrete registered tool
+ * invocation that implements that decision.
+ */
+export const AgentStepSchema = z.object({
+  agentStepId: z.string().min(1),
+  sequence: z.number().int().positive(),
+  taskId: z.string().min(1),
+  phase: z.enum(["execute", "recover", "verify"]).default("execute"),
+  tool: z.string().min(1),
+  decision: z.string().min(1),
+  input: z.record(z.string(), z.unknown()).default({}),
+  status: z.enum(["running", "succeeded", "failed", "blocked", "cancelled"]),
+  startedAt: z.string(),
+  endedAt: z.string().optional(),
+  durationMs: z.number().nonnegative().optional(),
+  output: z.unknown().optional(),
+  error: z.string().optional(),
+  toolCallIds: z.array(z.string().min(1)).default([]),
+  observationIds: z.array(z.string().min(1)).default([]),
+  evidence: z.array(EvidenceRefSchema).default([]),
+});
+export type AgentStep = z.infer<typeof AgentStepSchema>;
+
 export const FindingSchema = z.object({
   findingId: z.string().min(1),
   severity: z.enum(["info", "low", "medium", "high", "critical"]),
@@ -393,6 +418,7 @@ export const TestMissionSchema = z.object({
   verdict: VerdictSchema.optional(),
   charter: TestCharterSchema.optional(),
   plan: MissionPlanSchema,
+  agentSteps: z.array(AgentStepSchema).default([]),
   toolCalls: z.array(ToolCallSchema).default([]),
   observations: z.array(ObservationSchema).default([]),
   evidence: z.array(EvidenceRefSchema).default([]),

@@ -25,6 +25,9 @@ describe("MissionAgent", () => {
     expect(completed.verdict).toBe("passed");
     expect(calls).toEqual(["discover", "run", "verify"]);
     expect(completed.revision).toBeGreaterThan(3);
+    expect(completed.agentSteps).toHaveLength(3);
+    expect(completed.agentSteps.map((step) => step.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
+    expect(completed.agentSteps.every((step) => step.toolCallIds.length === 1)).toBe(true);
   });
 
   it("blocks an unregistered or disallowed tool with a finding", async () => {
@@ -123,6 +126,8 @@ describe("MissionAgent", () => {
     expect(result.toolCalls.find((call) => call.toolCallId === "tool-stale")?.status).toBe("cancelled");
     expect(result.toolCalls.filter((call) => call.status === "succeeded")).toHaveLength(3);
     expect(result.toolCalls.find((call) => call.taskId === "reconnaissance" && call.status === "succeeded")?.attempt).toBe(2);
+    expect(result.agentSteps.find((step) => step.taskId === "reconnaissance" && step.status === "cancelled")).toBeDefined();
+    expect(result.agentSteps.filter((step) => step.taskId === "reconnaissance" && step.status === "succeeded")).toHaveLength(1);
   });
 
   it("blocks an interrupted side-effecting task instead of replaying it", async () => {
@@ -148,6 +153,7 @@ describe("MissionAgent", () => {
     expect(result.status).toBe("blocked");
     expect(result.verdict).toBe("blocked");
     expect(result.toolCalls).toHaveLength(0);
+    expect(result.agentSteps[0]?.status).toBe("blocked");
     expect(result.findings.some((item) => item.message.includes("side effect"))).toBe(true);
   });
 

@@ -41,7 +41,7 @@ A `capability` action names a project-registered operation with schema-validated
 
 ### Test Mission and Agent Loop
 
-`TestMission` is the durable envelope for an AI-led test request. It records the user intent, selected surface, policy, generated `MissionPlan`, task graph, tool calls, observations, evidence, findings, diagnosis and repair suggestions. The mission is saved at `<project-root>/.proofkit/missions/<mission-id>.json`, so a CLI or MCP client can disconnect and later inspect, cancel or replay the same work.
+`TestMission` is the durable envelope for an AI-led test request. It records the user intent, selected surface, policy, generated `MissionPlan`, task graph, agent steps, tool calls, observations, evidence, findings, diagnosis and repair suggestions. The mission is saved at `<project-root>/.proofkit/missions/<mission-id>.json`, so a CLI or MCP client can disconnect and later inspect, cancel or replay the same work.
 
 The first planner is deterministic and creates explicit tasks for `project.discover`, one or more `surface.run-charter` executions, optional `surface.replay-charter` executions, and `mission.verify`. `quick` and `core` use one selected surface. `release` creates a Web/Electron matrix, runs the primary Charter on both surfaces, replays both runs, and verifies the aggregate evidence. An LLM planner can be added behind the same `MissionPlanner` interface, but its output must still validate against `MissionPlanSchema`, `TaskNodeSchema` and the registered tool schemas. Model output never becomes a shell command, raw CDP call, SQL statement or arbitrary JavaScript execution.
 
@@ -61,6 +61,20 @@ Every task is persisted as `running` before its tool starts and receives a `star
 Mission status describes orchestration (`awaiting-approval`, `running`, `completed`, `failed`, `blocked`, or `cancelled`). The nested Run verdict describes the actual surface execution. A mission can therefore explain that a test was blocked by policy even when no product run was attempted.
 
 The high-level MCP tools are `create_test_mission`, `approve_test_plan`, `start_mission`, `get_mission_status`, `get_mission_evidence`, `cancel_mission` and `replay_mission`. The equivalent CLI is `proofkit mission create|approve|run|status|evidence|replay`. Existing run-level tools remain available for users who already have a charter.
+
+### Mission audit records
+
+The mission protocol keeps five related records with separate responsibilities:
+
+| Record | Meaning | Typical contents |
+| --- | --- | --- |
+| `AgentStep` | The agent's decision and control-loop lifecycle | selected task, decision, phase, status, linked tool/observation/evidence IDs |
+| `ToolCall` | The concrete registered tool invocation | tool name, validated input, attempt, execution status, timing and error |
+| `Observation` | A typed fact observed during planning or execution | project map, surface run summary, business state or runtime event |
+| `Evidence` | A reviewable artifact or reference | snapshot, screenshot, report, business response or event log |
+| `Finding` | A classified outcome that needs attention | severity, category, confidence status and linked evidence |
+
+`AgentStep` is the control-plane audit record; it is not a replacement for `ToolCall`. The full mission file keeps the original task input/output for local recovery. `get_mission_evidence` exposes a bounded AgentStep summary containing the decision, lifecycle, links and evidence references, while omitting potentially large input/output payloads. This gives an AI client enough context to explain what it did without turning the evidence endpoint into an unbounded transcript.
 
 ### Local Runner and MCP
 
@@ -99,7 +113,7 @@ Mission state is separate from run artifacts:
   runs/<run-id>/run.json
 ```
 
-The mission references run evidence through typed `EvidenceRef` records. A mission file is orchestration state and can be replayed; a run directory is immutable execution evidence and remains the source of truth for what the surface actually did.
+The mission references run evidence through typed `EvidenceRef` records. A mission file is orchestration state and can be replayed; a run directory is immutable execution evidence and remains the source of truth for what the surface actually did. Agent decisions and tool receipts remain auditable in the mission, while screenshots, snapshots, reports and runtime events remain in the run evidence directory.
 
 Every event has a run ID and timestamp. Each step stores before/after snapshots and the action receipt. Optional evidence capture failures are recorded as findings and do not silently turn into business failures.
 

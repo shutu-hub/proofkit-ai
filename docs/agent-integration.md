@@ -34,11 +34,14 @@ The status result is intentionally short and structured:
 - resolved test level and why it was selected;
 - mission and run verdict;
 - task graph and first failed boundary;
+- bounded `AgentStep` summaries showing the agent decision, selected tool, lifecycle status and links to observations/evidence;
 - confirmed, suspected or unverified findings;
 - diagnosis and repair suggestions only when the evidence supports them;
 - evidence references to screenshots, snapshots, reports, process records and business Oracle output.
 
 The agent should report a product bug only for a `confirmed` product finding with linked evidence. A missing browser, permission, login, test data or business terminal observation is reported as `blocked` or `inconclusive` and includes the next required action.
+
+The protocol deliberately separates the audit layers: `AgentStep` explains why a task was selected, `ToolCall` records the registered operation, `Observation` records typed facts, and `Evidence` points to artifacts that can be reviewed. The evidence response is bounded; large tool inputs and outputs remain in the local Mission file rather than being copied into every MCP response.
 
 ## Project onboarding
 

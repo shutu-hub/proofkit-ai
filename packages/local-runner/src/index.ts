@@ -64,6 +64,14 @@ export type MissionStatus = {
   running: boolean;
 };
 
+/**
+ * Bounded AgentStep data exposed to MCP/CLI evidence consumers. The full
+ * Mission still retains inputs and outputs locally; this summary keeps the
+ * decision/audit trail useful without copying potentially large payloads.
+ */
+export type MissionAgentStepSummary = Pick<TestMission["agentSteps"][number],
+  "agentStepId" | "sequence" | "taskId" | "phase" | "tool" | "decision" | "status" | "startedAt" | "endedAt" | "durationMs" | "toolCallIds" | "observationIds" | "evidence" | "error">;
+
 type LocalRunRecord = {
   runId: string;
   status: LocalRunStatus["status"];
@@ -230,6 +238,7 @@ export class LocalRunnerService {
       maxAttempts: number;
       error?: string;
     }>;
+    agentSteps: MissionAgentStepSummary[];
     evidence: EvidenceRef[];
     findings: TestMission["findings"];
     firstFailure?: TestMission["firstFailure"];
@@ -254,6 +263,7 @@ export class LocalRunnerService {
         maxAttempts: task.maxAttempts,
         ...(task.error ? { error: task.error } : {}),
       })),
+      agentSteps: mission.agentSteps.map(summarizeAgentStep),
       evidence: mission.evidence,
       findings: mission.findings,
       firstFailure: mission.firstFailure,
@@ -704,6 +714,25 @@ export class LocalRunnerService {
   private reportPath(runId: string): string {
     return resolve(this.evidenceDir, runId, "report.html");
   }
+}
+
+function summarizeAgentStep(step: TestMission["agentSteps"][number]): MissionAgentStepSummary {
+  return {
+    agentStepId: step.agentStepId,
+    sequence: step.sequence,
+    taskId: step.taskId,
+    phase: step.phase,
+    tool: step.tool,
+    decision: step.decision,
+    status: step.status,
+    startedAt: step.startedAt,
+    ...(step.endedAt ? { endedAt: step.endedAt } : {}),
+    ...(step.durationMs !== undefined ? { durationMs: step.durationMs } : {}),
+    toolCallIds: step.toolCallIds,
+    observationIds: step.observationIds,
+    evidence: step.evidence,
+    ...(step.error ? { error: step.error } : {}),
+  };
 }
 
 function validateRunId(runId: string): string {
