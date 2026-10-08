@@ -13,7 +13,7 @@ ProofKit is a local, evidence-driven acceptance runner for Web and Electron. A u
 | YAML Charter, validated actions/assertions, Mission task graphs, and release Web/Electron replay | Generated plans still need measured quality and user review for consequential flows; negative paths are not yet automatic |
 | Process health, browser events, named HTTP oracles, bounded polling | AIHR business integration is designed but not connected to a live test workspace |
 | Project-owned integration module with typed capabilities, oracles and cleanup | The module is trusted local JavaScript; package distribution and version compatibility remain future work |
-| JSONL, artifact hashes, JSON/HTML report and five-state verdict | The report does not yet diagnose a likely code location or proposed fix |
+| JSONL, artifact hashes, JSON/HTML report, five-state verdict and recoverable Mission attempts | The report does not yet diagnose a likely code location or proposed fix |
 
 ## User entry path
 
@@ -33,7 +33,7 @@ The contracts package owns the Charter, run, event and verdict schema. Surface a
 
 1. **Trustworthy one-sentence planning:** evaluate opt-in generated Charters against a fixed Web/Electron benchmark, add a review gate for consequential actions, and report what the planner could not infer. Model text never executes shell, SQL or JavaScript directly.
 2. **AIHR vertical proof:** implement the AIHR project integration, scoped test fixture and read-only observers for collection run, file, extraction, identity, job binding, assessment and billing. Run the same Charter through Web and Electron; require matching terminal facts and evidence links.
-3. **Trust and repeatability:** isolated browser profiles, retry/idempotency checks, evidence-safe diagnostics and a first-failure report with likely owner and suggested repair backed by observed facts. Cancellation, total run deadline, and release replay are now part of the runner; profile isolation, negative-path execution and retry classification remain open.
+3. **Trust and repeatability:** isolated browser profiles, retry/idempotency checks, evidence-safe diagnostics and a first-failure report with likely owner and suggested repair backed by observed facts. Cancellation, total run deadline, release replay, and safe recovery of interrupted read-only tasks are now part of the runner; profile isolation, negative-path execution, and retry classification remain open.
 
 Mobile follows once these contracts survive the Web/Electron business slice. Maestro is the initial mobile adapter candidate; Appium covers cases Maestro cannot. Keploy-style traffic replay can provide deterministic backend fixtures later. Neither changes the Runner/verdict model.
 

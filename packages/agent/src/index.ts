@@ -274,6 +274,8 @@ export class MissionAgent {
     if (mission.status !== "approved" && mission.status !== "paused" && mission.status !== "running") {
       throw new Error(`Mission cannot run from status ${mission.status}`);
     }
+    mission = await this.recoverInterruptedTasks(mission);
+    if (mission.status === "blocked" || mission.status === "cancelled" || mission.status === "failed") return mission;
     mission = await this.save({ ...mission, status: "running" });
     const controller = new AbortController();
     const detach = relayAbort(options.signal, controller);
@@ -310,12 +312,84 @@ export class MissionAgent {
     }
   }
 
+  /**
+   * Recover a mission that was persisted while a task was running.
+   *
+   * A process crash can happen after the task has been marked `running` but
+   * before its tool call has produced a terminal receipt. Replaying a write
+   * operation blindly could duplicate user data or trigger an external side
+   * effect twice, so only side-effect-free tasks are automatically retried.
+   */
+  private async recoverInterruptedTasks(mission: TestMission): Promise<TestMission> {
+    const runningTasks = mission.plan.graph.tasks.filter((task) => task.status === "running");
+    if (runningTasks.length === 0) return mission;
+
+    let recovered = mission;
+    for (const task of runningTasks) {
+      const tool = this.tools.get(task.tool);
+      const safe = tool !== undefined && isSafeToRecover(mission, task, tool);
+      if (safe && task.attempts < task.maxAttempts) {
+        const reason = `The previous process stopped while task ${task.taskId} was running; a safe retry is being scheduled.`;
+        const nextTask = { ...task, status: "pending" as const, error: undefined };
+        recovered = updateTask(recovered, nextTask, { currentTaskId: recovered.currentTaskId === task.taskId ? undefined : recovered.currentTaskId });
+        recovered = {
+          ...recovered,
+          toolCalls: closeStartedCalls(recovered.toolCalls, task.taskId, reason),
+          findings: [...recovered.findings, finding(
+            `mission-recovered-${task.taskId}-${task.attempts}`,
+            "info",
+            "environment",
+            `Recovered interrupted task ${task.taskId}`,
+            `${reason} ProofKit will retry it (attempt ${task.attempts + 1} of ${task.maxAttempts}).`,
+            "confirmed",
+          )],
+        };
+        continue;
+      }
+
+      const reason = tool === undefined
+        ? `Mission tool ${task.tool} is no longer registered; the interrupted task cannot be resumed safely.`
+        : task.attempts >= task.maxAttempts
+          ? `Task ${task.taskId} already used all ${task.maxAttempts} allowed attempts before the process stopped.`
+          : `Task ${task.taskId} may have produced a side effect; automatic recovery is disabled and requires review.`;
+      const blockedTask = { ...task, status: "blocked" as const, error: reason };
+      recovered = updateTask(recovered, blockedTask, { currentTaskId: recovered.currentTaskId === task.taskId ? undefined : recovered.currentTaskId });
+      recovered = {
+        ...recovered,
+        toolCalls: closeStartedCalls(recovered.toolCalls, task.taskId, reason),
+        status: "blocked",
+        verdict: "blocked",
+        findings: [...recovered.findings, finding(
+          `mission-recovery-blocked-${task.taskId}`,
+          "high",
+          "environment",
+          `Interrupted task requires review: ${task.taskId}`,
+          reason,
+          "confirmed",
+        )],
+      };
+    }
+    return this.save(recovered);
+  }
+
   private async executeTask(mission: TestMission, task: TaskNode, signal: AbortSignal): Promise<TestMission> {
     const tool = this.tools.get(task.tool);
     const startedAt = new Date().toISOString();
     const toolCallId = `tool-${randomUUID().slice(0, 12)}`;
     const runningTask = { ...task, status: "running" as const, attempts: task.attempts + 1 };
-    const startedMission = await this.save(updateTask(mission, runningTask, { currentTaskId: task.taskId }));
+    const startedCall = ToolCallSchema.parse({
+      toolCallId,
+      taskId: task.taskId,
+      tool: tool?.name ?? task.tool,
+      attempt: runningTask.attempts,
+      input: task.input,
+      status: "started",
+      startedAt,
+    });
+    const startedMission = await this.save({
+      ...updateTask(mission, runningTask, { currentTaskId: task.taskId }),
+      toolCalls: [...mission.toolCalls, startedCall],
+    });
     if (!tool) {
       return this.save(failTask(startedMission, task.taskId, toolCallId, startedAt, `Mission tool is not registered: ${task.tool}`, "blocked"));
     }
@@ -333,13 +407,13 @@ export class MissionAgent {
       const result = await raceAbort(tool.execute(input, { mission: startedMission, task: runningTask, signal: toolController.signal }), toolController.signal);
       const output = tool.outputSchema ? tool.outputSchema.parse(result.output) : result.output;
       const finishedAt = new Date().toISOString();
-      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, input: task.input, status: "succeeded", startedAt, endedAt: finishedAt, durationMs: Date.now() - Date.parse(startedAt), evidence: result.evidence ?? [] });
+      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status: "succeeded", startedAt, endedAt: finishedAt, durationMs: Date.now() - Date.parse(startedAt), evidence: result.evidence ?? [] });
       const failedVerdict = result.verdict === "failed" || result.verdict === "blocked" || result.verdict === "cancelled";
       const taskStatus = failedVerdict ? result.verdict === "blocked" ? "blocked" : "failed" : "passed";
       const taskUpdate = updateTask(startedMission, { ...runningTask, status: taskStatus, output, ...(failedVerdict ? { error: `Tool returned verdict ${result.verdict}` } : {}) }, { currentTaskId: undefined });
       return this.save({
         ...taskUpdate,
-        toolCalls: [...startedMission.toolCalls, call],
+        toolCalls: replaceToolCall(startedMission.toolCalls, call),
         observations: [...startedMission.observations, ...(result.observations ?? []).map((item) => ObservationSchema.parse(item))],
         evidence: [...startedMission.evidence, ...(result.evidence ?? [])],
         findings: [...startedMission.findings, ...(result.findings ?? []).map((item) => FindingSchema.parse(item))],
@@ -353,11 +427,11 @@ export class MissionAgent {
       const cause = toError(error);
       const cancelled = toolController.signal.aborted && signal.aborted;
       const status = cancelled ? "cancelled" : "failed";
-      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: cause.message });
+      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: cause.message });
       const failedTask = updateTask(startedMission, { ...runningTask, status: status === "cancelled" ? "blocked" : "failed", error: cause.message }, { currentTaskId: task.taskId });
       return this.save({
         ...failedTask,
-        toolCalls: [...startedMission.toolCalls, call],
+        toolCalls: replaceToolCall(startedMission.toolCalls, call),
         findings: [...startedMission.findings, finding(`task-${task.taskId}`, status === "cancelled" ? "info" : "medium", status === "cancelled" ? "environment" : "test", `Task ${task.taskId} did not complete`, cause.message, status === "cancelled" ? "confirmed" : "suspected")],
         status: status === "cancelled" ? "cancelled" : "failed",
         verdict: status === "cancelled" ? "cancelled" : "failed",
@@ -388,8 +462,34 @@ function failTask(mission: TestMission, taskId: string, toolCallId: string, star
   const task = mission.plan.graph.tasks.find((candidate) => candidate.taskId === taskId);
   if (!task) throw new Error(`Task not found: ${taskId}`);
   const nextTask = { ...task, status, error } as TaskNode;
-  const call = ToolCallSchema.parse({ toolCallId, taskId, tool: task.tool, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error });
-  return { ...updateTask(mission, nextTask, { currentTaskId: taskId }), status: status === "blocked" ? "blocked" : "failed", verdict: status === "blocked" ? "blocked" : "failed", toolCalls: [...mission.toolCalls, call], findings: [...mission.findings, finding(`task-${taskId}`, status === "blocked" ? "high" : "medium", status === "blocked" ? "environment" : "product", `Task ${taskId} did not complete`, error)] };
+  const call = ToolCallSchema.parse({ toolCallId, taskId, tool: task.tool, attempt: task.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error });
+  return { ...updateTask(mission, nextTask, { currentTaskId: taskId }), status: status === "blocked" ? "blocked" : "failed", verdict: status === "blocked" ? "blocked" : "failed", toolCalls: replaceToolCall(mission.toolCalls, call), findings: [...mission.findings, finding(`task-${taskId}`, status === "blocked" ? "high" : "medium", status === "blocked" ? "environment" : "product", `Task ${taskId} did not complete`, error)] };
+}
+
+function replaceToolCall(calls: ToolCall[], next: ToolCall): ToolCall[] {
+  const index = calls.findIndex((call) => call.toolCallId === next.toolCallId);
+  if (index < 0) return [...calls, next];
+  return calls.map((call, current) => current === index ? next : call);
+}
+
+function closeStartedCalls(calls: ToolCall[], taskId: string, reason: string): ToolCall[] {
+  const endedAt = new Date().toISOString();
+  return calls.map((call) => {
+    if (call.taskId !== taskId || call.status !== "started") return call;
+    return ToolCallSchema.parse({
+      ...call,
+      status: "cancelled",
+      endedAt,
+      durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(call.startedAt)),
+      error: reason,
+    });
+  });
+}
+
+function isSafeToRecover(mission: TestMission, task: TaskNode, tool: MissionTool): boolean {
+  if (tool.sideEffect === "write") return false;
+  if ((task.tool === "surface.run-charter" || task.tool === "surface.replay-charter") && mission.charter?.sideEffectPolicy !== "deny") return false;
+  return true;
 }
 
 function finding(id: string, severity: Finding["severity"], category: Finding["category"], title: string, message: string, status: Finding["status"] = "confirmed"): Finding {

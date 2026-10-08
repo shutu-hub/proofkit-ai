@@ -86,6 +86,71 @@ describe("MissionAgent", () => {
     expect(result.findings[0]?.message).toContain("fixture surface is unavailable");
   });
 
+  it("recovers an interrupted read task when an attempt remains", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-mission-recovery-"));
+    const store = new JsonMissionStore(root);
+    const calls: string[] = [];
+    const tools = new InMemoryMissionToolRegistry([
+      { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => { calls.push("discover"); return {}; } },
+      { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}).passthrough(), execute: async () => { calls.push("run"); return { verdict: "passed" as const }; } },
+      { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => { calls.push("verify"); return { verdict: "passed" as const }; } },
+    ]);
+    const agent = new MissionAgent({ store, tools });
+    const created = await agent.create({ intent: "recover safe mission", projectRoot: root, surface: "web", policy: { requireApproval: false } });
+    const interrupted = await agent.load(created.missionId);
+    interrupted.status = "running";
+    interrupted.currentTaskId = "reconnaissance";
+    interrupted.plan.graph.tasks = interrupted.plan.graph.tasks.map((task) => task.taskId === "reconnaissance"
+      ? { ...task, status: "running" as const, attempts: 1, maxAttempts: 2 }
+      : task);
+    interrupted.toolCalls = [{
+      toolCallId: "tool-stale",
+      taskId: "reconnaissance",
+      tool: "project.discover",
+      attempt: 1,
+      input: {},
+      status: "started",
+      evidence: [],
+      startedAt: new Date(Date.now() - 10).toISOString(),
+    }];
+    await store.save(interrupted);
+
+    const result = await agent.run(created.missionId);
+
+    expect(result.status).toBe("completed");
+    expect(calls).toEqual(["discover", "run", "verify"]);
+    expect(result.findings.some((item) => item.title.includes("Recovered interrupted task"))).toBe(true);
+    expect(result.toolCalls.find((call) => call.toolCallId === "tool-stale")?.status).toBe("cancelled");
+    expect(result.toolCalls.filter((call) => call.status === "succeeded")).toHaveLength(3);
+    expect(result.toolCalls.find((call) => call.taskId === "reconnaissance" && call.status === "succeeded")?.attempt).toBe(2);
+  });
+
+  it("blocks an interrupted side-effecting task instead of replaying it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-mission-recovery-write-"));
+    const store = new JsonMissionStore(root);
+    const tools = new InMemoryMissionToolRegistry([
+      { name: "write.operation", description: "write", sideEffect: "write", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({ verdict: "passed" as const }) },
+      { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}).passthrough(), execute: async () => ({ verdict: "passed" as const }) },
+      { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({ verdict: "passed" as const }) },
+    ]);
+    const agent = new MissionAgent({ store, tools });
+    const created = await agent.create({ intent: "recover write mission", projectRoot: root, surface: "web", policy: { requireApproval: false, sideEffectPolicy: "allow" } });
+    const interrupted = await agent.load(created.missionId);
+    interrupted.status = "running";
+    interrupted.currentTaskId = "reconnaissance";
+    interrupted.plan.graph.tasks = interrupted.plan.graph.tasks.map((task) => task.taskId === "reconnaissance"
+      ? { ...task, tool: "write.operation", status: "running" as const, attempts: 1, maxAttempts: 2 }
+      : task);
+    await store.save(interrupted);
+
+    const result = await agent.run(created.missionId);
+
+    expect(result.status).toBe("blocked");
+    expect(result.verdict).toBe("blocked");
+    expect(result.toolCalls).toHaveLength(0);
+    expect(result.findings.some((item) => item.message.includes("side effect"))).toBe(true);
+  });
+
   it.each([
     ["quick", 3, ["web"], false],
     ["core", 3, ["electron"], false],

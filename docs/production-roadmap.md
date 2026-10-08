@@ -30,9 +30,10 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Expose cancellation through the CLI and MCP.
 - Treat adapter, process and integration cleanup failures as non-green results.
 - Keep Agent tool failures as suspected test findings until an independent product oracle confirms a defect.
+- Persist task attempts and recover interrupted read-only tasks; block interrupted side-effecting tasks for review instead of replaying them blindly.
 - Never let a rejected Mission promise leave a durable mission in an unexplained running state.
 
-**Gate:** a fixture integration is loaded without a hosted service; a slow run produces a `cancelled` verdict; cleanup runs on timeout and cancellation; Web/Electron smoke tests remain green.
+**Gate:** a fixture integration is loaded without a hosted service; a slow run produces a `cancelled` verdict; cleanup runs on timeout and cancellation; an interrupted read-only task resumes with an audited attempt; an interrupted write task is blocked; Web/Electron smoke tests remain green.
 
 ## Phase 2: measurable AI planning
 

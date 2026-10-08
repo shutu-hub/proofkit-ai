@@ -281,6 +281,7 @@ export const ToolCallSchema = z.object({
   toolCallId: z.string().min(1),
   taskId: z.string().min(1),
   tool: z.string().min(1),
+  attempt: z.number().int().positive().default(1),
   input: z.record(z.string(), z.unknown()).default({}),
   status: z.enum(["started", "succeeded", "failed", "blocked", "cancelled"]),
   startedAt: z.string(),
