@@ -192,7 +192,7 @@ The Electron smoke test uses an isolated temporary profile. The Web smoke test s
 4. Distinguish action receipts from assertions: an action receipt proves dispatch, not business success.
 5. Keep the core deterministic and make AI planning an optional provider behind a validated schema.
 
-See [docs/architecture.md](docs/architecture.md) for package boundaries, extension points, and the first end-to-end vertical slice. See [docs/research.md](docs/research.md) for the open-source project comparison and reuse decisions. See [docs/aihr-resume-integration.md](docs/aihr-resume-integration.md) for the first business-flow integration contract.
+See [docs/architecture.md](docs/architecture.md) for package boundaries, extension points, and the first end-to-end vertical slice. See [docs/research.md](docs/research.md) for the open-source project comparison and reuse decisions. See [docs/aihr-resume-integration.md](docs/aihr-resume-integration.md) for the first business-flow integration contract. The concrete AIHR gateway integration and starter Charter are in [.proofkit/integration.mjs](.proofkit/integration.mjs), [.proofkit/charters/aihr-online-resume.yml](.proofkit/charters/aihr-online-resume.yml), and [docs/aihr-resume-testing-map.md](docs/aihr-resume-testing-map.md).
 See [docs/product-direction.md](docs/product-direction.md) for the current status, adoption path, and next implementation decisions.
 
 ## License

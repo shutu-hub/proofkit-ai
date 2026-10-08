@@ -1,0 +1,35 @@
+intent: 验证 AIHR BOSS 在线简历从提交到候选人绑定和评估完成
+mode: deterministic
+sideEffectPolicy: allow
+preconditions:
+  - AIHR gateway is running in an isolated test environment
+  - AIHR_PROOFKIT_ACCESS_TOKEN and actor headers point to a test workspace
+  - Charter metadata.aihr identifies an existing test conversation and workflow
+actions:
+  - kind: capability
+    name: aihr.createOnlineResumeIntake
+    input:
+      conversationId: "$env:AIHR_PROOFKIT_CONVERSATION_ID"
+      workflowId: "$env:AIHR_PROOFKIT_WORKFLOW_ID"
+      workflowVersion: "$env:AIHR_PROOFKIT_WORKFLOW_VERSION"
+      jobId: "$env:AIHR_PROOFKIT_JOB_ID"
+      candidateUid: "$env:AIHR_PROOFKIT_CANDIDATE_UID"
+      bossAccountId: "$env:AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID"
+      sourcePlatform: boss
+      sourceText: "$env:AIHR_PROOFKIT_SOURCE_TEXT"
+      originalFilename: proofkit-online-resume.pdf
+      maxAttempts: 3
+  - kind: capability
+    name: aihr.waitOnlineResumePipeline
+    input:
+      sourceChannel: boss
+      maxWaitMs: 300000
+      pollIntervalMs: 1000
+      requireAssessmentSuccess: true
+assertions: []
+oracles:
+  - aihr.onlineResumePipeline
+metadata:
+  aihr:
+    sourceChannel: boss
+    requireAssessmentSuccess: true

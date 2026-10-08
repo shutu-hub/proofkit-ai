@@ -2,6 +2,7 @@ import { access } from "node:fs/promises";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ProofkitConfig } from "@proofkit/contracts";
+import { z } from "@proofkit/runner";
 import type { ProjectIntegration } from "@proofkit/runner";
 
 const DEFAULT_INTEGRATION_PATH = ".proofkit/integration.mjs";
@@ -9,6 +10,7 @@ const DEFAULT_INTEGRATION_PATH = ".proofkit/integration.mjs";
 export type ProjectIntegrationFactoryContext = {
   root: string;
   config: ProofkitConfig;
+  z: typeof z;
 };
 
 export async function loadProjectIntegration(
@@ -30,7 +32,7 @@ export async function loadProjectIntegration(
     createIntegration?: (context: ProjectIntegrationFactoryContext) => unknown | Promise<unknown>;
   };
   const candidate = loaded.createIntegration
-    ? await loaded.createIntegration({ root: projectRoot, config })
+    ? await loaded.createIntegration({ root: projectRoot, config, z })
     : loaded.default ?? loaded.integration;
   return validateIntegration(candidate, path);
 }

@@ -28,6 +28,26 @@ describe("LocalRunnerService", () => {
     expect(service.integration?.version).toBe("1");
   });
 
+  it("injects the ProofKit schema runtime into project factories", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-integration-schema-"));
+    roots.push(root);
+    await mkdir(join(root, ".proofkit"), { recursive: true });
+    await writeFile(join(root, ".proofkit", "integration.mjs"), `
+      export function createIntegration({ z }) {
+        const schema = z.object({ value: z.string().min(1) });
+        return { name: "schema-fixture", capabilities: [{
+          name: "readSchemaValue", description: "schema fixture", sideEffect: "read", environments: ["test"], timeoutMs: 1000,
+          inputSchema: schema, outputSchema: schema, execute: async (input) => input, evidence: (output) => ({ value: output.value }),
+        }] };
+      }
+    `, "utf8");
+
+    const service = await LocalRunnerService.create({ root });
+
+    expect(service.integration?.name).toBe("schema-fixture");
+    expect(service.integration?.capabilities?.[0]?.inputSchema.parse({ value: "ok" })).toEqual({ value: "ok" });
+  });
+
   it("executes capabilities, oracles and cleanup from the loaded integration", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-integration-run-"));
     roots.push(root);

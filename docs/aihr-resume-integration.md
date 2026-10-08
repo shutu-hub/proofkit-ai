@@ -19,25 +19,25 @@ The important distinction is that an upload response is an acknowledgement, not 
 
 The project integration is now loaded from `.proofkit/integration.mjs` (or the path configured by `integration.path`). The module is trusted repository code and is composed into the same Local Runner lifecycle used by CLI, MCP and CI. It can export capabilities, read-only oracles, and a setup hook that returns cleanup. The Runner supplies a cancellation signal and the configured total run deadline to every run.
 
-The project-local integration should expose typed, mostly read-only capabilities under the AIHR project rather than add AIHR logic to ProofKit. ProofKit now supplies the loading and lifecycle contract; the AIHR repository still needs to implement these domain operations:
+The concrete ProofKit workspace now includes a reference AIHR integration at `.proofkit/integration.mjs`. It calls only gateway endpoints and keeps the domain-specific allowlist in the project-owned module. The current capabilities are:
 
 | Capability | Side effect | Evidence returned |
 | --- | --- | --- |
-| `seedTestCandidate` | test-only write | opaque candidate/job/run IDs, no PII |
-| `startResumeCollection` | test-only write | request ID, run ID and request/response status |
-| `readResumeWorkflowStatus` | read | file, extract, parse, candidate, relation and assessment states |
-| `verifyResumeFile` | read | file ID, byte/hash metadata, content/text availability and status |
-| `verifyPositionBinding` | read | expected job ID, candidate ID and current relation |
-| `verifyBillingLedger` | read | scoped usage or ledger delta for this test run |
-| `resetTestScope` | test-only write | cleanup outcome and remaining opaque IDs |
+| `aihr.createResumeCollectionRun` | test-only write | opaque run ID, source channel and status |
+| `aihr.createOnlineResumeIntake` | test-only write | opaque task/workflow/job IDs and status |
+| `aihr.waitOnlineResumePipeline` | read | workflow, file, extraction, parse, candidate and assessment states |
+| `aihr.readResumeCollectionRun` | read | run status, counts and machine error code |
+| `aihr.readResumeFile` | read | file ID/hash and processing statuses |
+| `aihr.readWorkflowUsage` | read | immutable workflow facts and stage/result counts |
+| `aihr.readBillingUsage` | read | billing usage total and exact workflow-run match count |
 
-Each capability must declare an input schema, output schema, environment allowlist, timeout, idempotency key, cleanup method and evidence policy. Raw resume text, cookies, authorization headers and real candidate identifiers must never enter the default ProofKit evidence directory. Integration cleanup runs in reverse registration order after the adapter and project process close; a cleanup error prevents a green verdict.
+Each capability declares an input schema, output schema, environment allowlist, timeout and evidence projection. Raw resume text, cookies, authorization headers and real candidate identifiers never enter the default ProofKit evidence directory. The factory receives ProofKit's schema runtime, so a project integration does not need a hidden `zod` dependency. Integration cleanup runs in reverse registration order after the adapter and project process close; a cleanup error prevents a green verdict.
 
 ## Oracle strategy
 
 The first AIHR implementation can use a project-local read-only observer that calls existing gateway endpoints. It should correlate every observation with the ProofKit `runId`, AIHR collection run ID, file ID and client item key. Polling must be bounded and use the service's terminal statuses; arbitrary sleeps are not an oracle.
 
-ProofKit supports a declarative HTTP status oracle with terminal values and JSON Pointer extraction. Its query bindings can use the ProofKit run ID or a sanitized scalar from a completed capability step. The actual AIHR endpoints, status vocabulary and identifiers still need to be verified against an isolated running AIHR test environment before this configuration can be treated as an AIHR integration.
+ProofKit supports a declarative HTTP status oracle with terminal values and JSON Pointer extraction. Its query bindings can use the ProofKit run ID or a sanitized scalar from a completed capability step. The reference integration uses the public gateway projection for workflow, file, candidate and assessment observations, and the starter Charter is parameterized by environment variables for an isolated AIHR test workspace. It must be run against the approved test deployment before it is treated as a release gate.
 
 The minimum acceptance set is:
 

@@ -1,0 +1,8 @@
+project:
+  root: .
+  health: []
+surfaces: {}
+policies:
+  environment: test
+  sideEffects: confirm
+  saveSensitivePayloads: false

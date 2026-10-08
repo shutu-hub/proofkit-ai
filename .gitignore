@@ -1,7 +1,13 @@
 node_modules/
 dist/
 coverage/
-.proofkit/
+**/.proofkit/
+!/.proofkit/
+/.proofkit/*
+!/.proofkit/config.yaml
+!/.proofkit/integration.mjs
+!/.proofkit/charters/
+!/.proofkit/charters/*.yml
 .env
 .env.*
 !.env.example

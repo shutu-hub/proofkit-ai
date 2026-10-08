@@ -1,5 +1,10 @@
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
 import { z } from "zod";
+
+// Project integrations receive this schema runtime through the loader. This
+// avoids forcing every project that adds `.proofkit/integration.mjs` to add a
+// hidden zod dependency of its own.
+export { z } from "zod";
 import type {
   Action,
   ActionReceipt,
