@@ -51,14 +51,14 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 
 **Goal:** prove value on the resume acquisition workflow.
 
-- Implement project-local test data setup and cleanup in an isolated test workspace.
+- Run the project-local ordinary upload integration and scoped fixture in an isolated test workspace.
 - Observe file creation, extraction, candidate identity, job binding, assessment terminal state and billing scope.
 - Correlate ProofKit `runId`, request IDs and opaque domain IDs.
 - Run the same Charter through Web and Electron, replay both runs, and compare terminal business facts.
 
 **Gate:** seeded defects in upload, extraction, identity, relation and billing are found with linked evidence; retries do not create duplicate billable facts.
 
-The default AIHR development request is `core`. A resume acquisition run must include at least one surface assertion and one independent business Oracle for its terminal state. `release` compares and replays the Web and Electron paths; configured negative and retry cases are recorded but are not yet automatically executed.
+The default AIHR development request is `core`. The ordinary PDF upload Charter is the default business path; the online intake Charter remains a compatibility flow. A resume acquisition run must include at least one surface assertion and one independent business Oracle for its terminal state. `release` compares and replays the Web and Electron paths; configured negative and retry cases are recorded but are not yet automatically executed.
 
 ## Phase 4: failure diagnosis and repair loop
 

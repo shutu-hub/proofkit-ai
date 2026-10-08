@@ -4,11 +4,11 @@ This document records the first project-specific integration target for ProofKit
 
 ## Verified flow
 
-The current desktop flow has these observable boundaries:
+The default AIHR flow for ProofKit is the ordinary PDF upload path. The current desktop flow has these observable boundaries:
 
 1. Create a collection run with `POST /api/v1/resume-collection/runs`.
 2. Generate a deterministic PDF or attachment artifact in the desktop process.
-3. Upload it with `POST /api/v1/resume-collection/files`, carrying the run, source channel, candidate and job context.
+3. Upload it with `POST /api/v1/resume-collection/files` as multipart form data, carrying the run, source channel, candidate and job context.
 4. The resume collection service persists the file, extracts text, identifies the candidate, resolves the job relation and creates the downstream assessment when the relation is eligible.
 5. Poll read-only state: file detail and text, collection run detail, candidate/job relation, and assessment detail.
 6. Finish only when the expected terminal state, identity and billing facts agree.
@@ -24,6 +24,8 @@ The concrete ProofKit workspace now includes a reference AIHR integration at `.p
 | Capability | Side effect | Evidence returned |
 | --- | --- | --- |
 | `aihr.createResumeCollectionRun` | test-only write | opaque run ID, source channel and status |
+| `aihr.uploadResumeFile` | test-only write | opaque file ID, file hash, run ID, idempotency key and initial statuses |
+| `aihr.waitResumeCollectionPipeline` | read | extraction, parsing, candidate, job relation, assessment and workflow facts |
 | `aihr.createOnlineResumeIntake` | test-only write | opaque task/workflow/job IDs and status |
 | `aihr.waitOnlineResumePipeline` | read | workflow, file, extraction, parse, candidate and assessment states |
 | `aihr.readResumeCollectionRun` | read | run status, counts and machine error code |
@@ -35,9 +37,9 @@ Each capability declares an input schema, output schema, environment allowlist, 
 
 ## Oracle strategy
 
-The first AIHR implementation can use a project-local read-only observer that calls existing gateway endpoints. It should correlate every observation with the ProofKit `runId`, AIHR collection run ID, file ID and client item key. Polling must be bounded and use the service's terminal statuses; arbitrary sleeps are not an oracle.
+The first AIHR implementation uses a project-local read-only observer that calls existing gateway endpoints. It correlates every observation with the ProofKit `runId`, AIHR collection run ID, file ID and client item key. Polling is bounded and uses service terminal statuses; arbitrary sleeps are not an oracle.
 
-ProofKit supports a declarative HTTP status oracle with terminal values and JSON Pointer extraction. Its query bindings can use the ProofKit run ID or a sanitized scalar from a completed capability step. The reference integration uses the public gateway projection for workflow, file, candidate and assessment observations, and the starter Charter is parameterized by environment variables for an isolated AIHR test workspace. It must be run against the approved test deployment before it is treated as a release gate.
+ProofKit supports a declarative HTTP status oracle with terminal values and JSON Pointer extraction. Its query bindings can use the ProofKit run ID or a sanitized scalar from a completed capability step. The reference integration uses the public gateway projection for workflow, file, candidate and assessment observations. `.proofkit/charters/aihr-resume-upload.yml` is the default ordinary-upload Charter; `.proofkit/charters/aihr-online-resume.yml` remains a compatibility Charter for the online intake path. Both are parameterized by environment variables for an isolated AIHR test workspace and must be run against the approved test deployment before they are treated as release gates.
 
 The minimum acceptance set is:
 
@@ -59,9 +61,11 @@ This split lets the same integration be used from the CLI, MCP and CI. MCP must 
 ## Implementation order
 
 1. Run `proofkit init` and fill the generated `.proofkit/integration.mjs` for the AIHR project.
-2. Implement `readResumeWorkflowStatus`, `verifyResumeFile`, `verifyPositionBinding` and `verifyBillingLedger` as read-only observers against a dedicated test workspace.
-3. Add a bounded polling oracle that writes sanitized JSON evidence and hashes, while preserving request IDs and terminal statuses.
+2. Use the ordinary upload Charter to validate `collection_run → file → extract → parse → candidate → job → assessment`.
+3. Add or refine read-only observers for billing and retry/idempotency facts against a dedicated test workspace.
 4. Add `seedTestCandidate` and `resetTestScope` only after the test workspace and cleanup contract are explicit.
-5. Create one Web smoke and one Electron/CDP smoke for the same charter; compare the final business evidence, not only screenshots.
+5. Create one Web smoke and one Electron/CDP smoke for the same Charter; compare the final business evidence, not only screenshots.
+
+The current ProofKit workspace has validated the ordinary upload integration with isolated HTTP mocks. A live AIHR workspace, real Electron session and production-like worker chain are still required before claiming end-to-end release coverage.
 
 No new ProofKit database table is needed for this vertical slice. The local run directory, AIHR's existing run/file/workflow/assessment identities and the project integration's idempotency key are sufficient. A durable result index can be considered only after concurrent CI runs require cross-run querying.

@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -96,7 +97,7 @@ describe("AIHR project integration", () => {
     expect(JSON.stringify(evidence)).not.toContain("super-secret");
 
     const timedOut = await wait.execute({ sourceChannel: "boss", maxWaitMs: 1_000, pollIntervalMs: 250, requireAssessmentSuccess: true }, context);
-    expect(timedOut).toMatchObject({ passed: false, terminal: false, workflowPhase: "processing" });
+    expect(timedOut).toMatchObject({ passed: null, terminal: false, workflowPhase: "processing" });
     expect(timedOut.observationCount).toBeGreaterThan(1);
 
     const controller = new AbortController();
@@ -104,14 +105,106 @@ describe("AIHR project integration", () => {
     controller.abort(new Error("fixture cancelled"));
     await expect(cancelled).rejects.toThrow("fixture cancelled");
   });
+
+  it("uploads an in-project PDF as multipart and proves the ordinary collection pipeline", async () => {
+    const fixtureBytes = Buffer.from("%PDF-1.4 proofkit fixture\n", "utf8");
+    const fixtureSha256 = createHash("sha256").update(fixtureBytes).digest("hex");
+    const gateway = await startCollectionGatewayMock({ fixtureSha256 });
+    servers.push(gateway.server);
+    const root = await createIntegrationProject(fixtureBytes);
+    const service = await LocalRunnerService.create({ root });
+    const integration = service.integration;
+    if (!integration) throw new Error("AIHR integration was not loaded");
+
+    const createRun = integration.capabilities?.find((item) => item.name === "aihr.createResumeCollectionRun");
+    const upload = integration.capabilities?.find((item) => item.name === "aihr.uploadResumeFile");
+    const wait = integration.capabilities?.find((item) => item.name === "aihr.waitResumeCollectionPipeline");
+    const oracle = integration.oracles?.find((item) => item.name === "aihr.resumeCollectionPipeline");
+    if (!createRun || !upload || !wait || !oracle) throw new Error("AIHR resume collection integration is incomplete");
+
+    const context = { runId: "aihr-collection-run", signal: new AbortController().signal };
+    const created = await createRun.execute({ sourceChannel: "boss", taskName: "fixture resume", bossAccountId: "acct-fixture" }, context);
+    expect(created).toMatchObject({ runId: "900", status: "pending" });
+
+    const uploaded = await upload.execute({
+      runId: "900",
+      fixturePath: ".proofkit/fixtures/resume.pdf",
+      sourceChannel: "boss",
+      targetJobIds: ["505"],
+      clientItemKey: "proofkit-item-1",
+      resumeRole: "attachment",
+      originalFilename: "candidate.pdf",
+    }, context);
+    expect(uploaded).toMatchObject({ fileId: "901", runId: "900", fileSha256: fixtureSha256, status: "accepted", duplicate: false });
+    expect(gateway.uploadContentType).toMatch(/^multipart\/form-data; boundary=/);
+    expect(gateway.uploadBody).toContain("client_item_key");
+    expect(gateway.uploadBody).not.toContain("source_text");
+
+    const observed = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
+    expect(observed).toMatchObject({
+      passed: true,
+      outcome: "passed",
+      terminal: true,
+      collectionRunId: "900",
+      fileId: "901",
+      fileRunId: "900",
+      candidateId: "902",
+      jobId: "505",
+      relationCurrentResumeFileId: "901",
+      relationJobId: "505",
+      assessmentCurrentResumeFileId: "901",
+      assessmentJobId: "505",
+      assessmentCandidateId: "902",
+      assessmentTaskStatus: "success",
+      workflowMatchCount: 1,
+    });
+    const evidence = upload.evidence(uploaded);
+    expect(JSON.stringify(evidence)).not.toContain("proofkit fixture");
+
+    const oracleResult = await oracle.check({ runId: context.runId, charter: resumeCollectionCharter(), steps: [], assertions: [], signal: context.signal });
+    expect(oracleResult.passed).toBe(true);
+  });
+
+  it("reports stale bindings as confirmed failures and keeps pending observations inconclusive", async () => {
+    const fixtureSha256 = "a".repeat(64);
+    const gateway = await startCollectionGatewayMock({ fixtureSha256 });
+    servers.push(gateway.server);
+    const root = await createIntegrationProject(Buffer.from("%PDF-1.4 fixture\n", "utf8"));
+    const service = await LocalRunnerService.create({ root });
+    const integration = service.integration;
+    if (!integration) throw new Error("AIHR integration was not loaded");
+    const wait = integration.capabilities?.find((item) => item.name === "aihr.waitResumeCollectionPipeline");
+    if (!wait) throw new Error("AIHR resume collection wait capability is missing");
+    const context = { runId: "aihr-binding-run", signal: new AbortController().signal };
+
+    gateway.setMode("relation-old-file");
+    const staleRelation = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
+    expect(staleRelation).toMatchObject({ passed: false, outcome: "failed", terminal: true, relationCurrentResumeFileId: "777" });
+
+    gateway.setMode("assessment-old-file");
+    const staleAssessment = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
+    expect(staleAssessment).toMatchObject({ passed: false, outcome: "failed", terminal: true, assessmentCurrentResumeFileId: "778" });
+
+    gateway.setMode("extract-failed");
+    const failedExtract = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
+    expect(failedExtract).toMatchObject({ passed: false, outcome: "failed", terminal: true, extractStatus: "failed" });
+
+    gateway.setMode("not-found");
+    const pending = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
+    expect(pending).toMatchObject({ passed: null, outcome: "inconclusive", terminal: false });
+  });
 });
 
-async function createIntegrationProject(): Promise<string> {
+async function createIntegrationProject(fixtureBytes?: Buffer): Promise<string> {
   const root = await mkdtemp(join(process.env.TEMP ?? process.env.TMP ?? ".", "proofkit-aihr-integration-"));
   roots.push(root);
   await mkdir(join(root, ".proofkit"), { recursive: true });
   const source = resolve(dirname(fileURLToPath(import.meta.url)), "../../../.proofkit/integration.mjs");
   await copyFile(source, join(root, ".proofkit", "integration.mjs"));
+  if (fixtureBytes) {
+    await mkdir(join(root, ".proofkit", "fixtures"), { recursive: true });
+    await writeFile(join(root, ".proofkit", "fixtures", "resume.pdf"), fixtureBytes);
+  }
   return root;
 }
 
@@ -132,6 +225,28 @@ function aihrCharter(): TestCharter {
         platformAccountId: "acct-fixture",
         sourceChannel: "boss",
         requireAssessmentSuccess: true,
+      },
+    },
+  });
+}
+
+function resumeCollectionCharter(): TestCharter {
+  return TestCharterSchema.parse({
+    intent: "verify AIHR resume collection",
+    level: "core",
+    mode: "deterministic",
+    preconditions: [],
+    actions: [],
+    assertions: [],
+    sideEffectPolicy: "deny",
+    metadata: {
+      aihr: {
+        runId: "900",
+        fileId: "901",
+        jobId: "505",
+        requireCandidateBinding: true,
+        requireAssessmentSuccess: true,
+        requireWorkflowUsage: true,
       },
     },
   });
@@ -175,10 +290,79 @@ async function startGatewayMock(mode: () => "success" | "failed" | "processing")
   return server;
 }
 
+type CollectionMode = "success" | "relation-old-file" | "assessment-old-file" | "extract-failed" | "not-found";
+
+async function startCollectionGatewayMock(options: { fixtureSha256: string; mode?: CollectionMode }): Promise<{
+  server: ReturnType<typeof createServer>;
+  setMode: (mode: CollectionMode) => void;
+  readonly uploadContentType: string | undefined;
+  readonly uploadBody: string;
+}> {
+  let mode = options.mode ?? "success";
+  let uploadContentType: string | undefined;
+  let uploadBody = "";
+  const server = createServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+    const path = url.pathname.replace(/^\/api\/v1/, "");
+    response.setHeader("content-type", "application/json");
+
+    if (request.method === "POST" && path === "/resume-collection/runs") {
+      await consume(request);
+      return send(response, { run_id: 900, source_channel: "boss", status: "pending" });
+    }
+    if (request.method === "POST" && path === "/resume-collection/files") {
+      uploadContentType = typeof request.headers["content-type"] === "string" ? request.headers["content-type"] : undefined;
+      uploadBody = (await collectBody(request)).toString("latin1");
+      return send(response, { file_id: 901, run_id: 900, file_sha256: options.fixtureSha256, source_platform: "boss", status: "accepted", duplicate: false });
+    }
+    if (request.method === "GET" && path === "/resume-collection/files/901") {
+      if (mode === "not-found") return sendError(response, 404, "NOT_FOUND", "file is still pending");
+      return send(response, mode === "extract-failed"
+        ? { file_id: 901, run_id: 900, file_sha256: options.fixtureSha256, extract_status: "failed", parse_status: "failed", error_code: "EXTRACT_FAILED" }
+        : { file_id: 901, run_id: 900, file_sha256: options.fixtureSha256, extract_status: "done", parse_status: "matched", candidate_id: 902 });
+    }
+    if (request.method === "GET" && path === "/jobs/505/candidates/902") {
+      return send(response, { candidate_summary: { current_resume_file_id: mode === "relation-old-file" ? 777 : 901, job_id: 505, stage: "screening" } });
+    }
+    if (request.method === "GET" && path === "/assessments/jobs/505/candidates/902") {
+      return send(response, { assessment_id: 903, current_resume_file_id: mode === "assessment-old-file" ? 778 : 901, job_id: 505, candidate_id: 902, status: "completed", task_status: "success" });
+    }
+    if (request.method === "GET" && path === "/workflow-executions") {
+      return send(response, { items: [{ run_id: 900, id: 904, screening_stage: "screening", screening_result: "passed" }] });
+    }
+    return sendError(response, 404, "NOT_FOUND", "collection fixture route not found");
+  });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Collection gateway mock did not bind to a port");
+  process.env.AIHR_PROOFKIT_API_BASE_URL = `http://127.0.0.1:${address.port}/api/v1`;
+  process.env.AIHR_PROOFKIT_ACCESS_TOKEN = "fixture-token";
+  process.env.AIHR_PROOFKIT_ENTERPRISE_ID = "enterprise-fixture";
+  process.env.AIHR_PROOFKIT_WORKSPACE_ID = "workspace-fixture";
+  process.env.AIHR_PROOFKIT_USER_ID = "user-fixture";
+  return {
+    server,
+    setMode: (nextMode) => { mode = nextMode; },
+    get uploadContentType() { return uploadContentType; },
+    get uploadBody() { return uploadBody; },
+  };
+}
+
 async function consume(request: IncomingMessage): Promise<void> {
   for await (const _chunk of request) { /* consume fixture request body */ }
 }
 
+async function collectBody(request: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
 function send(response: ServerResponse, data: Record<string, unknown>): void {
   response.end(JSON.stringify({ code: "SUCCESS", message: "OK", data }));
+}
+
+function sendError(response: ServerResponse, status: number, code: string, message: string): void {
+  response.statusCode = status;
+  response.end(JSON.stringify({ code, message, data: {} }));
 }

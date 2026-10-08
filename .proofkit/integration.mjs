@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 let z;
 const positiveId = () => z.union([z.number().int().positive(), z.string().regex(/^[1-9][0-9]*$/)]);
 const positiveIdInput = () => z.union([z.number().int().positive(), z.string().min(1)]);
@@ -10,7 +12,7 @@ const environment = ["test", "staging", "local"];
  * service endpoints. This keeps the integration useful for a user checkout
  * and makes every observation reproduce the same path as the desktop app.
  */
-export function createIntegration({ z: injectedZ }) {
+export function createIntegration({ z: injectedZ, root }) {
   // Keep the module dependency-free for project roots. The runner injects the
   // schema runtime when loading this factory.
   z = injectedZ;
@@ -21,6 +23,8 @@ export function createIntegration({ z: injectedZ }) {
     version: "0.1.0",
     capabilities: [
       createResumeRunCapability(state),
+      createResumeFileUploadCapability(state, root),
+      waitResumeCollectionPipelineCapability(state),
       createOnlineResumeIntakeCapability(state),
       waitOnlineResumePipelineCapability(state),
       readResumeRunCapability(),
@@ -28,7 +32,7 @@ export function createIntegration({ z: injectedZ }) {
       readWorkflowUsageCapability(),
       readBillingUsageCapability(),
     ],
-    oracles: [createOnlineResumePipelineOracle(state)],
+    oracles: [createResumeCollectionPipelineOracle(state), createOnlineResumePipelineOracle(state)],
     setup: async ({ runId }) => {
       state.set(runId, { createdAt: new Date().toISOString() });
       return () => state.delete(runId);
@@ -79,6 +83,184 @@ function createResumeRunCapability(state) {
       sourceChannel: output.sourceChannel,
       status: output.status,
     }),
+  };
+}
+
+function createResumeFileUploadCapability(state, projectRoot) {
+  return {
+    name: "aihr.uploadResumeFile",
+    description: "Upload a PDF resume through the same gateway multipart contract used by the AIHR desktop flow.",
+    sideEffect: "write",
+    environments: environment,
+    timeoutMs: 60_000,
+    inputSchema: z.object({
+      runId: positiveIdInput().optional(),
+      fixturePath: z.string().min(1),
+      sourceChannel: z.string().min(1).default("boss"),
+      originalFilename: z.string().min(1).optional(),
+      targetJobIds: z.array(positiveIdInput()).max(20).default([]),
+      clientItemKey: z.string().min(1).max(255),
+      resumeRole: z.enum(["online", "attachment"]).default("online"),
+      expectedCandidateId: positiveIdInput().optional(),
+      bossAccountId: z.string().min(1).optional(),
+      candidateUid: z.string().min(1).optional(),
+      conversationId: positiveIdInput().optional(),
+      candidateAge: z.number().int().positive().optional(),
+      manualOverride: z.boolean().default(false),
+      manualRunId: z.string().min(1).optional(),
+    }),
+    outputSchema: z.object({
+      fileId: positiveId(),
+      runId: positiveId().nullable(),
+      fileSha256: z.string().regex(/^[a-f0-9]{64}$/i),
+      sourceChannel: z.string(),
+      clientItemKey: z.string(),
+      status: z.string(),
+      duplicate: z.boolean(),
+      extractStatus: z.string().nullable(),
+      parseStatus: z.string().nullable(),
+      candidateId: z.string().nullable(),
+    }),
+    async execute(input, { runId, signal }) {
+      input = resolveEnv(input);
+      const fixture = await readFixture(projectRoot, input.fixturePath);
+      const form = new FormData();
+      form.append("file", new Blob([fixture.bytes], { type: fixture.contentType }), input.originalFilename ?? fixture.filename);
+      if (input.runId !== undefined) form.append("run_id", asId(input.runId));
+      form.append("source_channel", input.sourceChannel);
+      form.append("original_filename", input.originalFilename ?? fixture.filename);
+      form.append("target_job_ids", JSON.stringify(input.targetJobIds.map(asId)));
+      form.append("client_item_key", input.clientItemKey);
+      form.append("resume_role", input.resumeRole);
+      if (input.expectedCandidateId !== undefined) form.append("expected_candidate_id", asId(input.expectedCandidateId));
+      if (input.bossAccountId) form.append("boss_account_id", input.bossAccountId);
+      if (input.candidateUid) form.append("candidate_uid", input.candidateUid);
+      if (input.conversationId !== undefined) form.append("conversation_id", asId(input.conversationId));
+      if (input.candidateAge !== undefined) form.append("candidate_age", String(input.candidateAge));
+      form.append("manual_override", String(input.manualOverride));
+      if (input.manualRunId) form.append("manual_run_id", input.manualRunId);
+
+      const response = await aihrFetch("/resume-collection/files", { method: "POST", signal, body: form });
+      const data = response.data ?? {};
+      const result = {
+        fileId: asId(data.file_id),
+        runId: data.run_id === null || data.run_id === undefined ? null : asId(data.run_id),
+        fileSha256: String(data.file_sha256 ?? fixture.sha256),
+        sourceChannel: String(data.source_platform ?? input.sourceChannel),
+        clientItemKey: input.clientItemKey,
+        status: String(data.status ?? "accepted"),
+        duplicate: Boolean(data.duplicate),
+        extractStatus: nullable(data.extract_status),
+        parseStatus: nullable(data.parse_status),
+        candidateId: positiveString(data.candidate_id),
+      };
+      const current = state.get(runId) ?? {};
+      state.set(runId, { ...current, collectionRunId: result.runId ?? current.collectionRunId, uploadedFile: result, fixtureSha256: fixture.sha256, sourceChannel: result.sourceChannel });
+      return result;
+    },
+    evidence: (output) => ({
+      fileId: output.fileId,
+      collectionRunId: output.runId,
+      fileSha256: output.fileSha256,
+      sourceChannel: output.sourceChannel,
+      clientItemKey: output.clientItemKey,
+      status: output.status,
+      duplicate: output.duplicate,
+      extractStatus: output.extractStatus,
+      parseStatus: output.parseStatus,
+      candidateId: output.candidateId,
+    }),
+  };
+}
+
+function waitResumeCollectionPipelineCapability(state) {
+  return {
+    name: "aihr.waitResumeCollectionPipeline",
+    description: "Poll the ordinary AIHR PDF upload path and verify file, candidate-job relation, assessment and workflow facts belong to the same upload.",
+    sideEffect: "read",
+    environments: environment,
+    timeoutMs: 610_000,
+    inputSchema: resumePipelineInputSchema(),
+    outputSchema: resumePipelineOutputSchema(),
+    async execute(input, { runId, signal }) {
+      input = resolveEnv(input);
+      const remembered = state.get(runId) ?? {};
+      const target = resolveResumePipelineTarget(input, remembered);
+      const observed = await pollResumeCollectionPipeline(target, { signal, maxWaitMs: input.maxWaitMs, pollIntervalMs: input.pollIntervalMs });
+      state.set(runId, { ...remembered, resumePipeline: observed });
+      return observed;
+    },
+    evidence: resumePipelineEvidence,
+  };
+}
+
+function resumePipelineInputSchema() {
+  return z.object({
+    runId: positiveIdInput().optional(),
+    fileId: positiveIdInput().optional(),
+    jobId: positiveIdInput().optional(),
+    clientItemKey: z.string().min(1).optional(),
+    maxWaitMs: z.number().int().min(1_000).max(600_000).default(300_000),
+    pollIntervalMs: z.number().int().min(250).max(10_000).default(1_000),
+    requireCandidateBinding: z.boolean().default(true),
+    requireAssessmentSuccess: z.boolean().default(true),
+    requireWorkflowUsage: z.boolean().default(false),
+  });
+}
+
+function resumePipelineOutputSchema() {
+  return z.object({
+    passed: z.boolean().nullable(),
+    outcome: z.enum(["passed", "failed", "inconclusive"]),
+    terminal: z.boolean(),
+    collectionRunId: z.string().nullable(),
+    fileId: z.string().nullable(),
+    fileRunId: z.string().nullable(),
+    fileSha256: z.string().nullable(),
+    extractStatus: z.string().nullable(),
+    parseStatus: z.string().nullable(),
+    candidateId: z.string().nullable(),
+    jobId: z.string().nullable(),
+    relationCurrentResumeFileId: z.string().nullable(),
+    relationJobId: z.string().nullable(),
+    relationStage: z.string().nullable(),
+    assessmentId: z.string().nullable(),
+    assessmentCurrentResumeFileId: z.string().nullable(),
+    assessmentJobId: z.string().nullable(),
+    assessmentCandidateId: z.string().nullable(),
+    assessmentStatus: z.string().nullable(),
+    assessmentTaskStatus: z.string().nullable(),
+    workflowMatchCount: z.number().int().nonnegative(),
+    lastErrorCode: z.string().nullable(),
+    observationCount: z.number().int().nonnegative(),
+  });
+}
+
+function resumePipelineEvidence(output) {
+  return {
+    passed: output.passed,
+    outcome: output.outcome,
+    terminal: output.terminal,
+    collectionRunId: output.collectionRunId,
+    fileId: output.fileId,
+    fileRunId: output.fileRunId,
+    fileSha256: output.fileSha256,
+    extractStatus: output.extractStatus,
+    parseStatus: output.parseStatus,
+    candidateId: output.candidateId,
+    jobId: output.jobId,
+    relationCurrentResumeFileId: output.relationCurrentResumeFileId,
+    relationJobId: output.relationJobId,
+    relationStage: output.relationStage,
+    assessmentId: output.assessmentId,
+    assessmentCurrentResumeFileId: output.assessmentCurrentResumeFileId,
+    assessmentJobId: output.assessmentJobId,
+    assessmentCandidateId: output.assessmentCandidateId,
+    assessmentStatus: output.assessmentStatus,
+    assessmentTaskStatus: output.assessmentTaskStatus,
+    workflowMatchCount: output.workflowMatchCount,
+    lastErrorCode: output.lastErrorCode,
+    observationCount: output.observationCount,
   };
 }
 
@@ -148,6 +330,211 @@ function createOnlineResumeIntakeCapability(state) {
   };
 }
 
+function createResumeCollectionPipelineOracle(state) {
+  return {
+    name: "aihr.resumeCollectionPipeline",
+    async check({ runId, charter, signal }) {
+      const configuration = charter.metadata?.aihr;
+      if (!configuration || typeof configuration !== "object") {
+        return { name: "aihr.resumeCollectionPipeline", passed: null, message: "Charter metadata.aihr is required for the independent AIHR resume collection oracle.", evidence: [] };
+      }
+      const remembered = state.get(runId) ?? {};
+      const target = resolveResumePipelineTarget(configuration, remembered);
+      if (!target.fileId) {
+        return { name: "aihr.resumeCollectionPipeline", passed: null, message: "No upload file ID was observed for the configured collection run.", evidence: [] };
+      }
+      const result = await observeResumeCollectionPipeline(target, signal);
+      const requireCandidateBinding = configuration.requireCandidateBinding !== false;
+      const requireAssessmentSuccess = configuration.requireAssessmentSuccess !== false;
+      const requireWorkflowUsage = configuration.requireWorkflowUsage === true;
+      const passed = evaluateResumePipeline(result, {
+        collectionRunId: target.collectionRunId,
+        jobId: target.jobId,
+        requireCandidateBinding,
+        requireAssessmentSuccess,
+        requireWorkflowUsage,
+      });
+      const facts = resumePipelineEvidence({ ...result, passed, outcome: passed === true ? "passed" : passed === false ? "failed" : "inconclusive" });
+      return {
+        name: "aihr.resumeCollectionPipeline",
+        passed,
+        message: passed === true
+          ? "AIHR PDF upload facts belong to the requested run and reached the required terminal state."
+          : passed === false
+            ? `AIHR PDF upload reached a confirmed failure: extract=${result.extractStatus ?? "unknown"}, parse=${result.parseStatus ?? "unknown"}.`
+            : "AIHR PDF upload evidence is incomplete or still pending; no product failure is confirmed.",
+        evidence: [JSON.stringify(facts)],
+        observedAt: new Date().toISOString(),
+      };
+    },
+  };
+}
+
+function resolveResumePipelineTarget(input, remembered) {
+  return {
+    collectionRunId: input.runId === undefined ? nullable(remembered.collectionRunId) : asId(input.runId),
+    fileId: input.fileId === undefined ? positiveString(remembered.uploadedFile?.fileId) : asId(input.fileId),
+    jobId: input.jobId === undefined ? positiveString(remembered.jobId ?? remembered.targetJobId) : asId(input.jobId),
+    clientItemKey: input.clientItemKey ?? remembered.uploadedFile?.clientItemKey ?? null,
+    requireCandidateBinding: input.requireCandidateBinding !== false,
+    requireAssessmentSuccess: input.requireAssessmentSuccess !== false,
+    requireWorkflowUsage: input.requireWorkflowUsage === true,
+  };
+}
+
+async function pollResumeCollectionPipeline(target, options) {
+  if (!target.fileId) throw new Error("AIHR fileId is required; upload a resume or provide fileId");
+  const deadline = Date.now() + options.maxWaitMs;
+  let observationCount = 0;
+  let last = emptyResumePipelineObservation(target);
+  while (Date.now() <= deadline) {
+    last = await observeResumeCollectionPipeline(target, options.signal);
+    observationCount += 1;
+    const passed = evaluateResumePipeline(last, target);
+    if (passed === true || passed === false) {
+      return { ...last, passed, outcome: passed ? "passed" : "failed", observationCount };
+    }
+    await delay(options.pollIntervalMs, options.signal);
+  }
+  return { ...last, passed: null, outcome: "inconclusive", terminal: false, observationCount };
+}
+
+async function observeResumeCollectionPipeline(target, signal) {
+  const fileResult = await getOrNull(`/resume-collection/files/${asId(target.fileId)}`, signal);
+  if (!fileResult) return emptyResumePipelineObservation(target);
+  const file = fileResult.data ?? {};
+  const collectionRunId = positiveString(file.run_id ?? target.collectionRunId);
+  const fileId = positiveString(file.file_id ?? target.fileId);
+  const candidateId = positiveString(file.candidate_id);
+  const jobId = positiveString(target.jobId ?? file.matched_job_id);
+  let relation = {};
+  let assessment = {};
+  if (candidateId && jobId) {
+    relation = (await getOrNull(`/jobs/${jobId}/candidates/${candidateId}`, signal))?.data ?? {};
+    assessment = (await getOrNull(`/assessments/jobs/${jobId}/candidates/${candidateId}`, signal))?.data ?? {};
+  }
+  const workflow = collectionRunId ? await readWorkflowItems(collectionRunId, signal) : { count: 0 };
+  const relationSummary = relation.candidate_summary ?? {};
+  return {
+    passed: null,
+    outcome: "inconclusive",
+    terminal: isResumeFileTerminal(file),
+    collectionRunId,
+    fileId,
+    fileRunId: positiveString(file.run_id),
+    fileSha256: nullable(file.file_sha256),
+    extractStatus: nullable(file.extract_status),
+    parseStatus: nullable(file.parse_status),
+    candidateId,
+    jobId,
+    relationCurrentResumeFileId: positiveString(relationSummary.current_resume_file_id),
+    relationJobId: positiveString(relationSummary.job_id ?? relation.job_id),
+    relationStage: nullable(relationSummary.stage),
+    assessmentId: positiveString(assessment.assessment_id),
+    assessmentCurrentResumeFileId: positiveString(assessment.current_resume_file_id),
+    assessmentJobId: positiveString(assessment.job_id),
+    assessmentCandidateId: positiveString(assessment.candidate_id),
+    assessmentStatus: nullable(assessment.status),
+    assessmentTaskStatus: nullable(assessment.task_status),
+    workflowMatchCount: workflow.count,
+    lastErrorCode: nullable(file.error_code ?? file.extract_error_code),
+    observationCount: 0,
+  };
+}
+
+function evaluateResumePipeline(observation, requirements) {
+  if (observation.fileRunId && requirements.collectionRunId && observation.fileRunId !== requirements.collectionRunId) return false;
+  if (!isResumeFileTerminal(observation)) return null;
+  if (observation.extractStatus === "failed" || ["failed", "identity_conflict", "needs_manual_match", "needs_job_sync"].includes(observation.parseStatus ?? "")) return false;
+  if (observation.extractStatus !== "done" || observation.parseStatus !== "matched" || !observation.candidateId) return null;
+  if (requirements.requireCandidateBinding !== false) {
+    if (!requirements.jobId) return null;
+    if (observation.relationCurrentResumeFileId && observation.relationCurrentResumeFileId !== observation.fileId) return false;
+    if (observation.relationJobId && observation.relationJobId !== requirements.jobId) return false;
+    if (!observation.relationCurrentResumeFileId || !observation.relationJobId) return null;
+  }
+  if (requirements.requireAssessmentSuccess !== false) {
+    if (observation.assessmentCurrentResumeFileId && observation.assessmentCurrentResumeFileId !== observation.fileId) return false;
+    if (observation.assessmentJobId && observation.assessmentJobId !== requirements.jobId) return false;
+    if (observation.assessmentCandidateId && observation.assessmentCandidateId !== observation.candidateId) return false;
+    if (!observation.assessmentCurrentResumeFileId || !observation.assessmentJobId || !observation.assessmentCandidateId) return null;
+    if (!isAssessmentSuccess(observation.assessmentStatus, observation.assessmentTaskStatus)) {
+      if (isAssessmentFailure(observation.assessmentStatus, observation.assessmentTaskStatus)) return false;
+      return null;
+    }
+  }
+  if (requirements.requireWorkflowUsage === true && observation.workflowMatchCount < 1) return null;
+  return true;
+}
+
+function isResumeFileTerminal(value) {
+  const extractStatus = value?.extractStatus ?? value?.extract_status;
+  const parseStatus = value?.parseStatus ?? value?.parse_status;
+  if (!value || !["done", "failed"].includes(extractStatus ?? "")) return false;
+  if (extractStatus === "failed") return true;
+  return ["matched", "needs_manual_match", "needs_job_sync", "failed", "identity_conflict"].includes(parseStatus ?? "");
+}
+
+function isAssessmentSuccess(status, taskStatus) {
+  return ["success", "completed", "passed"].includes(String(taskStatus ?? "").toLowerCase()) || ["success", "completed", "passed"].includes(String(status ?? "").toLowerCase());
+}
+
+function isAssessmentFailure(status, taskStatus) {
+  return ["failed", "error", "failure"].includes(String(taskStatus ?? "").toLowerCase()) || ["failed", "error", "failure"].includes(String(status ?? "").toLowerCase());
+}
+
+function emptyResumePipelineObservation(target) {
+  return {
+    passed: null,
+    outcome: "inconclusive",
+    terminal: false,
+    collectionRunId: target.collectionRunId ?? null,
+    fileId: target.fileId ?? null,
+    fileRunId: null,
+    fileSha256: null,
+    extractStatus: null,
+    parseStatus: null,
+    candidateId: null,
+    jobId: target.jobId ?? null,
+    relationCurrentResumeFileId: null,
+    relationJobId: null,
+    relationStage: null,
+    assessmentId: null,
+    assessmentCurrentResumeFileId: null,
+    assessmentJobId: null,
+    assessmentCandidateId: null,
+    assessmentStatus: null,
+    assessmentTaskStatus: null,
+    workflowMatchCount: 0,
+    lastErrorCode: null,
+    observationCount: 0,
+  };
+}
+
+async function readWorkflowItems(runId, signal) {
+  const response = await getOrNull(`/workflow-executions?run_id=${encodeURIComponent(runId)}&page=1&page_size=100`, signal);
+  const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+  return { count: items.filter((item) => String(item.run_id ?? runId) === String(runId)).length };
+}
+
+async function getOrNull(path, signal) {
+  try { return await aihrFetch(path, { signal }); } catch (error) { if (isNotFound(error)) return null; throw error; }
+}
+
+async function readFixture(projectRoot, fixturePath) {
+  const requested = String(fixturePath);
+  const path = isAbsolute(requested) ? resolve(requested) : resolve(projectRoot, requested);
+  const rel = relative(resolve(projectRoot), path);
+  if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("AIHR fixturePath must stay within the project root");
+  const info = await stat(path);
+  if (!info.isFile()) throw new Error("AIHR fixturePath must point to a file");
+  const bytes = await readFile(path);
+  if (bytes.length === 0) throw new Error("AIHR resume fixture is empty");
+  const filename = basename(path);
+  const contentType = filename.toLowerCase().endsWith(".pdf") ? "application/pdf" : "application/octet-stream";
+  return { bytes, filename, contentType, sha256: createHash("sha256").update(bytes).digest("hex") };
+}
+
 function waitOnlineResumePipelineCapability(state) {
   return {
     name: "aihr.waitOnlineResumePipeline",
@@ -166,7 +553,7 @@ function waitOnlineResumePipelineCapability(state) {
       requireAssessmentSuccess: z.boolean().default(true),
     }),
     outputSchema: z.object({
-      passed: z.boolean(),
+      passed: z.boolean().nullable(),
       terminal: z.boolean(),
       workflowPhase: z.string(),
       resumeFileId: z.string().nullable(),
@@ -306,7 +693,9 @@ function createOnlineResumePipelineOracle(state) {
       };
       const result = await observeOnlineResumePipeline(target, signal);
       const requireAssessmentSuccess = configuration.requireAssessmentSuccess !== false;
-      const passed = result.terminal && result.parseStatus === "matched" && result.extractStatus === "done" && Boolean(result.candidateId) && (!requireAssessmentSuccess || result.assessmentTaskStatus === "success");
+      const passed = !result.terminal
+        ? null
+        : result.parseStatus === "matched" && result.extractStatus === "done" && Boolean(result.candidateId) && (!requireAssessmentSuccess || result.assessmentTaskStatus === "success");
       const facts = { ...result, passed, requireAssessmentSuccess };
       return { name: "aihr.onlineResumePipeline", passed, message: passed ? "AIHR online resume facts reached the requested terminal state." : `AIHR online resume pipeline is not valid: phase=${result.workflowPhase}, extract=${result.extractStatus ?? "unknown"}, parse=${result.parseStatus ?? "unknown"}, assessment_task=${result.assessmentTaskStatus ?? "unknown"}.`, evidence: [JSON.stringify(facts)], observedAt: new Date().toISOString() };
     },
@@ -331,7 +720,7 @@ async function pollOnlineResumePipeline(target, options) {
     await delay(options.pollIntervalMs, options.signal);
   }
   const result = last ?? emptyObservation();
-  return { ...result, passed: false, terminal: false, observationCount };
+  return { ...result, passed: null, terminal: false, observationCount };
 }
 
 async function observeOnlineResumePipeline(target, signal) {
@@ -395,14 +784,23 @@ function assertTarget(target) {
 async function aihrFetch(path, options = {}) {
   const base = env("AIHR_PROOFKIT_API_BASE_URL") ?? "http://127.0.0.1:8080/api/v1";
   const url = `${base.replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
-  const headers = { accept: "application/json", ...(options.body === undefined ? {} : { "content-type": "application/json" }) };
+  const isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
+  const headers = {
+    accept: "application/json",
+    ...(isMultipart || options.body === undefined ? {} : { "content-type": "application/json" }),
+  };
   const token = env("AIHR_PROOFKIT_ACCESS_TOKEN");
   if (token) headers.authorization = `Bearer ${token}`;
   for (const [name, variable] of [["X-Enterprise-Id", "AIHR_PROOFKIT_ENTERPRISE_ID"], ["X-Workspace-Id", "AIHR_PROOFKIT_WORKSPACE_ID"], ["X-User-Id", "AIHR_PROOFKIT_USER_ID"]]) {
     const value = env(variable);
     if (value) headers[name] = value;
   }
-  const response = await fetch(url, { method: options.method ?? "GET", headers, body: options.body === undefined ? undefined : JSON.stringify(options.body), signal: options.signal });
+  const requestBody = isMultipart
+    ? options.body
+    : options.body === undefined
+      ? undefined
+      : JSON.stringify(options.body);
+  const response = await fetch(url, { method: options.method ?? "GET", headers, body: requestBody, signal: options.signal });
   const text = await response.text();
   let body = {};
   try { body = text ? JSON.parse(text) : {}; } catch { body = { message: text.slice(0, 256) }; }
