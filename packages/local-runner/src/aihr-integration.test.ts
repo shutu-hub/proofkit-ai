@@ -157,6 +157,7 @@ describe("AIHR project integration", () => {
     expect(gateway.uploadContentType).toMatch(/^multipart\/form-data; boundary=/);
     expect(gateway.uploadBody).toContain("client_item_key");
     expect(gateway.uploadBody).toMatch(/name="run_id"\r\n\r\n900\r\n/);
+    expect(gateway.uploadBody).toMatch(/name="target_job_ids"\r\n\r\n\[505\]\r\n/);
     expect(gateway.uploadBody).not.toContain("source_text");
 
     const observed = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
@@ -182,6 +183,55 @@ describe("AIHR project integration", () => {
 
     const oracleResult = await oracle.check({ runId: context.runId, charter: resumeCollectionCharter(), steps: [], assertions: [], signal: context.signal });
     expect(oracleResult.passed).toBe(true);
+  });
+
+  it("serializes int64 job IDs exactly and omits optional empty target jobs", async () => {
+    const gateway = await startCollectionGatewayMock({ fixtureSha256: "a".repeat(64) });
+    servers.push(gateway.server);
+    const root = await createIntegrationProject(Buffer.from("%PDF-1.4 fixture\n"));
+    const service = await LocalRunnerService.create({ root });
+    const upload = service.integration?.capabilities?.find((item) => item.name === "aihr.uploadResumeFile");
+    if (!upload) throw new Error("AIHR upload capability is missing");
+    const input = { fixturePath: ".proofkit/fixtures/resume.pdf", sourceChannel: "boss", clientItemKey: "exact-id", resumeRole: "attachment", manualOverride: false };
+    const context = { runId: "exact-id-run", signal: new AbortController().signal };
+    await upload.execute({ ...input, targetJobIds: ["9223372036854775807"] }, context);
+    expect(gateway.uploadBody).toMatch(/name="target_job_ids"\r\n\r\n\[9223372036854775807\]\r\n/);
+    await upload.execute({ ...input, targetJobIds: [] }, context);
+    expect(gateway.uploadBody).not.toContain('name="target_job_ids"');
+    const requestCount = gateway.requestPaths.length;
+    await expect(upload.execute({ ...input, targetJobIds: [Number.MAX_SAFE_INTEGER + 1] }, context)).rejects.toThrow("safe integers");
+    await expect(upload.execute({ ...input, targetJobIds: ["9223372036854775808"] }, context)).rejects.toThrow("signed int64");
+    expect(gateway.requestPaths).toHaveLength(requestCount);
+  });
+
+  it.each([
+    { run_id: "999" },
+    { candidate: { id: "999" } },
+    { job: { id: "999" } },
+    { screening_stage: "screening" },
+    { run_id: null },
+    { candidate: {} },
+    { job: {} },
+  ])("keeps unrelated or incomplete workflow facts inconclusive: %j", async (override) => {
+    const gateway = await startCollectionGatewayMock({ fixtureSha256: "a".repeat(64), workflowPage: () => ({ items: [{ ...completionFact(), ...override }], pagination: { page: 1, page_size: 100, total: 1 } }) });
+    servers.push(gateway.server);
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const oracle = service.integration?.oracles?.find((item) => item.name === "aihr.resumeCollectionPipeline");
+    if (!oracle) throw new Error("AIHR collection oracle is missing");
+    const observed = await oracle.check({ runId: "workflow-scope-run", charter: resumeCollectionCharter(), steps: [], assertions: [] });
+    expect(observed.passed).toBeNull();
+    expect(JSON.parse(observed.evidence[0]!)).toMatchObject({ outcome: "inconclusive", workflowMatchCount: 0 });
+  });
+
+  it.each([2, 21])("finds completion on later pages within the bounded scan: page %i", async (completionPage) => {
+    const gateway = await startCollectionGatewayMock({ fixtureSha256: "a".repeat(64), workflowPage: (page) => ({ items: page === completionPage ? [completionFact()] : [{ ...completionFact(), candidate: { id: "999" } }], pagination: { page, page_size: 100, total: completionPage * 100 } }) });
+    servers.push(gateway.server);
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const oracle = service.integration?.oracles?.find((item) => item.name === "aihr.resumeCollectionPipeline");
+    if (!oracle) throw new Error("AIHR collection oracle is missing");
+    const observed = await oracle.check({ runId: "workflow-page-run", charter: resumeCollectionCharter(), steps: [], assertions: [] });
+    expect(observed.passed).toBe(completionPage <= 20 ? true : null);
+    expect(gateway.requestPaths.filter((path) => path === "/workflow-executions")).toHaveLength(Math.min(completionPage, 20));
   });
 
   it.each(["success", "relation-old-file"] as const)("executes the checked-in env-based Charter through Local Runner: %s", async (mode) => {
@@ -346,7 +396,11 @@ async function startGatewayMock(mode: () => "success" | "failed" | "processing")
 
 type CollectionMode = "success" | "relation-old-file" | "assessment-old-file" | "extract-failed" | "not-found";
 
-async function startCollectionGatewayMock(options: { fixtureSha256: string; mode?: CollectionMode }): Promise<{
+function completionFact() {
+  return { run_id: "900", id: "904", screening_stage: "workflow_completion", candidate: { id: "902" }, job: { id: "505" }, status: "completed", record_type: "workflow_completion", screening_result: "passed" };
+}
+
+async function startCollectionGatewayMock(options: { fixtureSha256: string; mode?: CollectionMode; workflowPage?: (page: number) => Record<string, unknown> }): Promise<{
   server: ReturnType<typeof createServer>;
   setMode: (mode: CollectionMode) => void;
   readonly uploadContentType: string | undefined;
@@ -370,6 +424,10 @@ async function startCollectionGatewayMock(options: { fixtureSha256: string; mode
     if (request.method === "POST" && path === "/resume-collection/files") {
       uploadContentType = typeof request.headers["content-type"] === "string" ? request.headers["content-type"] : undefined;
       uploadBody = (await collectBody(request)).toString("latin1");
+      const targetJobs = uploadBody.match(/name="target_job_ids"\r\n\r\n([^\r]*)\r\n/)?.[1];
+      if (targetJobs !== undefined && (!/^\[[1-9]\d*(?:,[1-9]\d*){0,19}\]$/.test(targetJobs) || targetJobs.slice(1, -1).split(",").some((id) => BigInt(id) > 9223372036854775807n))) {
+        return sendError(response, 400, "VALIDATION_ERROR", "target_job_ids must be a JSON int64 array");
+      }
       return send(response, { file_id: 901, run_id: 900, file_sha256: options.fixtureSha256, source_platform: "boss", status: "accepted", duplicate: false });
     }
     if (request.method === "GET" && path === "/resume-collection/files/901") {
@@ -385,7 +443,8 @@ async function startCollectionGatewayMock(options: { fixtureSha256: string; mode
       return send(response, { assessment_id: 903, current_resume_file_id: mode === "assessment-old-file" ? 778 : 901, job_id: 505, candidate_id: 902, status: "completed", task_status: "success" });
     }
     if (request.method === "GET" && path === "/workflow-executions") {
-      return send(response, { items: [{ run_id: 900, id: 904, screening_stage: "screening", screening_result: "passed" }] });
+      const page = Number(url.searchParams.get("page"));
+      return send(response, options.workflowPage?.(page) ?? { items: [completionFact()], pagination: { page, page_size: 100, total: 1 } });
     }
     return sendError(response, 404, "NOT_FOUND", "collection fixture route not found");
   });

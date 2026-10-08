@@ -147,6 +147,7 @@ async function handleRequest(request, response) {
     for await (const chunk of request) chunks.push(chunk);
     const form = await new Request(`${baseUrl}${path}`, { method: "POST", headers: { "content-type": request.headers["content-type"] }, body: Buffer.concat(chunks) }).formData();
     assert.equal(form.get("run_id"), collectionRunId);
+    assert.equal(form.get("target_job_ids"), "[505]");
     assert.equal(createHash("sha256").update(Buffer.from(await form.get("file").arrayBuffer())).digest("hex"), fixtureSha256);
     currentFile = { file_id: String(++sequence), run_id: collectionRunId, file_sha256: fixtureSha256, candidate_id: "902", source_platform: "boss", status: "accepted", extract_status: "done", parse_status: "matched" };
     files.set(currentFile.file_id, currentFile);
@@ -159,7 +160,7 @@ async function handleRequest(request, response) {
   } else if (path === "/assessments/jobs/505/candidates/902") {
     send({ assessment_id: "903", current_resume_file_id: currentFile.file_id, job_id: "505", candidate_id: "902", status: "completed", task_status: "success" });
   } else if (path === "/workflow-executions") {
-    send({ items: [{ run_id: url.searchParams.get("run_id"), id: "904", screening_stage: "screening", screening_result: "passed" }] });
+    send({ items: [{ run_id: url.searchParams.get("run_id"), id: "904", screening_stage: "workflow_completion", candidate: { id: "902" }, job: { id: "505" }, status: "completed", record_type: "workflow_completion", screening_result: "passed" }], pagination: { page: 1, page_size: 100, total: 1 } });
   } else {
     if (path.startsWith("/boss-conversations/")) unrelatedReads++;
     response.writeHead(404, { "content-type": "application/json" });

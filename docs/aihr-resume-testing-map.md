@@ -64,6 +64,10 @@ resume_file_profiles.candidate_id
 
 `ResumePostProcessor` 在明确目标岗位时会绑定候选人与岗位，然后创建 `resume_screening` assessment。评估自身仍由 assessment worker 异步完成，因此上传成功、绑定成功和评估成功必须分开判定。
 
+上传的 `target_job_ids` 使用 JSON 正整数数组（如 `[505]`），不能使用字符串数组。连接器保留字符串形式的 int64 ID，并直接序列化已验证的十进制整数，避免 JavaScript Number 丢失精度；未指定岗位时省略该可选字段。
+
+workflow 完成事实必须同时匹配 `run_id`、`candidate.id`、`job.id` 和 `screening_stage=workflow_completion`。连接器按响应中的 `pagination` 最多扫描 20 页，找到相关完成事实后停止；缺少相关事实或超过扫描上限均保持 `inconclusive`。该公开投影没有文件 ID、评估 ID 或幂等键，因此仅证明对应 run/候选人/岗位存在完成事实，不能据此证明精确文件、评估关联或计费幂等。精确文件关联由岗位与评估接口分别验证，计费仍需独立验证。
+
 ## ProofKit 的第一条真实 Charter
 
 默认使用 `.proofkit/charters/aihr-resume-upload.yml`，覆盖：

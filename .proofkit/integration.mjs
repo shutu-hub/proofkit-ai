@@ -130,7 +130,9 @@ function createResumeFileUploadCapability(state, projectRoot) {
       if (collectionRunId !== undefined) form.append("run_id", asId(collectionRunId));
       form.append("source_channel", input.sourceChannel);
       form.append("original_filename", input.originalFilename ?? fixture.filename);
-      form.append("target_job_ids", JSON.stringify(input.targetJobIds.map(asId)));
+      // AIHR decodes []int64, so quoted IDs are invalid. Decimal literals keep
+      // string-supplied int64 IDs exact without a lossy Number conversion.
+      if (input.targetJobIds.length) form.append("target_job_ids", `[${input.targetJobIds.map(asId).join(",")}]`);
       form.append("client_item_key", input.clientItemKey);
       form.append("resume_role", input.resumeRole);
       if (input.expectedCandidateId !== undefined) form.append("expected_candidate_id", asId(input.expectedCandidateId));
@@ -414,7 +416,9 @@ async function observeResumeCollectionPipeline(target, signal) {
     relation = (await getOrNull(`/jobs/${jobId}/candidates/${candidateId}`, signal))?.data ?? {};
     assessment = (await getOrNull(`/assessments/jobs/${jobId}/candidates/${candidateId}`, signal))?.data ?? {};
   }
-  const workflow = collectionRunId ? await readWorkflowItems(collectionRunId, signal) : { count: 0 };
+  const workflow = collectionRunId && candidateId && jobId
+    ? await readWorkflowItems(collectionRunId, candidateId, jobId, signal)
+    : { count: 0 };
   const relationSummary = relation.candidate_summary ?? {};
   return {
     passed: null,
@@ -512,10 +516,24 @@ function emptyResumePipelineObservation(target) {
   };
 }
 
-async function readWorkflowItems(runId, signal) {
-  const response = await getOrNull(`/workflow-executions?run_id=${encodeURIComponent(runId)}&page=1&page_size=100`, signal);
-  const items = Array.isArray(response?.data?.items) ? response.data.items : [];
-  return { count: items.filter((item) => String(item.run_id ?? runId) === String(runId)).length };
+async function readWorkflowItems(runId, candidateId, jobId, signal) {
+  // This endpoint proves completion for run/candidate/job only. It does not
+  // expose the exact resume file, assessment ID or billing idempotency key.
+  for (let page = 1; page <= 20; page += 1) {
+    const response = await getOrNull(`/workflow-executions?run_id=${encodeURIComponent(runId)}&page=${page}&page_size=100`, signal);
+    const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+    const count = items.filter((item) => positiveString(item.run_id) === runId
+      && item.screening_stage === "workflow_completion"
+      && positiveString(item.candidate?.id) === candidateId
+      && positiveString(item.job?.id) === jobId).length;
+    if (count > 0) return { count };
+    const pagination = response?.data?.pagination;
+    if (!pagination || pagination.page !== page
+      || !Number.isSafeInteger(pagination.page_size) || pagination.page_size < 1 || pagination.page_size > 100
+      || !Number.isSafeInteger(pagination.total) || pagination.total < 0
+      || page * pagination.page_size >= pagination.total) break;
+  }
+  return { count: 0 };
 }
 
 async function getOrNull(path, signal) {
@@ -831,14 +849,15 @@ function env(name) {
 }
 
 function asId(value) {
+  if (typeof value === "number" && !Number.isSafeInteger(value)) throw new Error("AIHR numeric identifiers must be safe integers; use decimal strings for int64 IDs");
   const stringValue = String(value ?? "").trim();
   if (!/^[1-9][0-9]*$/.test(stringValue)) throw new Error("AIHR identifiers must be positive decimal strings");
+  if (BigInt(stringValue) > 9223372036854775807n) throw new Error("AIHR identifiers must fit a signed int64");
   return stringValue;
 }
 
 function positiveString(value) {
-  const stringValue = String(value ?? "").trim();
-  return /^[1-9][0-9]*$/.test(stringValue) ? stringValue : null;
+  try { return asId(value); } catch { return null; }
 }
 
 function nullable(value) {
