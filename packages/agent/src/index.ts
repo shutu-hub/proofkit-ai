@@ -276,7 +276,9 @@ export class MissionAgent {
     if (mission.status !== "approved" && mission.status !== "paused" && mission.status !== "running") {
       throw new Error(`Mission cannot run from status ${mission.status}`);
     }
-    mission = await this.recoverInterruptedTasks(mission);
+    const recovery = await this.recoverInterruptedTasks(mission);
+    mission = recovery.mission;
+    const recoveryTaskIds = recovery.retryTaskIds;
     if (mission.status === "blocked" || mission.status === "cancelled" || mission.status === "failed") return mission;
     mission = await this.save({ ...mission, status: "running" });
     const controller = new AbortController();
@@ -293,7 +295,9 @@ export class MissionAgent {
           const verdict = blocked ? "blocked" : failed ? "failed" : current.verdict ?? "passed";
           return this.save({ ...current, status: terminal, verdict });
         }
-        mission = await this.executeTask(current, next, controller.signal);
+        const phase = recoveryTaskIds.has(next.taskId) ? "recover" : undefined;
+        mission = await this.executeTask(current, next, controller.signal, phase);
+        recoveryTaskIds.delete(next.taskId);
         if (mission.status === "failed" || mission.status === "blocked" || mission.status === "cancelled") return mission;
       }
       return this.save({ ...mission, status: "blocked", verdict: "blocked", findings: [...mission.findings, finding("agent-step-limit", "medium", "test", "Agent step limit reached", "Mission exceeded its configured maxSteps.")] });
@@ -322,11 +326,12 @@ export class MissionAgent {
    * operation blindly could duplicate user data or trigger an external side
    * effect twice, so only side-effect-free tasks are automatically retried.
    */
-  private async recoverInterruptedTasks(mission: TestMission): Promise<TestMission> {
+  private async recoverInterruptedTasks(mission: TestMission): Promise<{ mission: TestMission; retryTaskIds: Set<string> }> {
     const runningTasks = mission.plan.graph.tasks.filter((task) => task.status === "running");
-    if (runningTasks.length === 0) return mission;
+    if (runningTasks.length === 0) return { mission, retryTaskIds: new Set() };
 
     let recovered = mission;
+    const retryTaskIds = new Set<string>();
     for (const task of runningTasks) {
       const tool = this.tools.get(task.tool);
       const safe = tool !== undefined && isSafeToRecover(mission, task, tool);
@@ -347,6 +352,7 @@ export class MissionAgent {
             "confirmed",
           )],
         };
+        retryTaskIds.add(task.taskId);
         continue;
       }
 
@@ -373,10 +379,10 @@ export class MissionAgent {
         )],
       };
     }
-    return this.save(recovered);
+    return { mission: await this.save(recovered), retryTaskIds };
   }
 
-  private async executeTask(mission: TestMission, task: TaskNode, signal: AbortSignal): Promise<TestMission> {
+  private async executeTask(mission: TestMission, task: TaskNode, signal: AbortSignal, phase?: AgentStep["phase"]): Promise<TestMission> {
     const tool = this.tools.get(task.tool);
     const startedAt = new Date().toISOString();
     const toolCallId = `tool-${randomUUID().slice(0, 12)}`;
@@ -395,7 +401,7 @@ export class MissionAgent {
       agentStepId,
       sequence: mission.agentSteps.length + 1,
       taskId: task.taskId,
-      phase: "execute",
+      phase: phase ?? agentStepPhase(task),
       tool: tool?.name ?? task.tool,
       decision: `选择依赖已满足的任务 ${task.taskId} 并调用已注册工具。`,
       input: task.input,
@@ -427,8 +433,20 @@ export class MissionAgent {
       const finishedAt = new Date().toISOString();
       const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status: "succeeded", startedAt, endedAt: finishedAt, durationMs: Date.now() - Date.parse(startedAt), evidence: result.evidence ?? [] });
       const failedVerdict = result.verdict === "failed" || result.verdict === "blocked" || result.verdict === "cancelled";
+      const stepStatus = result.verdict === "blocked"
+        ? "blocked"
+        : result.verdict === "cancelled"
+          ? "cancelled"
+          : result.verdict === "failed"
+            ? "failed"
+            : "succeeded";
+      const taskStatus = result.verdict === "blocked" || result.verdict === "cancelled"
+        ? "blocked"
+        : result.verdict === "failed"
+          ? "failed"
+          : "passed";
       const agentStep = completeAgentStep(startedMission.agentSteps, agentStepId, {
-        status: failedVerdict ? result.verdict === "blocked" ? "blocked" : "failed" : "succeeded",
+        status: stepStatus,
         endedAt: finishedAt,
         durationMs: Date.now() - Date.parse(startedAt),
         output,
@@ -436,7 +454,6 @@ export class MissionAgent {
         evidence: result.evidence ?? [],
         ...(failedVerdict ? { error: `Tool returned verdict ${result.verdict}` } : {}),
       });
-      const taskStatus = failedVerdict ? result.verdict === "blocked" ? "blocked" : "failed" : "passed";
       const taskUpdate = updateTask(startedMission, { ...runningTask, status: taskStatus, output, ...(failedVerdict ? { error: `Tool returned verdict ${result.verdict}` } : {}) }, { currentTaskId: undefined });
       return this.save({
         ...taskUpdate,
@@ -449,7 +466,7 @@ export class MissionAgent {
         ...(result.diagnosis ? { diagnosis: DiagnosisSchema.parse(result.diagnosis) } : {}),
         repairSuggestions: [...startedMission.repairSuggestions, ...(result.repairSuggestions ?? []).map((item) => RepairSuggestionSchema.parse(item))],
         verdict: result.verdict,
-        ...(failedVerdict ? { status: taskStatus === "blocked" ? "blocked" : "failed" } : {}),
+        ...(failedVerdict ? { status: taskStatus === "blocked" ? result.verdict === "cancelled" ? "cancelled" : "blocked" : "failed" } : {}),
       });
     } catch (error) {
       const cause = toError(error);
@@ -487,6 +504,10 @@ export class MissionAgent {
 function nextReadyTask(mission: TestMission): TaskNode | undefined {
   const completed = new Set(mission.plan.graph.tasks.filter((task) => task.status === "passed").map((task) => task.taskId));
   return mission.plan.graph.tasks.find((task) => (task.status === "pending" || task.status === "ready") && task.dependsOn.every((dependency) => completed.has(dependency)));
+}
+
+function agentStepPhase(task: TaskNode): AgentStep["phase"] {
+  return task.tool === "mission.verify" ? "verify" : "execute";
 }
 
 function updateTask(mission: TestMission, task: TaskNode, options: { currentTaskId?: string }): TestMission {

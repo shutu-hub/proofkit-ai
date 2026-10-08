@@ -27,7 +27,29 @@ describe("MissionAgent", () => {
     expect(completed.revision).toBeGreaterThan(3);
     expect(completed.agentSteps).toHaveLength(3);
     expect(completed.agentSteps.map((step) => step.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
+    expect(completed.agentSteps.map((step) => step.phase)).toEqual(["execute", "execute", "verify"]);
     expect(completed.agentSteps.every((step) => step.toolCallIds.length === 1)).toBe(true);
+  });
+
+  it("preserves a cancelled tool verdict in the AgentStep and mission", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-mission-cancelled-verdict-"));
+    const tools = new InMemoryMissionToolRegistry([
+      { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({}) },
+      { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}).passthrough(), execute: async () => ({ verdict: "cancelled" as const }) },
+      { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({ verdict: "passed" as const }) },
+    ]);
+    const agent = new MissionAgent({ store: new JsonMissionStore(root), tools });
+    const created = await agent.create({ intent: "cancelled surface", projectRoot: root, surface: "web", policy: { requireApproval: false } });
+
+    const result = await agent.run(created.missionId);
+
+    expect(result.status).toBe("cancelled");
+    expect(result.verdict).toBe("cancelled");
+    expect(result.agentSteps.find((step) => step.taskId === "execute-charter")).toMatchObject({
+      phase: "execute",
+      status: "cancelled",
+    });
+    expect(result.plan.graph.tasks.find((task) => task.taskId === "execute-charter")?.status).toBe("blocked");
   });
 
   it("blocks an unregistered or disallowed tool with a finding", async () => {
@@ -128,6 +150,7 @@ describe("MissionAgent", () => {
     expect(result.toolCalls.find((call) => call.taskId === "reconnaissance" && call.status === "succeeded")?.attempt).toBe(2);
     expect(result.agentSteps.find((step) => step.taskId === "reconnaissance" && step.status === "cancelled")).toBeDefined();
     expect(result.agentSteps.filter((step) => step.taskId === "reconnaissance" && step.status === "succeeded")).toHaveLength(1);
+    expect(result.agentSteps.find((step) => step.taskId === "reconnaissance" && step.status === "succeeded")?.phase).toBe("recover");
   });
 
   it("blocks an interrupted side-effecting task instead of replaying it", async () => {

@@ -177,7 +177,8 @@ export function createProgram(): Command {
       const runner = await LocalRunnerService.create({ root: resolve(options.root) });
       await runner.startMission(missionId, { approve: options.approve });
       const completed = await runner.waitMission(missionId);
-      console.log(JSON.stringify({ missionId: completed.missionId, status: completed.status, level: completed.level, verdict: completed.verdict, firstFailure: completed.firstFailure, diagnosis: completed.diagnosis, repairSuggestions: completed.repairSuggestions, findings: completed.findings, evidence: completed.evidence }, null, 2));
+      const evidence = await runner.missionEvidence(completed.missionId);
+      console.log(JSON.stringify(evidence, null, 2));
       if (completed.verdict !== "passed") process.exitCode = 1;
     });
 
