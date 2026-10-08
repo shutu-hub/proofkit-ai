@@ -112,6 +112,40 @@ $env:AIHR_PROOFKIT_SOURCE_TEXT = "<脱敏测试简历正文>"
 
 运行 Charter 时必须显式允许写操作；默认配置仍是 `confirm`。
 
+先确认 AIHR gateway、resume-collection、candidate、job、integration 和 assessment worker 都连接到隔离的 local/test 环境。AIHR `devlocal` 默认请求 `http://127.0.0.1:8080/api/v1`；如果使用共享测试环境，显式设置 ProofKit API 地址，不能把测试数据发到生产环境。
+
+在 AIHR 仓库的终端启动桌面应用并开放仅监听本机的 CDP 端口：
+
+```powershell
+$env:AIHR_ELECTRON_DEBUG_PORT = "9222"
+pnpm dev:devlocal
+```
+
+在另一个终端确认 Electron 已提供 CDP，再切换到 ProofKit 仓库：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:9222/json/version
+cd D:\code\proofkit-ai
+pnpm build
+pnpm test
+```
+
+将文档前面的测试 Token、租户、workspace、conversation、workflow、job、候选人和脱敏简历正文环境变量设置为隔离测试数据。然后在 ProofKit 仓库运行：
+
+```powershell
+pnpm --filter @proofkit/cli dev -- run "验证 AIHR 在线简历处理链路" `
+  --root D:\code\proofkit-ai `
+  --charter .proofkit/charters/aihr-online-resume.yml `
+  --adapter electron `
+  --cdp http://127.0.0.1:9222 `
+  --no-start `
+  --allow-capability-writes
+```
+
+`--allow-capability-writes` 是 Runner 的第二道显式授权；Charter 自身仍须声明 `sideEffectPolicy: allow`。Electron 的调试端口由 `AIHR_ELECTRON_DEBUG_PORT` 固定为 `9222`，因此命令直接使用 `--cdp`，不依赖 `DevToolsActivePort` 文件。该 Charter 当前通过网关提交在线简历任务，再轮询 workflow、简历文件、候选人关系和 assessment；它还没有执行 Electron 页面点击、平台简历抓取或 PDF 上传。
+
+测试结束后，终端会返回 `runId`、verdict 和 HTML 报告位置。报告及 JSONL 时间线默认写入 `.proofkit/runs/<runId>/`。只有在 verdict 为 `passed` 且 oracle 观察到目标业务终态时才算通过；先确认报告里的 test workspace、workflow 和 assessment 证据，再据此判定是否达到预期。
+
 ## 下一阶段
 
 1. 把 AIHR Charter 接入真实 Electron/CDP surface，并把 UI 操作与上述业务 oracle 绑定到同一个 run。

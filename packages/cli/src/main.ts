@@ -92,6 +92,7 @@ export function createProgram(): Command {
     .option("--evidence-dir <path>", "run artifact directory", ".proofkit/runs")
     .option("--oracle-url <url>", "read-only HTTP endpoint used as a business oracle")
     .option("--oracle-name <name>", "business oracle name", "http-check")
+    .option("--allow-capability-writes", "allow explicitly declared write capabilities")
     .action(async (intent: string, options: RunCommandOptions) => {
       const root = resolve(options.root);
       const config = await loadConfig(root);
@@ -99,6 +100,7 @@ export function createProgram(): Command {
         root,
         config,
         evidenceDir: resolve(root, options.evidenceDir),
+        allowCapabilityWrites: options.allowCapabilityWrites,
       });
       const started = await runner.start({
         intent,
@@ -147,6 +149,7 @@ export function createProgram(): Command {
     .option("--cdp <url>", "CDP endpoint")
     .option("--devtools-port-file <path>", "Electron DevToolsActivePort path")
     .option("--headful", "launch a visible browser")
+    .option("--allow-capability-writes", "allow explicitly declared write capabilities")
     .action(async (runId: string, options: ReplayOptions) => {
       const root = resolve(options.root);
       const store = new EvidenceStore(resolve(root, options.evidenceDir));
@@ -155,7 +158,12 @@ export function createProgram(): Command {
         console.log(JSON.stringify({ runId: previous.runId, verdict: previous.verdict, charter: previous.charter, steps: previous.steps.length, artifacts: previous.artifacts.length }, null, 2));
         return;
       }
-      const runner = await LocalRunnerService.create({ root, config: await loadConfig(root), evidenceDir: resolve(root, options.evidenceDir) });
+      const runner = await LocalRunnerService.create({
+        root,
+        config: await loadConfig(root),
+        evidenceDir: resolve(root, options.evidenceDir),
+        allowCapabilityWrites: options.allowCapabilityWrites,
+      });
       const started = await runner.replay(runId, {
         adapter: options.adapter as LocalAdapterName,
         cdp: options.cdp,
@@ -188,6 +196,7 @@ type RunCommandOptions = PlanCommandOptions & {
   headful?: boolean;
   start: boolean;
   evidenceDir: string;
+  allowCapabilityWrites?: boolean;
   oracleUrl?: string;
   oracleName: string;
 };
@@ -200,6 +209,7 @@ type ReplayOptions = {
   cdp?: string;
   devtoolsPortFile?: string;
   headful?: boolean;
+  allowCapabilityWrites?: boolean;
 };
 
 function collect(value: string, previous: string[]): string[] {
