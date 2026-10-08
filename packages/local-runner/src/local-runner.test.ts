@@ -1,9 +1,10 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProofkitConfigSchema } from "@proofkit/contracts";
+import { ExecutionRunner, type SurfaceAdapter } from "@proofkit/runner";
 import { LocalRunnerService } from "./index.js";
 
 const roots: string[] = [];
@@ -15,6 +16,82 @@ afterEach(async () => {
 });
 
 describe("LocalRunnerService", () => {
+  it("loads a project-local integration module without a hosted service", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-integration-"));
+    roots.push(root);
+    await mkdir(join(root, ".proofkit"), { recursive: true });
+    await writeFile(join(root, ".proofkit", "integration.mjs"), "export default { name: 'fixture-integration', version: '1' };", "utf8");
+
+    const service = await LocalRunnerService.create({ root });
+
+    expect(service.integration?.name).toBe("fixture-integration");
+    expect(service.integration?.version).toBe("1");
+  });
+
+  it("executes capabilities, oracles and cleanup from the loaded integration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-integration-run-"));
+    roots.push(root);
+    await mkdir(join(root, ".proofkit"), { recursive: true });
+    await writeFile(join(root, ".proofkit", "integration.mjs"), `
+      const passthrough = { parse(value) { return value; } };
+      const integration = {
+        name: "fixture-integration",
+        state: { cleaned: false },
+        capabilities: [{
+          name: "readResumeState",
+          description: "Read the fixture resume terminal state",
+          sideEffect: "read",
+          environments: ["test"],
+          timeoutMs: 1000,
+          inputSchema: passthrough,
+          outputSchema: passthrough,
+          execute: async () => ({ status: "complete" }),
+          evidence: (output) => ({ status: output.status }),
+        }],
+        oracles: [{
+          name: "resume-terminal",
+          check: async ({ steps }) => ({
+            name: "resume-terminal",
+            passed: steps[0]?.capabilityOutput?.status === "complete",
+            message: "resume reached the terminal state",
+            evidence: [],
+          }),
+        }],
+        setup: async () => async () => { integration.state.cleaned = true; },
+      };
+      export default integration;
+    `, "utf8");
+    const service = await LocalRunnerService.create({ root });
+    const adapter: SurfaceAdapter = {
+      name: "fixture",
+      async connect() {},
+      async discover() { return { capturedAt: new Date().toISOString(), metadata: {} }; },
+      async snapshot() { return { capturedAt: new Date().toISOString(), metadata: {} }; },
+      async act() { throw new Error("not used"); },
+      async assert(assertion) { return { assertion, passed: true, message: "not used", evidence: [] }; },
+      async capture() { return undefined; },
+      async subscribeEvents() { return () => {}; },
+      async close() {},
+    };
+    const summary = await new ExecutionRunner(adapter, {
+      evidenceDir: service.evidenceDir,
+      capabilities: service.integration?.capabilities,
+      oracles: service.integration?.oracles,
+      setup: service.integration?.setup,
+    }).run({
+      intent: "verify resume",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [{ kind: "capability", name: "readResumeState", input: {} }],
+      assertions: [],
+      oracles: ["resume-terminal"],
+      sideEffectPolicy: "deny",
+      metadata: {},
+    }, "integration-run");
+    expect(summary.verdict).toBe("passed");
+    expect((service.integration as unknown as { state: { cleaned: boolean } }).state.cleaned).toBe(true);
+  });
+
   it("uses the configured OpenAI-compatible planner through the local service", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-local-"));
     roots.push(root);
@@ -90,6 +167,8 @@ describe("LocalRunnerService", () => {
         project: { root: ".", start: "echo forbidden", health: [], startupTimeoutMs: 1_000 },
         surfaces: {},
         planning: { provider: "deterministic", timeoutMs: 30_000 },
+        integration: {},
+        run: { timeoutMs: 300_000 },
         oracles: [],
         policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false },
       },

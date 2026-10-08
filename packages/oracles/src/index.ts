@@ -13,6 +13,7 @@ export type HttpOracleOptions = {
   check?: (body: unknown, response: { status: number; headers: Record<string, string> }) => boolean | Promise<boolean>;
   describe?: (body: unknown) => string;
   facts?: (body: unknown) => Record<string, string | number | boolean | null>;
+  signal?: AbortSignal;
 };
 
 export type PollHttpOracleOptions = Omit<HttpOracleOptions, "check" | "describe" | "facts"> & {
@@ -55,6 +56,7 @@ export function configuredHttpOracle(config: ProofkitConfig["oracles"][number]):
           const value = jsonPointer(body, config.statusPointer);
           return { state: typeof value === "string" && (success.has(value) || failure.has(value)) ? value : "pending" };
         },
+        signal: context.signal,
       }).check(context);
     },
   };
@@ -91,10 +93,10 @@ export function jsonPointer(value: unknown, pointer: string): unknown {
 export function httpOracle(options: HttpOracleOptions): BusinessOracle {
   return {
     name: options.name,
-    async check(): Promise<OracleResult> {
+    async check(context): Promise<OracleResult> {
       let response: { status: number; headers: Record<string, string>; body: unknown };
       try {
-        response = await fetchJson(options);
+        response = await fetchJson({ ...options, signal: context.signal });
       } catch (error) {
         return {
           name: options.name,
@@ -126,7 +128,7 @@ export function pollHttpOracle(options: PollHttpOracleOptions): BusinessOracle {
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) throw new Error("intervalMs must be positive");
   return {
     name: options.name,
-    async check(): Promise<OracleResult> {
+    async check(context): Promise<OracleResult> {
       const deadline = Date.now() + options.deadlineMs;
       let attempts = 0;
       const observations: Array<Record<string, unknown>> = [];
@@ -135,10 +137,11 @@ export function pollHttpOracle(options: PollHttpOracleOptions): BusinessOracle {
         if (observations.length > 100) observations.shift();
       };
       while (Date.now() < deadline) {
+        throwIfAborted(context.signal);
         attempts++;
         try {
           const remaining = Math.max(1, deadline - Date.now());
-          const response = await fetchJson({ ...options, timeoutMs: Math.min(options.timeoutMs ?? 5_000, remaining) });
+          const response = await fetchJson({ ...options, timeoutMs: Math.min(options.timeoutMs ?? 5_000, remaining), signal: context.signal });
           const state = response.status === (options.expectedStatus ?? 200)
             ? await options.evaluate(response.body, response)
             : "pending";
@@ -150,7 +153,7 @@ export function pollHttpOracle(options: PollHttpOracleOptions): BusinessOracle {
         } catch (error) {
           record({ observationError: error instanceof Error ? error.name : "Error" });
         }
-        await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, Math.max(0, deadline - Date.now()))));
+        await waitOrAbort(Math.min(intervalMs, Math.max(0, deadline - Date.now())), context.signal);
       }
       return { name: options.name, passed: null, message: `${options.name}: terminal state not observed within ${options.deadlineMs}ms`, evidence: [JSON.stringify({ attempts, observations })], observedAt: new Date().toISOString() };
     },
@@ -186,6 +189,33 @@ async function fetchJson(options: HttpOracleOptions): Promise<{ status: number; 
     });
     req.on("timeout", () => { req.destroy(new Error("HTTP oracle timed out")); });
     req.on("error", reject);
+    const onAbort = () => req.destroy(options.signal?.reason instanceof Error ? options.signal.reason : new Error("HTTP oracle cancelled"));
+    if (options.signal?.aborted) onAbort();
+    else options.signal?.addEventListener("abort", onAbort, { once: true });
+    const cleanup = () => options.signal?.removeEventListener("abort", onAbort);
+    req.on("close", cleanup);
     req.end();
+  });
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal || !signal.aborted) return;
+  const reason = signal.reason;
+  throw reason instanceof Error ? reason : new Error("HTTP oracle cancelled");
+}
+
+async function waitOrAbort(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
+  throwIfAborted(signal);
+  if (!signal) {
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason instanceof Error ? signal.reason : new Error("HTTP oracle cancelled"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }

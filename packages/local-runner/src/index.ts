@@ -6,8 +6,11 @@ import { ProofkitConfigSchema, TestCharterSchema, type ProofkitConfig, type Proj
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { IntentPlanner, OpenAICompatiblePlannerProvider, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { loadConfig, scanProject } from "@proofkit/project";
-import { ExecutionRunner, type BusinessOracle, type CapabilityDefinition, type SurfaceAdapter } from "@proofkit/runner";
+import { CancelledError, ExecutionRunner, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
+import { loadProjectIntegration } from "./integration.js";
+
+export { loadProjectIntegration } from "./integration.js";
 
 export type LocalAdapterName = "web" | "electron";
 
@@ -42,6 +45,7 @@ type LocalRunRecord = {
   runId: string;
   status: LocalRunStatus["status"];
   promise: Promise<RunSummary>;
+  controller: AbortController;
   summary?: RunSummary;
   error?: string;
 };
@@ -55,12 +59,14 @@ export type LocalRunnerOptions = {
   capabilities?: CapabilityDefinition<any, any>[];
   allowCapabilityWrites?: boolean;
   plannerProvider?: PlannerProvider;
+  integration?: ProjectIntegration;
 };
 
 export class LocalRunnerService {
   readonly root: string;
   readonly config: ProofkitConfig;
   readonly evidenceDir: string;
+  readonly integration?: ProjectIntegration;
   private readonly records = new Map<string, LocalRunRecord>();
   private readonly evidence: EvidenceStore;
   private readonly restrictWebOrigins: boolean;
@@ -75,14 +81,17 @@ export class LocalRunnerService {
     this.evidenceDir = resolve(this.root, options.evidenceDir ?? ".proofkit/runs");
     this.evidence = new EvidenceStore(this.evidenceDir);
     this.restrictWebOrigins = options.restrictWebOrigins ?? false;
-    this.oracles = options.oracles ?? [];
-    this.capabilities = options.capabilities ?? [];
+    this.integration = options.integration;
+    this.oracles = [...(this.integration?.oracles ?? []), ...(options.oracles ?? [])];
+    this.capabilities = [...(this.integration?.capabilities ?? []), ...(options.capabilities ?? [])];
     this.allowCapabilityWrites = options.allowCapabilityWrites ?? false;
     this.plannerProvider = options.plannerProvider;
   }
 
   static async create(options: Omit<LocalRunnerOptions, "config"> & { config?: ProofkitConfig }): Promise<LocalRunnerService> {
-    return new LocalRunnerService({ ...options, config: options.config ?? await loadConfig(options.root) });
+    const config = options.config ?? await loadConfig(options.root);
+    const integration = options.integration ?? await loadProjectIntegration(options.root, config);
+    return new LocalRunnerService({ ...options, config, integration });
   }
 
   async discover(): Promise<ProjectMap> {
@@ -103,7 +112,10 @@ export class LocalRunnerService {
       allowedActionKinds: policy === "allow"
         ? ["goto", "click", "fill", "press", "waitForText", "screenshot", "observe"]
         : ["goto", "waitForText", "screenshot", "observe"],
-      allowedOracleNames: this.config.oracles.map((oracle) => oracle.name),
+      allowedOracleNames: [...new Set([
+        ...this.config.oracles.map((oracle) => oracle.name),
+        ...this.oracles.map((oracle) => oracle.name),
+      ])],
     };
     const provider = this.plannerProvider ?? this.createPlannerProvider();
     const charter = provider
@@ -130,9 +142,10 @@ export class LocalRunnerService {
 
   async start(input: LocalRunInput): Promise<LocalRunStatus> {
     const runId = createRunId();
-    const record: LocalRunRecord = { runId, status: "running", promise: Promise.resolve(undefined as never) };
+    const controller = new AbortController();
+    const record: LocalRunRecord = { runId, status: "running", controller, promise: Promise.resolve(undefined as never) };
     this.records.set(runId, record);
-    const promise = this.execute(runId, input);
+    const promise = this.execute(runId, input, controller.signal);
     record.promise = promise;
     void promise.then((summary) => {
       record.status = "completed";
@@ -141,6 +154,16 @@ export class LocalRunnerService {
       record.status = "failed";
       record.error = toError(error).message;
     });
+    return this.toStatus(record);
+  }
+
+  async cancel(runId: string, reason = "Run cancelled by user"): Promise<LocalRunStatus> {
+    const safeRunId = validateRunId(runId);
+    const record = this.records.get(safeRunId);
+    if (!record) throw new Error(`Run not found: ${safeRunId}`);
+    if (record.status === "running" || record.status === "queued") {
+      record.controller.abort(new CancelledError(reason));
+    }
     return this.toStatus(record);
   }
 
@@ -189,7 +212,7 @@ export class LocalRunnerService {
     return this.start({ ...input, charter: previous.charter });
   }
 
-  private async execute(runId: string, input: LocalRunInput): Promise<RunSummary> {
+  private async execute(runId: string, input: LocalRunInput, signal: AbortSignal): Promise<RunSummary> {
     const charter = TestCharterSchema.parse(await this.resolveCharter(input));
     if (this.restrictWebOrigins && charter.sideEffectPolicy === "allow" && this.config.policies.sideEffects !== "allow") {
       throw new Error("MCP interactive runs require sideEffects=allow in project config");
@@ -206,7 +229,10 @@ export class LocalRunnerService {
     const adapter = this.createAdapter(input);
     const oracleNames = charter.oracles ?? [];
     if (new Set(oracleNames).size !== oracleNames.length) throw new Error("Duplicate oracle name in Charter");
+    const registered = new Map(this.oracles.map((oracle) => [oracle.name, oracle]));
     const configured = oracleNames.map((name) => {
+      const projectOracle = registered.get(name);
+      if (projectOracle) return projectOracle;
       const definition = this.config.oracles.find((oracle) => oracle.name === name);
       if (!definition) throw new Error(`Oracle is not registered: ${name}`);
       if (this.restrictWebOrigins && !isLoopback(new URL(definition.url).hostname)) throw new Error(`MCP oracle ${name} must use loopback`);
@@ -215,25 +241,53 @@ export class LocalRunnerService {
     const oracles = input.oracleUrl
       ? [httpOracle({ name: input.oracleName ?? "http-check", url: input.oracleUrl })]
       : [];
+    const setup: IntegrationSetup | undefined = input.start !== false && this.config.project.start ? async ({ emit }) => {
+      const runtime = new ProjectRuntime({
+        root: this.root,
+        config: this.config,
+        onEvent: (event) => void emit({ timestamp: new Date().toISOString(), type: "adapter.event", payload: { source: "project-runtime", ...event } }),
+      });
+      try {
+        await runtime.start();
+      } catch (error) {
+        await runtime.stop();
+        throw error;
+      }
+      return () => runtime.stop();
+    } : undefined;
+    const integrationSetup = this.integration?.setup;
     return new ExecutionRunner(adapter, {
       evidenceDir: this.evidenceDir,
       oracles: [...this.oracles, ...configured, ...oracles],
       capabilities: this.capabilities,
       environment: this.config.policies.environment,
       allowCapabilityWrites: this.allowCapabilityWrites,
-      setup: input.start !== false && this.config.project.start ? async ({ emit }) => {
-        const runtime = new ProjectRuntime({
-          root: this.root,
-          config: this.config,
-          onEvent: (event) => void emit({ timestamp: new Date().toISOString(), type: "adapter.event", payload: { source: "project-runtime", ...event } }),
-        });
+      signal,
+      timeoutMs: this.config.run.timeoutMs,
+      integration: this.integration ? { name: this.integration.name, version: this.integration.version } : undefined,
+      setup: setup || integrationSetup ? async (context) => {
+        const cleanups: Array<() => void | Promise<void>> = [];
+        const cleanupAll = async () => {
+          let firstError: Error | undefined;
+          for (const cleanup of cleanups.reverse()) {
+            try { await cleanup(); } catch (error) { firstError ??= toError(error); }
+          }
+          if (firstError) throw firstError;
+        };
         try {
-          await runtime.start();
+          if (integrationSetup) {
+            const cleanup = await integrationSetup(context);
+            if (cleanup) cleanups.push(cleanup);
+          }
+          if (setup) {
+            const cleanup = await setup(context);
+            if (cleanup) cleanups.push(cleanup);
+          }
+          return cleanupAll;
         } catch (error) {
-          await runtime.stop();
+          try { await cleanupAll(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], "Integration setup and cleanup failed"); }
           throw error;
         }
-        return () => runtime.stop();
       } : undefined,
     }).run(charter, runId);
   }
@@ -331,6 +385,8 @@ function loadConfigDefaults(): ProofkitConfig {
     project: { root: ".", health: [], startupTimeoutMs: 60_000 },
     surfaces: {},
     planning: { provider: "deterministic", timeoutMs: 30_000 },
+    integration: {},
+    run: { timeoutMs: 300_000 },
     oracles: [],
     policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false },
   };

@@ -95,7 +95,7 @@ export function createProgram(): Command {
     .action(async (intent: string, options: RunCommandOptions) => {
       const root = resolve(options.root);
       const config = await loadConfig(root);
-      const runner = new LocalRunnerService({
+      const runner = await LocalRunnerService.create({
         root,
         config,
         evidenceDir: resolve(root, options.evidenceDir),
@@ -116,7 +116,14 @@ export function createProgram(): Command {
         oracleUrl: options.oracleUrl,
         oracleName: options.oracleName,
       });
-      const summary = await runner.wait(started.runId);
+      const onSigint = () => { void runner.cancel(started.runId, "CLI interrupted the run"); };
+      process.once("SIGINT", onSigint);
+      let summary;
+      try {
+        summary = await runner.wait(started.runId);
+      } finally {
+        process.off("SIGINT", onSigint);
+      }
       console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, report: resolve(root, options.evidenceDir, summary.runId, "report.html") }, null, 2));
       if (summary.verdict !== "passed") process.exitCode = 1;
     });
@@ -148,7 +155,7 @@ export function createProgram(): Command {
         console.log(JSON.stringify({ runId: previous.runId, verdict: previous.verdict, charter: previous.charter, steps: previous.steps.length, artifacts: previous.artifacts.length }, null, 2));
         return;
       }
-      const runner = new LocalRunnerService({ root, config: await loadConfig(root), evidenceDir: resolve(root, options.evidenceDir) });
+      const runner = await LocalRunnerService.create({ root, config: await loadConfig(root), evidenceDir: resolve(root, options.evidenceDir) });
       const started = await runner.replay(runId, {
         adapter: options.adapter as LocalAdapterName,
         cdp: options.cdp,

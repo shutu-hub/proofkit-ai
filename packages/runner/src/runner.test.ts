@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceSnapshot } from "@proofkit/contracts";
-import { ExecutionRunner, type AdapterEvent, type SurfaceAdapter } from "./index.js";
+import { CancelledError, ExecutionRunner, type AdapterEvent, type SurfaceAdapter } from "./index.js";
 
 class FakeAdapter implements SurfaceAdapter {
   readonly name = "fake";
@@ -23,6 +23,13 @@ class FakeAdapter implements SurfaceAdapter {
   async capture(): Promise<Uint8Array | undefined> { return undefined; }
   async subscribeEvents(_listener: (event: AdapterEvent) => void): Promise<() => void> { return () => {}; }
   async close(): Promise<void> {}
+}
+
+class SlowAdapter extends FakeAdapter {
+  override async act(action: Action): Promise<ActionReceipt> {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return super.act(action);
+  }
 }
 
 describe("ExecutionRunner", () => {
@@ -83,5 +90,65 @@ describe("ExecutionRunner", () => {
     }] }).run({ intent: "seed", mode: "guided", preconditions: [], actions: [{ kind: "capability", name: "seedFixture", input: {} }], assertions: [], sideEffectPolicy: "allow", metadata: {} }, "write-run");
     expect(summary.verdict).toBe("blocked");
     expect(called).toBe(false);
+  });
+
+  it("turns a total run deadline into a cancelled verdict and still closes the adapter", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-timeout-"));
+    let closed = false;
+    const adapter = new SlowAdapter();
+    adapter.close = async () => { closed = true; };
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root, timeoutMs: 10 }).run({
+      intent: "deadline",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [{ kind: "click", selector: "#slow" }],
+      assertions: [],
+      sideEffectPolicy: "deny",
+      metadata: {},
+    }, "timeout-run");
+    expect(summary.verdict).toBe("cancelled");
+    expect(summary.findings.some((finding) => finding.includes("deadline"))).toBe(true);
+    expect(closed).toBe(true);
+  });
+
+  it("propagates external cancellation to a capability and runs cleanup", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-cancel-"));
+    const controller = new AbortController();
+    let cleaned = false;
+    const promise = new ExecutionRunner(new FakeAdapter(), {
+      evidenceDir: root,
+      signal: controller.signal,
+      capabilities: [{
+        name: "slowCapability",
+        description: "Wait for cancellation",
+        sideEffect: "read",
+        environments: ["test"],
+        timeoutMs: 1_000,
+        inputSchema: z.object({}),
+        outputSchema: z.object({ ok: z.boolean() }),
+        execute: async (_input, context) => {
+          await new Promise<void>((resolve, reject) => {
+            context.signal.addEventListener("abort", () => reject(context.signal.reason), { once: true });
+            setTimeout(resolve, 500);
+          });
+          return { ok: true };
+        },
+        evidence: (output) => ({ ok: output.ok }),
+      }],
+      setup: async () => async () => { cleaned = true; },
+    }).run({
+      intent: "cancel",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [{ kind: "capability", name: "slowCapability", input: {} }],
+      assertions: [],
+      sideEffectPolicy: "deny",
+      metadata: {},
+    }, "cancel-run");
+    setTimeout(() => controller.abort(new CancelledError("user stop")), 10);
+    const summary = await promise;
+    expect(summary.verdict).toBe("cancelled");
+    expect(summary.findings.some((finding) => finding.includes("user stop"))).toBe(true);
+    expect(cleaned).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const VerdictSchema = z.enum(["passed", "failed", "blocked", "inconclusive"]);
+export const VerdictSchema = z.enum(["passed", "failed", "blocked", "cancelled", "inconclusive"]);
 export type Verdict = z.infer<typeof VerdictSchema>;
 
 export const RunModeSchema = z.enum(["deterministic", "guided", "explore"]);
@@ -169,6 +169,12 @@ export const ProofkitConfigSchema = z.object({
     model: z.string().min(1).optional(),
     apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/).optional(),
     timeoutMs: z.number().int().positive().max(120_000).default(30_000),
+  }).default({}),
+  integration: z.object({
+    path: z.string().min(1).optional(),
+  }).default({}),
+  run: z.object({
+    timeoutMs: z.number().int().positive().max(3_600_000).default(300_000),
   }).default({}),
   oracles: z.array(z.object({
     name: z.string().min(1),

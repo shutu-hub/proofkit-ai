@@ -16,9 +16,11 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Starts local project processes with health checks and captures runtime events in the same run timeline.
 - Observes read-only business HTTP endpoints through a redacted oracle instead of treating a UI click as proof of success.
 - Accepts programmatically registered, schema-validated project capabilities; only an explicit evidence projection is persisted.
+- Loads an optional project-owned `.proofkit/integration.mjs` module for typed capabilities, business oracles, test setup and cleanup.
+- Enforces a total run deadline and supports cancellation from the CLI or MCP while preserving the evidence directory.
 - Polls asynchronous HTTP business state to a bounded terminal verdict; a timeout remains inconclusive.
 - Records action receipts, before/after snapshots, network and console events, screenshots, and a JSONL timeline.
-- Reports `passed`, `failed`, `blocked`, or `inconclusive`; missing evidence never becomes a pass.
+- Reports `passed`, `failed`, `blocked`, `cancelled`, or `inconclusive`; missing evidence never becomes a pass.
 - Produces local JSON and HTML reports without a hosted service.
 
 ## Quick start
@@ -31,6 +33,8 @@ pnpm build
 pnpm --filter @proofkit/cli dev -- init --root /path/to/your/project
 pnpm --filter @proofkit/cli dev -- doctor --root /path/to/your/project
 ```
+
+`proofkit init` also creates a starter `.proofkit/integration.mjs`. Leave its arrays empty for UI-only checks, or add typed business capabilities and independent oracles when a workflow needs backend proof.
 
 Plan and review a test:
 
@@ -96,6 +100,24 @@ pnpm --filter @proofkit/mcp build
 PROOFKIT_ROOT=/path/to/your/project node packages/mcp/dist/server.js
 ```
 
+Project-specific capabilities can be kept in the project under `.proofkit/integration.mjs`. The module is trusted project code and may export a `name`, typed `capabilities`, business `oracles`, and a setup function that returns cleanup:
+
+```js
+export default {
+  name: "aihr-test-integration",
+  version: "1",
+  capabilities: [],
+  oracles: [],
+  async setup({ runId, emit, signal }) {
+    await emit({ type: "finding.created", timestamp: new Date().toISOString(), payload: { runId, message: "integration ready" } });
+    if (signal.aborted) throw signal.reason;
+    return async () => {};
+  },
+};
+```
+
+Set `run.timeoutMs` in `.proofkit/config.yaml` to bound the complete run. Press `Ctrl+C` during a CLI run or call the MCP `cancel_run` tool to cancel it; its report and evidence are retained with a `cancelled` verdict.
+
 ## Architecture
 
 ```mermaid
@@ -135,6 +157,7 @@ The repository is a pnpm workspace with explicit package boundaries:
 | `passed` | Every declared business assertion passed against an observed state. |
 | `failed` | An action or assertion produced a concrete failure. |
 | `blocked` | An explicit human, permission, authentication, or environment condition stopped execution. |
+| `cancelled` | The user cancelled the run or its total deadline expired; the evidence remains available. |
 | `inconclusive` | Execution ended without enough business assertions to prove success or failure. |
 
 Screenshots are supporting evidence. They do not override failed API, worker, file, or business-state assertions.
@@ -144,7 +167,7 @@ Screenshots are supporting evidence. They do not override failed API, worker, fi
 - Use a dedicated test profile and test data. CDP attachment controls the selected browser session.
 - Keep CDP bound to loopback; never expose a debugging port to a public network.
 - MCP model planning and configured business oracles accept loopback endpoints only. Model-generated navigation stays within the configured or explicitly supplied Web origin; interactive model actions require `sideEffects: allow` in the project config.
-- ProofKit does not seed or mutate databases in the first release. Project-specific write operations must be explicit, typed capabilities in a later extension.
+- ProofKit core does not seed or mutate application databases. Project-specific test writes must be explicit typed capabilities in the project integration, restricted to test environments and paired with cleanup.
 - Authorization, cookies, passwords, secrets, tokens, and phone fields are redacted from structured evidence by default.
 - Do not use production accounts or real candidate data for exploratory runs.
 

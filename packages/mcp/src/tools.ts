@@ -64,6 +64,16 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "cancel_run",
+    "Cancel a running ProofKit test. The run keeps its evidence and finishes with a cancelled verdict.",
+    {
+      runId: z.string().min(1),
+      reason: z.string().min(1).optional(),
+    },
+    async ({ runId, reason }) => result(await runner.cancel(runId, reason)),
+  );
+
+  server.tool(
     "get_evidence",
     "Read bounded evidence from a completed or running ProofKit run. Use events for the timeline and summary for the verdict.",
     {

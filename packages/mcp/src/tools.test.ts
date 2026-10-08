@@ -20,6 +20,7 @@ describe("ProofKit MCP tools", () => {
       "plan_test",
       "start_run",
       "get_run_status",
+      "cancel_run",
       "get_evidence",
       "replay_run",
     ]);

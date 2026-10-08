@@ -16,9 +16,13 @@ const DEFAULT_CONFIG: ProofkitConfig = {
   project: { root: ".", health: [], startupTimeoutMs: 60_000 },
   surfaces: {},
   planning: { provider: "deterministic", timeoutMs: 30_000 },
+  integration: {},
+  run: { timeoutMs: 300_000 },
   oracles: [],
   policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false },
 };
+
+const DEFAULT_INTEGRATION = `// Project-owned ProofKit capabilities and business oracles live here.\n// Keep writes limited to test data and always return cleanup from setup.\nexport default {\n  name: "project-integration",\n  version: "1",\n  capabilities: [],\n  oracles: [],\n};\n`;
 
 export async function scanProject(projectRoot = process.cwd()): Promise<ProjectMap> {
   const root = resolve(projectRoot);
@@ -63,10 +67,15 @@ export async function scanProject(projectRoot = process.cwd()): Promise<ProjectM
 }
 
 export async function initProject(projectRoot = process.cwd()): Promise<string> {
-  const configPath = join(resolve(projectRoot), ".proofkit", "config.yaml");
-  await mkdir(join(resolve(projectRoot), ".proofkit"), { recursive: true });
+  const root = resolve(projectRoot);
+  const configPath = join(root, ".proofkit", "config.yaml");
+  const integrationPath = join(root, ".proofkit", "integration.mjs");
+  await mkdir(join(root, ".proofkit"), { recursive: true });
   if (!(await fileExists(configPath))) {
     await writeFile(configPath, stringify(DEFAULT_CONFIG), "utf8");
+  }
+  if (!(await fileExists(integrationPath))) {
+    await writeFile(integrationPath, DEFAULT_INTEGRATION, "utf8");
   }
   return configPath;
 }

@@ -1,15 +1,45 @@
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ElectronAdapter } from "../packages/adapters/dist/index.js";
+import { pollHttpOracle } from "../packages/oracles/dist/index.js";
 import { planIntent } from "../packages/planner/dist/index.js";
 import { ExecutionRunner } from "../packages/runner/dist/index.js";
 
 const electron = "D:\\code\\Python\\AIHR-Microservices\\node_modules\\.pnpm\\electron@28.3.3\\node_modules\\electron\\dist\\electron.exe";
 const userData = await mkdtemp(join(tmpdir(), "proofkit-electron-"));
-const child = spawn(electron, ["tests/fixtures/electron-app.cjs", "--remote-debugging-port=9229", `--user-data-dir=${userData}`, "--no-sandbox", "--disable-gpu"], { cwd: process.cwd(), stdio: "ignore", windowsHide: true });
+let workflowStatus = "pending";
+const server = createServer((request, response) => {
+  if (request.url?.startsWith("/api/v1/resume-status")) {
+    if (request.method === "POST") {
+      setTimeout(() => { workflowStatus = "complete"; }, 50);
+      response.writeHead(202, { "content-type": "application/json", "access-control-allow-origin": "*" });
+      response.end(JSON.stringify({ data: { status: "accepted" } }));
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+    response.end(JSON.stringify({ data: { status: workflowStatus }, source: "fixture" }));
+    return;
+  }
+  response.writeHead(404);
+  response.end();
+});
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+const address = server.address();
+if (!address || typeof address === "string") throw new Error("Business fixture server did not bind");
+const oracleUrl = `http://127.0.0.1:${address.port}/api/v1/resume-status`;
+const oracle = pollHttpOracle({
+  name: "resume-workflow",
+  url: oracleUrl,
+  intervalMs: 25,
+  deadlineMs: 2_000,
+  evaluate: (body) => body?.data?.status === "complete" ? "passed" : "pending",
+  facts: (body) => ({ state: typeof body?.data?.status === "string" ? body.data.status : "unknown" }),
+});
+const child = spawn(electron, ["tests/fixtures/electron-app.cjs", `--proofkit-oracle-url=${oracleUrl}`, "--remote-debugging-port=9229", `--user-data-dir=${userData}`, "--no-sandbox", "--disable-gpu"], { cwd: process.cwd(), stdio: "ignore", windowsHide: true });
 
 try {
   await waitForCdp("http://127.0.0.1:9229/json/version");
@@ -17,12 +47,15 @@ try {
   await writeFile(portFile, "9229\n/devtools/browser/proofkit-smoke\n", "utf8");
   const adapter = new ElectronAdapter({ devtoolsActivePortPath: portFile });
   const charter = planIntent("验证 Electron 简历获取", { expect: ["Resume desktop", "Resume ready"] });
+  charter.oracles = ["resume-workflow"];
   charter.actions.push({ kind: "click", selector: "#fetch" }, { kind: "waitForText", text: "Resume ready" });
-  const summary = await new ExecutionRunner(adapter, { evidenceDir: ".proofkit/electron-runs" }).run(charter);
+  const summary = await new ExecutionRunner(adapter, { evidenceDir: ".proofkit/electron-runs", oracles: [oracle] }).run(charter);
   assert.equal(summary.verdict, "passed", JSON.stringify(summary, null, 2));
+  assert.equal(summary.oracles[0]?.passed, true, JSON.stringify(summary, null, 2));
   console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, artifacts: summary.artifacts.length }, null, 2));
 } finally {
   child.kill();
+  server.close();
 }
 
 async function waitForCdp(url) {

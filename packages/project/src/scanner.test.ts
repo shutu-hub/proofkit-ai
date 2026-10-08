@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { scanProject } from "./index.js";
+import { initProject, scanProject } from "./index.js";
 
 describe("scanProject", () => {
   it("maps package scripts and workspace surfaces", async () => {
@@ -14,5 +14,15 @@ describe("scanProject", () => {
     expect(map.detected.web).toBe(true);
     expect(map.detected.electron).toBe(true);
     expect(map.packages[0]?.name).toBe("desktop");
+  });
+
+  it("creates a config and integration starter without overwriting either", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-init-"));
+    await initProject(root);
+    const integrationPath = join(root, ".proofkit", "integration.mjs");
+    expect(await readFile(integrationPath, "utf8")).toContain("project-integration");
+    await writeFile(integrationPath, "export default { name: 'custom' };", "utf8");
+    await initProject(root);
+    expect(await readFile(integrationPath, "utf8")).toContain("custom");
   });
 });

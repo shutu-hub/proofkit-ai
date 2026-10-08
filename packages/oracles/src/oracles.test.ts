@@ -60,4 +60,12 @@ describe("pollHttpOracle", () => {
     expect(result.passed).toBeNull();
     expect(result.message).toContain("terminal state not observed");
   });
+
+  it("stops polling when the run is cancelled", async () => {
+    const controller = new AbortController();
+    const oracle = pollHttpOracle({ name: "resume", url: await endpoint(["pending"]), deadlineMs: 5_000, intervalMs: 500, evaluate: () => "pending" });
+    const promise = oracle.check({ runId: "test", charter: {} as never, steps: [], assertions: [], signal: controller.signal });
+    setTimeout(() => controller.abort(new Error("cancelled")), 20);
+    await expect(promise).rejects.toThrow("cancelled");
+  });
 });

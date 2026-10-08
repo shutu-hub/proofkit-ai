@@ -36,7 +36,22 @@ export type BusinessOracle = {
     charter: TestCharter;
     steps: RunSummary["steps"];
     assertions: AssertionResult[];
+    signal?: AbortSignal;
   }): Promise<OracleResult>;
+};
+
+export type IntegrationSetup = (context: {
+  runId: string;
+  signal: AbortSignal;
+  emit: (event: Omit<RunEvent, "runId">) => Promise<void>;
+}) => Promise<(() => void | Promise<void>) | undefined>;
+
+export type ProjectIntegration = {
+  name: string;
+  version?: string;
+  capabilities?: CapabilityDefinition<any, any>[];
+  oracles?: BusinessOracle[];
+  setup?: IntegrationSetup;
 };
 
 export type CapabilityDefinition<Input = unknown, Output = unknown> = {
@@ -55,6 +70,14 @@ export class BlockedError extends Error {
   override readonly name = "BlockedError";
 }
 
+export class CancelledError extends Error {
+  override readonly name = "CancelledError";
+}
+
+export class RunTimeoutError extends Error {
+  override readonly name = "RunTimeoutError";
+}
+
 export type ExecutionOptions = {
   evidenceDir?: string;
   runId?: string;
@@ -62,10 +85,10 @@ export type ExecutionOptions = {
   capabilities?: CapabilityDefinition<any, any>[];
   environment?: "test" | "staging" | "local";
   allowCapabilityWrites?: boolean;
-  setup?: (context: {
-    runId: string;
-    emit: (event: Omit<RunEvent, "runId">) => Promise<void>;
-  }) => Promise<(() => void | Promise<void>) | undefined>;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  integration?: { name: string; version?: string };
+  setup?: IntegrationSetup;
 };
 
 export class ExecutionRunner {
@@ -76,16 +99,23 @@ export class ExecutionRunner {
   private readonly environment: "test" | "staging" | "local";
   private readonly allowCapabilityWrites: boolean;
   private readonly setup?: ExecutionOptions["setup"];
+  private readonly signal?: AbortSignal;
+  private readonly timeoutMs?: number;
+  private readonly integration?: { name: string; version?: string };
 
   constructor(adapter: SurfaceAdapter, options: ExecutionOptions = {}) {
     this.adapter = adapter;
     this.store = new EvidenceStore(options.evidenceDir ?? ".proofkit/runs");
     this.oracles = options.oracles ?? [];
+    if (new Set(this.oracles.map((oracle) => oracle.name)).size !== this.oracles.length) throw new Error("Duplicate oracle name");
     this.capabilities = new Map((options.capabilities ?? []).map((capability) => [capability.name, capability]));
     if (this.capabilities.size !== (options.capabilities ?? []).length) throw new Error("Duplicate capability name");
     this.environment = options.environment ?? "test";
     this.allowCapabilityWrites = options.allowCapabilityWrites ?? false;
     this.setup = options.setup;
+    this.signal = options.signal;
+    this.timeoutMs = options.timeoutMs;
+    this.integration = options.integration;
   }
 
   async run(charter: TestCharter, runId = createRunId()): Promise<RunSummary> {
@@ -102,46 +132,56 @@ export class ExecutionRunner {
       findings: [],
     };
     await this.store.startRun(summary);
-    await this.emit({ runId, timestamp: startedAt, type: "run.started", payload: { adapter: this.adapter.name } });
+    await this.emit({ runId, timestamp: startedAt, type: "run.started", payload: { adapter: this.adapter.name, ...(this.integration ? { integration: this.integration } : {}) } });
 
+    const controller = new AbortController();
+    const detachSignal = relayAbort(this.signal, controller);
+    const timeout = this.timeoutMs === undefined ? undefined : setTimeout(() => {
+      controller.abort(new RunTimeoutError(`Run exceeded the ${this.timeoutMs}ms deadline`));
+    }, this.timeoutMs);
+    const signal = controller.signal;
     let executionError: Error | undefined;
     let unsubscribe: () => void | Promise<void> = () => {};
     let cleanupSetup: () => void | Promise<void> = () => {};
     const pendingEvents: Promise<void>[] = [];
     try {
+      throwIfAborted(signal);
       if (this.setup) {
-        cleanupSetup = await this.setup({
+        cleanupSetup = await withAbort(this.setup({
           runId,
+          signal,
           emit: (event) => this.emit({ ...event, runId }),
-        }) ?? (() => {});
+        }), signal, "Project setup") ?? (() => {});
       }
-      await this.adapter.connect();
-      unsubscribe = await this.adapter.subscribeEvents((event) => {
+      await withAbort(this.adapter.connect(), signal, "Adapter connect");
+      unsubscribe = await withAbort(this.adapter.subscribeEvents((event) => {
         pendingEvents.push(this.emit({ runId, timestamp: new Date().toISOString(), type: "adapter.event", payload: { adapter: this.adapter.name, eventType: event.type, ...event.payload } }));
-      });
+      }), signal, "Adapter event subscription");
       for (const [index, action] of charter.actions.entries()) {
+        throwIfAborted(signal);
         const stepId = `step-${String(index + 1).padStart(3, "0")}`;
         await this.emit({ runId, timestamp: new Date().toISOString(), type: "step.started", stepId, payload: { action } });
         const step: RunSummary["steps"][number] = { stepId, action, status: "passed", artifacts: [] };
         try {
           if (action.kind === "capability") {
-            const { output, receipt } = await this.executeCapability(action, charter, runId);
+            const { output, receipt } = await this.executeCapability(action, charter, runId, signal);
             step.receipt = receipt;
             step.capabilityOutput = output;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-capability`, { name: action.name, output }));
           } else {
-            const beforeSnapshot = await this.adapter.snapshot();
+            const beforeSnapshot = await withAbort(this.adapter.snapshot(), signal, `${stepId} snapshot`);
             step.beforeSnapshot = beforeSnapshot;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-before`, beforeSnapshot));
-            const receipt = await this.adapter.act(action);
+            const receipt = await withAbort(this.adapter.act(action), signal, `${stepId} action`);
             step.receipt = receipt;
-            const afterSnapshot = await this.adapter.snapshot();
+            const afterSnapshot = await withAbort(this.adapter.snapshot(), signal, `${stepId} snapshot`);
             step.afterSnapshot = afterSnapshot;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-after`, afterSnapshot));
             try {
-              const screenshot = await this.adapter.capture(`${stepId}.png`);
+              const screenshot = await withAbort(this.adapter.capture(`${stepId}.png`), signal, `${stepId} capture`);
               if (screenshot) step.artifacts.push(await this.store.writeBuffer(runId, `${stepId}.png`, screenshot));
             } catch (error) {
+              if (signal.aborted) throw abortReason(signal);
               summary.findings.push(`${stepId}: screenshot unavailable (${toError(error).message})`);
             }
           }
@@ -161,12 +201,14 @@ export class ExecutionRunner {
 
       if (!executionError) {
         for (const [index, assertion] of charter.assertions.entries()) {
-          const result = await this.adapter.assert(assertion);
+          throwIfAborted(signal);
+          const result = await withAbort(this.adapter.assert(assertion), signal, `Assertion ${index + 1}`);
           summary.assertions.push(result);
           await this.emit({ runId, timestamp: new Date().toISOString(), type: "assertion.completed", payload: { index, ...result } });
         }
         for (const oracle of this.oracles) {
-          const result = await oracle.check({ runId, charter, steps: summary.steps, assertions: summary.assertions });
+          throwIfAborted(signal);
+          const result = await withAbort(oracle.check({ runId, charter, steps: summary.steps, assertions: summary.assertions, signal }), signal, `Oracle ${oracle.name}`);
           const artifact = await this.store.writeJson(runId, `oracle-${summary.oracles.length + 1}`, result);
           result.evidence.push(artifact);
           summary.artifacts.push(artifact);
@@ -178,14 +220,16 @@ export class ExecutionRunner {
       executionError = toError(error);
       summary.findings.push(executionError.message);
     } finally {
-      try { await unsubscribe(); } catch (error) { summary.findings.push(`unsubscribe failed: ${toError(error).message}`); }
-      try { await this.adapter.close(); } catch (error) { summary.findings.push(`adapter close failed: ${toError(error).message}`); }
+      try { await unsubscribe(); } catch (error) { executionError ??= toError(error); summary.findings.push(`unsubscribe failed: ${toError(error).message}`); }
+      try { await this.adapter.close(); } catch (error) { executionError ??= toError(error); summary.findings.push(`adapter close failed: ${toError(error).message}`); }
       await Promise.all(pendingEvents);
-      try { await cleanupSetup(); } catch (error) { summary.findings.push(`runtime cleanup failed: ${toError(error).message}`); }
+      try { await cleanupSetup(); } catch (error) { executionError ??= toError(error); summary.findings.push(`runtime cleanup failed: ${toError(error).message}`); }
+      if (timeout) clearTimeout(timeout);
+      detachSignal();
     }
 
     summary.verdict = executionError
-      ? executionError instanceof BlockedError ? "blocked" : "failed"
+      ? executionError instanceof BlockedError ? "blocked" : executionError instanceof CancelledError || executionError instanceof RunTimeoutError ? "cancelled" : "failed"
       : charter.assertions.length === 0 && this.oracles.length === 0
         ? "inconclusive"
         : summary.assertions.some((result) => !result.passed) || summary.oracles.some((result) => result.passed === false)
@@ -208,7 +252,7 @@ export class ExecutionRunner {
     await this.store.appendEvent(event);
   }
 
-  private async executeCapability(action: Extract<Action, { kind: "capability" }>, charter: TestCharter, runId: string): Promise<{ output: unknown; receipt: ActionReceipt }> {
+  private async executeCapability(action: Extract<Action, { kind: "capability" }>, charter: TestCharter, runId: string, parentSignal: AbortSignal): Promise<{ output: unknown; receipt: ActionReceipt }> {
     const capability = this.capabilities.get(action.name);
     if (!capability) throw new BlockedError(`Capability is not registered: ${action.name}`);
     if (!capability.environments.includes(this.environment)) throw new BlockedError(`Capability ${action.name} is not allowed in ${this.environment}`);
@@ -225,12 +269,11 @@ export class ExecutionRunner {
     const startedAt = new Date().toISOString();
     const started = Date.now();
     const controller = new AbortController();
+    const detachSignal = relayAbort(parentSignal, controller);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const output = await Promise.race([
-        capability.execute(input, { runId, signal: controller.signal }),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error(`Capability ${action.name} timed out`)); }, capability.timeoutMs); }),
-      ]);
+      timer = setTimeout(() => controller.abort(new Error(`Capability ${action.name} timed out`)), capability.timeoutMs);
+      const output = await withAbort(capability.execute(input, { runId, signal: controller.signal }), controller.signal, `Capability ${action.name}`);
       const validated = capability.outputSchema.parse(output);
       const evidence = z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).parse(capability.evidence(validated));
       return {
@@ -239,12 +282,50 @@ export class ExecutionRunner {
       };
     } finally {
       if (timer) clearTimeout(timer);
+      detachSignal();
     }
   }
 }
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortReason(signal);
+}
+
+function abortReason(signal: AbortSignal): Error {
+  const reason = (signal as AbortSignal & { reason?: unknown }).reason;
+  if (reason instanceof Error) return reason;
+  return new CancelledError("Run was cancelled");
+}
+
+function relayAbort(source: AbortSignal | undefined, target: AbortController): () => void {
+  if (!source) return () => {};
+  const onAbort = () => target.abort((source as AbortSignal & { reason?: unknown }).reason);
+  if (source.aborted) onAbort();
+  else source.addEventListener("abort", onAbort, { once: true });
+  return () => source.removeEventListener("abort", onAbort);
+}
+
+async function withAbort<T>(promise: Promise<T>, signal: AbortSignal, label: string): Promise<T> {
+  throwIfAborted(signal);
+  let onAbort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        onAbort = () => reject(abortReason(signal));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } catch (error) {
+    if (signal.aborted) throw abortReason(signal);
+    throw new Error(`${label} failed: ${toError(error).message}`);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
 }
 
 export type { ActionReceipt, AssertionResult, OracleResult, RunSummary, SurfaceSnapshot };

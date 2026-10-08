@@ -35,15 +35,17 @@ The first implementation supports Web and Electron. Mobile, native desktop, prot
 
 A charter is a versionable execution plan with intent, preconditions, typed actions, assertions, named oracles, mode and side-effect policy. YAML is the human-editable encoding; Zod schemas are the runtime authority. The deterministic planner supports URL navigation and visible-text assertions. An opt-in OpenAI-compatible provider is connected to CLI and MCP through the same Local Runner. Its output is validated against action kind, registered oracle names, side-effect policy and approved navigation origin. Planning does not prove that free-form intent was understood correctly; the saved Charter remains reviewable.
 
-A `capability` action names a project-registered operation with schema-validated input and output. The Runner checks its environment allowlist, deadline and side-effect class. `write` requires both a Charter `allow` policy and a separate Runner `allowCapabilityWrites` opt-in, which defaults to false. Only the capability's evidence projection is persisted; a project integration must choose opaque IDs and sanitized facts. Registration is a programmatic Local Runner API today, not a CLI config import or a general MCP shell tool.
+A `capability` action names a project-registered operation with schema-validated input and output. The Runner checks its environment allowlist, deadline and side-effect class. `write` requires both a Charter `allow` policy and a separate Runner `allowCapabilityWrites` opt-in, which defaults to false. Only the capability's evidence projection is persisted; a project integration must choose opaque IDs and sanitized facts. A project-owned `.proofkit/integration.mjs` can now provide those capabilities, oracles and lifecycle hooks from inside the project root.
 
 ### Local Runner and MCP
 
-`@proofkit/local-runner` is the only application-level entry point for starting a run. It resolves a charter, selects a Web or Electron adapter, optionally starts the project, accepts registered business oracles/capabilities, and stores the result under the configured evidence directory. A run is addressable by its `runId`, so an interactive client can start it and poll status without holding an open browser tool call.
+`@proofkit/local-runner` is the only application-level entry point for starting a run. It resolves a charter, selects a Web or Electron adapter, optionally starts the project, loads the project-owned `.proofkit/integration.mjs` module, accepts registered business oracles/capabilities, and stores the result under the configured evidence directory. A run is addressable by its `runId`, so an interactive client can start, cancel and poll status without holding an open browser tool call.
+
+The integration module is trusted repository code, loaded only from inside the project root. It exports a name, optional typed capabilities, business oracles and a setup function that returns cleanup. The Local Runner composes integration cleanup with project process cleanup and adapter close. Cleanup failures prevent a green verdict.
 
 Project configuration can register read-only HTTP oracles by name, JSON Pointer status path, terminal values, interval and deadline. Query bindings can carry the ProofKit `runId` or a sanitized scalar from an earlier capability step. The adapter never interprets these business facts. The URL is parsed and query parameters are encoded with the platform URL API.
 
-The first MCP server exposes only six tools: `discover_project`, `plan_test`, `start_run`, `get_run_status`, `get_evidence` and `replay_run`. MCP inputs are validated with Zod. The server is started against one configured local project; it does not accept arbitrary commands or paths. MCP runs cannot execute `project.start`; users start their test environment through the CLI or independently. This keeps MCP useful for exploration while leaving deterministic bulk execution to the CLI and CI.
+The first MCP server exposes high-level tools: `discover_project`, `plan_test`, `start_run`, `get_run_status`, `cancel_run`, `get_evidence` and `replay_run`. MCP inputs are validated with Zod. The server is started against one configured local project; it does not accept arbitrary commands or paths. MCP runs cannot execute `project.start`; users start their test environment through the CLI or independently. This keeps MCP useful for exploration while leaving deterministic bulk execution to the CLI and CI.
 
 ### Surface Adapter
 
@@ -71,9 +73,10 @@ Every event has a run ID and timestamp. Each step stores before/after snapshots 
 - `passed`: all declared assertions pass.
 - `failed`: an action or assertion fails with a concrete finding.
 - `blocked`: a declared human/permission/environment gate prevents safe continuation.
+- `cancelled`: the user cancelled the run or the total run deadline expired; evidence is retained.
 - `inconclusive`: no business oracle was declared, or a bounded observer never saw a terminal state.
 
-`queued` and `running` are transport statuses used by Local Runner; they are not verdicts. A verdict is emitted only after the run has completed or been blocked.
+`queued` and `running` are transport statuses used by Local Runner; they are not verdicts. A verdict is emitted only after the run has completed or been cancelled or blocked.
 
 An action receipt means an operation was dispatched. It does not mean the product workflow succeeded. Visual/LLM interpretation cannot be the sole pass oracle for critical business behavior.
 
@@ -110,9 +113,9 @@ We use these as compatible components or design references. We do not copy their
 
 ## Delivery sequence
 
-1. **Current:** Web/Electron adapters, project runtime, read-only HTTP oracle, evidence hashes, shared Local Runner, bounded MCP facade and validated Planner Provider interface.
-2. **Current:** opt-in OpenAI-compatible planning in CLI/MCP and named, bounded HTTP oracles in project config. The next quality gate is measuring generated Charters against real projects and adding run timeout/cancellation.
-3. **Then:** make project-local registrations easy to load from CLI/CI, add scoped test data, worker/file/candidate/billing observers, and require cleanup for write capabilities. The current programmatic registry does not yet provide a declarative project plugin loader.
+1. **Current:** Web/Electron adapters, project runtime, read-only HTTP oracle, evidence hashes, shared Local Runner, bounded MCP facade, validated Planner Provider interface, project integration loading, run deadline and cancellation.
+2. **Next:** measure generated Charters against real projects and add scoped test data, worker/file/candidate/billing observers.
+3. **Later:** retry/idempotency classification, isolated browser profiles, first-failure diagnosis and repair suggestions.
 4. **After the Web/Electron slice is stable:** Maestro/Appium adapters for mobile, and Keploy-style traffic fixtures for deterministic backend replay.
 
 Mobile and hosted device orchestration stay outside the first install. They can implement the same Surface Adapter and Evidence contracts without changing Test Charter or verdict semantics.
