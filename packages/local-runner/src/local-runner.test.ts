@@ -52,6 +52,26 @@ describe("LocalRunnerService", () => {
     expect(completed.plan.graph.tasks.map((task) => task.status)).toEqual(["passed", "passed", "passed"]);
     expect(completed.evidence.some((item) => item.path.endsWith(join("fixture-run", "report.html")))).toBe(true);
     expect(completed.observations.some((item) => item.kind === "surface.run")).toBe(true);
+
+    const evidence = await service.missionEvidence(created.missionId);
+    expect(evidence).toMatchObject({
+      missionId: created.missionId,
+      status: "completed",
+      running: false,
+      verdict: "passed",
+      level: "core",
+      findings: [],
+      repairSuggestions: [],
+    });
+    expect(evidence.taskSummary).toHaveLength(3);
+    expect(evidence.taskSummary.every((task) => task.status === "passed" && task.attempts === 1)).toBe(true);
+    expect(evidence.agentSteps).toHaveLength(3);
+    expect(evidence.agentSteps.map((step) => step.phase)).toEqual(["execute", "execute", "verify"]);
+    expect(evidence.agentSteps.every((step) => step.status === "succeeded" && step.toolCallIds.length === 1)).toBe(true);
+    expect(evidence.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "report" }),
+      expect.objectContaining({ kind: "business" }),
+    ]));
   });
 
   it("does not report a core mission as passed without an independent business oracle", async () => {

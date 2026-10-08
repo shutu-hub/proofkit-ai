@@ -364,7 +364,7 @@ async function observeOnlineResumePipeline(target, signal) {
     }
   }
   return {
-    terminal: isTerminalObservation({ workflowPhase: String(workflow.phase ?? "unknown"), extractStatus: nullable(file.extract_status), parseStatus: nullable(file.parse_status), candidateId, assessmentTaskStatus: nullable(assessment.task_status), lastErrorCode: nullable(workflow.last_error_code) }),
+    terminal: isTerminalObservation({ resumeFileId: fileId, workflowPhase: String(workflow.phase ?? "unknown"), extractStatus: nullable(file.extract_status), parseStatus: nullable(file.parse_status), candidateId, assessmentTaskStatus: nullable(assessment.task_status), lastErrorCode: nullable(workflow.last_error_code) }),
     workflowPhase: String(workflow.phase ?? "unknown"),
     resumeFileId: fileId,
     extractStatus: nullable(file.extract_status),
