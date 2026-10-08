@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DeterministicPlannerProvider, IntentPlanner, OpenAICompatiblePlannerProvider, StructuredPlanner } from "./index.js";
+import { DeterministicPlannerProvider, IntentPlanner, OpenAICompatiblePlannerProvider, StructuredPlanner, resolveTestLevel } from "./index.js";
 
 describe("IntentPlanner", () => {
   it("creates executable navigation and text assertions", () => {
@@ -7,6 +7,15 @@ describe("IntentPlanner", () => {
     expect(charter.actions).toEqual([{ kind: "goto", url: "https://example.com" }, { kind: "observe" }]);
     expect(charter.assertions).toEqual([{ kind: "text-visible", text: "Example" }]);
     expect(charter.metadata.planner).toBe("deterministic-v1");
+    expect(charter.level).toBe("core");
+  });
+
+  it("resolves explicit and natural-language test levels without upgrading the request", () => {
+    expect(resolveTestLevel("快速检查简历获取").resolved).toBe("quick");
+    expect(resolveTestLevel("执行核心链路测试").resolved).toBe("core");
+    expect(resolveTestLevel("上线前完整回归").resolved).toBe("release");
+    expect(resolveTestLevel("检查简历获取").resolved).toBe("core");
+    expect(resolveTestLevel("上线前完整回归", "quick")).toMatchObject({ resolved: "quick", source: "explicit" });
   });
 
   it("validates provider output before it becomes executable", async () => {

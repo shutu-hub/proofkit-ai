@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
-import { ProjectMapSchema, TestCharterSchema, type Assertion, type ProjectMap, type RunMode, type SideEffectPolicy, type TestCharter } from "@proofkit/contracts";
+import { ProjectMapSchema, TestCharterSchema, type Assertion, type ProjectMap, type RunMode, type SideEffectPolicy, type TestCharter, type TestLevel } from "@proofkit/contracts";
+import { resolveTestLevel } from "./test-levels.js";
+
+export { getTestLevelProfile, resolveTestLevel, type TestLevelProfile } from "./test-levels.js";
 
 export type PlanOptions = {
   url?: string;
@@ -8,6 +11,7 @@ export type PlanOptions = {
   mode?: RunMode;
   sideEffectPolicy?: SideEffectPolicy;
   oracleNames?: string[];
+  level?: TestLevel;
 };
 
 export type PlannerConstraints = PlanOptions & {
@@ -29,6 +33,7 @@ export interface PlannerProvider {
 
 export class IntentPlanner {
   plan(intent: string, options: PlanOptions = {}): TestCharter {
+    const levelSelection = resolveTestLevel(intent, options.level);
     const url = options.url ?? intent.match(/https?:\/\/[^\s]+/)?.[0];
     const assertions: Assertion[] = (options.expect ?? []).map((text) => ({ kind: "text-visible", text }));
     const actions: TestCharter["actions"] = [];
@@ -37,13 +42,15 @@ export class IntentPlanner {
 
     return TestCharterSchema.parse({
       intent,
+      level: levelSelection.resolved,
+      levelSelection,
       mode: options.mode ?? "guided",
       preconditions: ["运行在隔离的测试环境", "使用可回滚的测试数据"],
       actions,
       assertions,
       oracles: options.oracleNames,
       sideEffectPolicy: options.sideEffectPolicy ?? "confirm",
-      metadata: { planner: "deterministic-v1", url: url ?? null },
+      metadata: { planner: "deterministic-v1", url: url ?? null, testLevel: levelSelection.resolved },
     });
   }
 
@@ -139,9 +146,12 @@ export class StructuredPlanner {
     if (input.constraints.allowedOracleNames && charter.oracles?.some((name) => !input.constraints.allowedOracleNames?.includes(name))) {
       throw new Error("Planner output references an unregistered oracle");
     }
+    const levelSelection = resolveTestLevel(input.intent, input.constraints.level);
     return TestCharterSchema.parse({
       ...charter,
-      metadata: { ...charter.metadata, planner: this.provider.name },
+      level: levelSelection.resolved,
+      levelSelection,
+      metadata: { ...charter.metadata, planner: this.provider.name, testLevel: levelSelection.resolved },
     });
   }
 }

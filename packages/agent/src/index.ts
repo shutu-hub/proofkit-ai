@@ -4,28 +4,38 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   FindingSchema,
+  DiagnosisSchema,
+  FailureBoundarySchema,
   MissionPlanSchema,
   MissionPolicySchema,
   ObservationSchema,
+  RepairSuggestionSchema,
   TaskNodeSchema,
   TestMissionSchema,
   ToolCallSchema,
   type Finding,
+  type Diagnosis,
+  type FailureBoundary,
   type MissionPlan,
   type MissionPolicy,
   type MissionStatus,
   type Observation,
+  type RepairSuggestion,
   type TaskNode,
   type TestMission,
   type ToolCall,
   type Verdict,
 } from "@proofkit/contracts";
+export { analyzeRun, type FailureAnalysis, type FailureAnalyzerInput } from "./failure-analyzer.js";
 
 export type MissionToolResult = {
   output?: unknown;
   observations?: Observation[];
   evidence?: TestMission["evidence"];
   findings?: Finding[];
+  diagnosis?: Diagnosis;
+  firstFailure?: FailureBoundary;
+  repairSuggestions?: RepairSuggestion[];
   verdict?: Verdict;
 };
 
@@ -96,7 +106,9 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       generatedBy: "deterministic-mission-planner-v1",
       graph: { tasks, terminalTaskIds: ["verify-result"] },
       successCriteria: ["所有任务完成", "业务结果有独立证据", "未发现已确认的高严重度缺陷"],
+      level: input.policy.level,
       assumptions: [
+        `test-level=${input.policy.level}`,
         `surface=${input.surface}`,
         `environment=${input.policy.environment}`,
         input.policy.requireEvidence ? "evidence-required" : "evidence-optional",
@@ -178,6 +190,9 @@ export class MissionAgent {
 
   async create(input: MissionCreateInput): Promise<TestMission> {
     const policy = MissionPolicySchema.parse(input.policy ?? {});
+    if (input.charter && input.charter.level !== policy.level) {
+      throw new Error(`Mission policy level ${policy.level} does not match charter level ${input.charter.level}`);
+    }
     const plan = await this.planner.plan({ ...input, policy });
     const now = new Date().toISOString();
     const mission = TestMissionSchema.parse({
@@ -185,6 +200,8 @@ export class MissionAgent {
       intent: input.intent,
       projectRoot: input.projectRoot,
       surface: input.surface,
+      level: policy.level,
+      levelSelection: input.charter?.levelSelection,
       policy,
       status: policy.requireApproval ? "awaiting-approval" : "approved",
       charter: input.charter,
@@ -237,7 +254,14 @@ export class MissionAgent {
       if (controller.signal.aborted) {
         return this.save({ ...mission, status: "cancelled", verdict: "cancelled", findings: [...mission.findings, finding("mission-cancelled", "info", "environment", "Mission cancelled", toError(error).message)] });
       }
-      throw error;
+      const cause = toError(error);
+      const current = await this.load(mission.missionId).catch(() => mission);
+      return this.save({
+        ...current,
+        status: "failed",
+        verdict: "failed",
+        findings: [...current.findings, finding("mission-system-failure", "high", "test", "Mission execution failed", cause.message, "suspected")],
+      });
     } finally {
       detach();
     }
@@ -276,6 +300,9 @@ export class MissionAgent {
         observations: [...startedMission.observations, ...(result.observations ?? []).map((item) => ObservationSchema.parse(item))],
         evidence: [...startedMission.evidence, ...(result.evidence ?? [])],
         findings: [...startedMission.findings, ...(result.findings ?? []).map((item) => FindingSchema.parse(item))],
+        ...(result.firstFailure ? { firstFailure: FailureBoundarySchema.parse(result.firstFailure) } : {}),
+        ...(result.diagnosis ? { diagnosis: DiagnosisSchema.parse(result.diagnosis) } : {}),
+        repairSuggestions: [...startedMission.repairSuggestions, ...(result.repairSuggestions ?? []).map((item) => RepairSuggestionSchema.parse(item))],
         verdict: result.verdict,
         ...(failedVerdict ? { status: taskStatus === "blocked" ? "blocked" : "failed" } : {}),
       });

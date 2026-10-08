@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Command } from "commander";
-import type { RunMode, SideEffectPolicy } from "@proofkit/contracts";
+import type { RunMode, SideEffectPolicy, TestLevel } from "@proofkit/contracts";
 import { EvidenceStore } from "@proofkit/evidence";
 import { IntentPlanner } from "@proofkit/planner";
 import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
@@ -57,6 +57,7 @@ export function createProgram(): Command {
     .option("--url <url>", "entry URL")
     .option("--expect <text>", "visible text assertion", collect, [])
     .option("--oracle <name>", "configured business oracle", collect, [])
+    .option("--level <level>", "quick, core or release")
     .option("--mode <mode>", "deterministic, guided or explore", "guided")
     .option("--side-effects <policy>", "deny, confirm or allow")
     .option("--out <path>", "write YAML output")
@@ -68,6 +69,7 @@ export function createProgram(): Command {
         url: options.url,
         expect: options.expect,
         oracleNames: options.oracle.length ? options.oracle : undefined,
+        level: options.level as TestLevel,
         mode: options.mode as RunMode,
         sideEffectPolicy: options.sideEffects as SideEffectPolicy | undefined,
       });
@@ -88,6 +90,7 @@ export function createProgram(): Command {
     .option("--no-start", "do not start the configured project command")
     .option("--expect <text>", "visible text assertion", collect, [])
     .option("--oracle <name>", "configured business oracle", collect, [])
+    .option("--level <level>", "quick, core or release")
     .option("--mode <mode>", "deterministic, guided or explore", "guided")
     .option("--evidence-dir <path>", "run artifact directory", ".proofkit/runs")
     .option("--oracle-url <url>", "read-only HTTP endpoint used as a business oracle")
@@ -114,6 +117,7 @@ export function createProgram(): Command {
         expect: options.expect,
         oracleNames: options.oracle.length ? options.oracle : undefined,
         mode: options.mode as RunMode,
+        level: options.level as TestLevel,
         sideEffectPolicy: config.policies.sideEffects,
         oracleUrl: options.oracleUrl,
         oracleName: options.oracleName,
@@ -138,6 +142,7 @@ export function createProgram(): Command {
     .option("--url <url>", "entry URL")
     .option("--expect <text>", "visible text assertion", collect, [])
     .option("--oracle <name>", "configured business oracle", collect, [])
+    .option("--level <level>", "quick, core or release")
     .option("--mode <mode>", "deterministic, guided or explore", "guided")
     .option("--side-effects <policy>", "deny, confirm or allow")
     .action(async (intent: string, options: MissionCreateCommandOptions) => {
@@ -149,6 +154,7 @@ export function createProgram(): Command {
         url: options.url,
         expect: options.expect,
         oracleNames: options.oracle.length ? options.oracle : undefined,
+        level: options.level as TestLevel,
         mode: options.mode as RunMode,
         sideEffectPolicy: options.sideEffects as SideEffectPolicy | undefined,
       });
@@ -171,7 +177,7 @@ export function createProgram(): Command {
       const runner = await LocalRunnerService.create({ root: resolve(options.root) });
       await runner.startMission(missionId, { approve: options.approve });
       const completed = await runner.waitMission(missionId);
-      console.log(JSON.stringify({ missionId: completed.missionId, status: completed.status, verdict: completed.verdict, findings: completed.findings, evidence: completed.evidence }, null, 2));
+      console.log(JSON.stringify({ missionId: completed.missionId, status: completed.status, level: completed.level, verdict: completed.verdict, firstFailure: completed.firstFailure, diagnosis: completed.diagnosis, repairSuggestions: completed.repairSuggestions, findings: completed.findings, evidence: completed.evidence }, null, 2));
       if (completed.verdict !== "passed") process.exitCode = 1;
     });
 
@@ -258,6 +264,7 @@ type PlanCommandOptions = {
   mode: string;
   sideEffects?: string;
   out?: string;
+  level?: string;
 };
 
 type MissionCreateCommandOptions = PlanCommandOptions & {

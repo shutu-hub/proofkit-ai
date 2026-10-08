@@ -100,6 +100,8 @@ pnpm --filter @proofkit/mcp build
 PROOFKIT_ROOT=/path/to/your/project node packages/mcp/dist/server.js
 ```
 
+The shortest agent workflow is `run_test({ intent, level, surface })`, followed by `get_mission_status` and `get_mission_evidence`. The supported levels are `quick` (fast observable path), `core` (the default, with an independent business Oracle), and `release` (pre-release regression scope). If no level is supplied, ProofKit selects `core` and records that decision in the Mission. See [docs/agent-integration.md](docs/agent-integration.md) for Codex, Claude Code and DeepSeek Harness usage.
+
 Project-specific capabilities can be kept in the project under `.proofkit/integration.mjs`. The module is trusted project code and may export a `name`, typed `capabilities`, business `oracles`, and a setup function that returns cleanup:
 
 ```js

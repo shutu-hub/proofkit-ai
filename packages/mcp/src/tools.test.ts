@@ -18,6 +18,7 @@ describe("ProofKit MCP tools", () => {
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       "discover_project",
       "create_test_mission",
+      "run_test",
       "approve_test_plan",
       "start_mission",
       "get_mission_status",
@@ -32,6 +33,8 @@ describe("ProofKit MCP tools", () => {
       "replay_run",
     ]);
     expect(listed.tools.some((tool) => tool.name.includes("shell"))).toBe(false);
+    const runTest = listed.tools.find((tool) => tool.name === "run_test");
+    expect(runTest?.inputSchema).toMatchObject({ properties: { level: { enum: ["quick", "core", "release"] } } });
 
     await client.close();
     await server.close();

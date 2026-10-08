@@ -9,6 +9,19 @@ export type RunMode = z.infer<typeof RunModeSchema>;
 export const SideEffectPolicySchema = z.enum(["deny", "confirm", "allow"]);
 export type SideEffectPolicy = z.infer<typeof SideEffectPolicySchema>;
 
+/** Controls the breadth and evidence gate of an AI-directed test mission. */
+export const TestLevelSchema = z.enum(["quick", "core", "release"]);
+export type TestLevel = z.infer<typeof TestLevelSchema>;
+
+export const TestLevelSelectionSchema = z.object({
+  requested: TestLevelSchema.optional(),
+  resolved: TestLevelSchema,
+  source: z.enum(["explicit", "inferred", "default"]),
+  reason: z.string().min(1),
+  confidence: z.number().min(0).max(1),
+});
+export type TestLevelSelection = z.infer<typeof TestLevelSelectionSchema>;
+
 export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("goto"), url: z.string().url() }),
   z.object({ kind: z.literal("click"), selector: z.string().min(1) }),
@@ -30,6 +43,8 @@ export type Assertion = z.infer<typeof AssertionSchema>;
 
 export const TestCharterSchema = z.object({
   intent: z.string().min(1),
+  level: TestLevelSchema.default("core"),
+  levelSelection: TestLevelSelectionSchema.optional(),
   mode: RunModeSchema.default("guided"),
   preconditions: z.array(z.string()).default([]),
   actions: z.array(ActionSchema).default([]),
@@ -221,6 +236,7 @@ export const MissionTaskStatusSchema = z.enum(["pending", "ready", "running", "p
 export type MissionTaskStatus = z.infer<typeof MissionTaskStatusSchema>;
 
 export const MissionPolicySchema = z.object({
+  level: TestLevelSchema.default("core"),
   environment: z.enum(["test", "staging", "local"]).default("test"),
   sideEffectPolicy: SideEffectPolicySchema.default("confirm"),
   requireApproval: z.boolean().default(true),
@@ -298,6 +314,20 @@ export const RepairSuggestionSchema = z.object({
 });
 export type RepairSuggestion = z.infer<typeof RepairSuggestionSchema>;
 
+// The first failure is the earliest observable boundary that explains why a
+// mission could not satisfy its success criteria. It is intentionally kept
+// separate from Finding so a test failure cannot be mistaken for a product
+// defect without an independent oracle or assertion evidence.
+export const FailureBoundarySchema = z.object({
+  kind: z.enum(["surface-action", "assertion", "business-oracle", "environment", "evidence"]),
+  message: z.string().min(1),
+  stepId: z.string().optional(),
+  oracleName: z.string().optional(),
+  evidence: z.array(EvidenceRefSchema).default([]),
+  observedAt: z.string(),
+});
+export type FailureBoundary = z.infer<typeof FailureBoundarySchema>;
+
 export const TaskNodeSchema = z.object({
   taskId: z.string().regex(/^[a-zA-Z0-9._-]+$/),
   title: z.string().min(1),
@@ -326,6 +356,7 @@ export const MissionPlanSchema = z.object({
   graph: TaskGraphSchema,
   successCriteria: z.array(z.string().min(1)).default([]),
   assumptions: z.array(z.string().min(1)).default([]),
+  level: TestLevelSchema.default("core"),
   createdAt: z.string(),
 });
 export type MissionPlan = z.infer<typeof MissionPlanSchema>;
@@ -335,6 +366,8 @@ export const TestMissionSchema = z.object({
   intent: z.string().min(1),
   projectRoot: z.string().min(1),
   surface: MissionSurfaceSchema,
+  level: TestLevelSchema.default("core"),
+  levelSelection: TestLevelSelectionSchema.optional(),
   policy: MissionPolicySchema,
   status: MissionStatusSchema,
   verdict: VerdictSchema.optional(),
@@ -344,6 +377,7 @@ export const TestMissionSchema = z.object({
   observations: z.array(ObservationSchema).default([]),
   evidence: z.array(EvidenceRefSchema).default([]),
   findings: z.array(FindingSchema).default([]),
+  firstFailure: FailureBoundarySchema.optional(),
   diagnosis: DiagnosisSchema.optional(),
   repairSuggestions: z.array(RepairSuggestionSchema).default([]),
   currentTaskId: z.string().optional(),

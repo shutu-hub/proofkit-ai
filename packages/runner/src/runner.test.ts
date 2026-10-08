@@ -37,6 +37,7 @@ describe("ExecutionRunner", () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-runner-"));
     const charter = {
       intent: "执行测试",
+      level: "core" as const,
       mode: "guided" as const,
       preconditions: [],
       actions: [{ kind: "observe" as const }, { kind: "click" as const, selector: "#ready" }],
@@ -66,7 +67,7 @@ describe("ExecutionRunner", () => {
         evidence: (output) => ({ status: output.status }),
       }],
       oracles: [{ name: "workflow", check: async ({ steps }) => ({ name: "workflow", passed: (steps[0]?.capabilityOutput as { status?: string } | undefined)?.status === "complete", message: "workflow complete", evidence: [] }) }],
-    }).run({ intent: "check workflow", mode: "deterministic", preconditions: [], actions: [{ kind: "capability", name: "readWorkflow", input: { id: "opaque-1" } }], assertions: [], sideEffectPolicy: "deny", metadata: {} }, "capability-run");
+    }).run({ intent: "check workflow", level: "core", mode: "deterministic", preconditions: [], actions: [{ kind: "capability", name: "readWorkflow", input: { id: "opaque-1" } }], assertions: [], sideEffectPolicy: "deny", metadata: {} }, "capability-run");
     expect(summary.verdict).toBe("passed");
     expect(summary.steps[0]?.artifacts[0]).toBe("capability-run/artifacts/step-001-capability.json");
     expect(summary.oracles[0]?.evidence).toContain("capability-run/artifacts/oracle-1.json");
@@ -75,7 +76,7 @@ describe("ExecutionRunner", () => {
 
   it("blocks an unregistered capability before execution", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-capability-"));
-    const summary = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root }).run({ intent: "check workflow", mode: "deterministic", preconditions: [], actions: [{ kind: "capability", name: "unknown", input: {} }], assertions: [], sideEffectPolicy: "deny", metadata: {} }, "blocked-run");
+    const summary = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root }).run({ intent: "check workflow", level: "core", mode: "deterministic", preconditions: [], actions: [{ kind: "capability", name: "unknown", input: {} }], assertions: [], sideEffectPolicy: "deny", metadata: {} }, "blocked-run");
     expect(summary.verdict).toBe("blocked");
     expect(summary.steps[0]?.error).toContain("not registered");
   });
@@ -87,7 +88,7 @@ describe("ExecutionRunner", () => {
       name: "seedFixture", description: "Create a test fixture", sideEffect: "write", environments: ["test"], timeoutMs: 1_000,
       inputSchema: z.object({}), outputSchema: z.object({ id: z.string() }),
       execute: async () => { called = true; return { id: "fixture" }; }, evidence: (output) => ({ id: output.id }),
-    }] }).run({ intent: "seed", mode: "guided", preconditions: [], actions: [{ kind: "capability", name: "seedFixture", input: {} }], assertions: [], sideEffectPolicy: "allow", metadata: {} }, "write-run");
+    }] }).run({ intent: "seed", level: "core", mode: "guided", preconditions: [], actions: [{ kind: "capability", name: "seedFixture", input: {} }], assertions: [], sideEffectPolicy: "allow", metadata: {} }, "write-run");
     expect(summary.verdict).toBe("blocked");
     expect(called).toBe(false);
   });
@@ -100,6 +101,7 @@ describe("ExecutionRunner", () => {
     adapter.close = async () => { closed = true; };
     const summary = await new ExecutionRunner(adapter, { evidenceDir: root, timeoutMs: 10, setup: async () => async () => { cleaned = true; } }).run({
       intent: "deadline",
+      level: "core",
       mode: "deterministic",
       preconditions: [],
       actions: [{ kind: "click", selector: "#slow" }],
@@ -140,6 +142,7 @@ describe("ExecutionRunner", () => {
       setup: async () => async () => { cleaned = true; },
     }).run({
       intent: "cancel",
+      level: "core",
       mode: "deterministic",
       preconditions: [],
       actions: [{ kind: "capability", name: "slowCapability", input: {} }],

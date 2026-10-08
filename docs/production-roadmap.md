@@ -42,8 +42,9 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Measure plan validity, workflow coverage, assertion quality, false passes and model cost.
 - Add a review gate for write actions and report planner uncertainty.
 - Keep all model output constrained to Charter and typed Capability schemas.
+- Make `quick`, `core` and `release` profiles change the generated task graph, negative-path set, surface matrix and evidence gate; preserve the resolved level in every result.
 
-**Gate:** publish benchmark results and refuse a green verdict when the generated plan has no independent business proof.
+**Gate:** publish benchmark results and refuse a green verdict when the generated plan has no independent business proof. Missing level-specific evidence is `inconclusive`, with the first missing boundary recorded.
 
 ## Phase 3: AIHR business vertical
 
@@ -55,6 +56,8 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Run the same Charter through Web and Electron and compare terminal business facts.
 
 **Gate:** seeded defects in upload, extraction, identity, relation and billing are found with linked evidence; retries do not create duplicate billable facts.
+
+The default AIHR development request is `core`. A resume acquisition run must include at least one surface assertion and one independent business Oracle for its terminal state. `release` additionally compares the Web and Electron paths and executes the configured negative and retry cases.
 
 ## Phase 4: failure diagnosis and repair loop
 

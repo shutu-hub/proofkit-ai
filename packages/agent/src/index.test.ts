@@ -36,6 +36,27 @@ describe("MissionAgent", () => {
     expect(result.findings[0]?.message).toContain("not registered");
   });
 
+  it("rejects a charter when its level disagrees with the mission policy", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-level-policy-"));
+    const agent = new MissionAgent({ store: new JsonMissionStore(root), tools: new InMemoryMissionToolRegistry() });
+    await expect(agent.create({
+      intent: "check login",
+      projectRoot: root,
+      surface: "web",
+      charter: {
+        intent: "check login",
+        level: "core",
+        mode: "deterministic",
+        preconditions: [],
+        actions: [],
+        assertions: [{ kind: "text-visible", text: "ready" }],
+        sideEffectPolicy: "deny",
+        metadata: {},
+      },
+      policy: { level: "quick" },
+    })).rejects.toThrow("Mission policy level quick does not match charter level core");
+  });
+
   it("persists one suspected finding when a tool throws", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mission-"));
     const tools = new InMemoryMissionToolRegistry([

@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-import { InMemoryMissionToolRegistry, JsonMissionStore, MissionAgent, type MissionTool, type MissionToolResult } from "@proofkit/agent";
+import { analyzeRun, InMemoryMissionToolRegistry, JsonMissionStore, MissionAgent, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { EvidenceRefSchema, FindingSchema, ObservationSchema, ProofkitConfigSchema, TestCharterSchema, type EvidenceRef, type ProofkitConfig, type ProjectMap, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter, type TestMission } from "@proofkit/contracts";
+import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, ObservationSchema, ProofkitConfigSchema, TestCharterSchema, type EvidenceRef, type ProofkitConfig, type ProjectMap, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter, type TestLevel, type TestMission } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
-import { IntentPlanner, OpenAICompatiblePlannerProvider, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
+import { getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { loadConfig, scanProject } from "@proofkit/project";
 import { CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
@@ -31,6 +31,7 @@ export type LocalRunInput = {
   sideEffectPolicy?: SideEffectPolicy;
   oracleUrl?: string;
   oracleName?: string;
+  level?: TestLevel;
 };
 
 export type LocalRunStatus = {
@@ -55,6 +56,7 @@ export type MissionCreateOptions = {
   mode?: RunMode;
   sideEffectPolicy?: SideEffectPolicy;
   policy?: Partial<TestMission["policy"]>;
+  level?: TestLevel;
 };
 
 export type MissionStatus = {
@@ -102,6 +104,7 @@ export class LocalRunnerService {
   private readonly plannerProvider?: PlannerProvider;
   private readonly missionAgent: MissionAgent;
   private readonly missionRecords = new Map<string, MissionRecord>();
+  private readonly missionStarts = new Map<string, Promise<MissionStatus>>();
 
   constructor(options: LocalRunnerOptions) {
     this.root = resolve(options.root);
@@ -133,19 +136,25 @@ export class LocalRunnerService {
   async createMission(input: MissionCreateOptions): Promise<TestMission> {
     const surface = input.surface ?? input.adapter ?? "web";
     if (surface === "mobile" || surface === "api") throw new Error(`Mission surface is not enabled by the local runner: ${surface}`);
+    const levelSelection = resolveTestLevel(input.intent, input.level ?? input.charter?.level);
     const charter = input.charter ?? await this.plan(input.intent, {
       url: input.url,
       expect: input.expect,
       oracleNames: input.oracleNames,
       mode: input.mode,
       sideEffectPolicy: input.sideEffectPolicy,
+      level: input.level,
     });
+    if (charter.level !== levelSelection.resolved) {
+      throw new Error(`Charter level ${charter.level} does not match requested level ${levelSelection.resolved}`);
+    }
+    const normalizedCharter = TestCharterSchema.parse({ ...charter, levelSelection: charter.levelSelection ?? levelSelection });
     return this.missionAgent.create({
       intent: input.intent,
       projectRoot: this.root,
       surface,
-      charter,
-      policy: input.policy,
+      charter: normalizedCharter,
+      policy: { ...input.policy, level: levelSelection.resolved },
     });
   }
 
@@ -154,9 +163,23 @@ export class LocalRunnerService {
   }
 
   async startMission(missionId: string, options: { approve?: boolean } = {}): Promise<MissionStatus> {
+    const safeMissionId = validateMissionId(missionId);
+    const start = this.missionStarts.get(safeMissionId) ?? this.startMissionOnce(safeMissionId, options);
+    this.missionStarts.set(safeMissionId, start);
+    try {
+      return await start;
+    } finally {
+      if (this.missionStarts.get(safeMissionId) === start) this.missionStarts.delete(safeMissionId);
+    }
+  }
+
+  private async startMissionOnce(missionId: string, options: { approve?: boolean }): Promise<MissionStatus> {
     const current = await this.missionAgent.load(missionId);
     const existing = this.missionRecords.get(current.missionId);
-    if (existing) return { mission: await this.missionAgent.load(current.missionId), running: true };
+    if (existing) {
+      const mission = await this.missionAgent.load(current.missionId);
+      return { mission, running: mission.status === "running" };
+    }
     const controller = new AbortController();
     const promise = this.missionAgent.run(current.missionId, { approve: options.approve, signal: controller.signal });
     this.missionRecords.set(current.missionId, { controller, promise });
@@ -166,7 +189,8 @@ export class LocalRunnerService {
       () => this.missionRecords.delete(current.missionId),
       () => this.missionRecords.delete(current.missionId),
     );
-    return { mission: await this.missionAgent.load(current.missionId), running: true };
+    const mission = await this.missionAgent.load(current.missionId);
+    return { mission, running: mission.status === "running" && this.missionRecords.has(current.missionId) };
   }
 
   async waitMission(missionId: string): Promise<TestMission> {
@@ -189,9 +213,23 @@ export class LocalRunnerService {
     return { mission: await record.promise, running: false };
   }
 
-  async missionEvidence(missionId: string): Promise<{ missionId: string; evidence: EvidenceRef[]; findings: TestMission["findings"] }> {
+  async missionEvidence(missionId: string): Promise<{
+    missionId: string;
+    evidence: EvidenceRef[];
+    findings: TestMission["findings"];
+    firstFailure?: TestMission["firstFailure"];
+    diagnosis?: TestMission["diagnosis"];
+    repairSuggestions: TestMission["repairSuggestions"];
+  }> {
     const mission = await this.missionAgent.load(validateMissionId(missionId));
-    return { missionId: mission.missionId, evidence: mission.evidence, findings: mission.findings };
+    return {
+      missionId: mission.missionId,
+      evidence: mission.evidence,
+      findings: mission.findings,
+      firstFailure: mission.firstFailure,
+      diagnosis: mission.diagnosis,
+      repairSuggestions: mission.repairSuggestions,
+    };
   }
 
   async replayMission(missionId: string): Promise<MissionStatus> {
@@ -227,23 +265,44 @@ export class LocalRunnerService {
         observationId: `${context.task.taskId}-${summary.runId}`,
         source: "surface",
         kind: "surface.run",
-        data: { runId: summary.runId, verdict: summary.verdict, steps: summary.steps.length, assertions: summary.assertions.length, oracles: summary.oracles.length },
+        data: {
+          runId: summary.runId,
+          verdict: summary.verdict,
+          steps: summary.steps.length,
+          assertions: summary.assertions.length,
+          passedAssertions: summary.assertions.filter((item) => item.passed).length,
+          oracles: summary.oracles.length,
+          passedOracles: summary.oracles.filter((item) => item.passed === true).length,
+          businessEvidence: summary.oracles.reduce((count, oracle) => count + oracle.evidence.length, 0),
+        },
         evidence,
         observedAt: new Date().toISOString(),
       });
-      const findings = summary.verdict === "failed" || summary.verdict === "blocked"
-        ? [FindingSchema.parse({
-            findingId: `run-${summary.runId}`,
-            severity: "high",
-            category: summary.verdict === "blocked" ? "environment" : "unknown",
-            status: "suspected",
-            title: "Surface run did not pass",
-            message: summary.findings.join("; ") || `Surface run ended with verdict ${summary.verdict}`,
-            evidence,
-            createdAt: new Date().toISOString(),
-          })]
-        : [];
-      return { output: { runId: summary.runId, verdict: summary.verdict, report: this.reportPath(summary.runId) }, verdict: summary.verdict, observations: [observation], evidence, findings };
+      const analysis = analyzeRun({ summary, evidence });
+      const findings = analysis.finding
+        ? [FindingSchema.parse(analysis.finding)]
+        : summary.verdict === "failed" || summary.verdict === "blocked"
+          ? [FindingSchema.parse({
+              findingId: `run-${summary.runId}`,
+              severity: "medium",
+              category: summary.verdict === "blocked" ? "environment" : "unknown",
+              status: "suspected",
+              title: "Surface run did not pass",
+              message: summary.findings.join("; ") || `Surface run ended with verdict ${summary.verdict}`,
+              evidence,
+              createdAt: new Date().toISOString(),
+            })]
+          : [];
+      return {
+        output: { runId: summary.runId, verdict: summary.verdict, report: this.reportPath(summary.runId) },
+        verdict: summary.verdict,
+        observations: [observation],
+        evidence,
+        findings,
+        firstFailure: analysis.boundary,
+        diagnosis: analysis.diagnosis,
+        repairSuggestions: analysis.repairSuggestion ? [analysis.repairSuggestion] : [],
+      };
     };
     const verify = async (_input: Record<string, never>, context: Parameters<NonNullable<MissionTool["execute"]>>[1]): Promise<MissionToolResult> => {
       const run = [...context.mission.observations].reverse().find((item) => item.kind === "surface.run");
@@ -251,6 +310,25 @@ export class LocalRunnerService {
       const verdict = run.data.verdict as RunSummary["verdict"] | undefined;
       if (context.mission.policy.requireEvidence && context.mission.evidence.length === 0) {
         return { output: { verified: false, reason: "No evidence was captured" }, verdict: "failed", findings: [FindingSchema.parse({ findingId: "missing-evidence", severity: "high", category: "test", status: "confirmed", title: "Mission has no evidence", message: "The configured evidence requirement was not met.", createdAt: new Date().toISOString() })] };
+      }
+      const profile = getTestLevelProfile(context.mission.level);
+      const assertionCount = numberValue(run.data.assertions);
+      const oracleCount = numberValue(run.data.oracles);
+      const missing: string[] = [];
+      if (profile.evidencePolicy.requireAssertions && assertionCount < 1) missing.push("至少一个可观察断言");
+      if (profile.evidencePolicy.requireBusinessOracle && oracleCount < 1) missing.push("至少一个独立业务 Oracle");
+      if (profile.evidencePolicy.requireArtifacts && context.mission.evidence.length < profile.evidencePolicy.minimumEvidence) {
+        missing.push(`至少 ${profile.evidencePolicy.minimumEvidence} 份可追溯证据`);
+      }
+      if (missing.length > 0) {
+        const message = `${profile.label}证据门禁未满足：${missing.join("、")}`;
+        const observedAt = new Date().toISOString();
+        return {
+          output: { verified: false, reason: message, level: context.mission.level },
+          verdict: "inconclusive",
+          firstFailure: FailureBoundarySchema.parse({ kind: "evidence", message, evidence: context.mission.evidence.slice(0, 4), observedAt }),
+          findings: [FindingSchema.parse({ findingId: `evidence-gate-${context.mission.level}`, severity: "high", category: "test", status: "confirmed", title: `${profile.label}证据不足`, message, evidence: context.mission.evidence.slice(0, 4), createdAt: observedAt })],
+        };
       }
       return { output: { verified: verdict === "passed", runVerdict: verdict }, verdict: verdict === "passed" ? "passed" : verdict === "inconclusive" ? "inconclusive" : "failed" };
     };
@@ -274,6 +352,8 @@ export class LocalRunnerService {
   }
 
   async plan(intent: string, options: PlanOptions = {}): Promise<TestCharter> {
+    const levelSelection = resolveTestLevel(intent, options.level);
+    const levelProfile = getTestLevelProfile(levelSelection.resolved);
     const policy = options.sideEffectPolicy ?? this.config.policies.sideEffects;
     if (this.restrictWebOrigins && policy === "allow" && this.config.policies.sideEffects !== "allow") {
       throw new Error("MCP interactive planning requires sideEffects=allow in project config");
@@ -284,6 +364,8 @@ export class LocalRunnerService {
       mode: options.mode,
       sideEffectPolicy: policy,
       oracleNames: options.oracleNames,
+      level: levelSelection.resolved,
+      requireAssertions: levelProfile.evidencePolicy.requireAssertions,
       allowedActionKinds: policy === "allow"
         ? ["goto", "click", "fill", "press", "waitForText", "screenshot", "observe"]
         : ["goto", "waitForText", "screenshot", "observe"],
@@ -477,6 +559,7 @@ export class LocalRunnerService {
       mode: input.mode,
       sideEffectPolicy: input.sideEffectPolicy,
       oracleNames: input.oracleNames,
+      level: input.level,
     });
   }
 
@@ -558,6 +641,10 @@ function resolveWithinRoot(root: string, candidate: string): string {
   const rel = relative(root, absolute);
   if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("Path must stay within the project root");
   return absolute;
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function loadConfigDefaults(): ProofkitConfig {

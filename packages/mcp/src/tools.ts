@@ -20,10 +20,34 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
       oracleNames: z.array(z.string().min(1)).optional(),
+      level: z.enum(["quick", "core", "release"]).optional(),
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
     },
-    async ({ intent, surface, url, expect, oracleNames, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy })),
+    async ({ intent, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
+  );
+
+  server.tool(
+    "run_test",
+    "Run a natural-language ProofKit test mission at the requested intensity. Poll get_mission_status and read get_mission_evidence for the final auditable result.",
+    {
+      intent: z.string().min(1),
+      level: z.enum(["quick", "core", "release"]).optional(),
+      surface: z.enum(["web", "electron"]).default("web"),
+      url: z.string().url().optional(),
+      expect: z.array(z.string().min(1)).optional(),
+      oracleNames: z.array(z.string().min(1)).optional(),
+      mode: z.enum(["deterministic", "guided", "explore"]).optional(),
+      sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
+      autoApprove: z.boolean().default(true),
+    },
+    async ({ intent, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
+      const mission = await runner.createMission({ intent, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
+      const started = autoApprove
+        ? await runner.startMission(mission.missionId, { approve: true })
+        : { mission, running: false };
+      return result({ missionId: mission.missionId, level: mission.level, levelSelection: mission.levelSelection, status: started.mission.status, running: started.running, next: ["get_mission_status", "get_mission_evidence"] });
+    },
   );
 
   server.tool(
@@ -76,11 +100,12 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
       oracleNames: z.array(z.string().min(1)).optional(),
+      level: z.enum(["quick", "core", "release"]).optional(),
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
     },
-    async ({ intent, url, expect, oracleNames, mode, sideEffectPolicy }) => result({
-      charter: await runner.plan(intent, { url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy }),
+    async ({ intent, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result({
+      charter: await runner.plan(intent, { url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy }),
     }),
   );
 
@@ -94,18 +119,20 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
       oracleNames: z.array(z.string().min(1)).optional(),
+      level: z.enum(["quick", "core", "release"]).optional(),
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       startProject: z.boolean().default(false),
       oracleUrl: z.string().url().optional(),
       oracleName: z.string().min(1).optional(),
     },
-    async ({ intent, charter, adapter, url, expect, oracleNames, mode, startProject, oracleUrl, oracleName }) => result(await runner.start({
+    async ({ intent, charter, adapter, url, expect, oracleNames, level, mode, startProject, oracleUrl, oracleName }) => result(await runner.start({
       intent,
       charter,
       adapter,
       url: surfaceUrl(url, runner),
       expect,
       oracleNames,
+      level,
       mode,
       start: startProject,
       oracleUrl: localOnlyUrl(oracleUrl),

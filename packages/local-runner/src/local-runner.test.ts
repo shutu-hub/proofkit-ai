@@ -20,7 +20,7 @@ describe("LocalRunnerService", () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mission-run-"));
     roots.push(root);
     const service = new LocalRunnerService({ root });
-    const charter: TestCharter = { intent: "verify fixture", mode: "deterministic", preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny", metadata: {} };
+    const charter: TestCharter = { intent: "verify fixture", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], oracles: ["fixture-terminal"], sideEffectPolicy: "deny", metadata: {} };
     const summary: RunSummary = {
       runId: "fixture-run",
       startedAt: new Date().toISOString(),
@@ -29,9 +29,9 @@ describe("LocalRunnerService", () => {
       verdict: "passed",
       charter,
       steps: [],
-      assertions: [],
-      oracles: [],
-      artifacts: [],
+      assertions: [{ assertion: { kind: "text-visible", text: "ready" }, passed: true, message: "ready is visible", evidence: ["fixture-run/after.json"] }],
+      oracles: [{ name: "fixture-terminal", passed: true, message: "fixture is complete", evidence: ["fixture-run/oracle-1.json"], observedAt: new Date().toISOString() }],
+      artifacts: ["fixture-run/after.json", "fixture-run/oracle-1.json"],
       findings: [],
     };
     service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
@@ -39,6 +39,10 @@ describe("LocalRunnerService", () => {
 
     const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
     expect(created.status).toBe("awaiting-approval");
+    expect(created.level).toBe("core");
+    expect(created.policy.level).toBe("core");
+    expect(created.plan.level).toBe("core");
+    expect(created.levelSelection?.source).toBe("explicit");
     await service.approveMission(created.missionId);
     await service.startMission(created.missionId);
     const completed = await service.waitMission(created.missionId);
@@ -48,6 +52,60 @@ describe("LocalRunnerService", () => {
     expect(completed.plan.graph.tasks.map((task) => task.status)).toEqual(["passed", "passed", "passed"]);
     expect(completed.evidence.some((item) => item.path.endsWith(join("fixture-run", "report.html")))).toBe(true);
     expect(completed.observations.some((item) => item.kind === "surface.run")).toBe(true);
+  });
+
+  it("does not report a core mission as passed without an independent business oracle", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-core-gate-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ root });
+    const charter: TestCharter = { intent: "verify fixture", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny", metadata: {} };
+    const summary: RunSummary = {
+      runId: "core-gate-run",
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      status: "completed",
+      verdict: "passed",
+      charter,
+      steps: [],
+      assertions: [{ assertion: { kind: "text-visible", text: "ready" }, passed: true, message: "ready is visible", evidence: [] }],
+      oracles: [],
+      artifacts: ["core-gate-run/after.json"],
+      findings: [],
+    };
+    service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
+    service.wait = async () => summary;
+
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    const started = await service.startMission(created.missionId, { approve: true });
+    const completed = await service.waitMission(started.mission.missionId);
+
+    expect(completed.status).toBe("completed");
+    expect(completed.verdict).toBe("inconclusive");
+    expect(completed.firstFailure?.kind).toBe("evidence");
+    expect(completed.findings.some((finding) => finding.message.includes("独立业务 Oracle"))).toBe(true);
+  });
+
+  it("keeps an explicitly requested quick level through the mission envelope", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-quick-level-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ root });
+    const charter: TestCharter = { intent: "check login", level: "quick", mode: "deterministic", preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny", metadata: {} };
+
+    const mission = await service.createMission({ intent: "check login", level: "quick", surface: "web", charter });
+
+    expect(mission.level).toBe("quick");
+    expect(mission.policy.level).toBe("quick");
+    expect(mission.plan.level).toBe("quick");
+    expect(mission.levelSelection).toMatchObject({ requested: "quick", resolved: "quick", source: "explicit" });
+  });
+
+  it("rejects a charter and requested level that disagree", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-level-conflict-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ root });
+    const charter: TestCharter = { intent: "check login", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny", metadata: {} };
+
+    await expect(service.createMission({ intent: "check login", level: "quick", surface: "web", charter })).rejects.toThrow("Charter level core does not match requested level quick");
   });
 
   it("loads a project-local integration module without a hosted service", async () => {
@@ -134,6 +192,7 @@ describe("LocalRunnerService", () => {
       setup: service.integration?.setup,
     }).run({
       intent: "verify resume",
+      level: "core",
       mode: "deterministic",
       preconditions: [],
       actions: [{ kind: "capability", name: "readResumeState", input: {} }],
@@ -172,7 +231,7 @@ describe("LocalRunnerService", () => {
     roots.push(root);
     const config = ProofkitConfigSchema.parse({ surfaces: { web: { baseUrl: "http://127.0.0.1:5173" } }, oracles: [{ name: "resume", url: "http://127.0.0.1:8080/status", statusPointer: "/data/status", successValues: ["done"] }] });
     let actions: unknown[] = [{ kind: "goto", url: "http://127.0.0.1:5173/resumes" }, { kind: "observe" }];
-    const service = new LocalRunnerService({ root, config, plannerProvider: { name: "fake-model", async plan() { return { intent: "test resume", actions, assertions: [], oracles: ["resume"], sideEffectPolicy: "confirm" }; } } });
+    const service = new LocalRunnerService({ root, config, plannerProvider: { name: "fake-model", async plan() { return { intent: "test resume", actions, assertions: [{ kind: "text-visible", text: "Resume ready" }], oracles: ["resume"], sideEffectPolicy: "confirm" }; } } });
     const valid = await service.plan("test resume");
     expect(valid.oracles).toEqual(["resume"]);
     expect(valid.metadata.planner).toBe("fake-model");
@@ -186,7 +245,7 @@ describe("LocalRunnerService", () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-local-"));
     roots.push(root);
     const service = new LocalRunnerService({ root });
-    const started = await service.start({ charter: { intent: "check", mode: "guided", preconditions: [], actions: [], assertions: [], oracles: ["unknown"], sideEffectPolicy: "deny", metadata: {} } });
+    const started = await service.start({ charter: { intent: "check", level: "core", mode: "guided", preconditions: [], actions: [], assertions: [], oracles: ["unknown"], sideEffectPolicy: "deny", metadata: {} } });
     await expect(service.wait(started.runId)).rejects.toThrow("Oracle is not registered");
   });
 
@@ -195,7 +254,7 @@ describe("LocalRunnerService", () => {
     roots.push(root);
     const service = new LocalRunnerService({ root, restrictWebOrigins: true });
     const started = await service.start({
-      charter: { intent: "unsafe", mode: "guided", preconditions: [], actions: [{ kind: "shell", command: "whoami" } as never], assertions: [], sideEffectPolicy: "deny", metadata: {} },
+      charter: { intent: "unsafe", level: "core", mode: "guided", preconditions: [], actions: [{ kind: "shell", command: "whoami" } as never], assertions: [], sideEffectPolicy: "deny", metadata: {} },
     });
     await expect(service.wait(started.runId)).rejects.toThrow();
     const status = await service.status(started.runId);

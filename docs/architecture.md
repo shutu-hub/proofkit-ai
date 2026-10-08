@@ -113,6 +113,18 @@ Every event has a run ID and timestamp. Each step stores before/after snapshots 
 
 An action receipt means an operation was dispatched. It does not mean the product workflow succeeded. Visual/LLM interpretation cannot be the sole pass oracle for critical business behavior.
 
+## Test levels
+
+Every natural-language request is resolved to one immutable `TestLevelSelection` and copied into the Charter, Mission policy, Mission plan and final result. The precedence is explicit `level` input, then recognizable intent keywords, then the default `core` level. A client can therefore see whether `core` was requested, inferred, or selected as the safe default.
+
+| Level | Intended use | Required gate |
+| --- | --- | --- |
+| `quick` | Fast health check and shortest happy path | At least one executable assertion and traceable run evidence |
+| `core` | Default for feature work and the important module path | Assertions, an independent business Oracle, and traceable evidence |
+| `release` | Pre-release regression and cross-surface confidence | Core gates plus negative paths, terminal evidence, replay inputs and the configured Web/Electron matrix |
+
+The current kernel enforces the assertion and evidence gates for all levels and the independent Oracle gate for `core` and `release`. The planner profile already records negative cases and surface scope; the next execution slice expands those profiles into separate task graph nodes and release blocking rules. A missing gate produces `inconclusive` with a first failure boundary of `evidence`, never a false `passed` verdict.
+
 ## First vertical slice
 
 1. Scan the project and identify Web/Electron entry points, scripts and health URLs.
@@ -122,6 +134,8 @@ An action receipt means an operation was dispatched. It does not mean the produc
 5. Observe UI state and browser events while the backend workflow runs.
 6. Assert the final business state using explicit APIs, logs, file metadata, worker state or read-only queries supplied by a project integration.
 7. Save the evidence timeline, concise verdict, first failure and replay inputs.
+
+For an AI client, the normal interaction is a single MCP call such as `run_test({ intent: "测试简历获取", level: "core", surface: "electron" })`. The tool returns a `missionId`; the client polls `get_mission_status`, then reads `get_mission_evidence`. The client does not need to remember CDP instructions, browser tool names, evidence paths or cleanup rules. Those remain inside the shared Local Runner.
 
 The first real business sample is resume acquisition: platform interaction -> file generation/upload -> text extraction -> candidate identification -> position binding -> screening terminal state. The UI adapter supplies interaction; project-specific read-only oracles supply business truth. No generic scanner can infer those invariants reliably without project knowledge.
 
