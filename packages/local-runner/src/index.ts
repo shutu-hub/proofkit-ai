@@ -245,7 +245,10 @@ export class LocalRunnerService {
   }
 
   private createMissionTools(): MissionTool[] {
-    const discover = async (_input: Record<string, never>, context: Parameters<NonNullable<MissionTool["execute"]>>[1]): Promise<MissionToolResult> => {
+    type MissionToolContext = Parameters<NonNullable<MissionTool["execute"]>>[1];
+    type SurfaceRunKind = "primary" | "replay";
+
+    const discover = async (_input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
       const project = await this.discover();
       const observation = ObservationSchema.parse({
         observationId: `${context.task.taskId}-${Date.now()}`,
@@ -256,10 +259,8 @@ export class LocalRunnerService {
       });
       return { output: project, observations: [observation] };
     };
-    const runCharter = async (input: { charter: TestCharter; adapter?: LocalAdapterName }, context: Parameters<NonNullable<MissionTool["execute"]>>[1]): Promise<MissionToolResult> => {
-      const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
-      const started = await this.start({ charter: input.charter, adapter });
-      const summary = await this.wait(started.runId);
+
+    const collectSurfaceRun = async (summary: RunSummary, context: MissionToolContext, adapter: LocalAdapterName, runKind: SurfaceRunKind, sourceRunId?: string): Promise<MissionToolResult> => {
       const evidence = this.runEvidence(summary);
       const observation = ObservationSchema.parse({
         observationId: `${context.task.taskId}-${summary.runId}`,
@@ -267,6 +268,9 @@ export class LocalRunnerService {
         kind: "surface.run",
         data: {
           runId: summary.runId,
+          sourceRunId,
+          surface: adapter,
+          runKind,
           verdict: summary.verdict,
           steps: summary.steps.length,
           assertions: summary.assertions.length,
@@ -304,38 +308,84 @@ export class LocalRunnerService {
         repairSuggestions: analysis.repairSuggestion ? [analysis.repairSuggestion] : [],
       };
     };
-    const verify = async (_input: Record<string, never>, context: Parameters<NonNullable<MissionTool["execute"]>>[1]): Promise<MissionToolResult> => {
-      const run = [...context.mission.observations].reverse().find((item) => item.kind === "surface.run");
-      if (!run) throw new Error("No surface run observation is available for verification");
-      const verdict = run.data.verdict as RunSummary["verdict"] | undefined;
+
+    const runCharter = async (input: { charter?: TestCharter; adapter?: LocalAdapterName }, context: MissionToolContext): Promise<MissionToolResult> => {
+      const charter = input.charter ?? context.mission.charter;
+      if (!charter) throw new Error("Mission has no Test Charter to execute");
+      const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
+      const started = await this.start({ charter, adapter });
+      const summary = await this.wait(started.runId);
+      return collectSurfaceRun(summary, context, adapter, "primary");
+    };
+
+    const replayCharter = async (input: { adapter?: LocalAdapterName }, context: MissionToolContext): Promise<MissionToolResult> => {
+      const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
+      const source = [...context.mission.observations].reverse().find((item) => item.kind === "surface.run"
+        && item.data.surface === adapter
+        && (item.data.runKind === "primary" || item.data.runKind === undefined));
+      const sourceRunId = typeof source?.data.runId === "string" ? source.data.runId : undefined;
+      if (!sourceRunId) {
+        const observedAt = new Date().toISOString();
+        const message = `没有找到 ${adapter} 的主运行证据，无法执行回放`;
+        return {
+          output: { adapter, verified: false, reason: message },
+          verdict: "blocked",
+          firstFailure: FailureBoundarySchema.parse({ kind: "evidence", message, evidence: [], observedAt }),
+          findings: [FindingSchema.parse({ findingId: `replay-source-${adapter}`, severity: "high", category: "test", status: "confirmed", title: "回放缺少主运行证据", message, createdAt: observedAt })],
+        };
+      }
+      const started = await this.replay(sourceRunId, { adapter });
+      const summary = await this.wait(started.runId);
+      return collectSurfaceRun(summary, context, adapter, "replay", sourceRunId);
+    };
+
+    const verify = async (_input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
+      const runs = context.mission.observations.filter((item) => item.kind === "surface.run");
+      if (runs.length === 0) throw new Error("No surface run observation is available for verification");
+      const executionProfile = context.mission.plan.executionProfile;
+      const expectedSurfaces = executionProfile.surfaceMatrix;
+      const missing: string[] = [];
+      for (const surface of expectedSurfaces) {
+        const primary = runs.some((item) => item.data.surface === surface && (item.data.runKind === "primary" || item.data.runKind === undefined));
+        if (!primary) missing.push(`${surface} 主运行`);
+        if (executionProfile.requireReplay && !runs.some((item) => item.data.surface === surface && item.data.runKind === "replay")) {
+          missing.push(`${surface} 回放运行`);
+        }
+      }
+      const assertionCount = runs.reduce((total, item) => total + numberValue(item.data.assertions), 0);
+      const oracleCount = runs.reduce((total, item) => total + numberValue(item.data.oracles), 0);
+      const expectedRunCount = expectedSurfaces.length * (executionProfile.requireReplay ? 2 : 1);
+      const expectedRuns = runs.filter((item) => expectedSurfaces.includes(item.data.surface as typeof expectedSurfaces[number])
+        && (item.data.runKind === "primary" || item.data.runKind === "replay" || item.data.runKind === undefined));
+      if (expectedRuns.length < expectedRunCount) missing.push(`至少 ${expectedRunCount} 次表面运行`);
+      if (assertionCount < 1) missing.push("至少一个可观察断言");
       if (context.mission.policy.requireEvidence && context.mission.evidence.length === 0) {
         return { output: { verified: false, reason: "No evidence was captured" }, verdict: "failed", findings: [FindingSchema.parse({ findingId: "missing-evidence", severity: "high", category: "test", status: "confirmed", title: "Mission has no evidence", message: "The configured evidence requirement was not met.", createdAt: new Date().toISOString() })] };
       }
-      const profile = getTestLevelProfile(context.mission.level);
-      const assertionCount = numberValue(run.data.assertions);
-      const oracleCount = numberValue(run.data.oracles);
-      const missing: string[] = [];
-      if (profile.evidencePolicy.requireAssertions && assertionCount < 1) missing.push("至少一个可观察断言");
-      if (profile.evidencePolicy.requireBusinessOracle && oracleCount < 1) missing.push("至少一个独立业务 Oracle");
-      if (profile.evidencePolicy.requireArtifacts && context.mission.evidence.length < profile.evidencePolicy.minimumEvidence) {
-        missing.push(`至少 ${profile.evidencePolicy.minimumEvidence} 份可追溯证据`);
+      if (executionProfile.requireBusinessOracle && oracleCount < 1) missing.push("至少一个独立业务 Oracle");
+      if (executionProfile.minimumEvidence > 0 && context.mission.evidence.length < executionProfile.minimumEvidence) {
+        missing.push(`至少 ${executionProfile.minimumEvidence} 份可追溯证据`);
       }
       if (missing.length > 0) {
-        const message = `${profile.label}证据门禁未满足：${missing.join("、")}`;
+        const message = `${context.mission.level} 测试证据门禁未满足：${missing.join("、")}`;
         const observedAt = new Date().toISOString();
         return {
           output: { verified: false, reason: message, level: context.mission.level },
           verdict: "inconclusive",
           firstFailure: FailureBoundarySchema.parse({ kind: "evidence", message, evidence: context.mission.evidence.slice(0, 4), observedAt }),
-          findings: [FindingSchema.parse({ findingId: `evidence-gate-${context.mission.level}`, severity: "high", category: "test", status: "confirmed", title: `${profile.label}证据不足`, message, evidence: context.mission.evidence.slice(0, 4), createdAt: observedAt })],
+          findings: [FindingSchema.parse({ findingId: `evidence-gate-${context.mission.level}`, severity: "high", category: "test", status: "confirmed", title: `${context.mission.level} 测试证据不足`, message, evidence: context.mission.evidence.slice(0, 4), createdAt: observedAt })],
         };
       }
-      return { output: { verified: verdict === "passed", runVerdict: verdict }, verdict: verdict === "passed" ? "passed" : verdict === "inconclusive" ? "inconclusive" : "failed" };
+      const failed = expectedRuns.some((item) => item.data.verdict === "failed" || item.data.verdict === "blocked" || item.data.verdict === "cancelled");
+      const inconclusive = expectedRuns.some((item) => item.data.verdict === "inconclusive");
+      const verdict = failed ? "failed" : inconclusive ? "inconclusive" : "passed";
+      return { output: { verified: verdict === "passed", runVerdict: verdict, surfaces: expectedSurfaces }, verdict };
     };
     return [
       { name: "project.discover", description: "Inspect the local project without modifying it.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
       { name: "surface.inspect", description: "Inspect the configured Web or Electron surface.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
-      { name: "surface.run-charter", description: "Run a validated charter through the existing deterministic runner and collect evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ charter: TestCharterSchema, adapter: z.enum(["web", "electron"]).optional() }), execute: runCharter },
+      { name: "surface.run-charter", description: "Run a validated charter through the existing deterministic runner and collect evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ charter: TestCharterSchema.optional(), adapter: z.enum(["web", "electron"]).optional() }), execute: runCharter },
+      { name: "surface.replay-charter", description: "Replay the preceding surface run using the saved charter and preserve a second evidence trail.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ adapter: z.enum(["web", "electron"]).optional() }), execute: replayCharter },
       { name: "mission.verify", description: "Verify the terminal verdict and evidence completeness of the preceding run.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: verify },
     ];
   }

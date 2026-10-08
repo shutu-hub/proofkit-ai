@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { InMemoryMissionToolRegistry, JsonMissionStore, MissionAgent } from "./index.js";
+import { DeterministicMissionPlanner, InMemoryMissionToolRegistry, JsonMissionStore, MissionAgent } from "./index.js";
 
 describe("MissionAgent", () => {
   it("requires approval and resumes a task graph through registered tools", async () => {
@@ -84,5 +84,28 @@ describe("MissionAgent", () => {
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.status).toBe("suspected");
     expect(result.findings[0]?.message).toContain("fixture surface is unavailable");
+  });
+
+  it.each([
+    ["quick", 3, ["web"], false],
+    ["core", 3, ["electron"], false],
+    ["release", 6, ["web", "electron"], true],
+  ] as const)("builds the %s execution graph", async (level, taskCount, surfaces, requiresReplay) => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-level-graph-"));
+    const planner = new DeterministicMissionPlanner();
+    const plan = await planner.plan({
+      intent: `${level} fixture`,
+      projectRoot: root,
+      surface: level === "core" ? "electron" : "web",
+      policy: { level, environment: "test", sideEffectPolicy: "deny", requireApproval: true, requireEvidence: true, maxSteps: 100, timeoutMs: 30_000 },
+    });
+
+    expect(plan.graph.tasks).toHaveLength(taskCount);
+    expect(plan.executionProfile.surfaceMatrix).toEqual(surfaces);
+    expect(plan.executionProfile.requireReplay).toBe(requiresReplay);
+    const verify = plan.graph.tasks.find((task) => task.taskId === "verify-result");
+    expect(verify?.dependsOn).toEqual(requiresReplay
+      ? ["replay-charter", "replay-charter-electron"]
+      : ["execute-charter"]);
   });
 });

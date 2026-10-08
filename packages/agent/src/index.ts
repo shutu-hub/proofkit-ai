@@ -7,6 +7,7 @@ import {
   DiagnosisSchema,
   FailureBoundarySchema,
   MissionPlanSchema,
+  MissionExecutionProfileSchema,
   MissionPolicySchema,
   ObservationSchema,
   RepairSuggestionSchema,
@@ -17,6 +18,7 @@ import {
   type Diagnosis,
   type FailureBoundary,
   type MissionPlan,
+  type MissionExecutionProfile,
   type MissionPolicy,
   type MissionStatus,
   type Observation,
@@ -68,10 +70,57 @@ export interface MissionPlanner {
   plan(input: MissionPlanInput): Promise<MissionPlan>;
 }
 
+function executionProfile(level: MissionPolicy["level"], surface: TestMission["surface"]): MissionExecutionProfile {
+  const surfaceMatrix = level === "release" && (surface === "web" || surface === "electron")
+    ? [surface, surface === "web" ? "electron" : "web"] as TestMission["surface"][]
+    : [surface];
+  return MissionExecutionProfileSchema.parse({
+    surfaceMatrix,
+    negativeCases: level === "quick"
+      ? []
+      : level === "core"
+        ? ["关键权限或输入边界"]
+        : ["权限边界", "无效输入", "重试与恢复", "重复提交与幂等"],
+    requireBusinessOracle: level !== "quick",
+    requireReplay: level === "release",
+    requireNegativeCases: false,
+    minimumEvidence: level === "quick" ? 1 : level === "core" ? 2 : 3,
+  });
+}
+
 export class DeterministicMissionPlanner implements MissionPlanner {
   async plan(input: MissionPlanInput): Promise<MissionPlan> {
     const now = new Date().toISOString();
     const planId = `plan-${randomUUID().slice(0, 12)}`;
+    const profile = executionProfile(input.policy.level, input.surface);
+    const primaryTasks = profile.surfaceMatrix.map((surface) => {
+      const taskId = surface === input.surface ? "execute-charter" : `execute-charter-${surface}`;
+      return TaskNodeSchema.parse({
+        taskId,
+        title: `${surface} 执行确定性测试步骤`,
+        objective: input.intent,
+        tool: "surface.run-charter",
+        input: input.charter ? { charter: input.charter, adapter: surface } : { adapter: surface },
+        dependsOn: ["reconnaissance"],
+        maxAttempts: 1,
+      });
+    });
+    const replayTasks = profile.requireReplay ? profile.surfaceMatrix.map((surface) => {
+      const taskId = surface === input.surface ? "replay-charter" : `replay-charter-${surface}`;
+      const primaryTaskId = surface === input.surface ? "execute-charter" : `execute-charter-${surface}`;
+      return TaskNodeSchema.parse({
+        taskId,
+        title: `${surface} 回放测试并确认结果可重复`,
+        objective: "重新执行同一 Charter，确认通过结果不是一次性偶然状态。",
+        tool: "surface.replay-charter",
+        input: { adapter: surface },
+        dependsOn: [primaryTaskId],
+        maxAttempts: 1,
+      });
+    }) : [];
+    const verificationDependencies = profile.requireReplay
+      ? replayTasks.map((task) => task.taskId)
+      : primaryTasks.map((task) => task.taskId);
     const tasks: TaskNode[] = [
       TaskNodeSchema.parse({
         taskId: "reconnaissance",
@@ -81,22 +130,15 @@ export class DeterministicMissionPlanner implements MissionPlanner {
         input: {},
         maxAttempts: 1,
       }),
-      TaskNodeSchema.parse({
-        taskId: "execute-charter",
-        title: "执行确定性测试步骤",
-        objective: input.intent,
-        tool: "surface.run-charter",
-        input: input.charter ? { charter: input.charter } : {},
-        dependsOn: ["reconnaissance"],
-        maxAttempts: 1,
-      }),
+      ...primaryTasks,
+      ...replayTasks,
       TaskNodeSchema.parse({
         taskId: "verify-result",
         title: "验证业务终态和证据完整性",
         objective: "确认测试结果有独立验证和可追溯证据。",
         tool: "mission.verify",
         input: {},
-        dependsOn: ["execute-charter"],
+        dependsOn: verificationDependencies,
         maxAttempts: 1,
       }),
     ];
@@ -107,6 +149,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       graph: { tasks, terminalTaskIds: ["verify-result"] },
       successCriteria: ["所有任务完成", "业务结果有独立证据", "未发现已确认的高严重度缺陷"],
       level: input.policy.level,
+      executionProfile: profile,
       assumptions: [
         `test-level=${input.policy.level}`,
         `surface=${input.surface}`,

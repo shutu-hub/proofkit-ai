@@ -42,9 +42,9 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Measure plan validity, workflow coverage, assertion quality, false passes and model cost.
 - Add a review gate for write actions and report planner uncertainty.
 - Keep all model output constrained to Charter and typed Capability schemas.
-- Make `quick`, `core` and `release` profiles change the generated task graph, negative-path set, surface matrix and evidence gate; preserve the resolved level in every result.
+- Measure generated Charter and Mission quality, and preserve the resolved level in every result. The kernel already changes the task graph, surface matrix, replay obligations and evidence gate for `quick`, `core` and `release`; negative-path execution is still pending.
 
-**Gate:** publish benchmark results and refuse a green verdict when the generated plan has no independent business proof. Missing level-specific evidence is `inconclusive`, with the first missing boundary recorded.
+**Gate:** publish benchmark results and refuse a green verdict when the generated plan has no independent business proof. Missing level-specific evidence, a required release surface, or a required replay is `inconclusive`, with the first missing boundary recorded.
 
 ## Phase 3: AIHR business vertical
 
@@ -53,11 +53,11 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Implement project-local test data setup and cleanup in an isolated test workspace.
 - Observe file creation, extraction, candidate identity, job binding, assessment terminal state and billing scope.
 - Correlate ProofKit `runId`, request IDs and opaque domain IDs.
-- Run the same Charter through Web and Electron and compare terminal business facts.
+- Run the same Charter through Web and Electron, replay both runs, and compare terminal business facts.
 
 **Gate:** seeded defects in upload, extraction, identity, relation and billing are found with linked evidence; retries do not create duplicate billable facts.
 
-The default AIHR development request is `core`. A resume acquisition run must include at least one surface assertion and one independent business Oracle for its terminal state. `release` additionally compares the Web and Electron paths and executes the configured negative and retry cases.
+The default AIHR development request is `core`. A resume acquisition run must include at least one surface assertion and one independent business Oracle for its terminal state. `release` compares and replays the Web and Electron paths; configured negative and retry cases are recorded but are not yet automatically executed.
 
 ## Phase 4: failure diagnosis and repair loop
 

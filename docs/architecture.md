@@ -43,7 +43,7 @@ A `capability` action names a project-registered operation with schema-validated
 
 `TestMission` is the durable envelope for an AI-led test request. It records the user intent, selected surface, policy, generated `MissionPlan`, task graph, tool calls, observations, evidence, findings, diagnosis and repair suggestions. The mission is saved at `<project-root>/.proofkit/missions/<mission-id>.json`, so a CLI or MCP client can disconnect and later inspect, cancel or replay the same work.
 
-The first planner is deterministic and creates three explicit tasks: `project.discover`, `surface.run-charter` and `mission.verify`. An LLM planner can be added behind the same `MissionPlanner` interface, but its output must still validate against `MissionPlanSchema`, `TaskNodeSchema` and the registered tool schemas. Model output never becomes a shell command, raw CDP call, SQL statement or arbitrary JavaScript execution.
+The first planner is deterministic and creates explicit tasks for `project.discover`, one or more `surface.run-charter` executions, optional `surface.replay-charter` executions, and `mission.verify`. `quick` and `core` use one selected surface. `release` creates a Web/Electron matrix, runs the primary Charter on both surfaces, replays both runs, and verifies the aggregate evidence. An LLM planner can be added behind the same `MissionPlanner` interface, but its output must still validate against `MissionPlanSchema`, `TaskNodeSchema` and the registered tool schemas. Model output never becomes a shell command, raw CDP call, SQL statement or arbitrary JavaScript execution.
 
 The Agent loop is deliberately narrow:
 
@@ -54,7 +54,7 @@ The Agent loop is deliberately narrow:
 5. Persist a new revision before selecting the next task.
 6. Reduce the terminal mission status and verdict without overwriting a failed or blocked result with `passed`.
 
-`surface.run-charter` is the only surface tool in the first slice. It calls `LocalRunnerService.start()` and `wait()`, which in turn reuse the existing `ExecutionRunner`; the Agent does not create a second browser or Electron engine. This keeps natural-language use and deterministic CLI/CI use on one lifecycle and one evidence format.
+`surface.run-charter` and `surface.replay-charter` call `LocalRunnerService.start()`, `wait()` and `replay()`, which in turn reuse the existing `ExecutionRunner`; the Agent does not create a second browser or Electron engine. Primary and replay observations include the surface and source run ID, so the verifier can distinguish a real cross-surface matrix from duplicate evidence. This keeps natural-language use and deterministic CLI/CI use on one lifecycle and one evidence format.
 
 Mission status describes orchestration (`awaiting-approval`, `running`, `completed`, `failed`, `blocked`, or `cancelled`). The nested Run verdict describes the actual surface execution. A mission can therefore explain that a test was blocked by policy even when no product run was attempted.
 
@@ -121,9 +121,9 @@ Every natural-language request is resolved to one immutable `TestLevelSelection`
 | --- | --- | --- |
 | `quick` | Fast health check and shortest happy path | At least one executable assertion and traceable run evidence |
 | `core` | Default for feature work and the important module path | Assertions, an independent business Oracle, and traceable evidence |
-| `release` | Pre-release regression and cross-surface confidence | Core gates plus negative paths, terminal evidence, replay inputs and the configured Web/Electron matrix |
+| `release` | Pre-release regression and cross-surface confidence | Core gates plus terminal evidence, replay inputs and the configured Web/Electron matrix; negative-path execution is planned and currently reported as a profile obligation only |
 
-The current kernel enforces the assertion and evidence gates for all levels and the independent Oracle gate for `core` and `release`. The planner profile already records negative cases and surface scope; the next execution slice expands those profiles into separate task graph nodes and release blocking rules. A missing gate produces `inconclusive` with a first failure boundary of `evidence`, never a false `passed` verdict.
+The current kernel enforces the assertion and evidence gates for all levels and the independent Oracle gate for `core` and `release`. `release` now expands its surface matrix and replay requirement into separate task graph nodes and blocks verification when a surface or replay run is missing. Negative cases are recorded in the execution profile for planning and reporting, but `requireNegativeCases` is currently `false`; automatic negative-path generation and execution remain a later phase. A missing gate produces `inconclusive` with a first failure boundary of `evidence`, never a false `passed` verdict.
 
 ## First vertical slice
 
@@ -160,8 +160,8 @@ We use these as compatible components or design references. We do not copy their
 
 ## Delivery sequence
 
-1. **Current:** Web/Electron adapters, project runtime, read-only HTTP oracle, evidence hashes, shared Local Runner, bounded MCP facade, validated Planner Provider interface, project integration loading, run deadline and cancellation, and the persisted Mission Agent loop.
-2. **Next:** measure generated Charters and Missions against real projects and add scoped test data, worker/file/candidate/billing observers.
+1. **Current:** Web/Electron adapters, project runtime, read-only HTTP oracle, evidence hashes, shared Local Runner, bounded MCP facade, validated Planner Provider interface, project integration loading, run deadline and cancellation, the persisted Mission Agent loop, and the release Web/Electron primary-plus-replay task matrix.
+2. **Next:** measure generated Charters and Missions against real projects, implement scoped test data, and add worker/file/candidate/billing observers. Negative-path tasks are not yet generated automatically.
 3. **Later:** retry/idempotency classification, isolated browser profiles, first-failure diagnosis and evidence-backed repair suggestions.
 4. **After the Web/Electron slice is stable:** Maestro/Appium adapters for mobile, and Keploy-style traffic fixtures for deterministic backend replay.
 

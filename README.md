@@ -21,6 +21,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Polls asynchronous HTTP business state to a bounded terminal verdict; a timeout remains inconclusive.
 - Records action receipts, before/after snapshots, network and console events, screenshots, and a JSONL timeline.
 - Reports `passed`, `failed`, `blocked`, `cancelled`, or `inconclusive`; missing evidence never becomes a pass.
+- The default `core` mission runs one selected surface with an independent business Oracle. `release` creates Web/Electron primary runs plus replay runs and verifies the complete matrix; negative-path execution is planned but not enabled yet.
 - Produces local JSON and HTML reports without a hosted service.
 
 ## Quick start

@@ -218,6 +218,17 @@ export type ProofkitConfig = z.infer<typeof ProofkitConfigSchema>;
 export const MissionSurfaceSchema = z.enum(["web", "electron", "mobile", "api"]);
 export type MissionSurface = z.infer<typeof MissionSurfaceSchema>;
 
+/** The execution obligations selected by the test level. */
+export const MissionExecutionProfileSchema = z.object({
+  surfaceMatrix: z.array(MissionSurfaceSchema).min(1).default(["web"]),
+  negativeCases: z.array(z.string().min(1)).default([]),
+  requireBusinessOracle: z.boolean().default(false),
+  requireReplay: z.boolean().default(false),
+  requireNegativeCases: z.boolean().default(false),
+  minimumEvidence: z.number().int().positive().default(1),
+});
+export type MissionExecutionProfile = z.infer<typeof MissionExecutionProfileSchema>;
+
 export const MissionStatusSchema = z.enum([
   "draft",
   "planned",
@@ -357,6 +368,14 @@ export const MissionPlanSchema = z.object({
   successCriteria: z.array(z.string().min(1)).default([]),
   assumptions: z.array(z.string().min(1)).default([]),
   level: TestLevelSchema.default("core"),
+  executionProfile: MissionExecutionProfileSchema.default({
+    surfaceMatrix: ["web"],
+    negativeCases: [],
+    requireBusinessOracle: false,
+    requireReplay: false,
+    requireNegativeCases: false,
+    minimumEvidence: 1,
+  }),
   createdAt: z.string(),
 });
 export type MissionPlan = z.infer<typeof MissionPlanSchema>;

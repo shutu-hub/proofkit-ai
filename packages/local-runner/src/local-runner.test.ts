@@ -85,6 +85,35 @@ describe("LocalRunnerService", () => {
     expect(completed.findings.some((finding) => finding.message.includes("独立业务 Oracle"))).toBe(true);
   });
 
+  it("does not report a mission as passed without an observable assertion", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-assertion-gate-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ root });
+    const charter: TestCharter = { intent: "verify fixture", level: "quick", mode: "deterministic", preconditions: [], actions: [], assertions: [], sideEffectPolicy: "deny", metadata: {} };
+    const summary: RunSummary = {
+      runId: "assertion-gate-run",
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      status: "completed",
+      verdict: "passed",
+      charter,
+      steps: [],
+      assertions: [],
+      oracles: [],
+      artifacts: ["assertion-gate-run/after.json"],
+      findings: [],
+    };
+    service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
+    service.wait = async () => summary;
+
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    const started = await service.startMission(created.missionId, { approve: true });
+    const completed = await service.waitMission(started.mission.missionId);
+
+    expect(completed.verdict).toBe("inconclusive");
+    expect(completed.findings.some((finding) => finding.message.includes("可观察断言"))).toBe(true);
+  });
+
   it("keeps an explicitly requested quick level through the mission envelope", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-quick-level-"));
     roots.push(root);
@@ -97,6 +126,71 @@ describe("LocalRunnerService", () => {
     expect(mission.policy.level).toBe("quick");
     expect(mission.plan.level).toBe("quick");
     expect(mission.levelSelection).toMatchObject({ requested: "quick", resolved: "quick", source: "explicit" });
+  });
+
+  it("runs and verifies the release matrix across Web and Electron with replay evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-release-matrix-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ root });
+    const charter: TestCharter = {
+      intent: "release fixture",
+      level: "release",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [],
+      assertions: [{ kind: "text-visible", text: "ready" }],
+      oracles: ["fixture-terminal"],
+      sideEffectPolicy: "deny",
+      metadata: {},
+    };
+    let sequence = 0;
+    const runs: Array<{ adapter: string; runKind: string }> = [];
+    const createSummary = (adapter: string): RunSummary => {
+      sequence += 1;
+      return {
+        runId: `release-run-${sequence}`,
+        startedAt: new Date().toISOString(),
+        endedAt: new Date().toISOString(),
+        status: "completed",
+        verdict: "passed",
+        charter,
+        steps: [],
+        assertions: [{ assertion: charter.assertions[0]!, passed: true, message: `${adapter} ready`, evidence: [`release-run-${sequence}/after.json`] }],
+        oracles: [{ name: "fixture-terminal", passed: true, message: `${adapter} terminal`, evidence: [`release-run-${sequence}/oracle.json`], observedAt: new Date().toISOString() }],
+        artifacts: [`release-run-${sequence}/after.json`, `release-run-${sequence}/oracle.json`, `release-run-${sequence}/trace.json`],
+        findings: [],
+      };
+    };
+    service.start = async (input) => {
+      const adapter = input.adapter ?? "web";
+      const summary = createSummary(adapter);
+      runs.push({ adapter, runKind: "primary" });
+      return { runId: summary.runId, status: "completed", verdict: summary.verdict, summary };
+    };
+    service.wait = async (runId) => {
+      const index = Number(runId.split("-").at(-1));
+      return createSummary(index % 2 === 0 ? "electron" : "web");
+    };
+    service.replay = async (runId, input = {}) => {
+      const adapter = input.adapter ?? "web";
+      const summary = createSummary(adapter);
+      runs.push({ adapter, runKind: "replay" });
+      return { runId: summary.runId, status: "completed", verdict: summary.verdict, summary };
+    };
+
+    const created = await service.createMission({ intent: charter.intent, surface: "web", level: "release", charter });
+    expect(created.plan.executionProfile.surfaceMatrix).toEqual(["web", "electron"]);
+    expect(created.plan.executionProfile.requireReplay).toBe(true);
+    const started = await service.startMission(created.missionId, { approve: true });
+    const completed = await service.waitMission(started.mission.missionId);
+
+    expect(completed.status).toBe("completed");
+    expect(completed.verdict).toBe("passed");
+    expect(completed.plan.graph.tasks.every((task) => task.status === "passed")).toBe(true);
+    expect(completed.observations.filter((item) => item.kind === "surface.run")).toHaveLength(4);
+    expect(completed.observations.filter((item) => item.kind === "surface.run" && item.data.runKind === "primary").map((item) => item.data.surface).sort()).toEqual(["electron", "web"]);
+    expect(completed.observations.filter((item) => item.kind === "surface.run" && item.data.runKind === "replay").map((item) => item.data.surface).sort()).toEqual(["electron", "web"]);
+    expect(completed.evidence.length).toBeGreaterThanOrEqual(3);
   });
 
   it("rejects a charter and requested level that disagree", async () => {
