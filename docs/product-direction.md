@@ -11,9 +11,9 @@ ProofKit is a local, evidence-driven acceptance runner for Web and Electron. A u
 | Project scan, local config, Web/Electron Playwright/CDP execution | Project map is structural; it does not infer product invariants |
 | CLI, shared Local Runner, run-level and mission-level MCP interface | Model planning is opt-in and requires an OpenAI-compatible endpoint |
 | YAML Charter, validated actions/assertions, Mission task graphs, and release Web/Electron replay | Generated plans still need measured quality and user review for consequential flows; negative paths are not yet automatic |
-| Process health, browser events, named HTTP oracles, bounded polling | AIHR ordinary-upload integration is validated with isolated mocks; a live test workspace is still pending |
+| Process health, browser events, named HTTP oracles, bounded polling | Web and Electron Local Runner smokes exercise the AIHR Charter against an isolated gateway fixture, including a seeded stale job binding; a live AIHR test workspace is still pending |
 | Project-owned integration module with typed capabilities, oracles and cleanup | The module is trusted local JavaScript; package distribution and version compatibility remain future work |
-| JSONL, artifact hashes, JSON/HTML report, five-state verdict and recoverable Mission attempts | The report does not yet diagnose a likely code location or proposed fix |
+| JSONL, artifact hashes, JSON/HTML report, five-state verdict, evidence-linked findings and recoverable Mission attempts | Diagnosis and repair suggestions identify the evidenced business boundary, but source-level ownership and code locations are not inferred yet |
 
 ## User entry path
 
@@ -32,7 +32,7 @@ The contracts package owns the Charter, run, event and verdict schema. Surface a
 ## Next three increments
 
 1. **Trustworthy one-sentence planning:** evaluate opt-in generated Charters against a fixed Web/Electron benchmark, add a review gate for consequential actions, and report what the planner could not infer. Model text never executes shell, SQL or JavaScript directly.
-2. **AIHR vertical proof:** run the existing ordinary-upload integration and scoped fixture against a real isolated workspace, then run the same Charter through Web and Electron; require matching terminal facts and evidence links.
+2. **AIHR vertical proof:** the checked-in ordinary-upload Charter now runs through real Web and Electron adapters against a loopback gateway fixture. Both adapters pass the success path and detect a seeded stale job binding with an Oracle artifact linked to a confirmed product Finding, Diagnosis and RepairSuggestion. Next, run the same Charter against a real isolated AIHR workspace and compare the terminal facts across surfaces.
 3. **Trust and repeatability:** isolated browser profiles, retry/idempotency checks, evidence-safe diagnostics and a first-failure report with likely owner and suggested repair backed by observed facts. Cancellation, total run deadline, release replay, and safe recovery of interrupted read-only tasks are now part of the runner; profile isolation, negative-path execution, and retry classification remain open.
 
 Mobile follows once these contracts survive the Web/Electron business slice. Maestro is the initial mobile adapter candidate; Appium covers cases Maestro cannot. Keploy-style traffic replay can provide deterministic backend fixtures later. Neither changes the Runner/verdict model.

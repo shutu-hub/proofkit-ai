@@ -126,7 +126,8 @@ function createResumeFileUploadCapability(state, projectRoot) {
       const fixture = await readFixture(projectRoot, input.fixturePath);
       const form = new FormData();
       form.append("file", new Blob([fixture.bytes], { type: fixture.contentType }), input.originalFilename ?? fixture.filename);
-      if (input.runId !== undefined) form.append("run_id", asId(input.runId));
+      const collectionRunId = input.runId ?? state.get(runId)?.collectionRunId;
+      if (collectionRunId !== undefined) form.append("run_id", asId(collectionRunId));
       form.append("source_channel", input.sourceChannel);
       form.append("original_filename", input.originalFilename ?? fixture.filename);
       form.append("target_job_ids", JSON.stringify(input.targetJobIds.map(asId)));
@@ -334,7 +335,7 @@ function createResumeCollectionPipelineOracle(state) {
   return {
     name: "aihr.resumeCollectionPipeline",
     async check({ runId, charter, signal }) {
-      const configuration = charter.metadata?.aihr;
+      const configuration = resolveEnv(charter.metadata?.aihr);
       if (!configuration || typeof configuration !== "object") {
         return { name: "aihr.resumeCollectionPipeline", passed: null, message: "Charter metadata.aihr is required for the independent AIHR resume collection oracle.", evidence: [] };
       }
@@ -679,7 +680,7 @@ function createOnlineResumePipelineOracle(state) {
   return {
     name: "aihr.onlineResumePipeline",
     async check({ runId, charter, signal }) {
-      const configuration = charter.metadata?.aihr;
+      const configuration = resolveEnv(charter.metadata?.aihr);
       if (!configuration || typeof configuration !== "object") {
         return { name: "aihr.onlineResumePipeline", passed: null, message: "Charter metadata.aihr is required for the independent AIHR workflow oracle.", evidence: [] };
       }

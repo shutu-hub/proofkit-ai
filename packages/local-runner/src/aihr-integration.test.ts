@@ -3,8 +3,10 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WebAdapter } from "@proofkit/adapters";
 import { TestCharterSchema, type TestCharter } from "@proofkit/contracts";
+import { loadCharter } from "@proofkit/planner";
 import { LocalRunnerService } from "./index.js";
 
 const roots: string[] = [];
@@ -16,12 +18,29 @@ const envKeys = [
   "AIHR_PROOFKIT_ENTERPRISE_ID",
   "AIHR_PROOFKIT_WORKSPACE_ID",
   "AIHR_PROOFKIT_USER_ID",
+  "AIHR_PROOFKIT_SOURCE_CHANNEL",
+  "AIHR_PROOFKIT_CANDIDATE_UID",
+  "AIHR_PROOFKIT_CONVERSATION_ID",
+  "AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID",
+  "AIHR_PROOFKIT_FIXTURE_PATH",
+  "AIHR_PROOFKIT_JOB_ID",
+  "AIHR_PROOFKIT_CLIENT_ITEM_KEY",
 ];
+const savedEnv = new Map<string, string | undefined>();
+
+beforeEach(() => {
+  for (const key of envKeys) savedEnv.set(key, process.env[key]);
+});
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolveClose) => server.close(() => resolveClose()))));
-  for (const key of envKeys) delete process.env[key];
+  vi.restoreAllMocks();
+  for (const key of envKeys) {
+    const value = savedEnv.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 });
 
 describe("AIHR project integration", () => {
@@ -127,7 +146,6 @@ describe("AIHR project integration", () => {
     expect(created).toMatchObject({ runId: "900", status: "pending" });
 
     const uploaded = await upload.execute({
-      runId: "900",
       fixturePath: ".proofkit/fixtures/resume.pdf",
       sourceChannel: "boss",
       targetJobIds: ["505"],
@@ -138,6 +156,7 @@ describe("AIHR project integration", () => {
     expect(uploaded).toMatchObject({ fileId: "901", runId: "900", fileSha256: fixtureSha256, status: "accepted", duplicate: false });
     expect(gateway.uploadContentType).toMatch(/^multipart\/form-data; boundary=/);
     expect(gateway.uploadBody).toContain("client_item_key");
+    expect(gateway.uploadBody).toMatch(/name="run_id"\r\n\r\n900\r\n/);
     expect(gateway.uploadBody).not.toContain("source_text");
 
     const observed = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
@@ -163,6 +182,41 @@ describe("AIHR project integration", () => {
 
     const oracleResult = await oracle.check({ runId: context.runId, charter: resumeCollectionCharter(), steps: [], assertions: [], signal: context.signal });
     expect(oracleResult.passed).toBe(true);
+  });
+
+  it.each(["success", "relation-old-file"] as const)("executes the checked-in env-based Charter through Local Runner: %s", async (mode) => {
+    const fixtureBytes = Buffer.from("%PDF-1.4 proofkit fixture\n", "utf8");
+    const fixtureSha256 = createHash("sha256").update(fixtureBytes).digest("hex");
+    const gateway = await startCollectionGatewayMock({ fixtureSha256, mode });
+    servers.push(gateway.server);
+    const root = await createIntegrationProject(fixtureBytes);
+    Object.assign(process.env, {
+      AIHR_PROOFKIT_SOURCE_CHANNEL: "boss",
+      AIHR_PROOFKIT_CANDIDATE_UID: "candidate-fixture",
+      AIHR_PROOFKIT_CONVERSATION_ID: "101",
+      AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID: "account-fixture",
+      AIHR_PROOFKIT_FIXTURE_PATH: ".proofkit/fixtures/resume.pdf",
+      AIHR_PROOFKIT_JOB_ID: "505",
+      AIHR_PROOFKIT_CLIENT_ITEM_KEY: "proofkit-default-charter",
+    });
+    vi.spyOn(WebAdapter.prototype, "connect").mockResolvedValue();
+    vi.spyOn(WebAdapter.prototype, "subscribeEvents").mockResolvedValue(() => {});
+    vi.spyOn(WebAdapter.prototype, "close").mockResolvedValue();
+    const service = await LocalRunnerService.create({ root, allowCapabilityWrites: true });
+    const source = resolve(dirname(fileURLToPath(import.meta.url)), "../../../.proofkit/charters/aihr-resume-upload.yml");
+    const started = await service.start({ charter: await loadCharter(source) });
+    const summary = await service.wait(started.runId);
+
+    expect(summary.verdict).toBe(mode === "success" ? "passed" : "failed");
+    expect(summary.steps).toHaveLength(3);
+    expect(summary.steps.every((step) => step.status === "passed")).toBe(true);
+    expect(summary.oracles).toHaveLength(1);
+    expect(summary.oracles[0]).toMatchObject({ name: "aihr.resumeCollectionPipeline", passed: mode === "success" });
+    expect(summary.steps[1]?.capabilityOutput).toMatchObject({ collectionRunId: "900", fileSha256: fixtureSha256 });
+    expect(summary.steps[2]?.capabilityOutput).toMatchObject({ outcome: mode === "success" ? "passed" : "failed", jobId: "505" });
+    expect(gateway.uploadBody).toMatch(/name="run_id"\r\n\r\n900\r\n/);
+    expect(gateway.requestPaths.filter((path) => path.startsWith("/boss-conversations/"))).toEqual([]);
+    expect(summary.artifacts.some((path) => path.includes("oracle-1"))).toBe(true);
   });
 
   it("reports stale bindings as confirmed failures and keeps pending observations inconclusive", async () => {
@@ -297,13 +351,16 @@ async function startCollectionGatewayMock(options: { fixtureSha256: string; mode
   setMode: (mode: CollectionMode) => void;
   readonly uploadContentType: string | undefined;
   readonly uploadBody: string;
+  readonly requestPaths: string[];
 }> {
   let mode = options.mode ?? "success";
   let uploadContentType: string | undefined;
   let uploadBody = "";
+  const requestPaths: string[] = [];
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
     const path = url.pathname.replace(/^\/api\/v1/, "");
+    requestPaths.push(path);
     response.setHeader("content-type", "application/json");
 
     if (request.method === "POST" && path === "/resume-collection/runs") {
@@ -345,6 +402,7 @@ async function startCollectionGatewayMock(options: { fixtureSha256: string; mode
     setMode: (nextMode) => { mode = nextMode; },
     get uploadContentType() { return uploadContentType; },
     get uploadBody() { return uploadBody; },
+    get requestPaths() { return requestPaths; },
   };
 }
 

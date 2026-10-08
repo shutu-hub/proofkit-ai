@@ -52,9 +52,13 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 **Goal:** prove value on the resume acquisition workflow.
 
 - Run the project-local ordinary upload integration and scoped fixture in an isolated test workspace.
+- Run the checked-in ordinary upload Charter through the real Web and Electron adapters against a loopback gateway fixture.
+- Seed a stale candidate-to-job resume binding and require the Oracle artifact to produce a confirmed product Finding, Diagnosis and RepairSuggestion.
 - Observe file creation, extraction, candidate identity, job binding, assessment terminal state and billing scope.
 - Correlate ProofKit `runId`, request IDs and opaque domain IDs.
 - Run the same Charter through Web and Electron, replay both runs, and compare terminal business facts.
+
+**Current evidence:** the isolated Web/Electron smoke proves upload binding, terminal extraction, candidate identity, job relation, assessment state and workflow usage, and detects the seeded stale relation with linked evidence. A real isolated AIHR workspace, billing assertions and retry/idempotency checks remain required before this phase is complete.
 
 **Gate:** seeded defects in upload, extraction, identity, relation and billing are found with linked evidence; retries do not create duplicate billable facts.
 

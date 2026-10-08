@@ -49,6 +49,32 @@ describe("analyzeRun", () => {
     expect(result.diagnosis).toBeUndefined();
   });
 
+  it("links Windows evidence to the exact run-relative Oracle path", () => {
+    const result = analyzeRun({
+      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "stale binding", evidence: ["run-fixture/artifacts/oracle-1.json"] }] }),
+      evidence: [evidence("D:\\tests\\runs\\run-fixture\\artifacts\\oracle-1.json", "business")],
+    });
+    expect(result.finding?.status).toBe("confirmed");
+    expect(result.finding?.evidence).toHaveLength(1);
+  });
+
+  it.each(["oracle-1.json", "artifacts/oracle-1.json", "other-run/artifacts/oracle-1.json", "run-fixture/../other-run/artifacts/oracle-1.json"])("rejects unscoped or unrelated Oracle evidence: %s", (path) => {
+    const result = analyzeRun({
+      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "failed", evidence: [path] }] }),
+      evidence: [evidence("/tests/runs/run-fixture/artifacts/oracle-1.json", "business")],
+    });
+    expect(result.finding?.status).toBe("unverified");
+    expect(result.diagnosis).toBeUndefined();
+  });
+
+  it("keeps ambiguous Oracle artifact matches unverified", () => {
+    const result = analyzeRun({
+      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "failed", evidence: ["run-fixture/artifacts/oracle-1.json"] }] }),
+      evidence: [evidence("/one/run-fixture/artifacts/oracle-1.json", "business"), evidence("/two/run-fixture/artifacts/oracle-1.json", "business")],
+    });
+    expect(result.finding?.status).toBe("unverified");
+  });
+
   it("marks a surface action as suspected instead of a confirmed product bug", () => {
     const result = analyzeRun({
       summary: summary({

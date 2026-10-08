@@ -91,6 +91,7 @@ export type LocalRunnerOptions = {
   config?: ProofkitConfig;
   evidenceDir?: string;
   restrictWebOrigins?: boolean;
+  /** Registry of available Oracles. Only names selected by a Charter execute. */
   oracles?: BusinessOracle[];
   capabilities?: CapabilityDefinition<any, any>[];
   allowCapabilityWrites?: boolean;
@@ -122,6 +123,8 @@ export class LocalRunnerService {
     this.restrictWebOrigins = options.restrictWebOrigins ?? false;
     this.integration = options.integration;
     this.oracles = [...(this.integration?.oracles ?? []), ...(options.oracles ?? [])];
+    const oracleNames = [...this.oracles, ...this.config.oracles].map((oracle) => oracle.name);
+    if (new Set(oracleNames).size !== oracleNames.length) throw new Error("Duplicate oracle registration");
     this.capabilities = [...(this.integration?.capabilities ?? []), ...(options.capabilities ?? [])];
     this.allowCapabilityWrites = options.allowCapabilityWrites ?? false;
     this.plannerProvider = options.plannerProvider;
@@ -605,7 +608,7 @@ export class LocalRunnerService {
     const integrationSetup = this.integration?.setup;
     return new ExecutionRunner(adapter, {
       evidenceDir: this.evidenceDir,
-      oracles: [...this.oracles, ...configured, ...oracles],
+      oracles: [...configured, ...oracles],
       capabilities: this.capabilities,
       environment: this.config.policies.environment,
       allowCapabilityWrites: this.allowCapabilityWrites,
@@ -673,8 +676,9 @@ export class LocalRunnerService {
     if ((input.adapter ?? "web") !== "web") throw new Error(`Unsupported adapter: ${input.adapter}`);
     return new WebAdapter({
       baseUrl: input.url ?? this.config.surfaces.web?.baseUrl,
-      cdpUrl: input.cdp,
+      cdpUrl: input.cdp ?? this.config.surfaces.web?.cdpUrl,
       headless: !input.headful,
+      executablePath: this.config.surfaces.web?.executablePath,
     });
   }
 
@@ -694,7 +698,7 @@ export class LocalRunnerService {
 
   private validateCdpEndpoint(input: LocalRunInput): void {
     if (!this.restrictWebOrigins) return;
-    const cdp = input.cdp ?? (input.adapter === "electron" ? this.config.surfaces.electron?.cdpUrl : undefined);
+    const cdp = input.cdp ?? (input.adapter === "electron" ? this.config.surfaces.electron?.cdpUrl : this.config.surfaces.web?.cdpUrl);
     if (cdp && !isLoopback(new URL(cdp).hostname)) {
       throw new Error("CDP endpoint must use loopback in MCP runs");
     }

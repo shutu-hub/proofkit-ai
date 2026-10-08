@@ -172,7 +172,11 @@ export const ProofkitConfigSchema = z.object({
     startupTimeoutMs: z.number().int().positive().default(60_000),
   }).default({}),
   surfaces: z.object({
-    web: z.object({ baseUrl: z.string().url().optional() }).optional(),
+    web: z.object({
+      baseUrl: z.string().url().optional(),
+      cdpUrl: z.string().url().optional(),
+      executablePath: z.string().min(1).optional(),
+    }).optional(),
     electron: z.object({
       cdpUrl: z.string().optional(),
       devtoolsActivePort: z.string().optional(),

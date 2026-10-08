@@ -39,7 +39,7 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
 
   const failedOracle = summary.oracles.find((oracle) => oracle.passed === false);
   if (failedOracle) {
-    const oracleEvidence = evidenceForPaths(evidence, failedOracle.evidence);
+    const oracleEvidence = evidenceForPaths(evidence, failedOracle.evidence, summary.runId);
     const boundary = FailureBoundarySchema.parse({
       kind: "business-oracle",
       oracleName: failedOracle.name,
@@ -109,7 +109,7 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
 
   const failedStep = summary.steps.find((step) => step.status !== "passed");
   if (failedStep) {
-    const stepEvidence = evidenceForPaths(evidence, failedStep.artifacts);
+    const stepEvidence = evidenceForPaths(evidence, failedStep.artifacts, summary.runId);
     const environmentLike = isEnvironmentFailure(failedStep.error);
     const boundary = FailureBoundarySchema.parse({
       kind: environmentLike ? "environment" : "surface-action",
@@ -214,15 +214,28 @@ function createRepairSuggestion(summary: RunSummary, boundary: FailureBoundary, 
 }
 
 function evidenceForAssertion(summary: RunSummary, evidence: EvidenceRef[], assertionEvidence: string[]): EvidenceRef[] {
-  const direct = evidenceForPaths(evidence, assertionEvidence);
+  const direct = evidenceForPaths(evidence, assertionEvidence, summary.runId);
   if (direct.length > 0) return direct;
   const lastStep = [...summary.steps].reverse().find((step) => step.status === "passed" && step.artifacts.length > 0);
-  return lastStep ? evidenceForPaths(evidence, lastStep.artifacts).slice(0, 4) : [];
+  return lastStep ? evidenceForPaths(evidence, lastStep.artifacts, summary.runId).slice(0, 4) : [];
 }
 
-function evidenceForPaths(evidence: EvidenceRef[], paths: string[]): EvidenceRef[] {
-  if (paths.length === 0) return [];
-  return evidence.filter((item) => paths.some((path) => item.path === path || item.path.endsWith(path) || path.endsWith(item.path)));
+function evidenceForPaths(evidence: EvidenceRef[], paths: string[], runId: string): EvidenceRef[] {
+  const matched = new Map<string, EvidenceRef>();
+  for (const path of paths) {
+    const requested = path.replaceAll("\\", "/");
+    if (requested.split("/").some((segment) => segment === "." || segment === "..")) continue;
+    const runRelative = requested.startsWith(`${runId}/`);
+    const absolute = requested.startsWith("/") || /^[A-Za-z]:\//.test(requested);
+    if (!runRelative && !absolute) continue;
+    const candidates = evidence.filter((item) => {
+      const actual = item.path.replaceAll("\\", "/");
+      return actual === requested || (runRelative && actual.endsWith(`/${requested}`));
+    });
+    // A basename or ambiguous suffix is not sufficient to confirm a bug.
+    if (candidates.length === 1) matched.set(candidates[0]!.evidenceId, candidates[0]!);
+  }
+  return [...matched.values()];
 }
 
 function uniqueEvidence(evidence: EvidenceRef[]): EvidenceRef[] {

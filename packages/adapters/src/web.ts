@@ -7,6 +7,12 @@ export type WebAdapterOptions = {
   cdpUrl?: string;
   headless?: boolean;
   executablePath?: string;
+  /**
+   * Screenshots are supporting evidence. Keep a broken or offscreen renderer
+   * from holding the business assertions and Oracles for Playwright's
+   * default 30 second timeout.
+   */
+  screenshotTimeoutMs?: number;
 };
 
 export class WebAdapter implements SurfaceAdapter {
@@ -115,7 +121,11 @@ export class WebAdapter implements SurfaceAdapter {
   }
 
   async capture(_label: string): Promise<Uint8Array | undefined> {
-    return this.page().screenshot({ type: "png" });
+    return this.page().screenshot({
+      type: "png",
+      timeout: this.options.screenshotTimeoutMs ?? 5_000,
+      animations: "disabled",
+    });
   }
 
   async subscribeEvents(listener: (event: AdapterEvent) => void): Promise<() => void> {
