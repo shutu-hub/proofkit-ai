@@ -58,7 +58,7 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
         evidence: oracleEvidence,
         createdAt: boundary.observedAt,
       });
-      const diagnosis = createDiagnosis(summary, boundary, finding, input.observations);
+      const diagnosis = createDiagnosis(summary, boundary, finding, input.observations, failedOracle.sourceLocations);
       return { boundary, finding, diagnosis, repairSuggestion: createRepairSuggestion(summary, boundary, diagnosis) };
     }
     return {
@@ -176,11 +176,12 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
   };
 }
 
-function createDiagnosis(summary: RunSummary, boundary: FailureBoundary, finding: Finding | undefined, observations: Observation[] | undefined): Diagnosis {
-  const sourceLocations = observations?.flatMap((observation) => {
+function createDiagnosis(summary: RunSummary, boundary: FailureBoundary, finding: Finding | undefined, observations: Observation[] | undefined, oracleSourceLocations: string[] = []): Diagnosis {
+  const observedSourceLocations = observations?.flatMap((observation) => {
     const values = observation.data.sourceLocations;
     return Array.isArray(values) ? values.filter((value): value is string => typeof value === "string" && value.length > 0) : [];
   }) ?? [];
+  const sourceLocations = [...new Set([...oracleSourceLocations, ...observedSourceLocations])];
   return {
     diagnosisId: `diagnosis-${summary.runId}`,
     summary: finding

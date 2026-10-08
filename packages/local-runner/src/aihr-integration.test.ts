@@ -262,6 +262,9 @@ describe("AIHR project integration", () => {
     expect(summary.steps.every((step) => step.status === "passed")).toBe(true);
     expect(summary.oracles).toHaveLength(1);
     expect(summary.oracles[0]).toMatchObject({ name: "aihr.resumeCollectionPipeline", passed: mode === "success" });
+    if (mode === "relation-old-file") {
+      expect(summary.oracles[0]?.sourceLocations).toContain("services/resume-collection-service/internal/service/resume_post_processor.go");
+    }
     expect(summary.steps[1]?.capabilityOutput).toMatchObject({ collectionRunId: "900", fileSha256: fixtureSha256 });
     expect(summary.steps[2]?.capabilityOutput).toMatchObject({ outcome: mode === "success" ? "passed" : "failed", jobId: "505" });
     expect(gateway.uploadBody).toMatch(/name="run_id"\r\n\r\n900\r\n/);

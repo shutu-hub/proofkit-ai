@@ -38,6 +38,27 @@ describe("analyzeRun", () => {
     expect(result.repairSuggestion?.status).toBe("proposed");
   });
 
+  it("carries trusted Oracle source hints into the diagnosis and repair proposal", () => {
+    const result = analyzeRun({
+      summary: summary({
+        oracles: [{
+          name: "resume-terminal",
+          passed: false,
+          message: "stale binding",
+          evidence: ["run-fixture/oracle.json"],
+          sourceLocations: ["services/resume-collection-service/internal/service/resume_post_processor.go"],
+          observedAt: capturedAt,
+        }],
+      }),
+      evidence: [evidence("run-fixture/oracle.json", "business")],
+    });
+
+    expect(result.diagnosis?.sourceLocations).toEqual([
+      "services/resume-collection-service/internal/service/resume_post_processor.go",
+    ]);
+    expect(result.repairSuggestion?.changes[0]).toContain("resume_post_processor.go");
+  });
+
   it("keeps an oracle failure unverified when evidence is missing", () => {
     const result = analyzeRun({
       summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "resume failed", evidence: [], observedAt: capturedAt }] }),

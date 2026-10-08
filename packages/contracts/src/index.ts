@@ -111,6 +111,8 @@ export const OracleResultSchema = z.object({
   passed: z.boolean().nullable(),
   message: z.string(),
   evidence: z.array(z.string()).default([]),
+  /** Optional repository hints supplied by a trusted project integration. */
+  sourceLocations: z.array(z.string().min(1)).optional(),
   observedAt: z.string().optional(),
 });
 export type OracleResult = z.infer<typeof OracleResultSchema>;

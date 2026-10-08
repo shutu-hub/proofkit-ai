@@ -367,6 +367,7 @@ function createResumeCollectionPipelineOracle(state) {
             ? `AIHR PDF upload reached a confirmed failure: extract=${result.extractStatus ?? "unknown"}, parse=${result.parseStatus ?? "unknown"}.`
             : "AIHR PDF upload evidence is incomplete or still pending; no product failure is confirmed.",
         evidence: [JSON.stringify(facts)],
+        ...(passed === false ? { sourceLocations: ["services/resume-collection-service/internal/service/resume_post_processor.go"] } : {}),
         observedAt: new Date().toISOString(),
       };
     },
@@ -716,7 +717,7 @@ function createOnlineResumePipelineOracle(state) {
         ? null
         : result.parseStatus === "matched" && result.extractStatus === "done" && Boolean(result.candidateId) && (!requireAssessmentSuccess || result.assessmentTaskStatus === "success");
       const facts = { ...result, passed, requireAssessmentSuccess };
-      return { name: "aihr.onlineResumePipeline", passed, message: passed ? "AIHR online resume facts reached the requested terminal state." : `AIHR online resume pipeline is not valid: phase=${result.workflowPhase}, extract=${result.extractStatus ?? "unknown"}, parse=${result.parseStatus ?? "unknown"}, assessment_task=${result.assessmentTaskStatus ?? "unknown"}.`, evidence: [JSON.stringify(facts)], observedAt: new Date().toISOString() };
+      return { name: "aihr.onlineResumePipeline", passed, message: passed ? "AIHR online resume facts reached the requested terminal state." : `AIHR online resume pipeline is not valid: phase=${result.workflowPhase}, extract=${result.extractStatus ?? "unknown"}, parse=${result.parseStatus ?? "unknown"}, assessment_task=${result.assessmentTaskStatus ?? "unknown"}.`, evidence: [JSON.stringify(facts)], ...(passed === false ? { sourceLocations: ["services/resume-collection-service/internal/service/structured_online_resume.go", "services/resume-collection-service/internal/service/resume_post_processor.go"] } : {}), observedAt: new Date().toISOString() };
     },
   };
 }

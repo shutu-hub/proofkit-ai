@@ -13,7 +13,7 @@ ProofKit is a local, evidence-driven acceptance runner for Web and Electron. A u
 | YAML Charter, validated actions/assertions, Mission task graphs, release Web/Electron replay, and explicit negative/recovery cases | Generated plans still need measured quality and user review for consequential flows; ProofKit executes only cases explicitly declared by the Charter |
 | Process health, browser events, named HTTP oracles, bounded polling | Web and Electron Local Runner smokes exercise the AIHR Charter against an isolated gateway fixture, including a seeded stale job binding; a live AIHR test workspace is still pending |
 | Workspace-owned integration module with typed capabilities, oracles and cleanup | The module is trusted local JavaScript; package distribution and version compatibility remain future work |
-| JSONL, artifact hashes, JSON/HTML report, five-state verdict, evidence-linked findings and recoverable Mission attempts | Diagnosis and repair suggestions identify the evidenced business boundary, but source-level ownership and code locations are not inferred yet |
+| JSONL, artifact hashes, JSON/HTML report, five-state verdict, evidence-linked findings and recoverable Mission attempts | Diagnosis and repair suggestions identify the evidenced business boundary; trusted project Oracles can now provide source-location hints, while automatic source-level inference remains future work |
 
 ## User entry path
 
