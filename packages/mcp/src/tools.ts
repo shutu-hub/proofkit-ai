@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { TestMission } from "@proofkit/contracts";
 import { TestCharterSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 
@@ -46,7 +47,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       const started = autoApprove
         ? await runner.startMission(mission.missionId, { approve: true })
         : { mission, running: false };
-      return result({ missionId: mission.missionId, level: mission.level, levelSelection: mission.levelSelection, status: started.mission.status, running: started.running, next: ["get_mission_status", "get_mission_evidence"] });
+      return result(missionStartResponse(started));
     },
   );
 
@@ -61,7 +62,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "start_mission",
     "Start a ProofKit mission. The mission executes registered tools and preserves deterministic run evidence.",
     { missionId: z.string().min(1), approve: z.boolean().default(false) },
-    async ({ missionId, approve }) => result(await runner.startMission(missionId, { approve })),
+    async ({ missionId, approve }) => result(missionStartResponse(await runner.startMission(missionId, { approve }))),
   );
 
   server.tool(
@@ -183,6 +184,51 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
 function result(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
+}
+
+function missionStartResponse(started: { mission: TestMission; running: boolean }) {
+  const mission = started.mission;
+  const profile = mission.plan.executionProfile;
+  const terminal = ["completed", "failed", "blocked", "cancelled"];
+  const next = mission.status === "awaiting-approval"
+    ? ["approve_test_plan"]
+    : started.running || mission.status === "running"
+      ? ["get_mission_status", "get_mission_evidence"]
+      : terminal.includes(mission.status)
+        ? ["get_mission_evidence"]
+        : ["start_mission", "get_mission_status"];
+  return {
+    missionId: mission.missionId,
+    status: mission.status,
+    running: started.running,
+    verdict: mission.verdict,
+    level: mission.level,
+    levelSelection: mission.levelSelection,
+    executionProfile: profile,
+    taskSummary: mission.plan.graph.tasks.map((task) => ({
+      taskId: task.taskId,
+      title: task.title,
+      tool: task.tool,
+      status: task.status,
+      attempts: task.attempts,
+      maxAttempts: task.maxAttempts,
+      ...(task.error ? { error: task.error } : {}),
+    })),
+    oracleRequirement: {
+      required: profile.requireBusinessOracle,
+      declared: mission.charter?.oracles?.length ?? 0,
+      message: profile.requireBusinessOracle
+        ? "该测试级别必须有独立业务 Oracle；UI 点击或截图不能单独证明通过。"
+        : "该测试级别不强制独立业务 Oracle。",
+    },
+    polling: {
+      statusTool: "get_mission_status",
+      evidenceTool: "get_mission_evidence",
+      intervalMs: 500,
+      terminalStatuses: terminal,
+    },
+    next,
+  };
 }
 
 function localOnlyUrl(url: string | undefined): string | undefined {

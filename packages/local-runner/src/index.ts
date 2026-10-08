@@ -215,6 +215,21 @@ export class LocalRunnerService {
 
   async missionEvidence(missionId: string): Promise<{
     missionId: string;
+    status: TestMission["status"];
+    running: boolean;
+    verdict?: TestMission["verdict"];
+    level: TestMission["level"];
+    levelSelection?: TestMission["levelSelection"];
+    executionProfile: TestMission["plan"]["executionProfile"];
+    taskSummary: Array<{
+      taskId: string;
+      title: string;
+      tool: string;
+      status: TestMission["plan"]["graph"]["tasks"][number]["status"];
+      attempts: number;
+      maxAttempts: number;
+      error?: string;
+    }>;
     evidence: EvidenceRef[];
     findings: TestMission["findings"];
     firstFailure?: TestMission["firstFailure"];
@@ -224,6 +239,21 @@ export class LocalRunnerService {
     const mission = await this.missionAgent.load(validateMissionId(missionId));
     return {
       missionId: mission.missionId,
+      status: mission.status,
+      running: this.missionRecords.has(mission.missionId) || mission.status === "running",
+      verdict: mission.verdict,
+      level: mission.level,
+      levelSelection: mission.levelSelection,
+      executionProfile: mission.plan.executionProfile,
+      taskSummary: mission.plan.graph.tasks.map((task) => ({
+        taskId: task.taskId,
+        title: task.title,
+        tool: task.tool,
+        status: task.status,
+        attempts: task.attempts,
+        maxAttempts: task.maxAttempts,
+        ...(task.error ? { error: task.error } : {}),
+      })),
       evidence: mission.evidence,
       findings: mission.findings,
       firstFailure: mission.firstFailure,
