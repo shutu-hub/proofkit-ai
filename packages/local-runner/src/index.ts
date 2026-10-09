@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type NegativeCase, type ProofkitConfig, type ProjectMap, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
+import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { initProject, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
@@ -265,7 +265,7 @@ export class LocalRunnerService {
       if (saved.level !== catalog.level) throw new Error(`Test suite ${entry.id} Charter ${charterId} has a mismatched level`);
       const charter = TestCharterSchema.parse({ ...saved, metadata: { ...saved.metadata, catalogId: charterId, suiteId: entry.id } });
       for (const surface of entry.surfaces) this.validateCatalogCharter(charterId, charter, surface);
-      charters.push({ charterId, charter });
+      charters.push({ charterId, charter, routeTargets: catalog.routeTargets ?? [] });
     }
     const included = new Set(entry.charterIds);
     const uncoveredCharterIds = this.config.charters.filter((item) => item.level === "release" && !included.has(item.id)).map((item) => item.id);
@@ -483,6 +483,7 @@ export class LocalRunnerService {
           oracles: summary.oracles.length,
           passedOracles: summary.oracles.filter((item) => item.passed === true).length,
           businessEvidence: summary.oracles.reduce((count, oracle) => count + (oracle.sourceEvidenceCount ?? 0), 0),
+          matchedRoutePaths: matchedWebRouteTargets(summary, context.mission.suite?.charters.find((item) => item.charterId === charterId)?.routeTargets ?? []),
         },
         evidence,
         observedAt: new Date().toISOString(),
@@ -1042,6 +1043,29 @@ function validateMissionId(missionId: string): string {
 
 function numberValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/** Persist only declared route patterns; concrete URL paths may contain private IDs. */
+function matchedWebRouteTargets(summary: RunSummary, targets: RouteCoverageTarget[]): string[] {
+  const paths = new Set<string>();
+  for (const step of summary.steps) {
+    for (const value of [step.beforeSnapshot?.url, step.receipt?.urlBefore, step.receipt?.urlAfter, step.afterSnapshot?.url]) {
+      if (!value) continue;
+      try {
+        const url = new URL(value);
+        if (url.hash.startsWith("#/")) paths.add(url.hash.slice(1).split(/[?#]/, 1)[0]!);
+        else if (url.protocol === "http:" || url.protocol === "https:") paths.add(url.pathname);
+      } catch { /* A malformed adapter URL is not route coverage evidence. */ }
+    }
+  }
+  return [...new Set(targets.filter((target) => target.kind === "web" && [...paths].some((path) => routeMatches(target.path, path))).map((target) => target.path))].sort();
+}
+
+function routeMatches(declared: string, observed: string): boolean {
+  const expected = declared.split("/");
+  const actual = observed.split("/");
+  return expected.length === actual.length && expected.every((segment, index) =>
+    segment.startsWith(":") ? Boolean(actual[index]) : segment === actual[index]);
 }
 
 function toError(error: unknown): Error {

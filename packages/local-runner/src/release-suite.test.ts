@@ -80,6 +80,61 @@ describe("explicit release suites", () => {
     expect(completed.firstFailure?.kind).toBe("evidence");
   });
 
+  it("counts a mapped route as observed only after passing primary and replay visits on both surfaces", async () => {
+    const service = await createSuiteService();
+    stubRuns(service);
+    const mission = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    await service.startMission(mission.missionId, { approve: true });
+    await service.waitMission(mission.missionId);
+    const coverage = (await service.missionEvidence(mission.missionId)).suiteScope?.routeCoverage;
+    expect(coverage).toMatchObject({ candidateRoutes: 6, declaredTargets: 2, mappedCandidates: 2, observedCandidates: 2, inventoryTruncated: false });
+    expect(coverage?.gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "/settings", status: "unmapped" }),
+      expect.objectContaining({ path: "/api/v1/people", status: "unmapped" }),
+    ]));
+
+    const service2 = await createSuiteService();
+    stubRuns(service2, { missingVisitedPath: "resume/electron/replay" });
+    const mission2 = await service2.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    await service2.startMission(mission2.missionId, { approve: true });
+    await service2.waitMission(mission2.missionId);
+    const coverage2 = (await service2.missionEvidence(mission2.missionId)).suiteScope?.routeCoverage;
+    expect(coverage2).toMatchObject({ candidateRoutes: 6, mappedCandidates: 2, observedCandidates: 1 });
+    expect(coverage2?.gaps).toContainEqual(expect.objectContaining({ path: "/resume", status: "mapped-unobserved", charterIds: ["resume"] }));
+  });
+
+  it("reports stale and ambiguous route mappings without increasing covered counts", async () => {
+    const service = await createSuiteService();
+    service.config.charters[0]!.routeTargets = [{ kind: "web", path: "/unknown" }, { kind: "web", path: "/shared" }];
+    stubRuns(service);
+    const mission = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    await service.startMission(mission.missionId, { approve: true });
+    await service.waitMission(mission.missionId);
+    const coverage = (await service.missionEvidence(mission.missionId)).suiteScope?.routeCoverage;
+    expect(coverage?.unresolvedTargets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ charterId: "resume", path: "/unknown", reason: "absent" }),
+      expect.objectContaining({ charterId: "resume", path: "/shared", reason: "ambiguous" }),
+    ]));
+    expect(coverage?.mappedCandidates).toBe(1);
+    expect(coverage?.observedCandidates).toBe(1);
+  });
+
+  it("keeps concrete route parameters out of Mission coverage observations", async () => {
+    const service = await createSuiteService();
+    await writeFile(join(service.root, "apps", "web", "src", "dynamic-router.ts"), "export const detail = { path: '/resumes/:id' };\n");
+    service.config.charters[0]!.routeTargets = [{ kind: "web", path: "/resumes/:id" }];
+    stubRuns(service, { dynamicResume: true });
+    const mission = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    const observations = completed.observations.filter((item) => item.kind === "surface.run" && item.charterId === "resume");
+    expect(observations).toHaveLength(6);
+    expect(observations.filter((item) => item.data.runKind !== "negative").every((item) =>
+      JSON.stringify(item.data.matchedRoutePaths) === '["/resumes/:id"]')).toBe(true);
+    expect(JSON.stringify(observations)).not.toContain("private-candidate-123");
+    expect((await service.missionEvidence(mission.missionId)).suiteScope?.routeCoverage?.observedCandidates).toBe(2);
+  });
+
   it("rejects a suite whose Charter is missing a required surface or business Oracle", async () => {
     const service = await createSuiteService({ loginSurfaces: ["web"] });
     await expect(service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" }))
@@ -103,6 +158,11 @@ async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[];
   const workspaceRoot = await mkdtemp(join(tmpdir(), "proofkit-suite-workspace-"));
   roots.push(root, workspaceRoot);
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "suite-fixture" }));
+  await mkdir(join(root, "apps", "web", "src"), { recursive: true });
+  await writeFile(join(root, "apps", "web", "src", "router.ts"), "export const resume = { path: '/resume' };\nexport const login = { path: '/login' };\nexport const settings = { path: '/settings' };\nexport const shared = { path: '/shared' };\n");
+  await writeFile(join(root, "apps", "web", "src", "other-router.ts"), "export const shared = { path: '/shared' };\n");
+  await mkdir(join(root, "services", "gateway"), { recursive: true });
+  await writeFile(join(root, "services", "gateway", "router.ts"), "router.get('/api/v1/people', handler);\n");
   await mkdir(join(workspaceRoot, ".proofkit", "charters"), { recursive: true });
   const charters = ["resume", "login", "other-release"];
   const config = ProofkitConfigSchema.parse({
@@ -110,6 +170,7 @@ async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[];
     charters: charters.map((id) => ({
       id, path: `.proofkit/charters/${id}.yml`, aliases: [id], level: "release",
       surfaces: id === "login" ? options.loginSurfaces ?? ["web", "electron"] : ["web", "electron"],
+      routeTargets: [{ kind: "web", path: `/${id === "other-release" ? "settings" : id}` }],
     })),
     suites: [{ id: "release-critical", aliases: ["上线完整回归"], level: "release", charterIds: ["resume", "login"], surfaces: ["web", "electron"] }],
     oracles: charters.map((id) => ({ name: `${id}-oracle`, url: `http://127.0.0.1:8765/${id}`, statusPointer: "/status", successValues: ["done"] })),
@@ -132,7 +193,7 @@ async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[];
   return LocalRunnerService.create({ root, workspaceRoot });
 }
 
-function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string } = {}) {
+function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; dynamicResume?: boolean } = {}) {
   const summaries = new Map<string, RunSummary>();
   const started: Array<{ charterId: string; surface: LocalAdapterName; negativeCaseId?: string }> = [];
   const replayed: Array<{ sourceRunId: string; charterId: string; surface: LocalAdapterName }> = [];
@@ -142,12 +203,17 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     const runId = `suite-${++sequence}`;
     const failed = options.failedPrimary === `${charterId}/${surface}` && kind !== "negative";
     const missing = options.missingBusinessFact === `${charterId}/${surface}/${kind}`;
+    const visited = options.missingVisitedPath !== `${charterId}/${surface}/${kind}`;
     const verdict: Verdict = failed ? "failed" : "passed";
     const now = new Date().toISOString();
     const oracleArtifact = `${runId}/oracle.json`;
     const summary: RunSummary = {
       runId, startedAt: now, endedAt: now, status: "completed", verdict, charter,
-      steps: [],
+      steps: kind === "negative" ? [] : [{
+        stepId: "step-001", action: { kind: "observe" }, status: "passed", artifacts: [],
+        beforeSnapshot: { capturedAt: now, url: "http://127.0.0.1:8765/", metadata: {} },
+        afterSnapshot: { capturedAt: now, url: `http://127.0.0.1:8765/${visited ? options.dynamicResume && charterId === "resume" ? "resumes/private-candidate-123" : charterId : ""}`, metadata: {} },
+      }],
       assertions: kind === "negative" ? [] : [{ assertion: charter.assertions[0]!, passed: true, message: "visible", evidence: [`${runId}/snapshot.json`] }],
       oracles: [{ name: `${charterId}-oracle`, passed: !failed, message: failed ? "business state is wrong" : "business state is done", evidence: [oracleArtifact], sourceEvidenceCount: missing ? 0 : 1, observedAt: now }],
       artifacts: [`${runId}/snapshot.json`, oracleArtifact],

@@ -208,12 +208,21 @@ export const ProjectMapSchema = z.object({
 export type ProjectMap = z.infer<typeof ProjectMapSchema>;
 
 /** A curated test case in the external workspace, selected by explicit aliases. */
+export const RouteCoverageTargetSchema = z.object({
+  kind: z.enum(["web", "api"]),
+  path: z.string().min(1).max(256).refine((value) => value.startsWith("/") && !/[?#\s{}$]/.test(value), "Use a static route path without a query or fragment"),
+  /** Repository-relative path, required when the same route appears in multiple files. */
+  source: z.string().min(1).refine((value) => !value.startsWith("/") && !value.includes("\\") && !value.split("/").includes(".."), "Use a repository-relative source path").optional(),
+});
+export type RouteCoverageTarget = z.infer<typeof RouteCoverageTargetSchema>;
+
 export const CharterCatalogEntrySchema = z.object({
   id: z.string().regex(/^[a-zA-Z0-9._-]+$/),
   path: z.string().min(1),
   aliases: z.array(z.string().trim().min(2)).min(1),
   level: TestLevelSchema,
   surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1),
+  routeTargets: z.array(RouteCoverageTargetSchema).optional(),
 });
 export type CharterCatalogEntry = z.infer<typeof CharterCatalogEntrySchema>;
 
@@ -237,7 +246,7 @@ export const TestSuiteSchema = z.object({
   suiteId: CatalogIdSchema,
   level: z.literal("release"),
   surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1),
-  charters: z.array(z.object({ charterId: CatalogIdSchema, charter: TestCharterSchema })).min(2),
+  charters: z.array(z.object({ charterId: CatalogIdSchema, charter: TestCharterSchema, routeTargets: z.array(RouteCoverageTargetSchema).optional() })).min(2),
   uncoveredCharterIds: z.array(CatalogIdSchema).default([]),
 }).superRefine((suite, ctx) => {
   if (new Set(suite.charters.map((item) => item.charterId)).size !== suite.charters.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charters"], message: "Suite Charter IDs must be unique" });

@@ -16,13 +16,14 @@ describe("scanProject", () => {
     await writeFile(join(root, "apps", "desktop", "package.json"), JSON.stringify({ name: "desktop", scripts: { dev: "electron ." }, dependencies: { electron: "1" } }));
     await writeFile(join(root, "apps", "desktop", "main.ts"), "router.get('/health', handler);\n");
     await writeFile(join(root, "apps", "desktop", "router.ts"), "export const routes = [{ path: '/resume' }];\n");
+    await writeFile(join(root, "apps", "desktop", "extra-routes.ts"), "export const routes = [{ path: '/login' }, { path: '/settings' }];\n");
     await mkdir(join(root, "apps", "desktop", "tests"), { recursive: true });
-    await writeFile(join(root, "apps", "desktop", "tests", "resume.test.ts"), "test('resume', () => {});\n");
+    await writeFile(join(root, "apps", "desktop", "tests", "resume.test.ts"), "const fixture = { path: '/fixture-only' }; test('resume', () => {});\n");
     const map = await scanProject(root);
     expect(map.detected.web).toBe(true);
     expect(map.detected.electron).toBe(true);
     expect(map.packages[0]?.name).toBe("desktop");
-    expect(map.inventory.sourceFiles).toBe(3);
+    expect(map.inventory.sourceFiles).toBe(4);
     expect(map.inventory.testFiles).toBe(1);
     expect(map.inventory.truncated).toBe(false);
     expect(map.inventory.source).toBe("filesystem");
@@ -34,7 +35,10 @@ describe("scanProject", () => {
     expect(map.inventory.routeHints).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "api", path: "/health", source: "apps/desktop/main.ts", line: 1 }),
       expect.objectContaining({ kind: "web", path: "/resume", source: "apps/desktop/router.ts", line: 1 }),
+      expect.objectContaining({ kind: "web", path: "/login", source: "apps/desktop/extra-routes.ts", line: 1 }),
+      expect.objectContaining({ kind: "web", path: "/settings", source: "apps/desktop/extra-routes.ts", line: 1 }),
     ]));
+    expect(map.inventory.routeHints.some((hint) => hint.path === "/fixture-only")).toBe(false);
   });
 
   it("uses the Git working tree and includes untracked source without scanning ignored archives", async () => {
@@ -66,6 +70,30 @@ describe("scanProject", () => {
     expect(map.inventory.routeHints.some((hint) => hint.path.includes("token"))).toBe(false);
   });
 
+  it("scans an independent project ignored by its parent repository", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "proofkit-ignored-parent-"));
+    await execFileAsync("git", ["init", "-q"], { cwd: parent });
+    await writeFile(join(parent, ".gitignore"), "sandbox/\n");
+    const root = join(parent, "sandbox", "project");
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "package.json"), JSON.stringify({ name: "ignored-fixture" }));
+    await writeFile(join(root, "router.ts"), "export const route = { path: '/resume' };\n");
+    const map = await scanProject(root);
+    expect(map.inventory.source).toBe("filesystem");
+    expect(map.inventory.routeHints).toContainEqual(expect.objectContaining({ kind: "web", path: "/resume" }));
+  });
+
+  it("respects an empty Git inventory at the repository root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-empty-git-"));
+    await execFileAsync("git", ["init", "-q"], { cwd: root });
+    await writeFile(join(root, ".gitignore"), "*\n");
+    await writeFile(join(root, "package.json"), JSON.stringify({ name: "ignored-root" }));
+    await writeFile(join(root, "router.ts"), "export const route = { path: '/ignored' };\n");
+    const map = await scanProject(root);
+    expect(map.inventory.source).toBe("git");
+    expect(map.inventory.routeHints).toHaveLength(0);
+  });
+
   it("keeps the bounded inventory out of dependency and generated directories", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-inventory-"));
     await writeFile(join(root, "package.json"), JSON.stringify({ name: "fixture", devDependencies: { vitest: "1" } }));
@@ -79,6 +107,26 @@ describe("scanProject", () => {
     expect(map.inventory.filesScanned).toBe(2);
     expect(map.inventory.truncated).toBe(false);
     expect(map.inventory.testFrameworks).toContain("vitest");
+  });
+
+  it("marks the map partial when route hints exceed the result cap", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-route-cap-"));
+    await writeFile(join(root, "package.json"), JSON.stringify({ name: "fixture" }));
+    await writeFile(join(root, "router.ts"), Array.from({ length: 205 }, (_, index) => `export const route${index} = { path: '/r${index}' };`).join("\n"));
+    const map = await scanProject(root);
+    expect(map.inventory.filesScanned).toBe(2);
+    expect(map.inventory.routeHints).toHaveLength(200);
+    expect(map.inventory.truncated).toBe(true);
+  });
+
+  it("marks the map partial when a source file is too large to inspect", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-large-source-"));
+    await writeFile(join(root, "package.json"), JSON.stringify({ name: "fixture" }));
+    await writeFile(join(root, "router.ts"), `export const route = { path: '/hidden' };\n${"x".repeat(1_000_000)}`);
+    const map = await scanProject(root);
+    expect(map.inventory.sourceFiles).toBe(1);
+    expect(map.inventory.routeHints).toHaveLength(0);
+    expect(map.inventory.truncated).toBe(true);
   });
 
   it("creates a config and integration starter without overwriting either", async () => {

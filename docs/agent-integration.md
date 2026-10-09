@@ -55,6 +55,23 @@ suites:
 
 Both referenced Charters must be registered `release` entries, support both surfaces, and declare their own assertions and business Oracles. Call `run_test({ intent: "上线完整回归", suiteId: "release-critical", surface: "web" })`, or use the suite's alias without `suiteId` when it is unambiguous. `list_test_suites` shows the configured scope. A suite runs only its declared Charters; the result lists other registered release Charters as uncovered catalog scope. A direct `charterId` still runs one Charter.
 
+To measure discovered route scope, add reviewed `routeTargets` to each catalog Charter in the same external config:
+
+```yaml
+charters:
+  - id: resume-release
+    path: .proofkit/charters/resume-release.yml
+    aliases: [简历获取上线回归]
+    level: release
+    surfaces: [web, electron]
+    routeTargets:
+      - kind: web
+        path: /resumes
+        source: apps/resume/src/router.ts
+```
+
+`source` may be omitted when the scanned route path is unique. `get_mission_evidence.suiteScope.routeCoverage` reports candidate, mapped and observed route counts, bounded gap details with omitted counts, stale or ambiguous declarations, and whether the project inventory was truncated. A Web route is **observed** only when a mapped Charter passes with business evidence and both its primary and replay runs visit that path on every required surface. The saved Mission keeps the mapping used for the run, even if the catalog later changes. API route hints remain mapped but unobserved until network-to-route correlation is implemented. These counts describe static candidate routes, not whole-project coverage.
+
 The final evidence gate is checked per primary run and required replay, not across pooled runs. An Oracle must return at least one sanitized observation fact; ProofKit's own Oracle result file does not count as that fact. A negative case cannot make an unverified main path green.
 
 If a one-sentence request has no suitable Charter and the planner cannot supply an assertion or required Oracle, `run_test` returns `readiness.ready=false` and does not start the surface. The agent should use `list_test_charters` or `plan_test` and fill the missing test contract. Readiness checks structural prerequisites; they do not prove the assertion is meaningful.

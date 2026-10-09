@@ -267,7 +267,7 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
       sourceFiles += 1;
       const kind = classifyEntry(path);
       if (kind) addEntry({ kind, path, reason: "conventional entry point" });
-      await readRouteHints(absolute, path, addRoute);
+      if (!isTestFile(path) && !(await readRouteHints(absolute, path, addRoute))) truncated = true;
     } else if (CONFIG_EXTENSIONS.has(extension) || /(^|\/)Dockerfile[^/]*$|\.env(?:\.|$)/i.test(path)) {
       configFiles += 1;
     }
@@ -281,6 +281,7 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
 
   entryPoints.sort((left, right) => inventoryPriority(right.path) - inventoryPriority(left.path) || left.path.localeCompare(right.path) || left.kind.localeCompare(right.kind));
   routeHints.sort((left, right) => inventoryPriority(right.source) - inventoryPriority(left.source) || left.source.localeCompare(right.source) || left.line - right.line);
+  truncated ||= entryPoints.length > 200 || routeHints.length > MAX_ROUTE_HINTS;
   return {
     filesScanned,
     truncated,
@@ -302,7 +303,14 @@ async function listGitFiles(root: string): Promise<string[] | undefined> {
       maxBuffer: 16 * 1024 * 1024,
       timeout: 10_000,
     });
-    return [...new Set(stdout.split("\0").filter(Boolean).map((path) => path.replaceAll("\\", "/")))];
+    const files = [...new Set(stdout.split("\0").filter(Boolean).map((path) => path.replaceAll("\\", "/")))];
+    if (files.length === 0) {
+      // A source nested in an ignored directory of a *parent* repository is
+      // independent of that repository. Scan its own files instead.
+      const { stdout: topLevel } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: root, encoding: "utf8", timeout: 10_000 });
+      if (!sameProjectPath(topLevel.trim(), root)) return undefined;
+    }
+    return files;
   } catch {
     return undefined;
   }
@@ -342,22 +350,23 @@ function shouldIncludeInventoryPath(path: string): boolean {
   return directories.every((directory) => !directory.startsWith(".") && !IGNORED_DIRECTORIES.has(directory.toLowerCase()));
 }
 
-async function readRouteHints(path: string, source: string, add: (route: InventoryRouteHint) => void): Promise<void> {
+async function readRouteHints(path: string, source: string, add: (route: InventoryRouteHint) => void): Promise<boolean> {
   let content: string;
   try {
     const metadata = await stat(path);
-    if (metadata.size > MAX_SOURCE_BYTES) return;
+    if (metadata.size > MAX_SOURCE_BYTES) return false;
     content = await readFile(path, "utf8");
-  } catch { return; }
+  } catch { return false; }
   const lines = content.split(/\r?\n/);
   lines.forEach((line, index) => {
-    const web = line.match(/\bpath\s*:\s*["'`]([^"'`]+)["'`]/);
-    if (isStaticRoute(web?.[1])) add({ kind: "web", path: web[1], source, line: index + 1 });
-    const api = line.match(/\b(?:get|post|put|patch|delete|head)\s*\(\s*["'`]([^"'`]+)["'`]/i);
-    if (isStaticRoute(api?.[1])) add({ kind: "api", path: api[1], source, line: index + 1 });
-    const go = line.match(/\b(?:GET|POST|PUT|PATCH|DELETE|HEAD)\s*\(\s*["'`]([^"'`]+)["'`]/);
-    if (isStaticRoute(go?.[1])) add({ kind: "api", path: go[1], source, line: index + 1 });
+    for (const match of line.matchAll(/\bpath\s*:\s*["'`]([^"'`]+)["'`]/g)) {
+      if (isStaticRoute(match[1])) add({ kind: "web", path: match[1], source, line: index + 1 });
+    }
+    for (const match of line.matchAll(/\b(?:get|post|put|patch|delete|head)\s*\(\s*["'`]([^"'`]+)["'`]/gi)) {
+      if (isStaticRoute(match[1])) add({ kind: "api", path: match[1], source, line: index + 1 });
+    }
   });
+  return true;
 }
 
 function isStaticRoute(value: string | undefined): value is string {
