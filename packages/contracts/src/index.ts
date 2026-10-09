@@ -9,6 +9,12 @@ export type RunMode = z.infer<typeof RunModeSchema>;
 export const SideEffectPolicySchema = z.enum(["deny", "confirm", "allow"]);
 export type SideEffectPolicy = z.infer<typeof SideEffectPolicySchema>;
 
+/** Persist an environment variable name, never its runtime value, for credential fields. */
+export const FillValueSchema = z.union([
+  z.string(),
+  z.object({ env: z.string().regex(/^[A-Z_][A-Z0-9_]*$/) }).strict(),
+]);
+
 /** Controls the breadth and evidence gate of an AI-directed test mission. */
 export const TestLevelSchema = z.enum(["quick", "core", "release"]);
 export type TestLevel = z.infer<typeof TestLevelSchema>;
@@ -25,7 +31,7 @@ export type TestLevelSelection = z.infer<typeof TestLevelSelectionSchema>;
 export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("goto"), url: z.string().url() }),
   z.object({ kind: z.literal("click"), selector: z.string().min(1) }),
-  z.object({ kind: z.literal("fill"), selector: z.string().min(1), value: z.string() }),
+  z.object({ kind: z.literal("fill"), selector: z.string().min(1), value: FillValueSchema }),
   z.object({ kind: z.literal("press"), selector: z.string().min(1), key: z.string().min(1) }),
   z.object({ kind: z.literal("waitForText"), text: z.string().min(1), timeoutMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("screenshot"), name: z.string().min(1).optional() }),

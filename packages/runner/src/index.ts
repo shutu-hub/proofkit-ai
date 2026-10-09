@@ -219,6 +219,7 @@ export class ExecutionRunner {
     };
     try {
       throwIfAborted(signal);
+      assertFillEnvironment(charter.actions);
       await inspectAndRecordTarget("before-setup");
       if (this.preflight) {
         let result: IntegrationPreflightResult;
@@ -271,7 +272,17 @@ export class ExecutionRunner {
             const beforeSnapshot = await withAbort(this.adapter.snapshot(), signal, `${stepId} snapshot`);
             step.beforeSnapshot = beforeSnapshot;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-before`, beforeSnapshot));
-            const receipt = await withAbort(this.adapter.act(action), signal, `${stepId} action`);
+            const runtimeAction = resolveRuntimeAction(action);
+            let receipt: ActionReceipt;
+            try {
+              receipt = await withAbort(this.adapter.act(runtimeAction), signal, `${stepId} action`);
+            } catch (error) {
+              if (signal.aborted) throw error;
+              if (action.kind === "fill" && typeof action.value !== "string" && runtimeAction.kind === "fill" && typeof runtimeAction.value === "string") {
+                throw new Error(toError(error).message.replaceAll(runtimeAction.value, "[REDACTED_FILL_VALUE]"));
+              }
+              throw error;
+            }
             step.receipt = receipt;
             const afterSnapshot = await withAbort(action.kind === "observe" ? this.adapter.discover() : this.adapter.snapshot(), signal, `${stepId} snapshot`);
             step.afterSnapshot = afterSnapshot;
@@ -561,6 +572,19 @@ function preflightResult(value: IntegrationPreflightResult): IntegrationPrefligh
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function assertFillEnvironment(actions: readonly Action[]): void {
+  const names = actions.flatMap((action) => action.kind === "fill" && typeof action.value !== "string" ? [action.value.env] : []);
+  const missing = names.filter((name) => !process.env[name]);
+  if (missing.length > 0) throw new BlockedError(`Required fill environment variables are unset or empty: ${[...new Set(missing)].join(", ")}`);
+}
+
+function resolveRuntimeAction(action: Action): Action {
+  if (action.kind !== "fill" || typeof action.value === "string") return action;
+  const value = process.env[action.value.env];
+  if (!value) throw new BlockedError(`Required fill environment variable is unset or empty: ${action.value.env}`);
+  return { ...action, value };
 }
 
 function throwIfAborted(signal: AbortSignal): void {

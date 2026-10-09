@@ -42,6 +42,109 @@ class SlowAdapter extends FakeAdapter {
 }
 
 describe("ExecutionRunner", () => {
+  it("resolves fill values only at execution and replays with the current environment", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-fill-env-"));
+    const envName = "PROOFKIT_TEST_FILL_SECRET";
+    const previous = process.env[envName];
+    const seen: string[] = [];
+    const adapter = () => {
+      const instance = new FakeAdapter();
+      instance.act = async (action) => {
+        if (action.kind === "fill") seen.push(typeof action.value === "string" ? action.value : "unresolved");
+        return { actionId: action.kind, kind: action.kind, startedAt: new Date().toISOString(),
+          endedAt: new Date().toISOString(), durationMs: 0, metadata: {} };
+      };
+      return instance;
+    };
+    const charter = { intent: "fill a test credential", level: "quick" as const, mode: "deterministic" as const,
+      preconditions: [], actions: [{ kind: "fill" as const, selector: "#password", value: { env: envName } }],
+      assertions: [], sideEffectPolicy: "allow" as const, metadata: {} };
+    try {
+      process.env[envName] = "first-runtime-secret";
+      const first = await new ExecutionRunner(adapter(), { evidenceDir: root }).run(charter, "fill-env-first");
+      expect(first.steps[0]?.status).toBe("passed");
+      expect(seen).toEqual(["first-runtime-secret"]);
+      const saved = await readFile(join(root, "fill-env-first", "run.json"), "utf8");
+      const events = await readFile(join(root, "fill-env-first", "events.jsonl"), "utf8");
+      expect(saved + events).not.toContain("first-runtime-secret");
+      expect(JSON.parse(saved).charter.actions[0].value).toEqual({ env: envName });
+
+      process.env[envName] = "second-runtime-secret";
+      const replay = await new ExecutionRunner(adapter(), { evidenceDir: root }).run(JSON.parse(saved).charter, "fill-env-replay");
+      expect(replay.steps[0]?.status).toBe("passed");
+      expect(seen).toEqual(["first-runtime-secret", "second-runtime-secret"]);
+      expect(await readFile(join(root, "fill-env-replay", "run.json"), "utf8")).not.toContain("second-runtime-secret");
+    } finally {
+      if (previous === undefined) delete process.env[envName];
+      else process.env[envName] = previous;
+    }
+  });
+
+  it("blocks a missing fill environment variable before connecting a surface", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-fill-missing-"));
+    const envName = "PROOFKIT_TEST_FILL_MISSING";
+    const previous = process.env[envName];
+    delete process.env[envName];
+    const adapter = new FakeAdapter();
+    let connected = false;
+    adapter.connect = async () => { connected = true; };
+    try {
+      const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
+        intent: "fill a required credential", level: "quick", mode: "deterministic", preconditions: [],
+        actions: [{ kind: "fill", selector: "#password", value: { env: envName } }],
+        assertions: [], sideEffectPolicy: "allow", metadata: {},
+      }, "fill-env-missing");
+      expect(summary.verdict).toBe("blocked");
+      expect(connected).toBe(false);
+      expect(summary.findings).toContain(`Required fill environment variables are unset or empty: ${envName}`);
+    } finally {
+      if (previous === undefined) delete process.env[envName];
+      else process.env[envName] = previous;
+    }
+  });
+
+  it("redacts an environment-provided fill value from adapter failure evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-fill-error-"));
+    const envName = "PROOFKIT_TEST_FILL_ERROR";
+    const previous = process.env[envName];
+    const secret = "error-runtime-secret";
+    process.env[envName] = secret;
+    const adapter = new FakeAdapter();
+    adapter.act = async () => { throw new Error(`Adapter failed while handling ${secret}`); };
+    try {
+      const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
+        intent: "check error evidence", level: "quick", mode: "deterministic", preconditions: [],
+        actions: [{ kind: "fill", selector: "#password", value: { env: envName } }],
+        assertions: [], sideEffectPolicy: "allow", metadata: {},
+      }, "fill-env-error");
+      expect(summary.verdict).toBe("failed");
+      expect(summary.steps[0]?.error).toContain("[REDACTED_FILL_VALUE]");
+      expect(JSON.stringify(summary)).not.toContain(secret);
+      expect(await readFile(join(root, "fill-env-error", "events.jsonl"), "utf8")).not.toContain(secret);
+    } finally {
+      if (previous === undefined) delete process.env[envName];
+      else process.env[envName] = previous;
+    }
+  });
+
+  it("preserves cancellation while a fill action uses a runtime environment value", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-fill-timeout-"));
+    const envName = "PROOFKIT_TEST_FILL_TIMEOUT";
+    const previous = process.env[envName];
+    process.env[envName] = "timeout-runtime-secret";
+    try {
+      const summary = await new ExecutionRunner(new SlowAdapter(), { evidenceDir: root, timeoutMs: 10 }).run({
+        intent: "cancel a slow credential fill", level: "quick", mode: "deterministic", preconditions: [],
+        actions: [{ kind: "fill", selector: "#password", value: { env: envName } }],
+        assertions: [], sideEffectPolicy: "allow", metadata: {},
+      }, "fill-env-timeout");
+      expect(summary.verdict).toBe("cancelled");
+    } finally {
+      if (previous === undefined) delete process.env[envName];
+      else process.env[envName] = previous;
+    }
+  });
+
   it("blocks a different source checkout before connecting and retains process evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-target-mismatch-"));
     const adapter = new FakeAdapter();

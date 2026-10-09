@@ -11,13 +11,15 @@ import { createProofkitMcp } from "../packages/mcp/dist/server.js";
 const scratch = await mkdtemp(join(tmpdir(), "proofkit-inspection-"));
 const source = join(scratch, "source");
 const workspaceRoot = join(scratch, "workspace");
+const fillEnvName = "PROOFKIT_INSPECTION_FILL_VALUE";
+const previousFillValue = process.env[fillEnvName];
 let mcp;
 let client;
 const web = createServer((_request, response) => {
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   response.end(`<!doctype html><title>Inspection fixture</title><h1>Resume intake</h1>
     <p>qa@example.com 13800138000</p>
-    <label for="candidate">Candidate</label><input id="candidate" data-testid="candidate-field" value="private candidate value">
+    <label for="candidate">Candidate</label><input id="candidate" data-testid="candidate-field" value="private candidate value" oninput="document.querySelector('#result').textContent='Candidate updated'">
     <button id="fetch" onclick="document.querySelector('#result').textContent='Resume ready'">Fetch resume</button>
     <button onclick="document.querySelector('#result').textContent='Details ready'">Show details</button>
     <button>Duplicate</button><button>Duplicate</button>
@@ -72,6 +74,32 @@ try {
     assertions: [{ kind: "text-visible", text: "Details ready" }], sideEffectPolicy: "allow", metadata: {},
   } });
   assert.equal((await runner.wait(started.runId)).verdict, "passed");
+  process.env[fillEnvName] = "inspection-fixture-value";
+  const fillResponse = await client.callTool({ name: "run_test", arguments: {
+    intent: "Fill using a runtime test variable", level: "quick", surface: "web", charter: {
+      intent: "Fill using a runtime test variable", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "fill", selector: candidate.selector, value: { env: fillEnvName } }],
+      assertions: [{ kind: "text-visible", text: "Candidate updated" }], sideEffectPolicy: "allow", metadata: {},
+    },
+  } });
+  assert.equal(fillResponse.isError, undefined);
+  const fillMission = JSON.parse(fillResponse.content.find((item) => item.type === "text")?.text ?? "null");
+  assert.equal(fillMission.readiness.ready, true, JSON.stringify(fillMission.readiness));
+  let fillStatus;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const statusResponse = await client.callTool({ name: "get_mission_status", arguments: { missionId: fillMission.missionId } });
+    fillStatus = JSON.parse(statusResponse.content.find((item) => item.type === "text")?.text ?? "null");
+    if (["completed", "failed", "blocked", "cancelled"].includes(fillStatus.mission.status)) break;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  assert.equal(fillStatus.mission.verdict, "passed", JSON.stringify(fillStatus.mission.findings));
+  const savedMission = await readFile(join(workspaceRoot, ".proofkit", "missions", `${fillMission.missionId}.json`), "utf8");
+  assert.equal(savedMission.includes("inspection-fixture-value"), false);
+  const fillRunId = JSON.parse(savedMission).observations.find((item) => item.kind === "surface.run")?.data.runId;
+  assert.ok(fillRunId);
+  const fillEvidence = await readFile(join(workspaceRoot, ".proofkit", "runs", fillRunId, "run.json"), "utf8");
+  assert.equal(fillEvidence.includes("inspection-fixture-value"), false);
+  assert.deepEqual(JSON.parse(fillEvidence).charter.actions[0].value, { env: fillEnvName });
   const ambiguous = await runner.start({ adapter: "web", start: false, charter: {
     intent: "Reject an ambiguous selector", level: "quick", mode: "deterministic", preconditions: [],
     actions: [{ kind: "click", selector: 'role=button[name="Duplicate"]' }],
@@ -82,8 +110,10 @@ try {
   assert.ok(ambiguousSummary.findings.some((finding) => finding.includes("matched 2 elements")));
   assert.deepEqual(await readdir(source), ["package.json"]);
   console.log(JSON.stringify({ inspectionId: inspection.inspectionId, controls: inspection.snapshot.controls.length,
-    selector: details.selector, verified: ["mcp-inspect-surface", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "source-unchanged"] }, null, 2));
+    selector: details.selector, verified: ["mcp-inspect-surface", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
 } finally {
+  if (previousFillValue === undefined) delete process.env[fillEnvName];
+  else process.env[fillEnvName] = previousFillValue;
   await client?.close();
   await mcp?.close();
   await new Promise((done) => web.close(() => done()));

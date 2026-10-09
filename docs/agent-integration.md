@@ -148,6 +148,8 @@ surfaces:
 
 The integration should expose opaque IDs and sanitized facts. It should not expose arbitrary shell, SQL, filesystem or credential operations. Write capabilities require an explicit test environment, a Charter side-effect policy of `allow`, and the runner-level write opt-in.
 
+For UI login fields, use a `fill` action with `value: { env: "PROOFKIT_TEST_PASSWORD" }` and set that variable in the local test runner process. ProofKit resolves it immediately before the action; the Charter, Mission, Run JSON and step event retain only the variable name. A missing or empty variable blocks before browser connection, and replay reads the current value. A literal `fill.value` remains supported for non-sensitive fixture text and is saved in evidence. Screenshots, page text, application logs and business integrations can still reveal a value that the application displays, so use isolated credentials and keep evidence access restricted.
+
 For MCP, the operator sets `PROOFKIT_ALLOW_CAPABILITY_WRITES=1` when launching the server. The workspace must also set `policies.sideEffects: allow`, and the selected Charter and capability must each allow the write. The agent cannot turn on this process-level switch through a tool argument. CLI uses `proofkit mission run <mission-id> --approve --allow-capability-writes`. Use this only with a dedicated test environment and the integration's preflight checks.
 
 ## Choosing a level

@@ -76,6 +76,7 @@ export class MobileAdapter implements SurfaceAdapter {
         await this.elementCommand(action.selector, "POST", "/click");
         break;
       case "fill":
+        if (typeof action.value !== "string") throw new Error("Fill environment reference must be resolved by the runner");
         await this.elementCommand(action.selector, "POST", "/clear");
         await this.elementCommand(action.selector, "POST", "/value", { text: action.value, value: [...action.value] });
         break;

@@ -151,6 +151,7 @@ export class WebAdapter implements SurfaceAdapter {
         await (await uniqueActionLocator(page, action.selector)).click();
         break;
       case "fill":
+        if (typeof action.value !== "string") throw new Error("Fill environment reference must be resolved by the runner");
         await (await uniqueActionLocator(page, action.selector)).fill(action.value);
         break;
       case "press":
