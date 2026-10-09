@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
-import { normalizePlanningQuality, PlanningQualitySchema, RunModeSchema, ProjectMapSchema, SideEffectPolicySchema, TestCharterSchema, TestLevelSchema, type Assertion, type PlanningQuality, type ProjectMap, type RunMode, type SideEffectPolicy, type TestCharter, type TestLevel } from "@proofkit/contracts";
+import { hasPositiveSurfaceAssertion, normalizePlanningQuality, PlanningQualitySchema, RunModeSchema, ProjectMapSchema, SideEffectPolicySchema, TestCharterSchema, TestLevelSchema, type Assertion, type PlanningQuality, type ProjectMap, type RunMode, type SideEffectPolicy, type TestCharter, type TestLevel } from "@proofkit/contracts";
 import { z } from "zod";
 import { resolveTestLevel } from "./test-levels.js";
 
@@ -53,8 +53,8 @@ export function assessPlanningQuality(charter: TestCharter, input: PlanningAsses
   const evidenceGaps: string[] = [];
   const add = (items: string[], value: string) => { if (!items.includes(value)) items.push(value); };
 
-  if (constraints.requireAssertions && charter.assertions.length === 0) {
-    add(missingInputs, "至少一个可观察的表面断言");
+  if (constraints.requireAssertions && !hasPositiveSurfaceAssertion(charter.assertions)) {
+    add(missingInputs, "至少一个正向可观察的表面断言");
     add(evidenceGaps, "surface-assertion");
   }
   if (constraints.requireBusinessOracle && (charter.oracles?.length ?? 0) === 0) {
@@ -196,8 +196,8 @@ export class StructuredPlanner {
   async plan(input: PlannerInput): Promise<TestCharter> {
     const candidate = await this.provider.plan(input);
     const charter = TestCharterSchema.parse(candidate);
-    if (input.constraints.requireAssertions && charter.assertions.length === 0) {
-      throw new Error("Planner output must include at least one assertion");
+    if (input.constraints.requireAssertions && !hasPositiveSurfaceAssertion(charter.assertions)) {
+      throw new Error("Planner output must include at least one positive surface assertion");
     }
     if (input.constraints.allowedActionKinds && charter.actions.some((action) => !input.constraints.allowedActionKinds?.includes(action.kind))) {
       throw new Error("Planner output contains an action outside the allowed action kinds");

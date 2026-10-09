@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ProjectMapSchema, TestLevelSchema, type TestCharter } from "@proofkit/contracts";
+import { hasPositiveSurfaceAssertion, ProjectMapSchema, TestLevelSchema, type TestCharter } from "@proofkit/contracts";
 import { PlannerConstraintsSchema, StructuredPlanner, type PlannerProvider } from "./core.js";
 
 export const PlannerBenchmarkExpectationSchema = z.object({
@@ -88,13 +88,13 @@ export async function evaluatePlannerBenchmark(provider: PlannerProvider, cases:
       checks.requiredActions = expectation.requiredActionKinds.every((kind) => actionKinds.has(kind));
       checks.forbiddenActions = expectation.forbiddenActionKinds.every((kind) => !actionKinds.has(kind));
       checks.requiredOracles = expectation.requiredOracleNames.every((name) => oracleNames.has(name));
-      checks.assertions = !expectation.requireAssertions || charter.assertions.length > 0;
+      checks.assertions = !expectation.requireAssertions || hasPositiveSurfaceAssertion(charter.assertions);
       checks.negativeCases = !expectation.requireNegativeCases || (charter.negativeCases?.length ?? 0) > 0;
       if (!checks.level) failures.push(`expected level ${expectation.level}, received ${charter.level}`);
       if (!checks.requiredActions) failures.push(`missing required action kind(s): ${expectation.requiredActionKinds.filter((kind) => !actionKinds.has(kind)).join(", ")}`);
       if (!checks.forbiddenActions) failures.push(`contains forbidden action kind(s): ${expectation.forbiddenActionKinds.filter((kind) => actionKinds.has(kind)).join(", ")}`);
       if (!checks.requiredOracles) failures.push(`missing required Oracle(s): ${expectation.requiredOracleNames.filter((name) => !oracleNames.has(name)).join(", ")}`);
-      if (!checks.assertions) failures.push("no assertion was generated");
+      if (!checks.assertions) failures.push("no positive surface assertion was generated");
       if (!checks.negativeCases) failures.push("no negative case was generated");
       const score = scoreChecks(checks);
       results.push({ caseId: benchmarkCase.caseId, planner: provider.name, valid: failures.length === 0, score, checks, failures, charter });

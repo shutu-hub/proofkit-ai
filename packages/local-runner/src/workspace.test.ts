@@ -63,7 +63,7 @@ describe("external test workspace", () => {
     await expect(service.createMission({ intent: "其它内容", surface: "web", charterId: "resume-core", url: "http://127.0.0.1" }))
       .rejects.toThrow("cannot be combined");
     await writeFile(charterPath, JSON.stringify({ ...catalogCharter, assertions: [] }));
-    await expect(service.createMission({ intent: "简历获取", surface: "web" })).rejects.toThrow("needs a surface assertion");
+    await expect(service.createMission({ intent: "简历获取", surface: "web" })).rejects.toThrow("needs a positive surface assertion");
     await writeFile(charterPath, JSON.stringify({ ...catalogCharter, oracles: ["missing"] }));
     await expect(service.createMission({ intent: "简历获取", surface: "web" })).rejects.toThrow("unregistered Oracle");
     await writeFile(charterPath, JSON.stringify({ ...catalogCharter, level: "quick" }));

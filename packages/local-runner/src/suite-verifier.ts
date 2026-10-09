@@ -1,4 +1,4 @@
-import { FailureBoundarySchema, FindingSchema, ProjectMapSchema, RouteCoverageTargetSchema, type Observation, type RouteCoverageTarget, type TestMission, type Verdict } from "@proofkit/contracts";
+import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, ProjectMapSchema, RouteCoverageTargetSchema, type Observation, type RouteCoverageTarget, type TestMission, type Verdict } from "@proofkit/contracts";
 import type { MissionToolResult } from "@proofkit/agent";
 
 type RunKind = "primary" | "replay" | "negative";
@@ -44,6 +44,7 @@ export function summarizeSuiteScope(mission: TestMission): SuiteScopeSummary | u
   const observations = mission.observations.filter((item) => item.kind === "surface.run");
   const results = suite.charters.flatMap(({ charterId, charter }) => suite.surfaces.map((surface): SuiteSurfaceResult => {
     const missing: string[] = [];
+    if (!hasPositiveSurfaceAssertion(charter.assertions)) missing.push("positive surface assertion");
     let failed = false;
     let blocked = false;
     let inconclusive = false;

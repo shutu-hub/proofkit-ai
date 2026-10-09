@@ -106,10 +106,13 @@ export class MobileAdapter implements SurfaceAdapter {
   }
 
   async assert(assertion: Assertion): Promise<AssertionResult> {
-    if (assertion.kind === "text-visible") {
-      const snapshot = await this.snapshot();
-      const passed = snapshot.text?.includes(assertion.text) ?? false;
-      return { assertion, passed, message: passed ? `Text is visible: ${assertion.text}` : `Text is not visible: ${assertion.text}`, evidence: [] };
+    if (assertion.kind === "text-visible" || assertion.kind === "text-not-visible") {
+      // The driver source is stronger than the bounded evidence snapshot for an
+      // absence check: truncation must never turn a present error into a pass.
+      const source = await this.command("GET", "/source");
+      const found = typeof source === "string" && source.includes(assertion.text);
+      const passed = assertion.kind === "text-visible" ? found : typeof source === "string" && !found;
+      return { assertion, passed, message: found ? `Text found in mobile source: ${assertion.text}` : `Text not found in mobile source: ${assertion.text}`, evidence: [] };
     }
     if (assertion.kind === "title-contains") {
       const title = await this.command("GET", "/title").catch(() => "");

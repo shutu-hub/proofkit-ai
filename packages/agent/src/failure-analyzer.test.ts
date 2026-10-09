@@ -140,6 +140,28 @@ describe("analyzeRun", () => {
     expect(result.finding?.status).toBe("confirmed");
   });
 
+  it("keeps an authentication blocker ahead of a downstream assertion failure", () => {
+    const result = analyzeRun({
+      summary: summary({
+        verdict: "blocked",
+        assertions: [{ assertion: { kind: "text-not-visible", text: "Page configuration failed" }, passed: false, message: "error visible", evidence: [] }],
+        runtimeFindings: [{
+          findingId: "runtime-auth", kind: "console", category: "environment", status: "confirmed", severity: "high",
+          message: "AuthRequiredError: login expired", eventType: "console", affectsVerdict: true,
+          evidence: ["run-fixture/events.jsonl"], observedAt: capturedAt,
+        }],
+      }),
+      evidence: [evidence("run-fixture/events.jsonl", "network"), evidence("run-fixture/after.json")],
+    });
+    expect(result.boundary?.kind).toBe("environment");
+    expect(result.boundary?.message).toContain("Configured environment blocker");
+    expect(result.boundary?.message).not.toContain("login expired");
+    expect(result.finding).toMatchObject({ category: "environment", status: "confirmed" });
+    expect(result.finding?.evidence).toHaveLength(1);
+    expect(result.diagnosis).toBeUndefined();
+    expect(result.repairSuggestion).toBeUndefined();
+  });
+
   it("returns no failure analysis for a passed run", () => {
     expect(analyzeRun({ summary: summary({ verdict: "passed" }), evidence: [] })).toEqual({});
   });

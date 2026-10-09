@@ -79,6 +79,8 @@ workflow 完成事实必须同时匹配 `run_id`、`candidate.id`、`job.id` 和
 
 `.proofkit/charters/aihr-online-resume.yml` 保留为在线简历兼容流程，覆盖 online intake、结构化处理、PDF 生成和后续业务状态。普通上传和在线简历两个参考 Charter 目前都没有真实 UI 断言，因此不能直接登记为 `core` 目录用例，也不能把连接器执行称为完整 Web/Electron 验收。
 
+`.proofkit/charters/aihr-resume-ui-quick.yml` 是只读页面检查，要求关键控件可见且“页面配置加载失败”不可见。此前一次本地快速运行只检查控件，页面同时显示该错误却被判为 `passed`；新增负向断言后，这种运行会明确失败。该 Charter 不证明简历获取业务终态，且运行目标必须与所声明的源码工作区一致。
+
 证据只保存：run/task/file/candidate/job/assessment 的 opaque ID、状态、计数、错误码和稳定哈希。不会保存 source_text、原始 PDF、cookie、token、手机号或完整候选人资料。
 
 ## 失败边界必须单独验收

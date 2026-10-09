@@ -38,6 +38,33 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
 
   if (summary.verdict === "passed" && runtimeFindings.length === 0) return {};
 
+  const environmentBlocker = summary.verdict === "blocked"
+    ? runtimeFindings.find((finding) => finding.category === "environment" && finding.status === "confirmed" && finding.affectsVerdict)
+    : undefined;
+  if (environmentBlocker) {
+    const blockerEvidence = evidenceForPaths(evidence, environmentBlocker.evidence, summary.runId);
+    const blockerMessage = `Configured environment blocker observed in a ${environmentBlocker.eventType} event. Inspect the linked run evidence for its bounded diagnostic.`;
+    const boundary = FailureBoundarySchema.parse({
+      kind: "environment",
+      message: blockerMessage,
+      evidence: blockerEvidence,
+      observedAt: environmentBlocker.observedAt,
+    });
+    return {
+      boundary,
+      finding: FindingSchema.parse({
+        findingId: `finding-${summary.runId}-environment-blocker`,
+        severity: "high",
+        category: "environment",
+        status: "confirmed",
+        title: "Configured test environment blocker observed",
+        message: blockerMessage,
+        evidence: blockerEvidence,
+        createdAt: boundary.observedAt,
+      }),
+    };
+  }
+
   const failedOracle = summary.oracles.find((oracle) => oracle.passed === false);
   if (failedOracle) {
     const oracleEvidence = failedOracle.sourceEvidenceCount && failedOracle.sourceEvidenceArtifacts?.length

@@ -249,6 +249,28 @@ describe("LocalRunnerService", () => {
     expect(completed.findings.some((finding) => finding.message.includes("可观察断言"))).toBe(true);
   });
 
+  it("does not report an absence-only surface check as a passing mission", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-absence-gate-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
+    const assertion = { kind: "text-not-visible" as const, text: "Page error" };
+    const charter: TestCharter = { intent: "check page", level: "quick", mode: "deterministic", preconditions: [], actions: [], assertions: [assertion], sideEffectPolicy: "deny", metadata: {} };
+    const summary: RunSummary = {
+      runId: "absence-gate-run", startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), status: "completed", verdict: "passed",
+      charter, steps: [], assertions: [{ assertion, passed: true, message: "error not visible", evidence: [] }], oracles: [],
+      artifacts: ["absence-gate-run/after.json"], findings: [],
+    };
+    service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
+    service.wait = async () => summary;
+
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    const started = await service.startMission(created.missionId, { approve: true });
+    const completed = await service.waitMission(started.mission.missionId);
+
+    expect(completed.verdict).toBe("inconclusive");
+    expect(completed.findings.some((finding) => finding.message.includes("正向表面断言"))).toBe(true);
+  });
+
   it("keeps an explicitly requested quick level through the mission envelope", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-quick-level-"));
     roots.push(root);
@@ -807,6 +829,7 @@ describe("LocalRunnerService", () => {
             failedResponses: { enabled: true, include4xx: false },
             allowUrlPatterns: [],
             ignoreUrlPatterns: [],
+            blockConsolePatterns: [],
           },
         },
       },

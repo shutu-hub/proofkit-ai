@@ -80,6 +80,7 @@ describe("ProjectRuntime", () => {
             failedResponses: { enabled: true, include4xx: false },
             allowUrlPatterns: [],
             ignoreUrlPatterns: [],
+            blockConsolePatterns: [],
           },
         },
       },

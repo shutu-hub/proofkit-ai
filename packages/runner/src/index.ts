@@ -22,6 +22,8 @@ import type {
 export type AdapterEvent = {
   type: string;
   payload: Record<string, unknown>;
+  /** Preserves events captured before the runner subscribes after adapter connection. */
+  timestamp?: string;
 };
 
 export interface SurfaceAdapter {
@@ -116,7 +118,7 @@ export type ExecutionOptions = {
   preflight?: IntegrationPreflight;
   setup?: IntegrationSetup;
   /** Classify adapter runtime signals without conflating them with business truth. */
-  runtimeQuality?: RuntimeQualityPolicy;
+  runtimeQuality?: z.input<typeof RuntimeQualityPolicySchema>;
 };
 
 export class ExecutionRunner {
@@ -136,6 +138,7 @@ export class ExecutionRunner {
   private readonly runtimeQuality: RuntimeQualityPolicy;
   private readonly runtimeAllowPatterns: RegExp[];
   private readonly runtimeIgnorePatterns: RegExp[];
+  private readonly runtimeBlockConsolePatterns: RegExp[];
 
   constructor(adapter: SurfaceAdapter, options: ExecutionOptions = {}) {
     this.adapter = adapter;
@@ -156,6 +159,7 @@ export class ExecutionRunner {
     this.runtimeQuality = RuntimeQualityPolicySchema.parse(options.runtimeQuality ?? {});
     this.runtimeAllowPatterns = compilePatterns(this.runtimeQuality.allowUrlPatterns, "allowUrlPatterns");
     this.runtimeIgnorePatterns = compilePatterns(this.runtimeQuality.ignoreUrlPatterns, "ignoreUrlPatterns");
+    this.runtimeBlockConsolePatterns = compilePatterns(this.runtimeQuality.blockConsolePatterns, "blockConsolePatterns");
   }
 
   async run(charter: TestCharter, runId = createRunId()): Promise<RunSummary> {
@@ -318,14 +322,19 @@ export class ExecutionRunner {
         : summary.assertions.some((result) => !result.passed) || summary.oracles.some((result) => result.passed === false)
           ? "failed"
           : summary.oracles.some((result) => result.passed === null) ? "inconclusive" : "passed";
-    summary.runtimeHealth = this.runtimeQuality.mode === "ignore"
+    summary.runtimeHealth = this.runtimeQuality.mode === "ignore" && (summary.runtimeFindings ?? []).length === 0
       ? "ignored"
       : (summary.runtimeFindings ?? []).length > 0 ? "failed" : "passed";
-    summary.verdict = this.runtimeQuality.mode === "fail"
+    const environmentBlocked = (summary.runtimeFindings ?? []).some((finding) => finding.category === "environment" && finding.status === "confirmed" && finding.affectsVerdict);
+    const independentBusinessFailure = summary.oracles.some((oracle) => oracle.passed === false && (oracle.sourceEvidenceCount ?? 0) > 0);
+    summary.verdict = environmentBlocked && !independentBusinessFailure
+      ? "blocked"
+      : this.runtimeQuality.mode === "fail"
       && (summary.runtimeFindings ?? []).length > 0
       && (baseVerdict === "passed" || baseVerdict === "inconclusive")
       ? "failed"
       : baseVerdict;
+    if (summary.verdict === "blocked" && environmentBlocked) summary.findings.push("Configured runtime environment blocker was observed; inspect runtime-findings.json.");
     if (summary.verdict === "inconclusive") summary.findings.push(
       charter.assertions.length === 0 && this.oracles.length === 0
         ? "No executable assertion or business oracle was declared."
@@ -344,7 +353,7 @@ export class ExecutionRunner {
   }
 
   private async recordAdapterEvent(runId: string, event: AdapterEvent, summary: RunSummary): Promise<void> {
-    const timestamp = new Date().toISOString();
+    const timestamp = event.timestamp ?? new Date().toISOString();
     const safeEvent = { ...event, payload: sanitizeAdapterEventPayload(event.payload) };
     const payload = { adapter: this.adapter.name, eventType: safeEvent.type, ...safeEvent.payload };
     await this.emit({ runId, timestamp, type: "adapter.event", payload });
@@ -355,8 +364,10 @@ export class ExecutionRunner {
   }
 
   private runtimeFinding(runId: string, event: AdapterEvent, observedAt: string): RuntimeFinding | undefined {
-    if (this.runtimeQuality.mode === "ignore") return undefined;
     const payload = event.payload;
+    const environmentBlocker = event.type === "console" && typeof payload.text === "string"
+      && this.runtimeBlockConsolePatterns.some((pattern) => pattern.test(payload.text as string));
+    if (this.runtimeQuality.mode === "ignore" && !environmentBlocker) return undefined;
     const url = typeof payload.url === "string" && payload.url.length > 0 ? payload.url : undefined;
     if (!matchesRuntimeUrl(url, this.runtimeAllowPatterns, this.runtimeIgnorePatterns)) return undefined;
 
@@ -366,13 +377,13 @@ export class ExecutionRunner {
     let consoleLevel: string | undefined;
     if (event.type === "console") {
       consoleLevel = typeof payload.level === "string" ? payload.level.toLowerCase() : "log";
-      if (!matchesConsoleLevel(consoleLevel, this.runtimeQuality.consoleLevels)) return undefined;
+      if (!environmentBlocker && !matchesConsoleLevel(consoleLevel, this.runtimeQuality.consoleLevels)) return undefined;
       severity = consoleLevel === "error" || consoleLevel === "assert" ? "high" : consoleLevel === "warn" || consoleLevel === "warning" ? "medium" : "low";
-      message = typeof payload.text === "string" && payload.text.length > 0 ? payload.text : "Browser console reported a runtime message.";
+      message = typeof payload.text === "string" && payload.text.length > 0 ? summarizeRuntimeMessage(payload.text) : "Browser console reported a runtime message.";
     } else if (event.type === "pageerror") {
       if (!this.runtimeQuality.pageErrors) return undefined;
       severity = "high";
-      message = typeof payload.message === "string" && payload.message.length > 0 ? payload.message : "Page reported a runtime error.";
+      message = typeof payload.message === "string" && payload.message.length > 0 ? summarizeRuntimeMessage(payload.message) : "Page reported a runtime error.";
     } else if (event.type === "response") {
       if (!this.runtimeQuality.failedResponses.enabled) return undefined;
       statusCode = typeof payload.status === "number" ? payload.status : undefined;
@@ -384,7 +395,7 @@ export class ExecutionRunner {
       if (!this.runtimeQuality.requestFailures) return undefined;
       const errorText = typeof payload.errorText === "string" ? payload.errorText : "request failed";
       severity = "medium";
-      message = url ? `Request failed for ${url}: ${errorText}` : `Request failed: ${errorText}`;
+      message = summarizeRuntimeMessage(url ? `Request failed for ${url}: ${errorText}` : `Request failed: ${errorText}`);
     } else {
       return undefined;
     }
@@ -392,14 +403,14 @@ export class ExecutionRunner {
       findingId: `runtime-${runId}-${summarySafeId(event.type)}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       kind: event.type,
       category: "environment",
-      status: "suspected",
+      status: environmentBlocker ? "confirmed" : "suspected",
       severity,
       message,
       eventType: event.type,
       ...(url ? { url } : {}),
       ...(statusCode !== undefined ? { statusCode } : {}),
       ...(consoleLevel ? { consoleLevel } : {}),
-      affectsVerdict: this.runtimeQuality.mode === "fail",
+      affectsVerdict: environmentBlocker || this.runtimeQuality.mode === "fail",
       evidence: [`${runId}/events.jsonl`],
       observedAt,
     });
@@ -448,17 +459,49 @@ function compilePatterns(patterns: string[], label: string): RegExp[] {
 }
 
 function sanitizeAdapterEventPayload(payload: AdapterEvent["payload"]): AdapterEvent["payload"] {
-  if (typeof payload.url !== "string") return payload;
+  const sanitized = { ...payload };
+  for (const key of ["text", "message", "errorText"] as const) {
+    if (typeof sanitized[key] === "string") sanitized[key] = sanitizeDiagnosticText(sanitized[key]);
+  }
+  if (typeof payload.url !== "string") return sanitized;
   try {
     const url = new URL(payload.url);
     url.username = "";
     url.password = "";
     url.search = "";
     url.hash = "";
-    return { ...payload, url: url.toString() };
+    return { ...sanitized, url: url.toString() };
   } catch {
-    return { ...payload, url: payload.url.split(/[?#]/, 1)[0] };
+    return { ...sanitized, url: "[invalid URL]" };
   }
+}
+
+/** Browser diagnostics are untrusted free text, so persist only bounded, scrubbed context. */
+function sanitizeDiagnosticText(value: string): string {
+  const limit = 4_096;
+  let text = value.slice(0, limit);
+  text = text.replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/gi, (candidate) => {
+    try {
+      const url = new URL(candidate);
+      url.username = "";
+      url.password = "";
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    } catch {
+      return "[URL REDACTED]";
+    }
+  });
+  text = text.replace(/\bBearer\s+[A-Za-z0-9._~+/-]+/gi, "Bearer [REDACTED]");
+  text = text.replace(/\b(authorization|cookie|set-cookie|password|passwd|secret|token|access[_-]?key|api[_-]?key|phone|mobile)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[REDACTED]");
+  text = text.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[REDACTED_EMAIL]");
+  text = text.replace(/\b1[3-9]\d{9}\b/g, "[REDACTED_PHONE]");
+  return value.length > limit ? `${text}… [truncated]` : text;
+}
+
+function summarizeRuntimeMessage(value: string): string {
+  const firstLine = value.split(/\r?\n/, 1)[0]?.trim() || "Runtime diagnostic was recorded.";
+  return firstLine.length > 240 ? `${firstLine.slice(0, 240)}…` : firstLine;
 }
 
 function matchesRuntimeUrl(url: string | undefined, allow: RegExp[], ignore: RegExp[]): boolean {

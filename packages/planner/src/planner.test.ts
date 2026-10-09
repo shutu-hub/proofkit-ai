@@ -24,6 +24,12 @@ describe("IntentPlanner", () => {
     expect(release.planning?.evidenceGaps).toEqual(["surface-assertion", "business-oracle", "negative-case"]);
   });
 
+  it("does not treat an absence-only check as proof that a surface loaded", () => {
+    const charter = new IntentPlanner().fromYaml("intent: check page\nlevel: quick\nactions: []\nassertions:\n  - kind: text-not-visible\n    text: Error\n");
+    expect(assessPlanningQuality(charter, { constraints: { requireAssertions: true } }).evidenceGaps)
+      .toContain("surface-assertion");
+  });
+
   it("keeps legacy Charters readable without planning metadata", () => {
     const charter = new IntentPlanner().fromYaml("intent: verify an existing flow\nactions: []\nassertions: []\n");
     expect(charter.planning).toBeUndefined();

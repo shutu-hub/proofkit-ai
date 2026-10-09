@@ -1,0 +1,22 @@
+intent: 快速检查 AIHR BOSS 简历获取页面可用
+level: quick
+mode: deterministic
+sideEffectPolicy: deny
+preconditions:
+  - AIHR 简历获取页面已通过测试工作区配置的 Web 地址或 Electron CDP 打开
+actions:
+  - kind: waitForText
+    text: BOSS直聘 简历获取
+    timeoutMs: 10000
+  - kind: observe
+assertions:
+  - kind: title-contains
+    text: 简历获取
+  - kind: text-visible
+    text: BOSS直聘 简历获取
+  - kind: text-visible
+    text: 立即运行
+  - kind: text-visible
+    text: 任务进度
+  - kind: text-not-visible
+    text: 页面配置加载失败

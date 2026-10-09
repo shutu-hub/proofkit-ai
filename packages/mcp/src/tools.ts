@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestMission } from "@proofkit/contracts";
-import { TestCharterSchema } from "@proofkit/contracts";
+import { hasPositiveSurfaceAssertion, TestCharterSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 
 export function registerTools(server: McpServer, runner: LocalRunnerService): void {
@@ -220,7 +220,7 @@ function missionReadiness(mission: TestMission): { ready: boolean; missing: stri
   const charters = mission.suite?.charters.map((item) => item) ?? [{ charterId: "", charter: mission.charter }];
   for (const { charterId, charter } of charters) {
     const prefix = charterId ? `${charterId}: ` : "";
-    if (!charter?.assertions.length) missing.push(`${prefix}至少一个明确的表面断言`);
+    if (!hasPositiveSurfaceAssertion(charter?.assertions ?? [])) missing.push(`${prefix}至少一个明确的正向表面断言`);
     if (mission.plan.executionProfile.requireBusinessOracle && !charter?.oracles?.length) {
       missing.push(`${prefix}至少一个独立业务 Oracle`);
     }

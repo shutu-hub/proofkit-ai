@@ -36,10 +36,16 @@ export type Action = z.infer<typeof ActionSchema>;
 
 export const AssertionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text-visible"), text: z.string().min(1) }),
+  z.object({ kind: z.literal("text-not-visible"), text: z.string().min(1) }),
   z.object({ kind: z.literal("url-matches"), pattern: z.string().min(1) }),
   z.object({ kind: z.literal("title-contains"), text: z.string().min(1) }),
 ]);
 export type Assertion = z.infer<typeof AssertionSchema>;
+
+/** An absence check alone cannot establish that the intended page or flow loaded. */
+export function hasPositiveSurfaceAssertion(assertions: readonly Assertion[]): boolean {
+  return assertions.some((assertion) => assertion.kind !== "text-not-visible");
+}
 
 /**
  * A declared negative or recovery scenario. The scenario is intentionally
@@ -204,6 +210,8 @@ export const RuntimeQualityPolicySchema = z.object({
   /** Regular expressions matched against event URLs. An allow list takes precedence over collection. */
   allowUrlPatterns: z.array(z.string().min(1)).default([]),
   ignoreUrlPatterns: z.array(z.string().min(1)).default([]),
+  /** Explicit console signatures that invalidate the test environment, such as missing authentication. */
+  blockConsolePatterns: z.array(z.string().min(1)).default([]),
 });
 export type RuntimeQualityPolicy = z.infer<typeof RuntimeQualityPolicySchema>;
 

@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
+import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningQuality, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
@@ -275,7 +275,7 @@ export class LocalRunnerService {
   }
 
   private validateCatalogCharter(id: string, charter: TestCharter, surface: LocalAdapterName): void {
-    if (charter.assertions.length === 0) throw new Error(`Test catalog entry ${id} needs a surface assertion before it can run`);
+    if (!hasPositiveSurfaceAssertion(charter.assertions)) throw new Error(`Test catalog entry ${id} needs a positive surface assertion before it can run`);
     if (getTestLevelProfile(charter.level).evidencePolicy.requireBusinessOracle && !charter.oracles?.length) {
       throw new Error(`Test catalog entry ${id} needs an independent business Oracle for ${charter.level}`);
     }
@@ -668,6 +668,7 @@ export class LocalRunnerService {
       const executionProfile = context.mission.plan.executionProfile;
       const expectedSurfaces = executionProfile.surfaceMatrix;
       const missing: string[] = [];
+      if (!hasPositiveSurfaceAssertion(context.mission.charter?.assertions ?? [])) missing.push("至少一个正向表面断言");
       for (const surface of expectedSurfaces) {
         for (const runKind of executionProfile.requireReplay ? ["primary", "replay"] as const : ["primary"] as const) {
           const label = runKind === "primary" ? "主运行" : "回放运行";

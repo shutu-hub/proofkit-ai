@@ -42,6 +42,64 @@ class SlowAdapter extends FakeAdapter {
 }
 
 describe("ExecutionRunner", () => {
+  it("blocks a surface failure when a configured authentication console signal invalidates the test environment", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-auth-blocker-"));
+    const adapter = new EventAdapter([{ type: "console", payload: {
+      level: "error",
+      text: "AuthRequiredError: login expired\nAuthorization: Bearer private-token\nrequest http://user:password@fixture/api/resume?token=private#candidate",
+      url: "http://fixture/",
+    } }]);
+    const runner = new ExecutionRunner(adapter, { evidenceDir: root, runtimeQuality: { blockConsolePatterns: ["AuthRequiredError"] } });
+    const summary = await runner.run({
+      intent: "check authenticated page", level: "quick", mode: "deterministic", preconditions: [], actions: [],
+      assertions: [{ kind: "text-visible", text: "Ready" }], sideEffectPolicy: "deny", metadata: {},
+    }, "auth-blocker-run");
+
+    expect(summary.assertions[0]?.passed).toBe(false);
+    expect(summary.verdict).toBe("blocked");
+    expect(summary.runtimeFindings?.[0]).toMatchObject({ category: "environment", status: "confirmed", affectsVerdict: true });
+    expect(summary.runtimeFindings?.[0]?.message).toBe("AuthRequiredError: login expired");
+    const events = await readFile(join(root, "auth-blocker-run", "events.jsonl"), "utf8");
+    expect(events).toContain("AuthRequiredError");
+    expect(events).not.toMatch(/private-token|user:password|token=private|candidate/);
+    expect(await readFile(join(root, "auth-blocker-run", "run.json"), "utf8")).not.toContain("private-token");
+  });
+
+  it("honors an explicit environment blocker even when ordinary runtime classification is ignored", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-auth-ignore-"));
+    const summary = await new ExecutionRunner(new EventAdapter([
+      { type: "console", payload: { level: "log", text: "AuthRequiredError", url: "http://fixture/app" } },
+    ]), { evidenceDir: root, runtimeQuality: { mode: "ignore", blockConsolePatterns: ["AuthRequiredError"] } }).run({
+      intent: "check login", level: "quick", mode: "deterministic", preconditions: [], actions: [],
+      assertions: [{ kind: "text-visible", text: "Ready" }], sideEffectPolicy: "deny", metadata: {},
+    }, "auth-ignore-run");
+
+    expect(summary.verdict).toBe("blocked");
+    expect(summary.runtimeFindings).toHaveLength(1);
+    expect(summary.runtimeHealth).toBe("failed");
+  });
+
+  it("keeps an independently evidenced business failure above an environment console blocker", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-auth-business-"));
+    const summary = await new ExecutionRunner(new EventAdapter([
+      { type: "console", payload: { level: "error", text: "AuthRequiredError", url: "http://fixture/app" } },
+    ]), {
+      evidenceDir: root,
+      runtimeQuality: { blockConsolePatterns: ["AuthRequiredError"] },
+      oracles: [{ name: "binding", check: async () => ({
+        name: "binding", passed: false, message: "resume bound to wrong candidate",
+        evidence: [JSON.stringify({ candidateMatches: false })],
+      }) }],
+    }).run({
+      intent: "check binding", level: "core", mode: "deterministic", preconditions: [], actions: [],
+      assertions: [], oracles: ["binding"], sideEffectPolicy: "deny", metadata: {},
+    }, "auth-business-run");
+
+    expect(summary.verdict).toBe("failed");
+    expect(summary.oracles[0]?.sourceEvidenceCount).toBe(1);
+    expect(summary.runtimeFindings?.[0]?.status).toBe("confirmed");
+  });
+
   it("retains a setup cleanup handle that arrives after cancellation", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-late-setup-"));
     const controller = new AbortController();
@@ -226,6 +284,12 @@ describe("ExecutionRunner", () => {
         failedResponses: { enabled: true, include4xx: false }, allowUrlPatterns: ["["], ignoreUrlPatterns: [],
       },
     })).toThrow("Invalid runtime allowUrlPatterns[0] regular expression");
+  });
+
+  it("rejects invalid environment blocker patterns before a run starts", () => {
+    expect(() => new ExecutionRunner(new FakeAdapter(), {
+      runtimeQuality: { blockConsolePatterns: ["["] },
+    })).toThrow("Invalid runtime blockConsolePatterns[0] regular expression");
   });
 
   it("classifies only matching URLs when a runtime allow list is configured", async () => {

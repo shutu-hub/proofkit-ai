@@ -133,7 +133,7 @@ describe("ProofKit MCP tools", () => {
     const result = JSON.parse(textContent(response));
     expect(result).toMatchObject({
       running: false,
-      readiness: { ready: false, missing: ["至少一个明确的表面断言", "至少一个独立业务 Oracle"] },
+      readiness: { ready: false, missing: ["至少一个明确的正向表面断言", "至少一个独立业务 Oracle"] },
       next: ["list_test_charters", "list_test_suites", "plan_test"],
     });
     expect(runner.startMission).not.toHaveBeenCalled();

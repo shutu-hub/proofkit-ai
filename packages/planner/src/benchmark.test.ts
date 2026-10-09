@@ -85,7 +85,7 @@ describe("evaluatePlannerBenchmark", () => {
       expect.stringContaining("missing required action"),
       expect.stringContaining("contains forbidden action"),
       expect.stringContaining("missing required Oracle"),
-      "no assertion was generated",
+      "no positive surface assertion was generated",
     ]));
     expect(report.failureCounts).toMatchObject({ requiredActions: 1, forbiddenActions: 1, requiredOracles: 1, assertions: 1 });
   });

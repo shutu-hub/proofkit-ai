@@ -41,6 +41,7 @@ const DEFAULT_CONFIG: ProofkitConfig = {
       failedResponses: { enabled: true, include4xx: false },
       allowUrlPatterns: [],
       ignoreUrlPatterns: [],
+      blockConsolePatterns: [],
     },
   },
 };

@@ -24,12 +24,18 @@ export class WebAdapter implements SurfaceAdapter {
   protected context?: BrowserContext;
   protected activePage?: Page;
   protected readonly options: WebAdapterOptions;
+  private eventSink?: (event: AdapterEvent) => void;
+  private pendingEvents: AdapterEvent[] = [];
+  private droppedPendingEvents = 0;
+  private detachPageEvents?: () => void;
 
   constructor(options: WebAdapterOptions = {}) {
     this.options = options;
   }
 
   async connect(): Promise<void> {
+    this.pendingEvents = [];
+    this.droppedPendingEvents = 0;
     const { chromium } = await import("playwright-core");
     if (this.options.cdpUrl) {
       this.browser = await chromium.connectOverCDP(this.options.cdpUrl);
@@ -40,6 +46,7 @@ export class WebAdapter implements SurfaceAdapter {
         if (selected) {
           this.context = selected.context();
           this.activePage = selected;
+          this.attachPageEvents(selected);
           return;
         }
         if (Date.now() >= deadline) {
@@ -55,6 +62,7 @@ export class WebAdapter implements SurfaceAdapter {
     }
     this.context = this.browser.contexts()[0] ?? await this.browser.newContext();
     this.activePage = this.context.pages()[0] ?? await this.context.newPage();
+    this.attachPageEvents(this.activePage);
     if (this.options.baseUrl && (await this.activePage.url()) === "about:blank") {
       await this.activePage.goto(this.options.baseUrl, { waitUntil: "domcontentloaded" });
     }
@@ -122,9 +130,15 @@ export class WebAdapter implements SurfaceAdapter {
 
   async assert(assertion: Assertion): Promise<AssertionResult> {
     const page = this.page();
-    if (assertion.kind === "text-visible") {
-      const count = await page.getByText(assertion.text, { exact: false }).count();
-      return { assertion, passed: count > 0, message: count > 0 ? `Text is visible: ${assertion.text}` : `Text is not visible: ${assertion.text}`, evidence: [] };
+    if (assertion.kind === "text-visible" || assertion.kind === "text-not-visible") {
+      const visible = await hasVisibleText(page, assertion.text);
+      const passed = assertion.kind === "text-visible" ? visible : !visible;
+      return {
+        assertion,
+        passed,
+        message: visible ? `Text is visible: ${assertion.text}` : `Text is not visible: ${assertion.text}`,
+        evidence: [],
+      };
     }
     if (assertion.kind === "title-contains") {
       const title = await page.title();
@@ -146,31 +160,28 @@ export class WebAdapter implements SurfaceAdapter {
   }
 
   async subscribeEvents(listener: (event: AdapterEvent) => void): Promise<() => void> {
-    const page = this.page();
-    const onRequest = (request: Request) => listener({ type: "request", payload: { method: request.method(), url: request.url() } });
-    const onResponse = (response: Response) => listener({ type: "response", payload: { method: response.request().method(), status: response.status(), url: response.url() } });
-    const onRequestFailed = (request: Request) => listener({ type: "requestfailed", payload: {
-      method: request.method(),
-      url: request.url(),
-      errorText: request.failure()?.errorText,
-    } });
-    const onConsole = (message: { type(): string; text(): string }) => listener({ type: "console", payload: { level: message.type(), text: message.text(), url: page.url() } });
-    const onPageError = (error: Error) => listener({ type: "pageerror", payload: { message: error.message, url: page.url() } });
-    page.on("request", onRequest);
-    page.on("requestfailed", onRequestFailed);
-    page.on("response", onResponse);
-    page.on("console", onConsole);
-    page.on("pageerror", onPageError);
+    this.page();
+    if (this.eventSink) throw new Error("Web adapter events are already subscribed");
+    this.eventSink = listener;
+    for (const event of this.pendingEvents) listener(event);
+    this.pendingEvents = [];
+    if (this.droppedPendingEvents > 0) {
+      listener({ type: "event-buffer-overflow", payload: { dropped: this.droppedPendingEvents }, timestamp: new Date().toISOString() });
+      this.droppedPendingEvents = 0;
+    }
     return () => {
-      page.off("request", onRequest);
-      page.off("requestfailed", onRequestFailed);
-      page.off("response", onResponse);
-      page.off("console", onConsole);
-      page.off("pageerror", onPageError);
+      if (this.eventSink === listener) this.eventSink = undefined;
+      this.detachPageEvents?.();
+      this.detachPageEvents = undefined;
     };
   }
 
   async close(): Promise<void> {
+    this.detachPageEvents?.();
+    this.detachPageEvents = undefined;
+    this.eventSink = undefined;
+    this.pendingEvents = [];
+    this.droppedPendingEvents = 0;
     await this.browser?.close();
     this.browser = undefined;
     this.context = undefined;
@@ -181,6 +192,47 @@ export class WebAdapter implements SurfaceAdapter {
     if (!this.activePage) throw new Error("Web adapter is not connected");
     return this.activePage;
   }
+
+  private attachPageEvents(page: Page): void {
+    this.detachPageEvents?.();
+    const onRequest = (request: Request) => this.recordPageEvent({ type: "request", payload: { method: request.method(), url: request.url() } });
+    const onResponse = (response: Response) => this.recordPageEvent({ type: "response", payload: { method: response.request().method(), status: response.status(), url: response.url() } });
+    const onRequestFailed = (request: Request) => this.recordPageEvent({ type: "requestfailed", payload: {
+      method: request.method(),
+      url: request.url(),
+      errorText: request.failure()?.errorText,
+    } });
+    const onConsole = (message: { type(): string; text(): string }) => this.recordPageEvent({ type: "console", payload: { level: message.type(), text: message.text(), url: page.url() } });
+    const onPageError = (error: Error) => this.recordPageEvent({ type: "pageerror", payload: { message: error.message, url: page.url() } });
+    page.on("request", onRequest);
+    page.on("requestfailed", onRequestFailed);
+    page.on("response", onResponse);
+    page.on("console", onConsole);
+    page.on("pageerror", onPageError);
+    this.detachPageEvents = () => {
+      page.off("request", onRequest);
+      page.off("requestfailed", onRequestFailed);
+      page.off("response", onResponse);
+      page.off("console", onConsole);
+      page.off("pageerror", onPageError);
+    };
+  }
+
+  private recordPageEvent(event: AdapterEvent): void {
+    const stamped = { ...event, timestamp: new Date().toISOString() };
+    if (this.eventSink) this.eventSink(stamped);
+    else if (this.pendingEvents.length < 2_000) this.pendingEvents.push(stamped);
+    else this.droppedPendingEvents += 1;
+  }
+}
+
+async function hasVisibleText(page: Page, text: string): Promise<boolean> {
+  const matches = page.getByText(text, { exact: false });
+  const count = await matches.count();
+  for (let index = 0; index < count; index++) {
+    if (await matches.nth(index).isVisible()) return true;
+  }
+  return false;
 }
 
 /** Never choose the first tab by accident when an attached browser has several pages. */

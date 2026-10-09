@@ -38,6 +38,8 @@ describe("MobileAdapter", () => {
     expect(receipt.kind).toBe("click");
     await adapter.act({ kind: "fill", selector: "id=email", value: "test@example.com" });
     expect((await adapter.assert({ kind: "text-visible", text: "Ready" })).passed).toBe(true);
+    expect((await adapter.assert({ kind: "text-not-visible", text: "Ready" })).passed).toBe(false);
+    expect((await adapter.assert({ kind: "text-not-visible", text: "Configuration failed" })).passed).toBe(true);
     expect((await adapter.assert({ kind: "title-contains", text: "Proof" })).passed).toBe(true);
     expect((await adapter.assert({ kind: "url-matches", pattern: "device\\.local" })).passed).toBe(true);
     const screenshot = await adapter.capture("screen.png");
