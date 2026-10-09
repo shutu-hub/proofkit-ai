@@ -50,6 +50,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 **Goal:** make one-sentence planning useful without allowing unverified model output to become an unsafe command.
 
 - Create a fixed Web/Electron benchmark with known workflows and seeded defects.
+- Use the bounded project test map to measure candidate entry-point and route coverage; partial scans must remain visible through the `truncated` flag.
 - Measure plan validity, workflow coverage, assertion quality, false passes and model cost.
 - Add a review gate for write actions and report planner uncertainty.
 - Keep all model output constrained to Charter and typed Capability schemas.

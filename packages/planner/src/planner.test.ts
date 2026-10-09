@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { DeterministicPlannerProvider, IntentPlanner, OpenAICompatiblePlannerProvider, StructuredPlanner, resolveTestLevel } from "./index.js";
 
+const projectMap = {
+  root: ".", scripts: {}, workspaces: [], packages: [],
+  detected: { web: true, electron: false, backend: false },
+  inventory: { filesScanned: 0, truncated: false, source: "filesystem" as const, sourceFiles: 0, testFiles: 0, configFiles: 0, testFrameworks: [], entryPoints: [], routeHints: [] },
+  generatedAt: new Date().toISOString(),
+};
+
 describe("IntentPlanner", () => {
   it("creates executable navigation and text assertions", () => {
     const charter = new IntentPlanner().plan("打开招聘页", { url: "https://example.com", expect: ["Example"] });
@@ -27,7 +34,7 @@ describe("IntentPlanner", () => {
     });
     await expect(planner.plan({
       intent: "safe",
-      projectMap: { root: ".", scripts: {}, workspaces: [], packages: [], detected: { web: true, electron: false, backend: false }, generatedAt: new Date().toISOString() },
+      projectMap,
       constraints: {},
     })).rejects.toThrow();
   });
@@ -36,7 +43,7 @@ describe("IntentPlanner", () => {
     const provider = new DeterministicPlannerProvider();
     const charter = await new StructuredPlanner(provider).plan({
       intent: "打开首页",
-      projectMap: { root: ".", scripts: {}, workspaces: [], packages: [], detected: { web: true, electron: false, backend: false }, generatedAt: new Date().toISOString() },
+      projectMap,
       constraints: { url: "https://example.com", expect: ["Example"] },
     });
     expect(charter.metadata.planner).toBe("deterministic-v1");
@@ -59,7 +66,7 @@ describe("IntentPlanner", () => {
     });
     const output = await provider.plan({
       intent: "观察首页",
-      projectMap: { root: ".", scripts: {}, workspaces: [], packages: [], detected: { web: true, electron: false, backend: false }, generatedAt: new Date().toISOString() },
+      projectMap,
       constraints: {},
     });
     expect(output).toMatchObject({ intent: "local" });

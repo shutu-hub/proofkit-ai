@@ -89,6 +89,22 @@ Initialization writes to the test workspace. If an existing source project alrea
 
 A charter is a versionable execution plan with intent, preconditions, typed actions, assertions, named oracles, mode and side-effect policy. YAML is the human-editable encoding; Zod schemas are the runtime authority. The deterministic planner supports URL navigation and visible-text assertions. An opt-in OpenAI-compatible provider is connected to CLI and MCP through the same Local Runner. Its output is validated against action kind, registered oracle names, side-effect policy and approved navigation origin. Planning does not prove that free-form intent was understood correctly; the saved Charter remains reviewable.
 
+### Project test map
+
+`project.discover` returns a bounded, path-level inventory in addition to
+package and surface detection. It counts source, test and configuration files,
+identifies test framework signals, records conventional Web/Electron/backend
+entry points, and extracts static route-shaped literals with source path and line
+number. It skips dependency, build, VCS, ProofKit and agent metadata
+directories, reads at most one megabyte per source file, and caps the scan at
+4,000 files. Git projects use tracked and nonignored untracked files, excluding
+tool metadata even when tracked; other projects use a priority-first bounded
+filesystem walk. The inventory records this source and
+the `truncated` flag; a partial map is
+never treated as whole-project coverage. These hints guide the host agent and
+planner toward candidate workflows while the source repository remains
+unchanged. They are not proof that a route works or that a test is complete.
+
 A `capability` action names a project-registered operation with schema-validated input and output. The Runner checks its environment allowlist, deadline and side-effect class. `write` requires both a Charter `allow` policy and a separate Runner `allowCapabilityWrites` opt-in, which defaults to false. Only the capability's evidence projection is persisted; a project integration must choose opaque IDs and sanitized facts. An optional `<workspaceRoot>/.proofkit/integration.mjs` supplies those capabilities, oracles and lifecycle hooks without adding test code to the application's business modules.
 
 ### Test Mission and Agent Loop

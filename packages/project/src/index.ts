@@ -1,7 +1,9 @@
-import { access, link, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { access, link, lstat, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { promisify } from "node:util";
 import { parse, stringify } from "yaml";
 import { ProjectMapSchema, ProofkitConfigSchema, type ProjectMap, type ProofkitConfig } from "@proofkit/contracts";
 import { resolveProjectContext, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
@@ -34,11 +36,13 @@ export async function scanProject(projectRoot = process.cwd()): Promise<ProjectM
   const packageJson = await readJson<PackageJson>(join(root, "package.json"));
   const packagePaths = await findPackageJsons(root);
   const packages = [];
+  const dependencyNames = new Set<string>();
   let packageHasElectron = false;
   let packageHasWeb = false;
   for (const packagePath of packagePaths) {
     const item = await readJson<PackageJson>(packagePath);
     const dependencies = { ...(item?.dependencies ?? {}), ...(item?.devDependencies ?? {}) };
+    for (const dependency of Object.keys(dependencies)) dependencyNames.add(dependency);
     packageHasElectron ||= Boolean(dependencies.electron || dependencies["electron-builder"]);
     packageHasWeb ||= Boolean(dependencies.vite || dependencies.vue || dependencies.react);
     packages.push({
@@ -46,6 +50,10 @@ export async function scanProject(projectRoot = process.cwd()): Promise<ProjectM
       name: item?.name,
       scripts: item?.scripts ?? {},
     });
+  }
+
+  for (const dependency of Object.keys({ ...(packageJson?.dependencies ?? {}), ...(packageJson?.devDependencies ?? {}) })) {
+    dependencyNames.add(dependency);
   }
 
   const workspaces = Array.isArray(packageJson?.workspaces)
@@ -58,6 +66,7 @@ export async function scanProject(projectRoot = process.cwd()): Promise<ProjectM
     web: Boolean(allDeps.vite || allDeps.vue || allDeps.react || packageHasWeb || packages.some((item) => item.path.startsWith("apps/"))),
     backend: (await hasDir("services")) || Boolean(await firstMatchingFile(root, ["go.mod", "pom.xml", "build.gradle"])) || packages.some((item) => item.path.startsWith("services/")),
   };
+  const inventory = await scanInventory(root, packageJson?.scripts ?? {}, packages, dependencyNames);
 
   return ProjectMapSchema.parse({
     root,
@@ -67,6 +76,7 @@ export async function scanProject(projectRoot = process.cwd()): Promise<ProjectM
     workspaces: workspaces ?? [],
     packages,
     detected,
+    inventory,
     generatedAt: new Date().toISOString(),
   });
 }
@@ -156,4 +166,209 @@ async function directoryExists(path: string): Promise<boolean> {
 async function firstMatchingFile(root: string, names: string[]): Promise<string | undefined> {
   for (const name of names) if (await fileExists(join(root, name))) return name;
   return undefined;
+}
+
+type InventoryEntryPoint = {
+  kind: "web" | "electron" | "backend" | "test" | "script";
+  path: string;
+  reason: string;
+};
+
+type InventoryRouteHint = {
+  kind: "web" | "api";
+  path: string;
+  source: string;
+  line: number;
+};
+
+const SOURCE_EXTENSIONS = new Set([".cjs", ".css", ".go", ".java", ".js", ".jsx", ".mjs", ".py", ".rs", ".scss", ".ts", ".tsx", ".vue"]);
+const CONFIG_EXTENSIONS = new Set([".ini", ".json", ".toml", ".yaml", ".yml"]);
+const IGNORED_DIRECTORIES = new Set([".agents", ".cache", ".codex", ".git", ".pnpm", ".proofkit", ".turbo", ".venv", "build", "coverage", "dist", "node_modules", "out", "target", "vendor"]);
+const MAX_INVENTORY_FILES = 4_000;
+const MAX_ROUTE_HINTS = 200;
+const MAX_SOURCE_BYTES = 1_000_000;
+const execFileAsync = promisify(execFile);
+
+async function scanInventory(root: string, rootScripts: Record<string, string>, packages: Array<{ path: string; scripts: Record<string, string> }>, dependencies: Set<string>): Promise<{
+  filesScanned: number;
+  truncated: boolean;
+  source: "git" | "filesystem";
+  sourceFiles: number;
+  testFiles: number;
+  configFiles: number;
+  testFrameworks: string[];
+  entryPoints: InventoryEntryPoint[];
+  routeHints: InventoryRouteHint[];
+}> {
+  const entryPoints: InventoryEntryPoint[] = [];
+  const routeHints: InventoryRouteHint[] = [];
+  const seenEntries = new Set<string>();
+  const seenRoutes = new Set<string>();
+  let filesScanned = 0;
+  let truncated = false;
+  let sourceFiles = 0;
+  let testFiles = 0;
+  let configFiles = 0;
+
+  const addEntry = (entry: InventoryEntryPoint) => {
+    const key = `${entry.kind}:${entry.path}`;
+    if (seenEntries.has(key) || entryPoints.length >= 1_000) return;
+    seenEntries.add(key);
+    entryPoints.push(entry);
+  };
+  const addRoute = (route: InventoryRouteHint) => {
+    const key = `${route.kind}:${route.path}:${route.source}:${route.line}`;
+    if (seenRoutes.has(key) || routeHints.length >= MAX_ROUTE_HINTS * 5) return;
+    seenRoutes.add(key);
+    routeHints.push(route);
+  };
+
+  const addScriptEntries = (packagePath: string, scripts: Record<string, string>) => {
+    for (const name of Object.keys(scripts)) {
+      if (/^(dev|start|preview|serve|build|test|e2e|integration|smoke)(:|$)/i.test(name)) {
+        addEntry({
+          kind: /^test|e2e|integration|smoke/i.test(name) ? "test" : "script",
+          path: packagePath,
+          reason: `package script ${name}`,
+        });
+      }
+    }
+  };
+  addScriptEntries("package.json", rootScripts);
+  for (const item of packages) addScriptEntries(`${item.path}/package.json`, item.scripts);
+
+  const classifyEntry = (path: string): InventoryEntryPoint["kind"] | undefined => {
+    const normalized = path.toLowerCase();
+    const fileName = basename(normalized);
+    if (/(^|\/)(electron|desktop|desktop-shell)(\/|$)/.test(normalized) && /^(main|background|preload|electron|index)\.[cm]?[jt]sx?$/.test(fileName)) return "electron";
+    if (/(^|\/)(services|service|server|cmd)(\/|$)/.test(normalized) && /^(main|server|router|handler|index)\.[cm]?[jt]sx?$|^main\.(go|java|py)$/.test(fileName)) return "backend";
+    if (/^(app|main|router|routes|index)\.(vue|jsx?|tsx?)$/.test(fileName)) return "web";
+    return undefined;
+  };
+
+  const gitFiles = await listGitFiles(root);
+  const source = gitFiles ? "git" : "filesystem";
+  const candidates = (gitFiles ?? await listFilesystemFiles(root)).filter(shouldIncludeInventoryPath);
+  candidates.sort((left, right) => inventoryPriority(right) - inventoryPriority(left) || left.localeCompare(right));
+  truncated = candidates.length > MAX_INVENTORY_FILES;
+  for (const path of candidates.slice(0, MAX_INVENTORY_FILES)) {
+    const absolute = resolve(root, path);
+    const withinRoot = relative(root, absolute);
+    if (isAbsolute(path) || withinRoot === ".." || withinRoot.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) continue;
+    let metadata;
+    try { metadata = await lstat(absolute); } catch { continue; }
+    if (!metadata.isFile()) continue;
+    filesScanned += 1;
+    const extension = extname(path).toLowerCase();
+    if (isTestFile(path)) testFiles += 1;
+    if (SOURCE_EXTENSIONS.has(extension)) {
+      sourceFiles += 1;
+      const kind = classifyEntry(path);
+      if (kind) addEntry({ kind, path, reason: "conventional entry point" });
+      await readRouteHints(absolute, path, addRoute);
+    } else if (CONFIG_EXTENSIONS.has(extension) || /(^|\/)Dockerfile[^/]*$|\.env(?:\.|$)/i.test(path)) {
+      configFiles += 1;
+    }
+  }
+
+  const testFrameworks: string[] = ([
+    ["vitest", "vitest"], ["jest", "jest"], ["@playwright/test", "playwright"], ["playwright", "playwright"],
+    ["cypress", "cypress"], ["@wdio/cli", "webdriverio"], ["mocha", "mocha"], ["pytest", "pytest"],
+  ] as Array<[string, string]>).filter(([dependency]) => dependencies.has(dependency)).map(([, framework]) => framework);
+  if (testFiles > 0) testFrameworks.push("repository-tests");
+
+  entryPoints.sort((left, right) => inventoryPriority(right.path) - inventoryPriority(left.path) || left.path.localeCompare(right.path) || left.kind.localeCompare(right.kind));
+  routeHints.sort((left, right) => inventoryPriority(right.source) - inventoryPriority(left.source) || left.source.localeCompare(right.source) || left.line - right.line);
+  return {
+    filesScanned,
+    truncated,
+    source,
+    sourceFiles,
+    testFiles,
+    configFiles,
+    testFrameworks: [...new Set(testFrameworks)].sort(),
+    entryPoints: entryPoints.slice(0, 200),
+    routeHints: routeHints.slice(0, MAX_ROUTE_HINTS),
+  };
+}
+
+async function listGitFiles(root: string): Promise<string[] | undefined> {
+  try {
+    const { stdout } = await execFileAsync("git", ["ls-files", "-c", "-o", "--exclude-standard", "-z"], {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 10_000,
+    });
+    return [...new Set(stdout.split("\0").filter(Boolean).map((path) => path.replaceAll("\\", "/")))];
+  } catch {
+    return undefined;
+  }
+}
+
+async function listFilesystemFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  const directories: string[][] = [[], [], [], [root]];
+  const nextDirectory = (): string | undefined => {
+    for (let priority = directories.length - 1; priority >= 0; priority--) {
+      const directory = directories[priority]?.shift();
+      if (directory) return directory;
+    }
+    return undefined;
+  };
+  for (let directory = nextDirectory(); directory && files.length <= MAX_INVENTORY_FILES; directory = nextDirectory()) {
+    let entries;
+    try { entries = await readdir(directory, { withFileTypes: true }); } catch { continue; }
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!entry.name.startsWith(".") && !IGNORED_DIRECTORIES.has(entry.name.toLowerCase())) {
+          const child = join(directory, entry.name);
+          directories[inventoryPriority(relative(root, child))]!.push(child);
+        }
+      } else if (entry.isFile()) {
+        files.push(relative(root, join(directory, entry.name)).replaceAll("\\", "/"));
+        if (files.length > MAX_INVENTORY_FILES) break;
+      }
+    }
+  }
+  return files;
+}
+
+function shouldIncludeInventoryPath(path: string): boolean {
+  const directories = path.replaceAll("\\", "/").split("/").slice(0, -1);
+  return directories.every((directory) => !directory.startsWith(".") && !IGNORED_DIRECTORIES.has(directory.toLowerCase()));
+}
+
+async function readRouteHints(path: string, source: string, add: (route: InventoryRouteHint) => void): Promise<void> {
+  let content: string;
+  try {
+    const metadata = await stat(path);
+    if (metadata.size > MAX_SOURCE_BYTES) return;
+    content = await readFile(path, "utf8");
+  } catch { return; }
+  const lines = content.split(/\r?\n/);
+  lines.forEach((line, index) => {
+    const web = line.match(/\bpath\s*:\s*["'`]([^"'`]+)["'`]/);
+    if (isStaticRoute(web?.[1])) add({ kind: "web", path: web[1], source, line: index + 1 });
+    const api = line.match(/\b(?:get|post|put|patch|delete|head)\s*\(\s*["'`]([^"'`]+)["'`]/i);
+    if (isStaticRoute(api?.[1])) add({ kind: "api", path: api[1], source, line: index + 1 });
+    const go = line.match(/\b(?:GET|POST|PUT|PATCH|DELETE|HEAD)\s*\(\s*["'`]([^"'`]+)["'`]/);
+    if (isStaticRoute(go?.[1])) add({ kind: "api", path: go[1], source, line: index + 1 });
+  });
+}
+
+function isStaticRoute(value: string | undefined): value is string {
+  return Boolean(value && value.startsWith("/") && value.length <= 256 && !/[?#\s{}$]/.test(value));
+}
+
+function isTestFile(path: string): boolean {
+  return /(^|\/)(__tests__|tests?)(\/|$)|\.(test|spec)\.[cm]?[jt]sx?$|_test\.(go|py)$/.test(path);
+}
+
+function inventoryPriority(path: string): number {
+  const normalized = path.replaceAll("\\", "/").toLowerCase();
+  if (normalized === "package.json" || normalized.startsWith("apps/") || normalized.startsWith("services/") || normalized.startsWith("packages/")) return 3;
+  if (normalized.startsWith("src/") || normalized.includes("/src/")) return 2;
+  return 1;
 }

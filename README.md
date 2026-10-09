@@ -11,6 +11,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 ## What it does
 
 - Maps workspace manifests and common Web, Electron, and backend entry points.
+- Produces a bounded path-level test map with source/test counts, framework signals, conventional entry points, static route hints and an explicit truncation flag.
 - Converts intent into a saved YAML Test Charter that can be reviewed and edited.
 - Executes Web and Electron actions through Playwright, including CDP attachment.
 - Executes mobile actions through a W3C WebDriver/Appium-compatible server when a mobile surface is configured.

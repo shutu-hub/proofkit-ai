@@ -7,6 +7,7 @@ const projectMap = {
   workspaces: [],
   packages: [],
   detected: { web: true, electron: true, backend: true },
+  inventory: { filesScanned: 0, truncated: false, source: "filesystem" as const, sourceFiles: 0, testFiles: 0, configFiles: 0, testFrameworks: [], entryPoints: [], routeHints: [] },
   generatedAt: new Date(0).toISOString(),
 };
 

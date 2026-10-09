@@ -180,6 +180,27 @@ export const ProjectMapSchema = z.object({
     web: z.boolean(),
     backend: z.boolean(),
   }),
+  /** Bounded path-level signals used to plan tests without changing the source project. */
+  inventory: z.object({
+    filesScanned: z.number().int().nonnegative().default(0),
+    truncated: z.boolean().default(false),
+    source: z.enum(["git", "filesystem"]).default("filesystem"),
+    sourceFiles: z.number().int().nonnegative().default(0),
+    testFiles: z.number().int().nonnegative().default(0),
+    configFiles: z.number().int().nonnegative().default(0),
+    testFrameworks: z.array(z.string().min(1)).default([]),
+    entryPoints: z.array(z.object({
+      kind: z.enum(["web", "electron", "backend", "test", "script"]),
+      path: z.string().min(1),
+      reason: z.string().min(1),
+    })).default([]),
+    routeHints: z.array(z.object({
+      kind: z.enum(["web", "api"]),
+      path: z.string().min(1),
+      source: z.string().min(1),
+      line: z.number().int().positive(),
+    })).default([]),
+  }).default({}),
   generatedAt: z.string(),
 });
 export type ProjectMap = z.infer<typeof ProjectMapSchema>;
