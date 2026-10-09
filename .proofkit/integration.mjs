@@ -45,6 +45,21 @@ async function aihrPreflight({ charter, environment }) {
   const actionNames = charter.actions
     .filter((action) => action.kind === "capability")
     .map((action) => action.name);
+  const oracleNames = charter.oracles ?? [];
+  const usesAihrBusinessContract = actionNames.some((name) => name.startsWith("aihr."))
+    || oracleNames.some((name) => name.startsWith("aihr."));
+  if (!usesAihrBusinessContract && charter.level === "quick") {
+    return {
+      passed: true,
+      message: "AIHR business preflight skipped: this quick Charter uses only surface assertions.",
+      evidence: {
+        environment,
+        integrationRequired: false,
+        capabilityCount: 0,
+        oracleCount: 0,
+      },
+    };
+  }
   const writeActions = actionNames.filter((name) => [
     "aihr.createResumeCollectionRun",
     "aihr.uploadResumeFile",
@@ -86,6 +101,7 @@ async function aihrPreflight({ charter, environment }) {
       apiHost: parsed?.hostname ?? "invalid",
       loopbackEndpoint: loopback,
       remoteEndpointOverride: env("AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT") === "true",
+      integrationRequired: usesAihrBusinessContract,
       writeActionCount: writeActions.length,
       testScopeConfigured: Boolean(scope),
       clientItemKeyNamespaced: Boolean(scope && clientItemKey?.startsWith(`${scope}:`)),

@@ -56,6 +56,8 @@ If any one of these facts cannot be observed, the result is `inconclusive` or `b
 
 The Web/Electron adapter owns platform interaction: navigation, session selection, opening an online resume, downloading or generating the artifact, upload initiation and visible progress. The AIHR integration owns business observation and test data cleanup. The Runner joins both streams through one `runId` and one evidence timeline.
 
+An AIHR integration may also be loaded for a surface-only quick check. When a quick Charter contains no AIHR Capability action and no AIHR business Oracle, the connector records a passed `preflight.json` with `integrationRequired: false` and does not require `AIHR_PROOFKIT_TEST_SCOPE` or a gateway endpoint. Core and release business Charters, and any Charter that names an AIHR Capability or Oracle, continue through the isolation and scope preflight before the surface is connected.
+
 This split lets the same integration be used from the CLI, MCP and CI. MCP must not receive a generic database or shell tool; it can call only the registered capability names with validated inputs. The default MCP profile starts no project command and accepts only loopback or configured test origins.
 
 ## Implementation order

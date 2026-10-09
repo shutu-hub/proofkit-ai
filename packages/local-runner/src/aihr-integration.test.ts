@@ -339,6 +339,33 @@ describe("AIHR project integration", () => {
     expect(result.message).toContain("remote AIHR endpoints");
     expect(result.message).toContain("AIHR_PROOFKIT_TEST_SCOPE");
   });
+
+  it("allows a quick UI-only charter without AIHR business scope", async () => {
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const preflight = service.integration?.preflight;
+    if (!preflight) throw new Error("AIHR integration preflight is missing");
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "https://example.invalid/api/v1";
+    delete process.env.AIHR_PROOFKIT_TEST_SCOPE;
+    const result = await preflight({
+      runId: "ui-only-preflight-run",
+      environment: "test",
+      charter: TestCharterSchema.parse({
+        intent: "inspect the resume page",
+        level: "quick",
+        mode: "deterministic",
+        actions: [{ kind: "goto", url: "http://127.0.0.1:5174/" }, { kind: "observe" }],
+        assertions: [{ kind: "text-visible", text: "BOSS直聘 简历获取" }],
+        sideEffectPolicy: "deny",
+        metadata: {},
+      }),
+      signal: new AbortController().signal,
+    });
+    expect(result).toMatchObject({
+      passed: true,
+      evidence: { integrationRequired: false },
+    });
+    expect(result.message).toContain("quick Charter");
+  });
 });
 
 async function createIntegrationProject(fixtureBytes?: Buffer): Promise<string> {
