@@ -95,6 +95,8 @@ The explicit release suite now snapshots multiple Charter IDs and its excluded c
 
 The reference connector now requires evaluation and worker task success together, exact file/job/candidate identities, and a concrete assessment ID. Isolated HTTP regressions cover pending/retrying/missing facts, explicit worker failures, wrong identities and retry recovery. Online acceptance records its stage scope, requires a screening-reject relation for workflow termination, and becomes inconclusive after an attachment binding or completed workflow supersedes the current-file facts. Saved Run business artifacts distinguish pending or superseded scope from an evidenced wrong-file failure; unverified results produce no product diagnosis or repair suggestion. These are connector/Runner regressions with mocked surface connection, not live AIHR UI acceptance. Concurrent attachment progress before its workflow identity is visible, historical phase evidence, and attachment/lifecycle Charters remain open.
 
+The two AIHR wait capabilities now share a deadline across interval waits, gateway requests and response bodies. Loopback HTTP regressions exercise stalled headers/bodies and a stalled partial observation after a complete pending round; timeout retains only complete facts and stays inconclusive. Cancellation preserves the caller's reason, and repeated pending-to-success tests verify timer/listener cleanup. This strengthens connector waiting behavior; live AIHR business acceptance remains open.
+
 **Gate:** seeded defects in upload, extraction, identity, relation and billing are found with linked evidence; retries do not create duplicate billable facts.
 
 **File-input evidence:** `pnpm test:smoke:upload` now runs real hidden file

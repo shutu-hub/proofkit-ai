@@ -481,19 +481,14 @@ function resolveResumePipelineTarget(input, remembered) {
 
 async function pollResumeCollectionPipeline(target, options) {
   if (!target.fileId) throw new Error("AIHR fileId is required; upload a resume or provide fileId");
-  const deadline = Date.now() + options.maxWaitMs;
-  let observationCount = 0;
-  let last = emptyResumePipelineObservation(target);
-  while (Date.now() <= deadline) {
-    last = await observeResumeCollectionPipeline(target, options.signal);
-    observationCount += 1;
-    const passed = evaluateResumePipeline(last, target);
-    if (passed === true || passed === false) {
-      return { ...last, passed, outcome: passed ? "passed" : "failed", observationCount };
-    }
-    await delay(options.pollIntervalMs, options.signal);
-  }
-  return { ...last, passed: null, outcome: "inconclusive", terminal: false, observationCount };
+  const { last, passed, observationCount } = await pollPipeline({
+    ...options,
+    initial: emptyResumePipelineObservation(target),
+    observe: (signal) => observeResumeCollectionPipeline(target, signal),
+    evaluate: (observation) => evaluateResumePipeline(observation, target),
+  });
+  return { ...last, passed, outcome: passed === null ? "inconclusive" : passed ? "passed" : "failed",
+    ...(passed === null ? { terminal: false } : {}), observationCount };
 }
 
 async function observeResumeCollectionPipeline(target, signal) {
@@ -867,19 +862,52 @@ function simpleReadCapability(name, description, inputSchema, execute, evidence)
 
 async function pollOnlineResumePipeline(target, options) {
   assertTarget(target);
-  const deadline = Date.now() + options.maxWaitMs;
+  const { last, passed, observationCount } = await pollPipeline({
+    ...options,
+    initial: emptyObservation(),
+    observe: (signal) => observeOnlineResumePipeline(target, signal),
+    evaluate: (observation) => evaluateOnlineResumePipeline(observation, { ...target, requireAssessmentSuccess: options.requireAssessmentSuccess }),
+    stop: (observation) => observation.scopeSuperseded,
+  });
+  return { ...last, passed, terminal: passed !== null, observationCount };
+}
+
+async function pollPipeline({ signal, maxWaitMs, pollIntervalMs, initial, observe, evaluate, stop }) {
+  signal?.throwIfAborted();
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal.reason);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  const deadlineReason = new Error("AIHR pipeline observation deadline exceeded");
+  const deadline = performance.now() + maxWaitMs;
+  const timer = setTimeout(() => controller.abort(deadlineReason), maxWaitMs);
+  let last = initial;
   let observationCount = 0;
-  let last;
-  while (Date.now() <= deadline) {
-    last = await observeOnlineResumePipeline(target, options.signal);
-    observationCount += 1;
-    const passed = evaluateOnlineResumePipeline(last, { ...target, requireAssessmentSuccess: options.requireAssessmentSuccess });
-    if (passed !== null) return { ...last, passed, terminal: true, observationCount };
-    if (last.scopeSuperseded) return { ...last, passed: null, terminal: false, observationCount };
-    await delay(Math.min(options.pollIntervalMs, Math.max(0, deadline - Date.now())), options.signal);
+  try {
+    while (performance.now() < deadline) {
+      controller.signal.throwIfAborted();
+      // This signal bounds every request and response body in the whole round.
+      const observation = await observe(controller.signal);
+      signal?.throwIfAborted();
+      controller.signal.throwIfAborted();
+      if (performance.now() >= deadline) break;
+      // Commit only complete rounds; a cancelled partial read cannot prove a terminal state.
+      last = observation;
+      observationCount += 1;
+      const passed = evaluate(last);
+      if (passed !== null) return { last, passed, observationCount };
+      if (stop?.(last)) break;
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) break;
+      await delay(Math.min(pollIntervalMs, remaining), controller.signal);
+    }
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (!controller.signal.aborted || controller.signal.reason !== deadlineReason) throw error;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
-  const result = last ?? emptyObservation();
-  return { ...result, passed: null, terminal: false, observationCount };
+  return { last, passed: null, observationCount };
 }
 
 async function observeOnlineResumePipeline(target, signal) {
@@ -1090,11 +1118,11 @@ function numberOrNull(value) {
 
 function delay(ms, signal) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    if (!signal) return;
-    const onAbort = () => { clearTimeout(timer); reject(signal.reason instanceof Error ? signal.reason : new Error("AIHR polling cancelled")); };
-    if (signal.aborted) onAbort();
-    else signal.addEventListener("abort", onAbort, { once: true });
+    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); };
+    const onAbort = () => { cleanup(); reject(signal.reason); };
+    const timer = setTimeout(() => { cleanup(); resolve(); }, ms);
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 

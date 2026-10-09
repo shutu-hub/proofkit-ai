@@ -35,6 +35,8 @@ The ProofKit repository includes a reference AIHR integration at `.proofkit/inte
 
 Each capability declares an input schema, output schema, environment allowlist, timeout and evidence projection. Raw resume text, cookies, authorization headers and real candidate identifiers never enter the default ProofKit evidence directory. The factory receives ProofKit's schema runtime, so a project integration does not need a hidden `zod` dependency. Integration cleanup runs in reverse registration order after the adapter and project process close; a cleanup error prevents a green verdict.
 
+Both pipeline wait capabilities use one monotonic deadline across polling intervals, HTTP requests and response bodies. `maxWaitMs` expiring returns `passed: null` and `terminal: false`; evidence and `observationCount` retain only fully completed observation rounds. A partially read file/relation/assessment round cannot supply a terminal verdict. User cancellation rejects with the original signal reason, including a non-Error reason, and releases the polling timer and listeners. Observed gateway errors still propagate as errors. These capabilities bound their own wait; the independent Oracle performs a separate read under the Runner's signal and total deadline.
+
 ## Oracle strategy
 
 The first AIHR implementation uses a workspace-owned read-only observer that calls existing gateway endpoints. It correlates every observation with the ProofKit `runId`, AIHR collection run ID, file ID and client item key. Polling is bounded and uses service terminal statuses; arbitrary sleeps are not an oracle.

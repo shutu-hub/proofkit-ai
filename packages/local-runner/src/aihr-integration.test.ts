@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { getEventListeners } from "node:events";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,6 +38,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolveClose) => server.close(() => resolveClose()))));
   vi.restoreAllMocks();
@@ -48,6 +50,205 @@ afterEach(async () => {
 });
 
 describe("AIHR project integration", () => {
+  const pipelines: Array<{
+    name: string;
+    capability: string;
+    input: Record<string, string>;
+    firstPath: string;
+    assessmentPath: string;
+    pending: Record<string, unknown>;
+    expectedPending: Record<string, unknown>;
+    terminalResponses: Record<string, Record<string, unknown>>;
+  }> = [
+    {
+      name: "ordinary upload",
+      capability: "aihr.waitResumeCollectionPipeline",
+      input: { runId: "900", fileId: "901", jobId: "505" },
+      firstPath: "/resume-collection/files/901",
+      assessmentPath: "/assessments/jobs/505/candidates/902",
+      pending: { file_id: 901, run_id: 900, extract_status: "pending", parse_status: "pending" },
+      expectedPending: { extractStatus: "pending", candidateId: null, assessmentId: null },
+      terminalResponses: {
+        "/resume-collection/files/901": { file_id: 901, run_id: 900, extract_status: "done", parse_status: "matched", candidate_id: 902 },
+        "/jobs/505/candidates/902": { candidate_summary: { current_resume_file_id: 901, job_id: 505, candidate_id: 902 } },
+        "/assessments/jobs/505/candidates/902": { assessment_id: 903, current_resume_file_id: 901, job_id: 505, candidate_id: 902, status: "success", task_status: "success" },
+        "/workflow-executions": { items: [], pagination: { page: 1, page_size: 100, total: 0 } },
+      },
+    },
+    {
+      name: "online resume",
+      capability: "aihr.waitOnlineResumePipeline",
+      input: { conversationId: "101", workflowId: "202", jobId: "505", platformAccountId: "acct-fixture" },
+      firstPath: "/boss-conversations/101/workflows/202",
+      assessmentPath: "/assessments/jobs/505/candidates/404",
+      pending: { workflow: { id: 202, conversation_id: 101, job_id: 505, phase: "online_resume_processing" } },
+      expectedPending: { workflowPhase: "online_resume_processing", resumeFileId: null, candidateId: null, assessmentId: null },
+      terminalResponses: {
+        "/boss-conversations/101/workflows/202": { workflow: { id: 202, conversation_id: 101, job_id: 505, phase: "wait_online_screening", online_resume_file_id: 303 }, candidate_id: 404 },
+        "/resume-collection/files/303": { file_id: 303, extract_status: "done", parse_status: "matched", candidate_id: 404 },
+        "/jobs/505/candidates/404": { candidate_summary: { current_resume_file_id: 303, job_id: 505, candidate_id: 404 } },
+        "/assessments/jobs/505/candidates/404": { assessment_id: 606, current_resume_file_id: 303, job_id: 505, candidate_id: 404, status: "success", task_status: "success" },
+      },
+    },
+  ];
+
+  async function loadPipelineWait(name: string) {
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const wait = service.integration?.capabilities?.find((item) => item.name === name);
+    if (!wait) throw new Error(`Missing pipeline capability ${name}`);
+    return wait;
+  }
+
+  async function boundedWait(wait: Awaited<ReturnType<typeof loadPipelineWait>>, input: Record<string, unknown>) {
+    const controller = new AbortController();
+    const watchdog = setTimeout(() => controller.abort(new Error("pipeline exceeded its own deadline")), 2_200);
+    const startedAt = performance.now();
+    try {
+      const result = await wait.execute({ maxWaitMs: 1_000, pollIntervalMs: 250, ...input }, { runId: "deadline-fixture", signal: controller.signal });
+      expect(performance.now() - startedAt).toBeLessThan(1_800);
+      expect(wait.outputSchema.safeParse(result).success).toBe(true);
+      return result;
+    } finally {
+      clearTimeout(watchdog);
+      controller.abort();
+    }
+  }
+
+  it.each(pipelines)("bounds $name polling when the interval exceeds the whole deadline", async (pipeline) => {
+    await startPollingGateway((_path, response) => send(response, pipeline.pending));
+    const wait = await loadPipelineWait(pipeline.capability);
+    const output = await boundedWait(wait, { ...pipeline.input, pollIntervalMs: 10_000 });
+    expect(output).toMatchObject({ passed: null, terminal: false, observationCount: 1, ...pipeline.expectedPending });
+  });
+
+  for (const stage of ["headers", "body"] as const) {
+    it.each(pipelines)(`ends $name at its deadline when response ${stage} hang`, async (pipeline) => {
+      let requested = false;
+      await startPollingGateway((_path, response) => {
+        requested = true;
+        if (stage === "body") response.write('{"code":"SUCCESS","data":');
+      });
+      const wait = await loadPipelineWait(pipeline.capability);
+      const output = await boundedWait(wait, pipeline.input);
+      expect(requested).toBe(true);
+      expect(output).toMatchObject({ passed: null, terminal: false, observationCount: 0, extractStatus: null, candidateId: null });
+    });
+
+    it.each(pipelines)(`keeps the original cancellation reason for $name during response ${stage}`, async (pipeline) => {
+      let onRequest!: () => void;
+      const requested = new Promise<void>((resolveRequest) => { onRequest = resolveRequest; });
+      await startPollingGateway((_path, response) => {
+        if (stage === "body") response.write('{"code":"SUCCESS","data":');
+        onRequest();
+      });
+      const wait = await loadPipelineWait(pipeline.capability);
+      const controller = new AbortController();
+      const reason = new Error("user stopped business acceptance");
+      const watchdog = setTimeout(() => controller.abort(new Error("cancellation watchdog")), 2_200);
+      const pending = wait.execute({ ...pipeline.input, maxWaitMs: 60_000, pollIntervalMs: 250 }, { runId: "cancel-fixture", signal: controller.signal });
+      const rejected = expect(pending).rejects.toBe(reason);
+      try {
+        await requested;
+        controller.abort(reason);
+        await rejected;
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      } finally {
+        clearTimeout(watchdog);
+        controller.abort(reason);
+      }
+    });
+  }
+
+  it.each(pipelines)("retains only the last complete $name observation after a partial round hangs", async (pipeline) => {
+    let rounds = 0;
+    let partialAssessmentRequested = false;
+    await startPollingGateway((path, response) => {
+      if (path === pipeline.firstPath && ++rounds === 1) return send(response, pipeline.pending);
+      if (path === pipeline.assessmentPath) {
+        partialAssessmentRequested = true;
+        response.write('{"code":"SUCCESS","data":');
+        return;
+      }
+      const data = pipeline.terminalResponses[path];
+      if (!data) return sendError(response, 404, "NOT_FOUND", "fixture route not found");
+      send(response, data);
+    });
+    const wait = await loadPipelineWait(pipeline.capability);
+    const output = await boundedWait(wait, pipeline.input);
+    expect(partialAssessmentRequested).toBe(true);
+    expect(output).toMatchObject({ passed: null, terminal: false, observationCount: 1, ...pipeline.expectedPending });
+    expect(wait.evidence(output)).toMatchObject({ passed: null, terminal: false, observationCount: 1, ...pipeline.expectedPending });
+  });
+
+  it.each(pipelines)("recovers $name after repeated pending observations without accumulating listeners", async (pipeline) => {
+    const wait = await loadPipelineWait(pipeline.capability);
+    const controller = new AbortController();
+    let rounds = 0;
+    const observedSignals = new Set<AbortSignal>();
+    const listenerCounts: number[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, options) => {
+      const signal = options?.signal;
+      if (!signal) throw new Error("Polling requests must receive cancellation");
+      observedSignals.add(signal);
+      listenerCounts.push(getEventListeners(signal, "abort").length);
+      const path = new URL(String(input)).pathname.replace(/^\/api\/v1/, "");
+      const data = path === pipeline.firstPath && ++rounds <= 8
+        ? pipeline.pending : pipeline.terminalResponses[path];
+      return new Response(JSON.stringify({ code: "SUCCESS", data }), { status: 200 });
+    });
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "http://127.0.0.1:8080/api/v1";
+    vi.useFakeTimers();
+    const pending = wait.execute({ ...pipeline.input, maxWaitMs: 10_000, pollIntervalMs: 250 }, { runId: "retry-fixture", signal: controller.signal });
+    const checked = expect(pending).resolves.toMatchObject({ passed: true, terminal: true, observationCount: 9 });
+    try {
+      await vi.advanceTimersByTimeAsync(2_000);
+      await checked;
+      expect(Math.max(...listenerCounts)).toBe(0);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      for (const signal of observedSignals) expect(getEventListeners(signal, "abort")).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort();
+    }
+  });
+
+  it.each(pipelines)("preserves a non-Error $name cancellation reason before any request", async (pipeline) => {
+    const wait = await loadPipelineWait(pipeline.capability);
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const controller = new AbortController();
+    const reason = { kind: "user-cancelled", requestId: "fixture-cancel" };
+    controller.abort(reason);
+    await expect(wait.execute({ ...pipeline.input, maxWaitMs: 1_000, pollIntervalMs: 250 }, { runId: "pre-cancelled", signal: controller.signal })).rejects.toBe(reason);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(pipelines)("propagates an observed $name gateway error instead of treating it as timeout", async (pipeline) => {
+    await startPollingGateway((_path, response) => sendError(response, 503, "UNAVAILABLE", "fixture gateway unavailable"));
+    const wait = await loadPipelineWait(pipeline.capability);
+    await expect(boundedWait(wait, pipeline.input)).rejects.toThrow("AIHR gateway 503");
+  });
+
+  it.each(pipelines)("preserves cancellation during the $name polling interval and releases timers", async (pipeline) => {
+    const wait = await loadPipelineWait(pipeline.capability);
+    const controller = new AbortController();
+    const reason = { kind: "user-cancelled", requestId: "interval-cancel" };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ code: "SUCCESS", data: pipeline.pending })));
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "http://127.0.0.1:8080/api/v1";
+    vi.useFakeTimers();
+    const pending = wait.execute({ ...pipeline.input, maxWaitMs: 60_000, pollIntervalMs: 10_000 }, { runId: "interval-cancelled", signal: controller.signal });
+    const rejected = expect(pending).rejects.toBe(reason);
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      controller.abort(reason);
+      await rejected;
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort(reason);
+    }
+  });
+
   it("projects successful and failed terminal states through the gateway contract", async () => {
     let mode: "success" | "failed" = "success";
     const server = await startGatewayMock(() => mode);
@@ -558,6 +759,18 @@ async function createIntegrationProject(fixtureBytes?: Buffer): Promise<string> 
     await writeFile(join(root, ".proofkit", "fixtures", "resume.pdf"), fixtureBytes);
   }
   return root;
+}
+
+async function startPollingGateway(handler: (path: string, response: ServerResponse) => void): Promise<void> {
+  const server = createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    handler(new URL(request.url ?? "/", "http://127.0.0.1").pathname.replace(/^\/api\/v1/, ""), response);
+  });
+  servers.push(server);
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Polling gateway did not bind to a port");
+  process.env.AIHR_PROOFKIT_API_BASE_URL = `http://127.0.0.1:${address.port}/api/v1`;
 }
 
 function aihrCharter(): TestCharter {
