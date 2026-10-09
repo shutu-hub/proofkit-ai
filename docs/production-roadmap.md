@@ -52,6 +52,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Create a fixed Web/Electron benchmark with known workflows and seeded defects.
 - Use the bounded project test map to measure candidate entry-point and route coverage; partial scans must remain visible through the `truncated` flag.
 - Register known business Charters by explicit aliases so one-sentence Agent requests reuse verified workflows; stop automatic execution when a required assertion or Oracle is missing.
+- Define an explicit multi-Charter release suite with per-workflow surface and evidence gates; report catalog and project-map coverage gaps before claiming whole-project readiness.
 - Measure plan validity, workflow coverage, assertion quality, false passes and model cost.
 - Add a review gate for write actions and report planner uncertainty.
 - Keep all model output constrained to Charter and typed Capability schemas.

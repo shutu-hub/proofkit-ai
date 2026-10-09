@@ -456,8 +456,64 @@ export const TaskNodeSchema = z.object({
 export type TaskNode = z.infer<typeof TaskNodeSchema>;
 
 export const TaskGraphSchema = z.object({
-  tasks: z.array(TaskNodeSchema).min(1),
-  terminalTaskIds: z.array(z.string()).default([]),
+  tasks: z.array(TaskNodeSchema).min(1).max(10_000),
+  terminalTaskIds: z.array(z.string()).min(1),
+}).superRefine((graph, ctx) => {
+  const tasks = new Map(graph.tasks.map((task) => [task.taskId, task]));
+  const dependents = new Map(graph.tasks.map((task) => [task.taskId, 0]));
+  const downstreamTasks = new Map(graph.tasks.map((task) => [task.taskId, [] as string[]]));
+  const outstandingDependencies = new Map(graph.tasks.map((task) => [task.taskId, 0]));
+  if (tasks.size !== graph.tasks.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["tasks"], message: "Task IDs must be unique" });
+  }
+  const terminals = new Set(graph.terminalTaskIds);
+  if (terminals.size !== graph.terminalTaskIds.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["terminalTaskIds"], message: "Terminal task IDs must be unique" });
+  }
+  for (const [index, task] of graph.tasks.entries()) {
+    if (new Set(task.dependsOn).size !== task.dependsOn.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["tasks", index, "dependsOn"], message: `Task ${task.taskId} has duplicate dependencies` });
+    }
+    for (const dependency of task.dependsOn) {
+      if (!tasks.has(dependency)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["tasks", index, "dependsOn"], message: `Task ${task.taskId} depends on unknown task ${dependency}` });
+      } else if (dependency === task.taskId) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["tasks", index, "dependsOn"], message: `Task ${task.taskId} cannot depend on itself` });
+      } else {
+        dependents.set(dependency, (dependents.get(dependency) ?? 0) + 1);
+        downstreamTasks.get(dependency)?.push(task.taskId);
+        outstandingDependencies.set(task.taskId, (outstandingDependencies.get(task.taskId) ?? 0) + 1);
+      }
+    }
+  }
+  for (const [index, terminalId] of graph.terminalTaskIds.entries()) {
+    if (!tasks.has(terminalId)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["terminalTaskIds", index], message: `Unknown terminal task ${terminalId}` });
+    }
+  }
+  const ready = [...outstandingDependencies].filter(([, count]) => count === 0).map(([taskId]) => taskId);
+  let processed = 0;
+  for (let index = 0; index < ready.length; index++) {
+    const taskId = ready[index]!;
+    processed++;
+    for (const downstream of downstreamTasks.get(taskId) ?? []) {
+      const remaining = (outstandingDependencies.get(downstream) ?? 0) - 1;
+      outstandingDependencies.set(downstream, remaining);
+      if (remaining === 0) ready.push(downstream);
+    }
+  }
+  if (processed !== tasks.size) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["tasks"], message: "Task graph contains a dependency cycle" });
+  }
+  for (const taskId of tasks.keys()) {
+    const downstream = dependents.get(taskId) ?? 0;
+    if (downstream === 0 && !terminals.has(taskId)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["terminalTaskIds"], message: `Final task ${taskId} is not declared terminal` });
+    }
+    if (downstream > 0 && terminals.has(taskId)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["terminalTaskIds"], message: `Terminal task ${taskId} still has dependents` });
+    }
+  }
 });
 export type TaskGraph = z.infer<typeof TaskGraphSchema>;
 

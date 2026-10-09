@@ -30,7 +30,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Polls asynchronous HTTP business state to a bounded terminal verdict; a timeout remains inconclusive.
 - Records action receipts, before/after snapshots, network and console events, screenshots, and a JSONL timeline.
 - Reports `passed`, `failed`, `blocked`, `cancelled`, or `inconclusive`; missing evidence never becomes a pass.
-- The default `core` mission runs one selected surface with an independent business Oracle and source facts. `release` creates Web/Electron primary runs plus replay runs and verifies each run's proof before accepting the matrix; explicitly declared negative or recovery cases run on every required surface and cannot supply missing main-path evidence. A negative case can declare an expected `failed` or `blocked` outcome while retaining the raw run evidence.
+- The default `core` mission runs one selected surface with an independent business Oracle and source facts. A `release` Mission currently tests one Charter across Web/Electron primary and replay runs, verifying each run's proof; a multi-workflow whole-project suite remains planned. Explicitly declared negative or recovery cases run on every required surface and cannot supply missing main-path evidence.
 - Produces local JSON and HTML reports without a hosted service.
 
 ## Quick start

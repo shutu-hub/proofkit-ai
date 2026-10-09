@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -29,6 +29,49 @@ describe("MissionAgent", () => {
     expect(completed.agentSteps.map((step) => step.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
     expect(completed.agentSteps.map((step) => step.phase)).toEqual(["execute", "execute", "verify"]);
     expect(completed.agentSteps.every((step) => step.toolCallIds.length === 1)).toBe(true);
+  });
+
+  it("does not pass a mission whose remaining tasks cannot run", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-stalled-graph-"));
+    const store = new JsonMissionStore(root);
+    const agent = new MissionAgent({ store, tools: new InMemoryMissionToolRegistry() });
+    const created = await agent.create({ intent: "verify workflow", projectRoot: root, surface: "web", policy: { requireApproval: false } });
+    const persisted = await agent.load(created.missionId);
+    persisted.plan.graph.tasks = persisted.plan.graph.tasks.map((task) => task.taskId === "reconnaissance"
+      ? { ...task, status: "skipped" as const }
+      : task);
+    await store.save(persisted);
+
+    const result = await agent.run(created.missionId);
+
+    expect(result.status).toBe("blocked");
+    expect(result.verdict).toBe("blocked");
+    expect(result.findings.some((finding) => finding.title === "Mission task graph stalled")).toBe(true);
+  });
+
+  it("rejects an invalid custom planner graph before persisting a mission", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-invalid-plan-"));
+    const agent = new MissionAgent({
+      store: new JsonMissionStore(root),
+      tools: new InMemoryMissionToolRegistry(),
+      planner: {
+        async plan(input) {
+          const valid = await new DeterministicMissionPlanner().plan(input);
+          return {
+            ...valid,
+            graph: {
+              ...valid.graph,
+              tasks: valid.graph.tasks.map((task) => task.taskId === "execute-charter"
+                ? { ...task, dependsOn: ["verify-result"] }
+                : task),
+            },
+          };
+        },
+      },
+    });
+
+    await expect(agent.create({ intent: "verify workflow", projectRoot: root, surface: "web" })).rejects.toThrow();
+    expect(await readdir(root)).toEqual([]);
   });
 
   it("preserves a cancelled tool verdict in the AgentStep and mission", async () => {

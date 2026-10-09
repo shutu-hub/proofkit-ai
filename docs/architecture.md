@@ -124,6 +124,8 @@ The Agent loop is deliberately narrow:
 5. Persist a new revision before selecting the next task.
 6. Reduce the terminal mission status and verdict without overwriting a failed or blocked result with `passed`.
 
+`TaskGraphSchema` rejects duplicate IDs, unknown or duplicate dependencies, cycles, missing terminals, and branches that do not reach a declared terminal. It caps a graph at 10,000 tasks. A recovered Mission with unfinished tasks but no dependency-ready task is blocked with a graph-stall Finding and first-failure boundary; it cannot be reduced to `passed` merely because the scheduler found nothing to run. This validation is also applied to future model-authored plans before a Mission is persisted.
+
 `MissionPolicy.timeoutMs` is the deadline for the complete Agent Loop,
 including recovery, surface runs and final verification. When it expires, the
 active ToolCall and AgentStep are closed with a cancellation receipt, the
@@ -241,6 +243,8 @@ Every natural-language request is resolved to one immutable `TestLevelSelection`
 | `release` | Pre-release regression and cross-surface confidence | Core gates plus terminal evidence, replay inputs and the configured Web/Electron matrix; every explicitly declared negative or recovery case must run on every required surface |
 
 The current Mission verifier enforces a passed surface assertion for each primary run, and for every required release replay. Each `core` or `release` primary/replay run must also have a passed business Oracle with source evidence. A negative case cannot supply missing proof for the main path. The lower-level Execution Runner evaluates the assertions and oracles declared by its Charter; it does not independently enforce Mission-level coverage obligations. `release` expands its surface matrix and replay requirement into separate task graph nodes and marks verification incomplete when a surface or replay run is missing. A Charter may explicitly declare negative or recovery cases; ProofKit creates an isolated task for each case, preserves its `negativeCaseId` in observations and evidence, and marks verification incomplete when any declared case is missing. A case can also declare an `expectedVerdict` such as `failed` or `blocked`; the raw surface verdict remains in evidence while the Mission evaluates whether the expected outcome matched. ProofKit never invents destructive actions from a category label. A missing gate produces `inconclusive` with a first failure boundary of `evidence`, never a false `passed` verdict.
+
+At present, a `release` Mission exercises **one Charter** across its required surfaces. It is cross-surface regression for that workflow, not an inventory-backed whole-project release suite. A future suite must explicitly name its included Charters, execute and verify each workflow separately, and report discovered but uncovered workflows without treating a partial project scan as complete coverage.
 
 ## First vertical slice
 

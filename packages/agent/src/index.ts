@@ -322,6 +322,17 @@ export class MissionAgent {
         if (!next) {
           const blocked = current.plan.graph.tasks.some((task) => task.status === "blocked");
           const failed = current.plan.graph.tasks.some((task) => task.status === "failed");
+          const unfinished = current.plan.graph.tasks.filter((task) => task.status !== "passed");
+          if (!blocked && !failed && unfinished.length > 0) {
+            const message = `No task is ready while these tasks remain unfinished: ${unfinished.map((task) => `${task.taskId} (${task.status})`).join(", ")}`;
+            return this.save({
+              ...current,
+              status: "blocked",
+              verdict: "blocked",
+              firstFailure: current.firstFailure ?? FailureBoundarySchema.parse({ kind: "evidence", message, evidence: current.evidence.slice(0, 4), observedAt: new Date().toISOString() }),
+              findings: [...current.findings, finding("agent-graph-stalled", "high", "test", "Mission task graph stalled", message)],
+            });
+          }
           const terminal: MissionStatus = blocked ? "blocked" : failed ? "failed" : "completed";
           const verdict = blocked ? "blocked" : failed ? "failed" : current.verdict ?? "passed";
           return this.save({ ...current, status: terminal, verdict });
