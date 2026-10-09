@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -287,12 +287,34 @@ export class JsonMissionStore implements MissionStore {
 
   async save(mission: TestMission): Promise<void> {
     await mkdir(this.rootDir, { recursive: true });
-    await writeFile(join(this.rootDir, `${safeMissionId(mission.missionId)}.json`), `${JSON.stringify(mission, null, 2)}\n`, "utf8");
+    const missionId = safeMissionId(mission.missionId);
+    const target = join(this.rootDir, `${missionId}.json`);
+    const temporary = join(this.rootDir, `.${missionId}.${randomUUID()}.tmp`);
+    try {
+      await writeFile(temporary, `${JSON.stringify(mission, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      await replaceMissionFile(temporary, target);
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   async load(missionId: string): Promise<TestMission> {
     const source = await readFile(join(this.rootDir, `${safeMissionId(missionId)}.json`), "utf8");
     return TestMissionSchema.parse(JSON.parse(source));
+  }
+}
+
+async function replaceMissionFile(temporary: string, target: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(temporary, target);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (process.platform !== "win32" || attempt >= 49 || !["EACCES", "EBUSY", "EPERM"].includes(code ?? "")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(5 * (attempt + 1), 50)));
+    }
   }
 }
 

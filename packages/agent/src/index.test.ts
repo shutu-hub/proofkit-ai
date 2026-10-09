@@ -6,6 +6,34 @@ import { z } from "zod";
 import { TestSuiteSchema } from "@proofkit/contracts";
 import { DeterministicMissionPlanner, InMemoryMissionToolRegistry, JsonMissionStore, MissionAgent } from "./index.js";
 
+describe("JsonMissionStore", () => {
+  it("keeps every read complete while a mission is repeatedly replaced", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-atomic-mission-"));
+    const store = new JsonMissionStore(root);
+    const agent = new MissionAgent({ store, tools: new InMemoryMissionToolRegistry() });
+    const created = await agent.create({ intent: "verify atomic mission storage", projectRoot: root, surface: "web" });
+    const intent = "business evidence ".repeat(2_048);
+    await store.save({ ...created, intent });
+
+    const writer = async () => {
+      for (let revision = 1; revision <= 100; revision += 1) {
+        await store.save({ ...created, intent, revision });
+      }
+    };
+    const reader = async () => {
+      for (let count = 0; count < 150; count += 1) {
+        const mission = await store.load(created.missionId);
+        expect(mission.missionId).toBe(created.missionId);
+        expect(mission.intent).toBe(intent);
+      }
+    };
+
+    await Promise.all([writer(), reader(), reader(), reader()]);
+    expect((await store.load(created.missionId)).revision).toBe(100);
+    expect(await readdir(root)).toEqual([`${created.missionId}.json`]);
+  }, 15_000);
+});
+
 describe("MissionAgent", () => {
   it("requires approval and resumes a task graph through registered tools", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mission-"));
