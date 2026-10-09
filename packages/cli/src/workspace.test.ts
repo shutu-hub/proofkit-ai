@@ -47,6 +47,25 @@ describe("CLI workspace onboarding", () => {
     log.mockClear();
     await run("mission", "create", "unrelated words", "--charter-id", "ready-quick");
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ level: "quick", charter: { metadata: { catalogId: "ready-quick" } } });
+    for (const id of ["resume", "login"]) {
+      await writeFile(join(workspace, "charters", `${id}.yml`), JSON.stringify({
+        intent: `test ${id}`, level: "release", mode: "deterministic", preconditions: [], actions: [],
+        assertions: [{ kind: "text-visible", text: `${id} ready` }], oracles: [`${id}-terminal`],
+        sideEffectPolicy: "deny", metadata: {},
+      }));
+    }
+    await writeFile(join(workspace, ".proofkit", "config.yaml"), JSON.stringify({
+      project: { root },
+      charters: ["resume", "login"].map((id) => ({ id, path: `charters/${id}.yml`, aliases: [id], level: "release", surfaces: ["web", "electron"] })),
+      suites: [{ id: "release-critical", aliases: ["上线完整回归"], level: "release", charterIds: ["resume", "login"], surfaces: ["web", "electron"] }],
+      oracles: ["resume", "login"].map((id) => ({ name: `${id}-terminal`, url: `http://127.0.0.1:8080/${id}`, statusPointer: "/state", successValues: ["done"] })),
+    }));
+    log.mockClear();
+    await run("suites");
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).suites).toEqual([expect.objectContaining({ id: "release-critical" })]);
+    log.mockClear();
+    await run("mission", "create", "上线完整回归", "--suite-id", "release-critical");
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ level: "release", levelSelection: { source: "inferred", resolved: "release" }, suite: { suiteId: "release-critical", charters: [{ charterId: "resume" }, { charterId: "login" }] } });
     await expect(run("plan", "ready", "--out", "../outside.yml")).rejects.toThrow("within the ProofKit workspace");
     expect(await readdir(root)).toEqual(["package.json"]);
   });

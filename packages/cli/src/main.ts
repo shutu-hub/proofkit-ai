@@ -66,6 +66,14 @@ export function createProgram(): Command {
       console.log(JSON.stringify({ charters: config.charters }, null, 2));
     });
 
+  program.command("suites")
+    .description("List explicit release suites configured in the test workspace")
+    .option("--root <path>", "project root", ".")
+    .action(async ({ root, workspace }: RootOptions) => {
+      const config = await loadConfig(resolve(root), { workspaceRoot: workspace });
+      console.log(JSON.stringify({ suites: config.suites }, null, 2));
+    });
+
   program.command("plan <intent>")
     .description("Turn a business intent into a reviewable Test Charter")
     .option("--root <path>", "project root", ".")
@@ -159,6 +167,7 @@ export function createProgram(): Command {
     .option("--root <path>", "project root", ".")
     .option("--surface <surface>", "web, electron or mobile", "web")
     .option("--charter-id <id>", "select a curated test by catalog ID")
+    .option("--suite-id <id>", "select an explicit release suite by ID")
     .option("--url <url>", "entry URL")
     .option("--expect <text>", "visible text assertion", collect, [])
     .option("--oracle <name>", "configured business oracle", collect, [])
@@ -171,7 +180,8 @@ export function createProgram(): Command {
       const created = await runner.createMission({
         intent,
         charterId: options.charterId,
-        surface: options.surface as "web" | "electron",
+        suiteId: options.suiteId,
+        surface: options.surface as LocalAdapterName,
         url: options.url,
         expect: options.expect,
         oracleNames: options.oracle.length ? options.oracle : undefined,
@@ -305,6 +315,7 @@ type PlanCommandOptions = RootOptions & {
 type MissionCreateCommandOptions = PlanCommandOptions & {
   surface: string;
   charterId?: string;
+  suiteId?: string;
 };
 
 type RunCommandOptions = PlanCommandOptions & {

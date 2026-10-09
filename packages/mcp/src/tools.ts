@@ -20,11 +20,19 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "list_test_suites",
+    "List explicitly scoped release suites and the Charters each one includes.",
+    {},
+    async () => result({ suites: runner.listSuites() }),
+  );
+
+  server.tool(
     "create_test_mission",
     "Create a reviewable AI test mission from a natural-language intent. The mission plans work without modifying the tested project.",
     {
       intent: z.string().min(1),
       charterId: z.string().min(1).optional(),
+      suiteId: z.string().min(1).optional(),
       surface: z.enum(["web", "electron", "mobile"]).default("web"),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
@@ -33,7 +41,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
     },
-    async ({ intent, charterId, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, charterId, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
+    async ({ intent, charterId, suiteId, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, charterId, suiteId, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
   );
 
   server.tool(
@@ -42,6 +50,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     {
       intent: z.string().min(1),
       charterId: z.string().min(1).optional(),
+      suiteId: z.string().min(1).optional(),
       level: z.enum(["quick", "core", "release"]).optional(),
       surface: z.enum(["web", "electron", "mobile"]).default("web"),
       url: z.string().url().optional(),
@@ -51,8 +60,8 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
       autoApprove: z.boolean().default(true),
     },
-    async ({ intent, charterId, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
-      const mission = await runner.createMission({ intent, charterId, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
+    async ({ intent, charterId, suiteId, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
+      const mission = await runner.createMission({ intent, charterId, suiteId, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
       const readiness = missionReadiness(mission);
       const started = autoApprove && readiness.ready
         ? await runner.startMission(mission.missionId, { approve: true })
@@ -201,9 +210,13 @@ function result(value: unknown) {
 
 function missionReadiness(mission: TestMission): { ready: boolean; missing: string[] } {
   const missing: string[] = [];
-  if (!mission.charter?.assertions.length) missing.push("至少一个明确的表面断言");
-  if (mission.plan.executionProfile.requireBusinessOracle && !mission.charter?.oracles?.length) {
-    missing.push("至少一个独立业务 Oracle");
+  const charters = mission.suite?.charters.map((item) => item) ?? [{ charterId: "", charter: mission.charter }];
+  for (const { charterId, charter } of charters) {
+    const prefix = charterId ? `${charterId}: ` : "";
+    if (!charter?.assertions.length) missing.push(`${prefix}至少一个明确的表面断言`);
+    if (mission.plan.executionProfile.requireBusinessOracle && !charter?.oracles?.length) {
+      missing.push(`${prefix}至少一个独立业务 Oracle`);
+    }
   }
   return { ready: missing.length === 0, missing };
 }
@@ -213,7 +226,7 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
   const profile = mission.plan.executionProfile;
   const terminal = ["completed", "failed", "blocked", "cancelled"];
   const next = !readiness.ready && mission.status === "awaiting-approval"
-    ? ["list_test_charters", "plan_test"]
+    ? ["list_test_charters", "list_test_suites", "plan_test"]
     : mission.status === "awaiting-approval"
     ? ["approve_test_plan"]
     : started.running || mission.status === "running"
@@ -233,8 +246,10 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
     executionProfile: profile,
     readiness,
     ...(typeof mission.charter?.metadata.catalogId === "string" ? { catalogId: mission.charter.metadata.catalogId } : {}),
+    ...(mission.suite ? { suiteId: mission.suite.suiteId, includedCharterIds: mission.suite.charters.map((item) => item.charterId) } : {}),
     taskSummary: mission.plan.graph.tasks.map((task) => ({
       taskId: task.taskId,
+      ...(task.charterId ? { charterId: task.charterId } : {}),
       title: task.title,
       tool: task.tool,
       status: task.status,
@@ -244,7 +259,8 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
     })),
     oracleRequirement: {
       required: profile.requireBusinessOracle,
-      declared: mission.charter?.oracles?.length ?? 0,
+      declared: mission.suite ? mission.suite.charters.reduce((count, item) => count + (item.charter.oracles?.length ?? 0), 0) : mission.charter?.oracles?.length ?? 0,
+      ...(mission.suite ? { byCharter: mission.suite.charters.map((item) => ({ charterId: item.charterId, declared: item.charter.oracles?.length ?? 0 })) } : {}),
       message: profile.requireBusinessOracle
         ? "该测试级别必须有独立业务 Oracle；UI 点击或截图不能单独证明通过。"
         : "该测试级别不强制独立业务 Oracle。",

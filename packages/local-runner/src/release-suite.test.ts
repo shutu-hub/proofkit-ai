@@ -1,0 +1,181 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { ProofkitConfigSchema, TestCharterSchema, type RunSummary, type TestCharter, type Verdict } from "@proofkit/contracts";
+import { LocalRunnerService, type LocalAdapterName } from "./index.js";
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+describe("explicit release suites", () => {
+  it("runs two Charters on Web and Electron with separate replay and negative evidence", async () => {
+    const service = await createSuiteService();
+    const harness = stubRuns(service);
+    const mission = await service.createMission({ intent: "上线完整回归", surface: "web" });
+    expect(mission.suite?.charters.map((item) => item.charterId)).toEqual(["resume", "login"]);
+    expect(mission.levelSelection?.source).toBe("inferred");
+    expect(mission.plan.graph.tasks).toHaveLength(14);
+    expect(mission.plan.graph.tasks.filter((task) => task.charterId)).toHaveLength(12);
+    expect(mission.plan.executionProfile).toMatchObject({ suiteId: "release-critical", charterIds: ["resume", "login"], surfaceMatrix: ["web", "electron"], collectAllResults: true });
+
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    const evidence = await service.missionEvidence(mission.missionId);
+    expect(completed.status).toBe("completed");
+    expect(completed.verdict).toBe("passed");
+    expect(harness.started).toHaveLength(8);
+    expect(harness.replayed).toHaveLength(4);
+    expect(harness.started.filter((item) => item.negativeCaseId)).toHaveLength(4);
+    expect(completed.observations.filter((item) => item.kind === "surface.run")).toHaveLength(12);
+    expect(completed.observations.filter((item) => item.kind === "surface.run").every((item) => item.charterId === item.data.charterId)).toBe(true);
+    expect(evidence.suiteScope).toMatchObject({
+      suiteId: "release-critical",
+      includedCharterIds: ["resume", "login"],
+      uncoveredCharterIds: ["other-release"],
+    });
+    expect(evidence.suiteScope?.results).toHaveLength(4);
+    expect(evidence.suiteScope?.results.every((item) => item.verdict === "passed" && item.missing.length === 0)).toBe(true);
+    for (const result of evidence.suiteScope?.results ?? []) {
+      expect(result.replay?.sourceRunId).toBe(result.primary?.runId);
+      expect(result.negativeCases).toHaveLength(1);
+    }
+
+    const replayedMission = await service.replayMission(mission.missionId);
+    const replayed = await service.waitMission(replayedMission.mission.missionId);
+    expect(replayed.suite?.suiteId).toBe("release-critical");
+    expect(replayed.verdict).toBe("passed");
+  });
+
+  it("continues independent workflows after a product failure and reports the failing Charter", async () => {
+    const service = await createSuiteService();
+    const harness = stubRuns(service, { failedPrimary: "resume/web" });
+    const mission = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    const scope = (await service.missionEvidence(mission.missionId)).suiteScope;
+    expect(completed.status).toBe("failed");
+    expect(completed.verdict).toBe("failed");
+    expect(harness.started).toHaveLength(8);
+    expect(harness.replayed).toHaveLength(4);
+    expect(scope?.results.find((item) => item.charterId === "resume" && item.surface === "web")?.verdict).toBe("failed");
+    expect(scope?.results.filter((item) => item.charterId === "login").every((item) => item.verdict === "passed")).toBe(true);
+    expect(completed.findings.some((item) => item.category === "product" && item.charterId === "resume" && item.surface === "web" && item.evidence.length > 0)).toBe(true);
+  });
+
+  it("does not borrow an Oracle fact from another Charter or surface", async () => {
+    const service = await createSuiteService();
+    stubRuns(service, { missingBusinessFact: "resume/electron/replay" });
+    const mission = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    const scope = (await service.missionEvidence(mission.missionId)).suiteScope;
+    expect(completed.verdict).toBe("inconclusive");
+    expect(scope?.results.find((item) => item.charterId === "resume" && item.surface === "electron"))
+      .toMatchObject({ verdict: "inconclusive", missing: ["replay independent business fact"] });
+    expect(scope?.results.filter((item) => item.charterId === "login").every((item) => item.verdict === "passed")).toBe(true);
+    expect(completed.firstFailure?.kind).toBe("evidence");
+  });
+
+  it("rejects a suite whose Charter is missing a required surface or business Oracle", async () => {
+    const service = await createSuiteService({ loginSurfaces: ["web"] });
+    await expect(service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" }))
+      .rejects.toThrow("complete release surface matrix");
+    const service2 = await createSuiteService({ loginOracle: false });
+    await expect(service2.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" }))
+      .rejects.toThrow("independent business Oracle");
+  });
+
+  it("requires an explicit ID when suite and single-Charter aliases both match", async () => {
+    const service = await createSuiteService();
+    service.config.charters[0]!.aliases = ["上线完整回归"];
+    await expect(service.createMission({ intent: "上线完整回归", surface: "web" })).rejects.toThrow("specify suiteId or charterId");
+    const selected = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    expect(selected.suite?.suiteId).toBe("release-critical");
+  });
+});
+
+async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[]; loginOracle?: boolean } = {}): Promise<LocalRunnerService> {
+  const root = await mkdtemp(join(tmpdir(), "proofkit-suite-source-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "proofkit-suite-workspace-"));
+  roots.push(root, workspaceRoot);
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "suite-fixture" }));
+  await mkdir(join(workspaceRoot, ".proofkit", "charters"), { recursive: true });
+  const charters = ["resume", "login", "other-release"];
+  const config = ProofkitConfigSchema.parse({
+    project: { root },
+    charters: charters.map((id) => ({
+      id, path: `.proofkit/charters/${id}.yml`, aliases: [id], level: "release",
+      surfaces: id === "login" ? options.loginSurfaces ?? ["web", "electron"] : ["web", "electron"],
+    })),
+    suites: [{ id: "release-critical", aliases: ["上线完整回归"], level: "release", charterIds: ["resume", "login"], surfaces: ["web", "electron"] }],
+    oracles: charters.map((id) => ({ name: `${id}-oracle`, url: `http://127.0.0.1:8765/${id}`, statusPointer: "/status", successValues: ["done"] })),
+    run: { timeoutMs: 2_000 },
+  });
+  await writeFile(join(workspaceRoot, ".proofkit", "config.yaml"), JSON.stringify(config));
+  for (const id of charters) {
+    const charter = TestCharterSchema.parse({
+      intent: `test ${id}`,
+      level: "release",
+      mode: "deterministic",
+      actions: [{ kind: "observe" }],
+      assertions: [{ kind: "text-visible", text: `${id} ready` }],
+      oracles: id === "login" && options.loginOracle === false ? [] : [`${id}-oracle`],
+      sideEffectPolicy: "deny",
+      negativeCases: [{ caseId: "duplicate", title: "duplicate input", actions: [{ kind: "observe" }], assertions: [], oracles: [`${id}-oracle`], sideEffectPolicy: "deny" }],
+    });
+    await writeFile(join(workspaceRoot, ".proofkit", "charters", `${id}.yml`), JSON.stringify(charter));
+  }
+  return LocalRunnerService.create({ root, workspaceRoot });
+}
+
+function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string } = {}) {
+  const summaries = new Map<string, RunSummary>();
+  const started: Array<{ charterId: string; surface: LocalAdapterName; negativeCaseId?: string }> = [];
+  const replayed: Array<{ sourceRunId: string; charterId: string; surface: LocalAdapterName }> = [];
+  let sequence = 0;
+  const summaryFor = (charter: TestCharter, surface: LocalAdapterName, kind: "primary" | "replay" | "negative"): RunSummary => {
+    const charterId = String(charter.metadata.catalogId);
+    const runId = `suite-${++sequence}`;
+    const failed = options.failedPrimary === `${charterId}/${surface}` && kind !== "negative";
+    const missing = options.missingBusinessFact === `${charterId}/${surface}/${kind}`;
+    const verdict: Verdict = failed ? "failed" : "passed";
+    const now = new Date().toISOString();
+    const oracleArtifact = `${runId}/oracle.json`;
+    const summary: RunSummary = {
+      runId, startedAt: now, endedAt: now, status: "completed", verdict, charter,
+      steps: [],
+      assertions: kind === "negative" ? [] : [{ assertion: charter.assertions[0]!, passed: true, message: "visible", evidence: [`${runId}/snapshot.json`] }],
+      oracles: [{ name: `${charterId}-oracle`, passed: !failed, message: failed ? "business state is wrong" : "business state is done", evidence: [oracleArtifact], sourceEvidenceCount: missing ? 0 : 1, observedAt: now }],
+      artifacts: [`${runId}/snapshot.json`, oracleArtifact],
+      findings: [],
+    };
+    summaries.set(runId, summary);
+    return summary;
+  };
+  service.start = async (input) => {
+    const charter = input.charter!;
+    const surface = input?.adapter ?? "web";
+    const negativeCaseId = typeof charter.metadata.negativeCaseId === "string" ? charter.metadata.negativeCaseId : undefined;
+    started.push({ charterId: String(charter.metadata.catalogId), surface, negativeCaseId });
+    const summary = summaryFor(charter, surface, negativeCaseId ? "negative" : "primary");
+    return { runId: summary.runId, status: "completed", verdict: summary.verdict, summary };
+  };
+  service.replay = async (sourceRunId, input) => {
+    const source = summaries.get(sourceRunId);
+    if (!source) throw new Error(`Unknown replay source ${sourceRunId}`);
+    const surface = input?.adapter ?? "web";
+    replayed.push({ sourceRunId, charterId: String(source.charter.metadata.catalogId), surface });
+    const summary = summaryFor(source.charter, surface, "replay");
+    return { runId: summary.runId, status: "completed", verdict: summary.verdict, summary };
+  };
+  service.wait = async (runId) => {
+    const summary = summaries.get(runId);
+    if (!summary) throw new Error(`Unknown run ${runId}`);
+    return summary;
+  };
+  return { started, replayed };
+}

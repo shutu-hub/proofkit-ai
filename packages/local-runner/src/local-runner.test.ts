@@ -757,6 +757,7 @@ describe("LocalRunnerService", () => {
         planning: { provider: "deterministic", timeoutMs: 30_000 },
         integration: {},
         charters: [],
+        suites: [],
         run: { timeoutMs: 300_000 },
         oracles: [],
         policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false },

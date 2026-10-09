@@ -9,6 +9,7 @@ Register one local MCP server for the project root. Clients with MCP support, in
 ```text
 discover_project
 list_test_charters
+list_test_suites
 run_test
 get_mission_status
 get_mission_evidence
@@ -40,6 +41,19 @@ charters:
 ```
 
 The Charter must declare a real surface assertion and, for `core` or `release`, a registered independent business Oracle. An agent can say “测试简历获取核心链路”; ProofKit selects the matching alias at the requested level and surface, records `catalogId`, and executes the saved Charter. A more specific alias may supersede its own generic substring; matches for distinct workflows require an explicit `charterId`. An explicit ID supplies its catalog level when `level` is omitted. A `release` Charter must support both Web and Electron when either is selected. Ad-hoc `url`, `expect`, Oracle, mode or side-effect options bypass automatic catalog matching. `list_test_charters` shows the available IDs and aliases. The source project remains untouched.
+
+For a multi-workflow release run, declare the exact scope in the same external config:
+
+```yaml
+suites:
+  - id: release-critical
+    aliases: [上线完整回归]
+    level: release
+    charterIds: [resume-release, login-release]
+    surfaces: [web, electron]
+```
+
+Both referenced Charters must be registered `release` entries, support both surfaces, and declare their own assertions and business Oracles. Call `run_test({ intent: "上线完整回归", suiteId: "release-critical", surface: "web" })`, or use the suite's alias without `suiteId` when it is unambiguous. `list_test_suites` shows the configured scope. A suite runs only its declared Charters; the result lists other registered release Charters as uncovered catalog scope. A direct `charterId` still runs one Charter.
 
 The final evidence gate is checked per primary run and required replay, not across pooled runs. An Oracle must return at least one sanitized observation fact; ProofKit's own Oracle result file does not count as that fact. A negative case cannot make an unverified main path green.
 
@@ -79,7 +93,7 @@ For MCP, the operator sets `PROOFKIT_ALLOW_CAPABILITY_WRITES=1` when launching t
 | --- | --- | --- |
 | “快速看一下登录页能不能打开” | `quick` | Run the shortest observable path and return quickly. |
 | “测试简历获取核心链路” | `core` | Require an independent business result and retain replayable evidence. |
-| “上线前完整回归 Web 和 Electron” | `release` | Run both surfaces and replay each; require the matrix and business evidence. Any negative or recovery cases declared in the Charter also run on every required surface; a case may declare an expected `failed` or `blocked` outcome. |
+| “上线前完整回归 Web 和 Electron” | `release` | Select a declared suite or a single Charter, then run and replay each selected workflow on both surfaces. Verify business evidence for every workflow and surface; execute every explicitly declared negative or recovery case. |
 | “在 Android 模拟器上测试登录” | `core` | Use the configured `mobile` W3C WebDriver surface with the same assertions, Oracles and evidence contract. |
 
 If the user does not specify a level, ProofKit selects `core`. An explicit `quick` request is never silently upgraded by the planner.

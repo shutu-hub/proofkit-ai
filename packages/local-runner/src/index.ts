@@ -3,14 +3,15 @@ import { resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, TestCharterSchema, type EvidenceRef, type NegativeCase, type ProofkitConfig, type ProjectMap, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter, type TestLevel, type TestMission, type Verdict } from "@proofkit/contracts";
+import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type NegativeCase, type ProofkitConfig, type ProjectMap, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
-import { getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
+import { getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { initProject, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
 import { CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
 import { ProjectMissionStore } from "./mission-store.js";
+import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from "./suite-verifier.js";
 
 export { loadProjectIntegration } from "./integration.js";
 
@@ -51,6 +52,7 @@ export type LocalRunStatus = {
 export type MissionCreateOptions = {
   intent: string;
   charterId?: string;
+  suiteId?: string;
   surface?: "web" | "electron" | "mobile" | "api";
   adapter?: LocalAdapterName;
   charter?: TestCharter;
@@ -77,7 +79,9 @@ export type MissionStatus = {
  * decision/audit trail useful without copying potentially large payloads.
  */
 export type MissionAgentStepSummary = Pick<TestMission["agentSteps"][number],
-  "agentStepId" | "sequence" | "taskId" | "phase" | "tool" | "decision" | "status" | "startedAt" | "endedAt" | "durationMs" | "toolCallIds" | "observationIds" | "evidence" | "error">;
+  "agentStepId" | "sequence" | "taskId" | "charterId" | "phase" | "tool" | "decision" | "status" | "startedAt" | "endedAt" | "durationMs" | "toolCallIds" | "observationIds" | "evidence" | "error">;
+
+export type { SuiteScopeSummary } from "./suite-verifier.js";
 
 type LocalRunRecord = {
   runId: string;
@@ -160,17 +164,52 @@ export class LocalRunnerService {
     return this.config.charters;
   }
 
+  listSuites(): ProofkitConfig["suites"] {
+    return this.config.suites;
+  }
+
   async createMission(input: MissionCreateOptions): Promise<TestMission> {
     const surface = input.surface ?? input.adapter ?? "web";
     if (surface === "api") throw new Error(`Mission surface is not enabled by the local runner: ${surface}`);
     if (input.charter && input.charterId) throw new Error("Supply either a Charter or charterId, not both");
+    if (input.suiteId && (input.charter || input.charterId)) throw new Error("Supply either suiteId or a Charter, not both");
     const catalogLevel = input.charterId ? this.config.charters.find((entry) => entry.id === input.charterId)?.level : undefined;
-    const levelSelection = resolveTestLevel(input.intent, input.level ?? input.charter?.level ?? catalogLevel);
+    const levelSelection = input.suiteId && !input.level
+      ? TestLevelSelectionSchema.parse({ resolved: "release", source: "inferred", reason: `选定的测试套件 ${input.suiteId} 要求 release 级别`, confidence: 1 })
+      : resolveTestLevel(input.intent, input.level ?? input.charter?.level ?? catalogLevel);
     const hasAdHocOptions = Boolean(input.url || input.expect?.length || input.oracleNames?.length || input.mode || input.sideEffectPolicy);
     if (input.charterId && hasAdHocOptions) throw new Error("charterId cannot be combined with ad-hoc planning options");
-    const selected = input.charter ? undefined : !hasAdHocOptions || input.charterId
+    if (input.suiteId && hasAdHocOptions) throw new Error("suiteId cannot be combined with ad-hoc planning options");
+    const selectedSuite = input.charter || input.charterId || (hasAdHocOptions && !input.suiteId)
+      ? undefined
+      : selectCatalogSuite(this.config.suites, { intent: input.intent, level: levelSelection.resolved, surface, suiteId: input.suiteId });
+    if (selectedSuite && !input.suiteId) {
+      const competingCharter = selectCatalogCharter(this.config.charters, { intent: input.intent, level: levelSelection.resolved, surface });
+      if (competingCharter) throw new Error(`Intent matches suite ${selectedSuite.entry.id} and Charter ${competingCharter.entry.id}; specify suiteId or charterId`);
+    }
+    const selected = input.charter || selectedSuite ? undefined : !hasAdHocOptions || input.charterId
       ? selectCatalogCharter(this.config.charters, { intent: input.intent, level: levelSelection.resolved, surface, charterId: input.charterId })
       : undefined;
+    if (selectedSuite) {
+      const suite = await this.loadSuite(selectedSuite.entry);
+      const sideEffectPolicy: SideEffectPolicy = suite.charters.some((item) => item.charter.sideEffectPolicy === "allow")
+        ? "allow" : suite.charters.some((item) => item.charter.sideEffectPolicy === "confirm") ? "confirm" : "deny";
+      if (input.policy?.sideEffectPolicy && input.policy.sideEffectPolicy !== sideEffectPolicy) {
+        throw new Error("Mission policy side effects must match the selected suite");
+      }
+      const expectedRuns = suite.charters.reduce((count, item) => count + suite.surfaces.length * (2 + (item.charter.negativeCases?.length ?? 0)), 0);
+      const timeoutMs = input.policy?.timeoutMs ?? Math.min(3_600_000, Math.max(300_000, expectedRuns * this.config.run.timeoutMs));
+      await this.ensureWorkspace();
+      return this.missionAgent.create({
+        intent: input.intent,
+        projectRoot: this.root,
+        workspaceRoot: this.workspaceRoot,
+        surface,
+        suite,
+        levelSelection,
+        policy: { ...input.policy, level: "release", sideEffectPolicy, timeoutMs },
+      });
+    }
     let charter: TestCharter;
     if (input.charter) {
       charter = input.charter;
@@ -208,8 +247,29 @@ export class LocalRunnerService {
       workspaceRoot: this.workspaceRoot,
       surface,
       charter: normalizedCharter,
+      levelSelection,
       policy: { ...input.policy, level: levelSelection.resolved, sideEffectPolicy: normalizedCharter.sideEffectPolicy },
     });
+  }
+
+  private async loadSuite(entry: ProofkitConfig["suites"][number]): Promise<TestSuite> {
+    const entries = new Map(this.config.charters.map((charter) => [charter.id, charter]));
+    const charters: TestSuite["charters"] = [];
+    for (const charterId of entry.charterIds) {
+      const catalog = entries.get(charterId);
+      if (!catalog) throw new Error(`Test suite ${entry.id} references unknown Charter: ${charterId}`);
+      if (catalog.level !== "release" || !entry.surfaces.every((surface) => catalog.surfaces.includes(surface))) {
+        throw new Error(`Test suite ${entry.id} Charter ${charterId} does not support its complete release surface matrix`);
+      }
+      const saved = await loadCharter(resolveWithinWorkspace(this.workspaceRoot, catalog.path));
+      if (saved.level !== catalog.level) throw new Error(`Test suite ${entry.id} Charter ${charterId} has a mismatched level`);
+      const charter = TestCharterSchema.parse({ ...saved, metadata: { ...saved.metadata, catalogId: charterId, suiteId: entry.id } });
+      for (const surface of entry.surfaces) this.validateCatalogCharter(charterId, charter, surface);
+      charters.push({ charterId, charter });
+    }
+    const included = new Set(entry.charterIds);
+    const uncoveredCharterIds = this.config.charters.filter((item) => item.level === "release" && !included.has(item.id)).map((item) => item.id);
+    return TestSuiteSchema.parse({ suiteId: entry.id, level: entry.level, surfaces: entry.surfaces, charters, uncoveredCharterIds });
   }
 
   private validateCatalogCharter(id: string, charter: TestCharter, surface: LocalAdapterName): void {
@@ -311,8 +371,10 @@ export class LocalRunnerService {
     level: TestMission["level"];
     levelSelection?: TestMission["levelSelection"];
     executionProfile: TestMission["plan"]["executionProfile"];
+    suiteScope?: SuiteScopeSummary;
     taskSummary: Array<{
       taskId: string;
+      charterId?: string;
       title: string;
       tool: string;
       status: TestMission["plan"]["graph"]["tasks"][number]["status"];
@@ -338,8 +400,10 @@ export class LocalRunnerService {
       level: mission.level,
       levelSelection: mission.levelSelection,
       executionProfile: mission.plan.executionProfile,
+      suiteScope: summarizeSuiteScope(mission),
       taskSummary: mission.plan.graph.tasks.map((task) => ({
         taskId: task.taskId,
+        ...(task.charterId ? { charterId: task.charterId } : {}),
         title: task.title,
         tool: task.tool,
         status: task.status,
@@ -365,6 +429,8 @@ export class LocalRunnerService {
       workspaceRoot: this.workspaceRoot,
       surface: previous.surface,
       charter: previous.charter,
+      suite: previous.suite,
+      levelSelection: previous.levelSelection,
       policy: { ...previous.policy, requireApproval: false },
     });
     return this.startMission(replay.missionId, { approve: true });
@@ -386,7 +452,10 @@ export class LocalRunnerService {
       return { output: project, observations: [observation] };
     };
 
-    const collectSurfaceRun = async (summary: RunSummary, context: MissionToolContext, adapter: LocalAdapterName, runKind: SurfaceRunKind, sourceRunId?: string, negativeCaseId?: string, expectedVerdict?: Verdict): Promise<MissionToolResult> => {
+    const collectSurfaceRun = async (summary: RunSummary, context: MissionToolContext, adapter: LocalAdapterName, runKind: SurfaceRunKind, sourceRunId?: string, negativeCaseId?: string, expectedVerdict?: Verdict, charterId?: string): Promise<MissionToolResult> => {
+      if (context.mission.suite && summary.charter.metadata.catalogId !== charterId) {
+        throw new Error(`Run ${summary.runId} returned evidence for a different Charter`);
+      }
       const actualVerdict = summary.verdict ?? "inconclusive";
       const outcomeMatched = expectedVerdict === undefined ? undefined : actualVerdict === expectedVerdict;
       const effectiveVerdict: Verdict = expectedVerdict === undefined
@@ -395,10 +464,12 @@ export class LocalRunnerService {
       const evidence = this.runEvidence(summary);
       const observation = ObservationSchema.parse({
         observationId: `${context.task.taskId}-${summary.runId}`,
+        charterId,
         source: "surface",
         kind: "surface.run",
         data: {
           runId: summary.runId,
+          charterId,
           sourceRunId,
           surface: adapter,
           runKind,
@@ -423,10 +494,12 @@ export class LocalRunnerService {
       const expectedFailureOutcome = runKind === "negative" && expectedVerdict !== undefined && expectedVerdict !== "passed";
       const analysis = expectedFailureOutcome ? {} : outcomeMatched === true ? {} : analyzeRun({ summary, evidence });
       const findings = analysis.finding
-        ? [FindingSchema.parse(analysis.finding)]
+        ? [FindingSchema.parse({ ...analysis.finding, charterId, surface: adapter })]
         : expectedVerdict !== undefined && outcomeMatched === false
           ? [FindingSchema.parse({
               findingId: `negative-outcome-${summary.runId}`,
+              charterId,
+              surface: adapter,
               severity: "high",
               category: "test",
               status: "confirmed",
@@ -438,6 +511,8 @@ export class LocalRunnerService {
         : runKind !== "negative" && (summary.verdict === "failed" || summary.verdict === "blocked")
           ? [FindingSchema.parse({
               findingId: `run-${summary.runId}`,
+              charterId,
+              surface: adapter,
               severity: "medium",
               category: summary.verdict === "blocked" ? "environment" : "unknown",
               status: "suspected",
@@ -448,35 +523,43 @@ export class LocalRunnerService {
             })]
           : [];
       return {
-        output: { runId: summary.runId, verdict: effectiveVerdict, actualVerdict, expectedVerdict, outcomeMatched, report: this.reportPath(summary.runId), ...(negativeCaseId ? { negativeCaseId } : {}) },
+        output: { runId: summary.runId, charterId, verdict: effectiveVerdict, actualVerdict, expectedVerdict, outcomeMatched, report: this.reportPath(summary.runId), ...(negativeCaseId ? { negativeCaseId } : {}) },
         verdict: effectiveVerdict,
         observations: [observation],
         evidence,
         findings,
-        firstFailure: analysis.boundary,
-        diagnosis: analysis.diagnosis,
-        repairSuggestions: analysis.repairSuggestion ? [analysis.repairSuggestion] : [],
+        firstFailure: analysis.boundary ? FailureBoundarySchema.parse({ ...analysis.boundary, charterId, surface: adapter }) : undefined,
+        diagnosis: analysis.diagnosis ? { ...analysis.diagnosis, charterId, surface: adapter } : undefined,
+        repairSuggestions: analysis.repairSuggestion ? [{ ...analysis.repairSuggestion, charterId, surface: adapter }] : [],
       };
     };
 
-    const runCharter = async (input: { charter?: TestCharter; adapter?: LocalAdapterName }, context: MissionToolContext): Promise<MissionToolResult> => {
-      const charter = input.charter ?? context.mission.charter;
+    const runCharter = async (input: { charter?: TestCharter; charterId?: string; adapter?: LocalAdapterName }, context: MissionToolContext): Promise<MissionToolResult> => {
+      if (context.mission.suite && context.task.charterId !== input.charterId) throw new Error("Suite task Charter ID does not match its input");
+      const charter = context.mission.suite
+        ? context.mission.suite.charters.find((item) => item.charterId === input.charterId)?.charter
+        : input.charter ?? context.mission.charter;
       if (!charter) throw new Error("Mission has no Test Charter to execute");
+      const charterId = context.mission.suite ? input.charterId : typeof charter.metadata.catalogId === "string" ? charter.metadata.catalogId : undefined;
       const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
       const started = await this.start({ charter, adapter, signal: context.signal });
       const summary = await this.wait(started.runId);
-      return collectSurfaceRun(summary, context, adapter, "primary");
+      return collectSurfaceRun(summary, context, adapter, "primary", undefined, undefined, undefined, charterId);
     };
 
-    const replayCharter = async (input: { adapter?: LocalAdapterName }, context: MissionToolContext): Promise<MissionToolResult> => {
+    const replayCharter = async (input: { charterId?: string; adapter?: LocalAdapterName }, context: MissionToolContext): Promise<MissionToolResult> => {
+      if (context.mission.suite && context.task.charterId !== input.charterId) throw new Error("Suite replay Charter ID does not match its input");
+      if (context.mission.suite && !context.mission.suite.charters.some((item) => item.charterId === input.charterId)) throw new Error("Replay Charter is not in the suite");
+      const charterId = context.mission.suite ? input.charterId : typeof context.mission.charter?.metadata.catalogId === "string" ? context.mission.charter.metadata.catalogId : undefined;
       const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
       const source = [...context.mission.observations].reverse().find((item) => item.kind === "surface.run"
         && item.data.surface === adapter
+        && (!context.mission.suite || item.charterId === charterId)
         && (item.data.runKind === "primary" || item.data.runKind === undefined));
       const sourceRunId = typeof source?.data.runId === "string" ? source.data.runId : undefined;
       if (!sourceRunId) {
         const observedAt = new Date().toISOString();
-        const message = `没有找到 ${adapter} 的主运行证据，无法执行回放`;
+        const message = `没有找到 ${charterId ? `${charterId} · ` : ""}${adapter} 的主运行证据，无法执行回放`;
         return {
           output: { adapter, verified: false, reason: message },
           verdict: "blocked",
@@ -486,13 +569,19 @@ export class LocalRunnerService {
       }
       const started = await this.replay(sourceRunId, { adapter, signal: context.signal });
       const summary = await this.wait(started.runId);
-      return collectSurfaceRun(summary, context, adapter, "replay", sourceRunId);
+      return collectSurfaceRun(summary, context, adapter, "replay", sourceRunId, undefined, undefined, charterId);
     };
 
-    const runNegativeCharter = async (input: { negativeCase: NegativeCase; adapter?: LocalAdapterName }, context: MissionToolContext): Promise<MissionToolResult> => {
-      const negativeCase = NegativeCaseSchema.parse(input.negativeCase);
-      const baseCharter = context.mission.charter;
+    const runNegativeCharter = async (input: { charterId?: string; negativeCase: NegativeCase; adapter?: LocalAdapterName }, context: MissionToolContext): Promise<MissionToolResult> => {
+      if (context.mission.suite && context.task.charterId !== input.charterId) throw new Error("Suite negative-case Charter ID does not match its input");
+      const requestedCase = NegativeCaseSchema.parse(input.negativeCase);
+      const baseCharter = context.mission.suite
+        ? context.mission.suite.charters.find((item) => item.charterId === input.charterId)?.charter
+        : context.mission.charter;
       if (!baseCharter) throw new Error("Mission has no Test Charter for the negative case");
+      const negativeCase = baseCharter.negativeCases?.find((item) => item.caseId === requestedCase.caseId);
+      if (!negativeCase) throw new Error(`Negative case is not declared by its Charter: ${requestedCase.caseId}`);
+      const charterId = context.mission.suite ? input.charterId : typeof baseCharter.metadata.catalogId === "string" ? baseCharter.metadata.catalogId : undefined;
       const charter = TestCharterSchema.parse({
         ...baseCharter,
         intent: `${context.mission.intent}: ${negativeCase.title}`,
@@ -505,10 +594,13 @@ export class LocalRunnerService {
       const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
       const started = await this.start({ charter, adapter, signal: context.signal });
       const summary = await this.wait(started.runId);
-      return collectSurfaceRun(summary, context, adapter, "negative", undefined, negativeCase.caseId, negativeCase.expectedVerdict ?? "passed");
+      return collectSurfaceRun(summary, context, adapter, "negative", undefined, negativeCase.caseId, negativeCase.expectedVerdict ?? "passed", charterId);
     };
 
     const verify = async (_input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
+      if (context.mission.suite) {
+        return verifySuiteMission(context.mission);
+      }
       const runs = context.mission.observations.filter((item) => item.kind === "surface.run");
       if (runs.length === 0) throw new Error("No surface run observation is available for verification");
       const executionProfile = context.mission.plan.executionProfile;
@@ -570,9 +662,9 @@ export class LocalRunnerService {
     return [
       { name: "project.discover", description: "Inspect the local project without modifying it.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
       { name: "surface.inspect", description: "Inspect the configured Web, Electron or mobile surface.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
-      { name: "surface.run-charter", description: "Run a validated charter through the existing deterministic runner and collect evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ charter: TestCharterSchema.optional(), adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runCharter },
-      { name: "surface.replay-charter", description: "Replay the preceding surface run using the saved charter and preserve a second evidence trail.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: replayCharter },
-      { name: "surface.run-negative-charter", description: "Run an explicitly declared negative or recovery Charter and collect independent evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ negativeCase: NegativeCaseSchema, adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runNegativeCharter },
+      { name: "surface.run-charter", description: "Run a validated charter through the existing deterministic runner and collect evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ charter: TestCharterSchema.optional(), charterId: z.string().optional(), adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runCharter },
+      { name: "surface.replay-charter", description: "Replay the preceding surface run using the saved charter and preserve a second evidence trail.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ charterId: z.string().optional(), adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: replayCharter },
+      { name: "surface.run-negative-charter", description: "Run an explicitly declared negative or recovery Charter and collect independent evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ charterId: z.string().optional(), negativeCase: NegativeCaseSchema, adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runNegativeCharter },
       { name: "mission.verify", description: "Verify the terminal verdict and evidence completeness of the preceding run.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: verify },
     ];
   }
@@ -923,6 +1015,7 @@ function summarizeAgentStep(step: TestMission["agentSteps"][number]): MissionAge
     agentStepId: step.agentStepId,
     sequence: step.sequence,
     taskId: step.taskId,
+    charterId: step.charterId,
     phase: step.phase,
     tool: step.tool,
     decision: step.decision,

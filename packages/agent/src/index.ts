@@ -27,6 +27,8 @@ import {
   type RepairSuggestion,
   type TaskNode,
   type TestMission,
+  type TestSuite,
+  type TestLevelSelection,
   type ToolCall,
   type Verdict,
 } from "@proofkit/contracts";
@@ -69,6 +71,8 @@ export type MissionPlanInput = {
   surface: TestMission["surface"];
   policy: MissionPolicy;
   charter?: TestMission["charter"];
+  suite?: TestSuite;
+  levelSelection?: TestLevelSelection;
 };
 
 export interface MissionPlanner {
@@ -96,6 +100,7 @@ function executionProfile(level: MissionPolicy["level"], surface: TestMission["s
 
 export class DeterministicMissionPlanner implements MissionPlanner {
   async plan(input: MissionPlanInput): Promise<MissionPlan> {
+    if (input.suite) return this.planSuite(input, input.suite);
     const now = new Date().toISOString();
     const planId = `plan-${randomUUID().slice(0, 12)}`;
     const profile = executionProfile(input.policy.level, input.surface);
@@ -188,6 +193,84 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       createdAt: now,
     });
   }
+
+  private planSuite(input: MissionPlanInput, suite: TestSuite): MissionPlan {
+    if (input.policy.level !== "release") throw new Error("A test suite requires the release level");
+    if (!suite.surfaces.includes(input.surface as typeof suite.surfaces[number])) throw new Error("The selected surface is not in the test suite");
+    const now = new Date().toISOString();
+    const negativeCases = suite.charters.flatMap(({ charter }) => charter.negativeCases ?? []);
+    const profile = MissionExecutionProfileSchema.parse({
+      surfaceMatrix: suite.surfaces,
+      suiteId: suite.suiteId,
+      charterIds: suite.charters.map((item) => item.charterId),
+      collectAllResults: true,
+      negativeCases: ["权限边界", "无效输入", "重试与恢复", "重复提交与幂等"],
+      declaredNegativeCases: negativeCases.map((item) => item.caseId),
+      requireBusinessOracle: true,
+      requireReplay: true,
+      requireNegativeCases: negativeCases.length > 0,
+      minimumEvidence: 3,
+    });
+    const primaryTasks = suite.charters.flatMap(({ charterId, charter }) => suite.surfaces.map((surface) => TaskNodeSchema.parse({
+      taskId: `execute-${charterId}-${surface}`,
+      charterId,
+      title: `${charterId} · ${surface} 主运行`,
+      objective: charter.intent,
+      tool: "surface.run-charter",
+      input: { charterId, adapter: surface },
+      dependsOn: ["reconnaissance"],
+      maxAttempts: 1,
+    })));
+    const replayTasks = suite.charters.flatMap(({ charterId }) => suite.surfaces.map((surface) => TaskNodeSchema.parse({
+      taskId: `replay-${charterId}-${surface}`,
+      charterId,
+      title: `${charterId} · ${surface} 回放`,
+      objective: "重复执行同一业务流程并保存独立证据。",
+      tool: "surface.replay-charter",
+      input: { charterId, adapter: surface },
+      dependsOn: [`execute-${charterId}-${surface}`],
+      dependencyMode: "settled",
+      maxAttempts: 1,
+    })));
+    const negativeTasks = suite.charters.flatMap(({ charterId, charter }) => suite.surfaces.flatMap((surface) => (charter.negativeCases ?? []).map((negativeCase) => TaskNodeSchema.parse({
+      taskId: `negative-${charterId}-${surface}-${negativeCase.caseId}`,
+      charterId,
+      title: `${charterId} · ${surface} 负向场景：${negativeCase.title}`,
+      objective: `验证 ${negativeCase.title} 的预期结果。`,
+      tool: "surface.run-negative-charter",
+      input: { charterId, negativeCase, adapter: surface },
+      dependsOn: [`execute-${charterId}-${surface}`],
+      dependencyMode: "settled",
+      maxAttempts: 1,
+    }))));
+    const tasks: TaskNode[] = [
+      TaskNodeSchema.parse({ taskId: "reconnaissance", title: "熟悉项目和运行表面", objective: "确认项目入口和当前可观察表面。", tool: "project.discover", input: {}, maxAttempts: 1 }),
+      ...primaryTasks,
+      ...replayTasks,
+      ...negativeTasks,
+      TaskNodeSchema.parse({
+        taskId: "verify-result",
+        title: "逐流程验证证据与结果",
+        objective: "独立校验每个 Charter、表面和运行类型的业务结果。",
+        tool: "mission.verify",
+        input: {},
+        dependsOn: [...replayTasks, ...negativeTasks].map((task) => task.taskId),
+        dependencyMode: "settled",
+        maxAttempts: 1,
+      }),
+    ];
+    return MissionPlanSchema.parse({
+      planId: `plan-${randomUUID().slice(0, 12)}`,
+      version: "1",
+      generatedBy: "deterministic-suite-planner-v1",
+      graph: { tasks, terminalTaskIds: ["verify-result"] },
+      successCriteria: ["逐流程主运行和回放完成", "每个流程及表面有独立业务事实", "明确报告未通过和未覆盖范围"],
+      level: "release",
+      executionProfile: profile,
+      assumptions: [`suite=${suite.suiteId}`, `environment=${input.policy.environment}`, `surfaces=${suite.surfaces.join(",")}`],
+      createdAt: now,
+    });
+  }
 }
 
 export interface MissionStore {
@@ -261,11 +344,16 @@ export class MissionAgent {
   }
 
   async create(input: MissionCreateInput): Promise<TestMission> {
-    const policy = MissionPolicySchema.parse(input.policy ?? {});
+    let policy = MissionPolicySchema.parse(input.policy ?? {});
+    if (input.charter && input.suite) throw new Error("A mission cannot contain both a Charter and a suite");
     if (input.charter && input.charter.level !== policy.level) {
       throw new Error(`Mission policy level ${policy.level} does not match charter level ${input.charter.level}`);
     }
+    if (input.suite && input.suite.level !== policy.level) throw new Error("Mission policy level must match the suite level");
     const plan = await this.planner.plan({ ...input, policy });
+    if (input.policy?.maxSteps === undefined && plan.graph.tasks.length > policy.maxSteps) {
+      policy = MissionPolicySchema.parse({ ...policy, maxSteps: plan.graph.tasks.length });
+    }
     const now = new Date().toISOString();
     const mission = TestMissionSchema.parse({
       missionId: `mission-${randomUUID().slice(0, 12)}`,
@@ -274,10 +362,11 @@ export class MissionAgent {
       workspaceRoot: input.workspaceRoot,
       surface: input.surface,
       level: policy.level,
-      levelSelection: input.charter?.levelSelection,
+      levelSelection: input.levelSelection ?? input.charter?.levelSelection,
       policy,
       status: policy.requireApproval ? "awaiting-approval" : "approved",
       charter: input.charter,
+      suite: input.suite,
       plan,
       createdAt: now,
       updatedAt: now,
@@ -447,6 +536,7 @@ export class MissionAgent {
     const startedCall = ToolCallSchema.parse({
       toolCallId,
       taskId: task.taskId,
+      charterId: task.charterId,
       tool: tool?.name ?? task.tool,
       attempt: runningTask.attempts,
       input: task.input,
@@ -457,6 +547,7 @@ export class MissionAgent {
       agentStepId,
       sequence: mission.agentSteps.length + 1,
       taskId: task.taskId,
+      charterId: task.charterId,
       phase: phase ?? agentStepPhase(task),
       tool: tool?.name ?? task.tool,
       decision: `选择依赖已满足的任务 ${task.taskId} 并调用已注册工具。`,
@@ -492,7 +583,7 @@ export class MissionAgent {
       }
       const output = tool.outputSchema ? tool.outputSchema.parse(result.output) : result.output;
       const finishedAt = new Date().toISOString();
-      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status: "succeeded", startedAt, endedAt: finishedAt, durationMs: Date.now() - Date.parse(startedAt), evidence: result.evidence ?? [] });
+      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, charterId: task.charterId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status: "succeeded", startedAt, endedAt: finishedAt, durationMs: Date.now() - Date.parse(startedAt), evidence: result.evidence ?? [] });
       const failedVerdict = result.verdict === "failed" || result.verdict === "blocked" || result.verdict === "cancelled";
       const stepStatus = result.verdict === "blocked"
         ? "blocked"
@@ -523,20 +614,20 @@ export class MissionAgent {
         observations: [...startedMission.observations, ...(result.observations ?? []).map((item) => ObservationSchema.parse(item))],
         evidence: [...startedMission.evidence, ...(result.evidence ?? [])],
         findings: [...startedMission.findings, ...(result.findings ?? []).map((item) => FindingSchema.parse(item))],
-        ...(result.firstFailure ? { firstFailure: FailureBoundarySchema.parse(result.firstFailure) } : {}),
+        ...(!startedMission.firstFailure && result.firstFailure ? { firstFailure: FailureBoundarySchema.parse(result.firstFailure) } : {}),
         ...(result.diagnosis ? { diagnosis: DiagnosisSchema.parse(result.diagnosis) } : {}),
         repairSuggestions: [...startedMission.repairSuggestions, ...(result.repairSuggestions ?? []).map((item) => RepairSuggestionSchema.parse(item))],
-        verdict: result.verdict,
-        ...(failedVerdict ? { status: taskStatus === "blocked" ? result.verdict === "cancelled" ? "cancelled" : "blocked" : "failed" } : {}),
+        verdict: startedMission.verdict === "failed" && result.verdict === "passed" ? "failed" : result.verdict,
+        ...(failedVerdict ? { status: taskStatus === "blocked" ? result.verdict === "cancelled" ? "cancelled" : "blocked" : startedMission.plan.executionProfile.collectAllResults ? "running" : "failed" } : {}),
       });
     } catch (error) {
       const cause = toError(error);
       const cancelled = toolController.signal.aborted && signal.aborted;
       const status = cancelled ? "cancelled" : "failed";
       const timedOut = cancelled && isMissionTimeout(signal.reason);
-      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: cause.message, evidence: cancelledResult?.evidence ?? [] });
+      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, charterId: task.charterId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: cause.message, evidence: cancelledResult?.evidence ?? [] });
       const agentStep = completeAgentStep(startedMission.agentSteps, agentStepId, {
-        status: status === "cancelled" ? "cancelled" : "failed",
+        status: status === "cancelled" ? "cancelled" : startedMission.plan.executionProfile.collectAllResults ? "running" : "failed",
         endedAt: new Date().toISOString(),
         durationMs: Date.now() - Date.parse(startedAt),
         error: cause.message,
@@ -580,7 +671,8 @@ export class MissionAgent {
 
 function nextReadyTask(mission: TestMission): TaskNode | undefined {
   const completed = new Set(mission.plan.graph.tasks.filter((task) => task.status === "passed").map((task) => task.taskId));
-  return mission.plan.graph.tasks.find((task) => (task.status === "pending" || task.status === "ready") && task.dependsOn.every((dependency) => completed.has(dependency)));
+  const settled = new Set(mission.plan.graph.tasks.filter((task) => task.status === "passed" || task.status === "failed" || task.status === "blocked" || task.status === "skipped").map((task) => task.taskId));
+  return mission.plan.graph.tasks.find((task) => (task.status === "pending" || task.status === "ready") && task.dependsOn.every((dependency) => task.dependencyMode === "settled" ? settled.has(dependency) : completed.has(dependency)));
 }
 
 function agentStepPhase(task: TaskNode): AgentStep["phase"] {
@@ -595,7 +687,7 @@ function failTask(mission: TestMission, taskId: string, toolCallId: string, agen
   const task = mission.plan.graph.tasks.find((candidate) => candidate.taskId === taskId);
   if (!task) throw new Error(`Task not found: ${taskId}`);
   const nextTask = { ...task, status, error } as TaskNode;
-  const call = ToolCallSchema.parse({ toolCallId, taskId, tool: task.tool, attempt: task.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error });
+  const call = ToolCallSchema.parse({ toolCallId, taskId, charterId: task.charterId, tool: task.tool, attempt: task.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error });
   const agentStep = completeAgentStep(mission.agentSteps, agentStepId, { status, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error });
   return { ...updateTask(mission, nextTask, { currentTaskId: taskId }), status: status === "blocked" ? "blocked" : "failed", verdict: status === "blocked" ? "blocked" : "failed", agentSteps: replaceAgentStep(mission.agentSteps, agentStep), toolCalls: replaceToolCall(mission.toolCalls, call), findings: [...mission.findings, finding(`task-${taskId}`, status === "blocked" ? "high" : "medium", status === "blocked" ? "environment" : "product", `Task ${taskId} did not complete`, error)] };
 }
@@ -643,6 +735,7 @@ function closeInterruptedAgentSteps(steps: AgentStep[], task: TaskNode, reason: 
     agentStepId: `agent-step-recovered-${task.taskId}-${task.attempts}`,
     sequence: closed.length + 1,
     taskId: task.taskId,
+    charterId: task.charterId,
     phase: "recover",
     tool: task.tool,
     decision: `恢复任务 ${task.taskId} 时发现旧状态没有代理步骤记录，补写中断审计记录。`,
@@ -657,11 +750,15 @@ function closeInterruptedAgentSteps(steps: AgentStep[], task: TaskNode, reason: 
 
 function isSafeToRecover(mission: TestMission, task: TaskNode, tool: MissionTool): boolean {
   if (tool.sideEffect === "write") return false;
-  if ((task.tool === "surface.run-charter" || task.tool === "surface.replay-charter") && mission.charter?.sideEffectPolicy !== "deny") return false;
+  const charterId = task.charterId ?? (typeof task.input.charterId === "string" ? task.input.charterId : undefined);
+  const charter = mission.suite
+    ? mission.suite.charters.find((item) => item.charterId === charterId)?.charter
+    : mission.charter;
+  if ((task.tool === "surface.run-charter" || task.tool === "surface.replay-charter") && charter?.sideEffectPolicy !== "deny") return false;
   if (task.tool === "surface.run-negative-charter") {
     const input = task.input as { negativeCase?: { caseId?: unknown; sideEffectPolicy?: unknown } };
     const caseId = typeof input.negativeCase?.caseId === "string" ? input.negativeCase.caseId : undefined;
-    const declared = mission.charter?.negativeCases?.find((negativeCase) => negativeCase.caseId === caseId);
+    const declared = charter?.negativeCases?.find((negativeCase) => negativeCase.caseId === caseId);
     // A negative case can contain a capability or a UI operation with a
     // product side effect. Only an explicitly deny-policy case is eligible
     // for automatic replay after a process interruption.

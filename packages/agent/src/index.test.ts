@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { TestSuiteSchema } from "@proofkit/contracts";
 import { DeterministicMissionPlanner, InMemoryMissionToolRegistry, JsonMissionStore, MissionAgent } from "./index.js";
 
 describe("MissionAgent", () => {
@@ -345,6 +346,55 @@ describe("MissionAgent", () => {
     expect(result.verdict).toBe("blocked");
     expect(calls).toEqual([]);
     expect(result.findings.some((item) => item.message.includes("side effect"))).toBe(true);
+  });
+
+  it("uses the interrupted suite task's own Charter policy for recovery", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-suite-recovery-"));
+    const store = new JsonMissionStore(root);
+    const calls: string[] = [];
+    const tools = new InMemoryMissionToolRegistry([
+      { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({}) },
+      { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}).passthrough(), execute: async (_input, context) => { calls.push(context.task.taskId); return { verdict: "passed" as const }; } },
+      { name: "surface.replay-charter", description: "replay", sideEffect: "read", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}).passthrough(), execute: async () => ({ verdict: "passed" as const }) },
+      { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({ verdict: "passed" as const }) },
+    ]);
+    const agent = new MissionAgent({ store, tools });
+    const suite = TestSuiteSchema.parse({
+      suiteId: "release-critical", level: "release", surfaces: ["web", "electron"],
+      charters: [
+        { charterId: "safe", charter: { intent: "safe workflow", level: "release", assertions: [{ kind: "text-visible", text: "safe" }], sideEffectPolicy: "deny" } },
+        { charterId: "write", charter: { intent: "write workflow", level: "release", assertions: [{ kind: "text-visible", text: "write" }], sideEffectPolicy: "allow" } },
+      ],
+    });
+    const create = () => agent.create({ intent: "release suite", projectRoot: root, surface: "web", suite, policy: { level: "release", sideEffectPolicy: "allow", requireApproval: false } });
+
+    const safeMission = await create();
+    const safeInterrupted = await agent.load(safeMission.missionId);
+    safeInterrupted.status = "running";
+    safeInterrupted.currentTaskId = "execute-safe-web";
+    safeInterrupted.plan.graph.tasks = safeInterrupted.plan.graph.tasks.map((task) => task.taskId === "execute-safe-web"
+      ? { ...task, status: "running" as const, attempts: 1, maxAttempts: 2 }
+      : task.taskId === "reconnaissance" ? { ...task, status: "passed" as const, attempts: 1 } : task);
+    await store.save(safeInterrupted);
+    const recovered = await agent.run(safeMission.missionId);
+    expect(recovered.status).toBe("completed");
+    expect(recovered.plan.graph.tasks.find((task) => task.taskId === "execute-safe-web")?.attempts).toBe(2);
+    expect(recovered.agentSteps.some((step) => step.taskId === "execute-safe-web" && step.phase === "recover" && step.status === "succeeded")).toBe(true);
+    expect(calls).toContain("execute-safe-web");
+
+    calls.length = 0;
+    const writeMission = await create();
+    const writeInterrupted = await agent.load(writeMission.missionId);
+    writeInterrupted.status = "running";
+    writeInterrupted.currentTaskId = "execute-write-web";
+    writeInterrupted.plan.graph.tasks = writeInterrupted.plan.graph.tasks.map((task) => task.taskId === "execute-write-web"
+      ? { ...task, status: "running" as const, attempts: 1, maxAttempts: 2 }
+      : task.taskId === "reconnaissance" ? { ...task, status: "passed" as const, attempts: 1 } : task);
+    await store.save(writeInterrupted);
+    const blocked = await agent.run(writeMission.missionId);
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.findings.some((item) => item.message.includes("side effect"))).toBe(true);
+    expect(calls).toEqual([]);
   });
 
   it.each([

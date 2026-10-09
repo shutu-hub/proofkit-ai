@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CharterCatalogEntry } from "@proofkit/contracts";
-import { selectCatalogCharter } from "./catalog.js";
+import type { CharterCatalogEntry, SuiteCatalogEntry } from "@proofkit/contracts";
+import { selectCatalogCharter, selectCatalogSuite } from "./catalog.js";
 
 const entries: CharterCatalogEntry[] = [
   { id: "resume-core", path: ".proofkit/charters/resume.yml", aliases: ["简历", "简历获取"], level: "core", surfaces: ["web", "electron"] },
@@ -33,5 +33,26 @@ describe("test catalog selection", () => {
     expect(() => selectCatalogCharter([...entries, entries[0]!], { intent: "简历获取", level: "core", surface: "web" })).toThrow("Duplicate test catalog ID");
     expect(() => selectCatalogCharter(entries, { intent: "先登录再测试简历获取", level: "core", surface: "web" })).toThrow("Ambiguous test catalog match");
     expect(() => selectCatalogCharter(entries, { intent: "上线检查", level: "release", surface: "web", charterId: "release-web-only" })).toThrow("does not support");
+  });
+});
+
+describe("release suite selection", () => {
+  const suites: SuiteCatalogEntry[] = [
+    { id: "release-critical", aliases: ["上线完整回归", "完整回归"], level: "release", charterIds: ["resume", "login"], surfaces: ["web", "electron"] },
+    { id: "release-payments", aliases: ["支付上线"], level: "release", charterIds: ["checkout", "refund"], surfaces: ["web", "electron"] },
+  ];
+
+  it("selects only an explicitly declared suite and respects its complete surface matrix", () => {
+    expect(selectCatalogSuite(suites, { intent: "执行上线完整回归", level: "release", surface: "web" }))
+      .toMatchObject({ entry: { id: "release-critical" }, matchedAlias: "上线完整回归" });
+    expect(selectCatalogSuite(suites, { intent: "测试登录", level: "release", surface: "web" })).toBeUndefined();
+    expect(selectCatalogSuite(suites, { intent: "完整回归", level: "core", surface: "web" })).toBeUndefined();
+    expect(() => selectCatalogSuite(suites, { intent: "anything", level: "core", surface: "web", suiteId: "release-critical" })).toThrow("does not support");
+  });
+
+  it("rejects duplicate and ambiguous suite registrations", () => {
+    expect(() => selectCatalogSuite([...suites, suites[0]!], { intent: "完整回归", level: "release", surface: "web" })).toThrow("Duplicate test suite ID");
+    const ambiguous = [...suites, { ...suites[1]!, id: "release-other", aliases: ["完整回归"] }];
+    expect(() => selectCatalogSuite(ambiguous, { intent: "完整回归", level: "release", surface: "web" })).toThrow("Ambiguous test suite match");
   });
 });

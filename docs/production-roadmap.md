@@ -52,7 +52,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Create a fixed Web/Electron benchmark with known workflows and seeded defects.
 - Use the bounded project test map to measure candidate entry-point and route coverage; partial scans must remain visible through the `truncated` flag.
 - Register known business Charters by explicit aliases so one-sentence Agent requests reuse verified workflows; stop automatic execution when a required assertion or Oracle is missing.
-- Define an explicit multi-Charter release suite with per-workflow surface and evidence gates; report catalog and project-map coverage gaps before claiming whole-project readiness.
+- Extend the implemented explicit multi-Charter release suite with measured project-map coverage. It already verifies each configured workflow and surface separately and reports registered release Charters outside its scope; static project-map routes still need a reviewed workflow mapping before they count as coverage.
 - Measure plan validity, workflow coverage, assertion quality, false passes and model cost.
 - Add a review gate for write actions and report planner uncertainty.
 - Keep all model output constrained to Charter and typed Capability schemas.
@@ -60,6 +60,8 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Run the same evaluator against deterministic and OpenAI-compatible providers. The evaluator checks level selection, required and forbidden action kinds, required Oracles, assertions and explicitly required negative cases without starting a browser, process or capability.
 
 **Current evidence:** `pnpm benchmark:planner` runs three fixed quick/core/release planning cases through `deterministic-v1`; all three currently pass with a 1.0 pass rate and average score. The same command accepts `PROOFKIT_PLANNER_PROVIDER=openai-compatible`, `PROOFKIT_PLANNER_BASE_URL` and `PROOFKIT_PLANNER_MODEL` for a real model. A workspace-owned Charter catalog and MCP readiness gate now reuse configured business scenarios without guessing assertions. The benchmark measures Charter structure only; it does not prove AIHR business execution.
+
+The explicit release suite now snapshots multiple Charter IDs and its excluded catalog scope into one Mission. A two-workflow Web/Electron smoke drives the real MCP `run_test` path, performs eight primary/replay Runs per Mission, checks independent HTTP business facts, and detects a seeded resume-only defect while the other workflow stays green. This proves the configured suite slice, not automatic whole-project coverage or a live AIHR deployment.
 
 **Gate:** publish benchmark results for every enabled planner and refuse a green verdict when the generated plan has no independent business proof. Missing level-specific evidence, a required release surface, or a required replay is `inconclusive`, with the first missing boundary recorded.
 

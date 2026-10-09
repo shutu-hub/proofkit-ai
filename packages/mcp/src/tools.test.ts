@@ -19,6 +19,7 @@ describe("ProofKit MCP tools", () => {
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       "discover_project",
       "list_test_charters",
+      "list_test_suites",
       "create_test_mission",
       "run_test",
       "approve_test_plan",
@@ -88,6 +89,35 @@ describe("ProofKit MCP tools", () => {
     await server.close();
   });
 
+  it("accepts a release suite from one natural-language MCP call", async () => {
+    const mission = fixtureMission("running");
+    const charter = { ...mission.charter!, level: "release" as const };
+    mission.level = "release";
+    mission.policy.level = "release";
+    mission.plan.level = "release";
+    mission.plan.executionProfile = { ...mission.plan.executionProfile, suiteId: "release-critical", charterIds: ["resume", "login"], surfaceMatrix: ["web", "electron"], collectAllResults: true, requireReplay: true };
+    mission.suite = { suiteId: "release-critical", level: "release", surfaces: ["web", "electron"], charters: [{ charterId: "resume", charter }, { charterId: "login", charter: { ...charter, intent: "test login" } }], uncoveredCharterIds: [] };
+    mission.charter = undefined;
+    const runner = {
+      config: { surfaces: {} },
+      listSuites: vi.fn(() => [{ id: "release-critical", aliases: ["上线完整回归"], level: "release", charterIds: ["resume", "login"], surfaces: ["web", "electron"] }]),
+      createMission: vi.fn(async () => mission),
+      startMission: vi.fn(async () => ({ mission, running: true })),
+    } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+
+    const listed = await client.callTool({ name: "list_test_suites", arguments: {} });
+    expect(JSON.parse(textContent(listed)).suites).toHaveLength(1);
+    const response = await client.callTool({ name: "run_test", arguments: { intent: "上线完整回归", suiteId: "release-critical", surface: "web" } });
+    const payload = JSON.parse(textContent(response));
+    expect(runner.createMission).toHaveBeenCalledWith(expect.objectContaining({ suiteId: "release-critical", surface: "web" }));
+    expect(runner.startMission).toHaveBeenCalled();
+    expect(payload).toMatchObject({ suiteId: "release-critical", includedCharterIds: ["resume", "login"], readiness: { ready: true }, running: true });
+
+    await client.close();
+    await server.close();
+  });
+
   it("holds an incomplete core request before surface execution", async () => {
     const mission = fixtureMission("awaiting-approval");
     mission.charter = { ...mission.charter!, assertions: [], oracles: [] };
@@ -103,7 +133,7 @@ describe("ProofKit MCP tools", () => {
     expect(result).toMatchObject({
       running: false,
       readiness: { ready: false, missing: ["至少一个明确的表面断言", "至少一个独立业务 Oracle"] },
-      next: ["list_test_charters", "plan_test"],
+      next: ["list_test_charters", "list_test_suites", "plan_test"],
     });
     expect(runner.startMission).not.toHaveBeenCalled();
     await client.close();
@@ -176,15 +206,15 @@ function fixtureMission(status: TestMission["status"]): TestMission {
       generatedBy: "test",
       graph: {
         tasks: [
-          { taskId: "reconnaissance", title: "熟悉项目", objective: "发现项目", tool: "project.discover", input: {}, dependsOn: [], status: "passed", attempts: 1, maxAttempts: 1 },
-          { taskId: "execute-charter", title: "执行测试", objective: "执行链路", tool: "surface.run-charter", input: {}, dependsOn: ["reconnaissance"], status: status === "running" ? "running" : "passed", attempts: 1, maxAttempts: 1 },
+          { taskId: "reconnaissance", title: "熟悉项目", objective: "发现项目", tool: "project.discover", input: {}, dependsOn: [], dependencyMode: "passed", status: "passed", attempts: 1, maxAttempts: 1 },
+          { taskId: "execute-charter", title: "执行测试", objective: "执行链路", tool: "surface.run-charter", input: {}, dependsOn: ["reconnaissance"], dependencyMode: "passed", status: status === "running" ? "running" : "passed", attempts: 1, maxAttempts: 1 },
         ],
         terminalTaskIds: ["execute-charter"],
       },
       successCriteria: [],
       assumptions: [],
       level: "core",
-      executionProfile: { surfaceMatrix: ["web"], negativeCases: ["关键权限或输入边界"], declaredNegativeCases: [], requireBusinessOracle: true, requireReplay: false, requireNegativeCases: false, minimumEvidence: 2 },
+      executionProfile: { surfaceMatrix: ["web"], charterIds: [], collectAllResults: false, negativeCases: ["关键权限或输入边界"], declaredNegativeCases: [], requireBusinessOracle: true, requireReplay: false, requireNegativeCases: false, minimumEvidence: 2 },
       createdAt: new Date().toISOString(),
     },
     agentSteps: [],

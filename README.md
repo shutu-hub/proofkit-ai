@@ -30,7 +30,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Polls asynchronous HTTP business state to a bounded terminal verdict; a timeout remains inconclusive.
 - Records action receipts, before/after snapshots, network and console events, screenshots, and a JSONL timeline.
 - Reports `passed`, `failed`, `blocked`, `cancelled`, or `inconclusive`; missing evidence never becomes a pass.
-- The default `core` mission runs one selected surface with an independent business Oracle and source facts. A `release` Mission currently tests one Charter across Web/Electron primary and replay runs, verifying each run's proof; a multi-workflow whole-project suite remains planned. Explicitly declared negative or recovery cases run on every required surface and cannot supply missing main-path evidence.
+- The default `core` mission runs one selected surface with an independent business Oracle and source facts. A `release` Mission can run one Charter or an explicitly configured multi-Charter suite across Web/Electron primary and replay runs. Every declared negative or recovery case has its own run and cannot supply missing main-path evidence. A suite reports registered release Charters outside its scope; it does not imply whole-project coverage.
 - Produces local JSON and HTML reports without a hosted service.
 
 ## Quick start
@@ -126,7 +126,7 @@ pnpm --filter @proofkit/mcp build
 PROOFKIT_ROOT=/path/to/your/project PROOFKIT_WORKSPACE_ROOT=/path/to/test-workspace node packages/mcp/dist/server.js
 ```
 
-The shortest agent workflow is `run_test({ intent, level, surface })`, followed by `get_mission_status` and `get_mission_evidence`. The supported levels are `quick` (fast observable path), `core` (the default, with an independent business Oracle), and `release` (pre-release regression scope). If no level is supplied, ProofKit selects `core` and records that decision in the Mission. See [docs/agent-integration.md](docs/agent-integration.md) for Codex, Claude Code and DeepSeek Harness usage.
+The shortest agent workflow is `run_test({ intent, level, surface })`, followed by `get_mission_status` and `get_mission_evidence`. The supported levels are `quick` (fast observable path), `core` (the default, with an independent business Oracle), and `release` (pre-release regression scope). When no level is supplied, ProofKit infers one from the intent or defaults to `core`; an explicit `suiteId` selects `release`. Register suites in the external workspace, inspect them with `proofkit suites` or MCP `list_test_suites`, then run one with `run_test({ intent: "上线完整回归", suiteId: "release-critical", surface: "web" })`. See [docs/agent-integration.md](docs/agent-integration.md) for Codex, Claude Code and DeepSeek Harness usage.
 
 For known business flows, add `charters` entries to the external workspace config with an ID, path, natural-language aliases, level and surfaces, then keep the validated YAML Charter in that workspace. `proofkit charters` or MCP `list_test_charters` lists them. An MCP server can run trusted write capabilities only when its operator sets `PROOFKIT_ALLOW_CAPABILITY_WRITES=1` and the workspace, Charter and capability all permit the isolated test operation; a project integration can add a preflight gate.
 
@@ -237,6 +237,7 @@ pnpm install
 pnpm build
 pnpm typecheck
 pnpm test
+pnpm test:smoke:suite
 node tests/web-smoke.mjs
 node tests/electron-smoke.mjs
 ```

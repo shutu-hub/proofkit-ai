@@ -217,6 +217,40 @@ export const CharterCatalogEntrySchema = z.object({
 });
 export type CharterCatalogEntry = z.infer<typeof CharterCatalogEntrySchema>;
 
+const CatalogIdSchema = z.string().regex(/^[a-zA-Z0-9._-]+$/);
+
+/** A release suite names its workflows explicitly; discovery never expands it implicitly. */
+export const SuiteCatalogEntrySchema = z.object({
+  id: CatalogIdSchema,
+  aliases: z.array(z.string().trim().min(2)).min(1),
+  level: z.literal("release"),
+  charterIds: z.array(CatalogIdSchema).min(2),
+  surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1),
+}).superRefine((suite, ctx) => {
+  if (new Set(suite.charterIds).size !== suite.charterIds.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charterIds"], message: "Suite Charter IDs must be unique" });
+  if (new Set(suite.surfaces).size !== suite.surfaces.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "Suite surfaces must be unique" });
+  if ((suite.surfaces.includes("web") || suite.surfaces.includes("electron")) && !(suite.surfaces.includes("web") && suite.surfaces.includes("electron"))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "A release suite with Web or Electron must include both surfaces" });
+});
+export type SuiteCatalogEntry = z.infer<typeof SuiteCatalogEntrySchema>;
+
+export const TestSuiteSchema = z.object({
+  suiteId: CatalogIdSchema,
+  level: z.literal("release"),
+  surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1),
+  charters: z.array(z.object({ charterId: CatalogIdSchema, charter: TestCharterSchema })).min(2),
+  uncoveredCharterIds: z.array(CatalogIdSchema).default([]),
+}).superRefine((suite, ctx) => {
+  if (new Set(suite.charters.map((item) => item.charterId)).size !== suite.charters.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charters"], message: "Suite Charter IDs must be unique" });
+  if (new Set(suite.surfaces).size !== suite.surfaces.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "Suite surfaces must be unique" });
+  if ((suite.surfaces.includes("web") || suite.surfaces.includes("electron")) && !(suite.surfaces.includes("web") && suite.surfaces.includes("electron"))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "A release suite with Web or Electron must include both surfaces" });
+  if (new Set(suite.uncoveredCharterIds).size !== suite.uncoveredCharterIds.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["uncoveredCharterIds"], message: "Uncovered Charter IDs must be unique" });
+  if (suite.uncoveredCharterIds.some((id) => suite.charters.some((item) => item.charterId === id))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["uncoveredCharterIds"], message: "Included Charters cannot be uncovered" });
+  for (const [index, item] of suite.charters.entries()) {
+    if (item.charter.level !== suite.level) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charters", index, "charter", "level"], message: "Suite Charter level must match the suite" });
+  }
+});
+export type TestSuite = z.infer<typeof TestSuiteSchema>;
+
 export const ProofkitConfigSchema = z.object({
   project: z.object({
     root: z.string().default("."),
@@ -262,6 +296,7 @@ export const ProofkitConfigSchema = z.object({
     path: z.string().min(1).optional(),
   }).default({}),
   charters: z.array(CharterCatalogEntrySchema).default([]),
+  suites: z.array(SuiteCatalogEntrySchema).default([]),
   run: z.object({
     timeoutMs: z.number().int().positive().max(3_600_000).default(300_000),
   }).default({}),
@@ -295,6 +330,9 @@ export type MissionSurface = z.infer<typeof MissionSurfaceSchema>;
 /** The execution obligations selected by the test level. */
 export const MissionExecutionProfileSchema = z.object({
   surfaceMatrix: z.array(MissionSurfaceSchema).min(1).default(["web"]),
+  suiteId: CatalogIdSchema.optional(),
+  charterIds: z.array(CatalogIdSchema).default([]),
+  collectAllResults: z.boolean().default(false),
   negativeCases: z.array(z.string().min(1)).default([]),
   declaredNegativeCases: z.array(z.string().regex(/^[a-zA-Z0-9._-]+$/)).default([]),
   requireBusinessOracle: z.boolean().default(false),
@@ -344,6 +382,7 @@ export type EvidenceRef = z.infer<typeof EvidenceRefSchema>;
 
 export const ObservationSchema = z.object({
   observationId: z.string().min(1),
+  charterId: CatalogIdSchema.optional(),
   source: z.enum(["surface", "network", "console", "process", "api", "business", "evidence", "planner"]),
   kind: z.string().min(1),
   data: z.record(z.string(), z.unknown()).default({}),
@@ -355,6 +394,7 @@ export type Observation = z.infer<typeof ObservationSchema>;
 export const ToolCallSchema = z.object({
   toolCallId: z.string().min(1),
   taskId: z.string().min(1),
+  charterId: CatalogIdSchema.optional(),
   tool: z.string().min(1),
   attempt: z.number().int().positive().default(1),
   input: z.record(z.string(), z.unknown()).default({}),
@@ -376,6 +416,7 @@ export const AgentStepSchema = z.object({
   agentStepId: z.string().min(1),
   sequence: z.number().int().positive(),
   taskId: z.string().min(1),
+  charterId: CatalogIdSchema.optional(),
   phase: z.enum(["execute", "recover", "verify"]).default("execute"),
   tool: z.string().min(1),
   decision: z.string().min(1),
@@ -394,6 +435,8 @@ export type AgentStep = z.infer<typeof AgentStepSchema>;
 
 export const FindingSchema = z.object({
   findingId: z.string().min(1),
+  charterId: CatalogIdSchema.optional(),
+  surface: z.enum(["web", "electron", "mobile"]).optional(),
   severity: z.enum(["info", "low", "medium", "high", "critical"]),
   category: z.enum(["product", "test", "environment", "security", "performance", "unknown"]),
   status: z.enum(["confirmed", "suspected", "unverified"]),
@@ -406,6 +449,8 @@ export type Finding = z.infer<typeof FindingSchema>;
 
 export const DiagnosisSchema = z.object({
   diagnosisId: z.string().min(1),
+  charterId: CatalogIdSchema.optional(),
+  surface: z.enum(["web", "electron", "mobile"]).optional(),
   summary: z.string().min(1),
   confidence: z.number().min(0).max(1),
   likelyOwner: z.string().min(1).optional(),
@@ -417,6 +462,8 @@ export type Diagnosis = z.infer<typeof DiagnosisSchema>;
 
 export const RepairSuggestionSchema = z.object({
   suggestionId: z.string().min(1),
+  charterId: CatalogIdSchema.optional(),
+  surface: z.enum(["web", "electron", "mobile"]).optional(),
   title: z.string().min(1),
   rationale: z.string().min(1),
   changes: z.array(z.string().min(1)).min(1),
@@ -432,6 +479,8 @@ export type RepairSuggestion = z.infer<typeof RepairSuggestionSchema>;
 // defect without an independent oracle or assertion evidence.
 export const FailureBoundarySchema = z.object({
   kind: z.enum(["surface-action", "assertion", "business-oracle", "environment", "evidence"]),
+  charterId: CatalogIdSchema.optional(),
+  surface: z.enum(["web", "electron", "mobile"]).optional(),
   message: z.string().min(1),
   stepId: z.string().optional(),
   oracleName: z.string().optional(),
@@ -442,11 +491,13 @@ export type FailureBoundary = z.infer<typeof FailureBoundarySchema>;
 
 export const TaskNodeSchema = z.object({
   taskId: z.string().regex(/^[a-zA-Z0-9._-]+$/),
+  charterId: CatalogIdSchema.optional(),
   title: z.string().min(1),
   objective: z.string().min(1),
   tool: z.string().min(1),
   input: z.record(z.string(), z.unknown()).default({}),
   dependsOn: z.array(z.string()).default([]),
+  dependencyMode: z.enum(["passed", "settled"]).default("passed"),
   status: MissionTaskStatusSchema.default("pending"),
   attempts: z.number().int().nonnegative().default(0),
   maxAttempts: z.number().int().positive().max(10).default(1),
@@ -550,6 +601,7 @@ export const TestMissionSchema = z.object({
   status: MissionStatusSchema,
   verdict: VerdictSchema.optional(),
   charter: TestCharterSchema.optional(),
+  suite: TestSuiteSchema.optional(),
   plan: MissionPlanSchema,
   agentSteps: z.array(AgentStepSchema).default([]),
   toolCalls: z.array(ToolCallSchema).default([]),
