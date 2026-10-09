@@ -127,13 +127,15 @@ describe("AIHR project integration", () => {
     await expect(cancelled).rejects.toThrow("fixture cancelled");
   });
 
-  it("uploads an in-project PDF as multipart and proves the ordinary collection pipeline", async () => {
+  it("uploads an external test-workspace PDF as multipart and proves the ordinary collection pipeline", async () => {
     const fixtureBytes = Buffer.from("%PDF-1.4 proofkit fixture\n", "utf8");
     const fixtureSha256 = createHash("sha256").update(fixtureBytes).digest("hex");
     const gateway = await startCollectionGatewayMock({ fixtureSha256 });
     servers.push(gateway.server);
-    const root = await createIntegrationProject(fixtureBytes);
-    const service = await LocalRunnerService.create({ root });
+    const workspaceRoot = await createIntegrationProject(fixtureBytes);
+    const root = await mkdtemp(join(process.env.TEMP ?? process.env.TMP ?? ".", "proofkit-aihr-source-"));
+    roots.push(root);
+    const service = await LocalRunnerService.create({ root, workspaceRoot });
     const integration = service.integration;
     if (!integration) throw new Error("AIHR integration was not loaded");
 
@@ -161,6 +163,10 @@ describe("AIHR project integration", () => {
     expect(gateway.uploadBody).toMatch(/name="run_id"\r\n\r\n900\r\n/);
     expect(gateway.uploadBody).toMatch(/name="target_job_ids"\r\n\r\n\[505\]\r\n/);
     expect(gateway.uploadBody).not.toContain("source_text");
+    const sourceFixture = join(root, "source-resume.pdf");
+    await writeFile(sourceFixture, fixtureBytes);
+    await expect(upload.execute({ fixturePath: sourceFixture, sourceChannel: "boss", clientItemKey: "outside-workspace" }, context))
+      .rejects.toThrow("fixturePath must stay within the test workspace");
 
     const observed = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
     expect(observed).toMatchObject({

@@ -2,6 +2,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
   MissionComparisonSchema,
+  SourceStateSchema,
   type EvidenceRef,
   type MissionComparison,
   type MissionComparisonDefect,
@@ -9,6 +10,7 @@ import {
   type Observation,
   type OracleResult,
   type RunSummary,
+  type SourceState,
   type TestCharter,
   type TestMission,
 } from "@proofkit/contracts";
@@ -28,6 +30,19 @@ export async function compareMissionRecords(
 ): Promise<MissionComparison> {
   const baselineScopeHash = scopeHash(baseline);
   const candidateScopeHash = scopeHash(candidate);
+  const baselineSourceState = sourceStateFor(baseline);
+  const candidateSourceState = sourceStateFor(candidate);
+  const candidateFinalSourceState = sourceStateFor(candidate, "project.source-state-final");
+  const sourceChange: MissionComparison["sourceChange"] = baselineSourceState?.complete && candidateSourceState?.complete
+    && baselineSourceState.method === "git" && candidateSourceState.method === "git"
+    && baselineSourceState.worktreeSha256 && candidateSourceState.worktreeSha256
+    ? baselineSourceState.worktreeSha256 === candidateSourceState.worktreeSha256 ? "unchanged" : "changed"
+    : "unknown";
+  const candidateSourceStability: MissionComparison["candidateSourceStability"] = candidateSourceState?.complete && candidateFinalSourceState?.complete
+    && candidateSourceState.method === "git" && candidateFinalSourceState.method === "git"
+    && candidateSourceState.worktreeSha256 && candidateFinalSourceState.worktreeSha256
+    ? candidateSourceState.worktreeSha256 === candidateFinalSourceState.worktreeSha256 ? "stable" : "changed-during-run"
+    : "unknown";
   const scopeMatched = baselineScopeHash === candidateScopeHash;
   const gaps: string[] = [];
   if (baseline.missionId === candidate.missionId) gaps.push("A Mission cannot be compared with itself.");
@@ -36,6 +51,7 @@ export async function compareMissionRecords(
   if (!terminal(baseline)) gaps.push("Baseline Mission has not reached a terminal state.");
   if (!terminal(candidate)) gaps.push("Candidate Mission has not reached a terminal state.");
   if (baseline.verdict !== "failed") gaps.push("Baseline Mission did not record a failed verdict for its confirmed product defect.");
+  if (candidateSourceStability === "changed-during-run") gaps.push("Candidate source changed while the Mission was executing.");
 
   const slots = slotsFor(baseline);
   const runs: MissionComparisonRun[] = [];
@@ -62,6 +78,7 @@ export async function compareMissionRecords(
       candidateEvidence: after ? compactEvidence(after.observation.evidence) : [],
     });
   }
+  const structuralIssue = gaps.length > 0;
 
   const defects: MissionComparisonDefect[] = [];
   for (const slot of slots.filter((item) => item.runKind !== "negative")) {
@@ -127,14 +144,12 @@ export async function compareMissionRecords(
 
   const reproduced = defects.some((item) => item.outcome === "reproduced");
   const allNotReproduced = defects.length > 0 && defects.every((item) => item.outcome === "not-reproduced");
-  const eligible = gaps.filter((gap) => !gap.startsWith("Baseline has no confirmed") && !gap.startsWith("Candidate did not pass")
-    && !gap.startsWith("Candidate is missing") && !gap.startsWith("Candidate "));
-  const status: MissionComparison["status"] = eligible.length > 0 || !terminal(candidate)
+  const status: MissionComparison["status"] = structuralIssue
     ? "inconclusive"
     : reproduced ? "defect-reproduced"
       : candidateComplete && allNotReproduced ? "verified-in-scope" : "inconclusive";
   const reason = status === "verified-in-scope"
-    ? "The original evidenced business defect was not reproduced by a complete replay of the same configured test scope. This does not establish which source change caused it."
+    ? `The original evidenced business defect was not reproduced by a complete replay of the same configured test scope. ${sourceChange === "unchanged" ? "The captured source fingerprint did not change; product or environment state may explain the difference." : sourceChange === "changed" ? "The source fingerprint changed, but this does not establish which edit caused the outcome." : "Source change could not be established."}`
     : status === "defect-reproduced"
       ? "At least one original business Oracle still fails with independent source facts in the replay."
       : gaps[0] ?? "The evidence is insufficient to verify the original defect after replay.";
@@ -146,6 +161,10 @@ export async function compareMissionRecords(
     baselineScopeHash,
     candidateScopeHash,
     scopeMatched,
+    baselineSourceState,
+    candidateSourceState,
+    sourceChange,
+    candidateSourceStability,
     status,
     reason,
     gaps: gaps.slice(0, 30),
@@ -159,6 +178,12 @@ export async function compareMissionRecords(
 
 function terminal(mission: TestMission): boolean {
   return ["completed", "failed", "blocked", "cancelled"].includes(mission.status);
+}
+
+function sourceStateFor(mission: TestMission, kind = "project.source-state"): SourceState | undefined {
+  const observed = [...mission.observations].reverse().find((item) => item.kind === kind);
+  const parsed = SourceStateSchema.safeParse(observed?.data);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function scopeHash(mission: TestMission): string {

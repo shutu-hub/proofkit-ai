@@ -31,6 +31,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Records action receipts, before/after snapshots, network and console events, screenshots, and a JSONL timeline.
 - Reports `passed`, `failed`, `blocked`, `cancelled`, or `inconclusive`; missing evidence never becomes a pass.
 - Links a replay Mission to its source and compares the same saved scope, Run matrix, and independent business facts. A repair is only `verified-in-scope` when the original evidenced defect is absent from a complete passing replay.
+- Records bounded Git source fingerprints before and after a Mission; comparison reports source changes and treats a mid-run change as inconclusive.
 - The default `core` mission runs one selected surface with an independent business Oracle and source facts. A `release` Mission can run one Charter or an explicitly configured multi-Charter suite across Web/Electron primary and replay runs. Every declared negative or recovery case has its own run and cannot supply missing main-path evidence. A suite reports registered release Charters outside its scope; it does not imply whole-project coverage.
 - Release suites reconcile reviewed route-to-Charter declarations with the bounded project map. Their result separates discovered, mapped and observed Web/API routes, reports stale or ambiguous mappings, and keeps partial scans explicit. API observation requires a matching successful HTTP response and the same independent business gate as the surface run.
 - Produces local JSON and HTML reports without a hosted service.

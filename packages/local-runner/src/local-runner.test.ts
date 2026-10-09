@@ -52,6 +52,8 @@ describe("LocalRunnerService", () => {
     expect(completed.plan.graph.tasks.map((task) => task.status)).toEqual(["passed", "passed", "passed"]);
     expect(completed.evidence.some((item) => item.path.endsWith(join("fixture-run", "report.html")))).toBe(true);
     expect(completed.observations.some((item) => item.kind === "surface.run")).toBe(true);
+    expect(completed.observations.some((item) => item.kind === "project.source-state")).toBe(true);
+    expect(completed.observations.some((item) => item.kind === "project.source-state-final")).toBe(true);
 
     const evidence = await service.missionEvidence(created.missionId);
     expect(evidence).toMatchObject({
@@ -63,6 +65,8 @@ describe("LocalRunnerService", () => {
       findings: [],
       repairSuggestions: [],
     });
+    expect(evidence.sourceState?.method).toBe("unavailable");
+    expect(evidence.finalSourceState?.method).toBe("unavailable");
     expect(evidence.taskSummary).toHaveLength(3);
     expect(evidence.taskSummary.every((task) => task.status === "passed" && task.attempts === 1)).toBe(true);
     expect(evidence.agentSteps).toHaveLength(3);

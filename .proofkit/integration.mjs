@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
-import { basename, isAbsolute, relative, resolve } from "node:path";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 let z;
 const positiveId = () => z.union([z.number().int().positive(), z.string().regex(/^[1-9][0-9]*$/)]);
 const positiveIdInput = () => z.union([z.number().int().positive(), z.string().min(1)]);
@@ -12,8 +12,8 @@ const environment = ["test", "staging", "local"];
  * service endpoints. This keeps the integration useful for a user checkout
  * and makes every observation reproduce the same path as the desktop app.
  */
-export function createIntegration({ z: injectedZ, root }) {
-  // Keep the module dependency-free for project roots. The runner injects the
+export function createIntegration({ z: injectedZ, workspaceRoot }) {
+  // Keep the module dependency-free for external test workspaces. The runner injects the
   // schema runtime when loading this factory.
   z = injectedZ;
   const state = new Map();
@@ -23,7 +23,7 @@ export function createIntegration({ z: injectedZ, root }) {
     version: "0.1.0",
     capabilities: [
       createResumeRunCapability(state),
-      createResumeFileUploadCapability(state, root),
+      createResumeFileUploadCapability(state, workspaceRoot),
       waitResumeCollectionPipelineCapability(state),
       createOnlineResumeIntakeCapability(state),
       waitOnlineResumePipelineCapability(state),
@@ -139,7 +139,7 @@ function createResumeRunCapability(state) {
   };
 }
 
-function createResumeFileUploadCapability(state, projectRoot) {
+function createResumeFileUploadCapability(state, workspaceRoot) {
   return {
     name: "aihr.uploadResumeFile",
     description: "Upload a PDF resume through the same gateway multipart contract used by the AIHR desktop flow.",
@@ -176,7 +176,7 @@ function createResumeFileUploadCapability(state, projectRoot) {
     }),
     async execute(input, { runId, signal }) {
       input = resolveEnv(input);
-      const fixture = await readFixture(projectRoot, input.fixturePath);
+      const fixture = await readFixture(workspaceRoot, input.fixturePath);
       const form = new FormData();
       form.append("file", new Blob([fixture.bytes], { type: fixture.contentType }), input.originalFilename ?? fixture.filename);
       const collectionRunId = input.runId ?? state.get(runId)?.collectionRunId;
@@ -595,14 +595,18 @@ async function getOrNull(path, signal) {
   try { return await aihrFetch(path, { signal }); } catch (error) { if (isNotFound(error)) return null; throw error; }
 }
 
-async function readFixture(projectRoot, fixturePath) {
+async function readFixture(workspaceRoot, fixturePath) {
   const requested = String(fixturePath);
-  const path = isAbsolute(requested) ? resolve(requested) : resolve(projectRoot, requested);
-  const rel = relative(resolve(projectRoot), path);
-  if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("AIHR fixturePath must stay within the project root");
-  const info = await stat(path);
+  const path = isAbsolute(requested) ? resolve(requested) : resolve(workspaceRoot, requested);
+  const rel = relative(resolve(workspaceRoot), path);
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error("AIHR fixturePath must stay within the test workspace");
+  const realRoot = await realpath(workspaceRoot);
+  const realPath = await realpath(path);
+  const realRel = relative(realRoot, realPath);
+  if (realRel === ".." || realRel.startsWith(`..${sep}`) || isAbsolute(realRel)) throw new Error("AIHR fixturePath must stay within the test workspace");
+  const info = await stat(realPath);
   if (!info.isFile()) throw new Error("AIHR fixturePath must point to a file");
-  const bytes = await readFile(path);
+  const bytes = await readFile(realPath);
   if (bytes.length === 0) throw new Error("AIHR resume fixture is empty");
   const filename = basename(path);
   const contentType = filename.toLowerCase().endsWith(".pdf") ? "application/pdf" : "application/octet-stream";

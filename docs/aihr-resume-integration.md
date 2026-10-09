@@ -17,9 +17,9 @@ The important distinction is that an upload response is an acknowledgement, not 
 
 ## ProofKit capability boundary
 
-The project integration is now loaded from `.proofkit/integration.mjs` (or the path configured by `integration.path`). The module is trusted repository code and is composed into the same Local Runner lifecycle used by CLI, MCP and CI. It can export capabilities, read-only oracles, and a setup hook that returns cleanup. The Runner supplies a cancellation signal and the configured total run deadline to every run.
+The project integration is loaded from `<workspaceRoot>/.proofkit/integration.mjs` (or the path configured by `integration.path`). The module is trusted local test-workspace code and is composed into the same Local Runner lifecycle used by CLI, MCP and CI. It can export capabilities, read-only oracles, and a setup hook that returns cleanup. The Runner supplies a cancellation signal and the configured total run deadline to every run.
 
-The concrete ProofKit workspace now includes a reference AIHR integration at `.proofkit/integration.mjs`. It calls only gateway endpoints and keeps the domain-specific allowlist in the project-owned module. The current capabilities are:
+The ProofKit repository includes a reference AIHR integration at `.proofkit/integration.mjs`. It can be copied into an external workspace bound to the AIHR source project, so no ProofKit file is needed in the AIHR repository. It calls only gateway endpoints and keeps the domain-specific allowlist in the workspace-owned module. The current capabilities are:
 
 | Capability | Side effect | Evidence returned |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ Each capability declares an input schema, output schema, environment allowlist, 
 
 ## Oracle strategy
 
-The first AIHR implementation uses a project-local read-only observer that calls existing gateway endpoints. It correlates every observation with the ProofKit `runId`, AIHR collection run ID, file ID and client item key. Polling is bounded and uses service terminal statuses; arbitrary sleeps are not an oracle.
+The first AIHR implementation uses a workspace-owned read-only observer that calls existing gateway endpoints. It correlates every observation with the ProofKit `runId`, AIHR collection run ID, file ID and client item key. Polling is bounded and uses service terminal statuses; arbitrary sleeps are not an oracle.
 
 ProofKit supports a declarative HTTP status oracle with terminal values and JSON Pointer extraction. Its query bindings can use the ProofKit run ID or a sanitized scalar from a completed capability step. The reference integration uses the public gateway projection for workflow, file, candidate and assessment observations. `.proofkit/charters/aihr-resume-upload.yml` is the default ordinary-upload Charter; `.proofkit/charters/aihr-online-resume.yml` remains a compatibility Charter for the online intake path. Both are parameterized by environment variables for an isolated AIHR test workspace and must be run against the approved test deployment before they are treated as release gates.
 
@@ -60,7 +60,7 @@ This split lets the same integration be used from the CLI, MCP and CI. MCP must 
 
 ## Implementation order
 
-1. Run `proofkit init` and fill the generated `.proofkit/integration.mjs` for the AIHR project.
+1. Run `proofkit init --root <AIHR-source> --workspace <external-test-workspace>`, then copy or adapt the reference `.proofkit/integration.mjs` in that external workspace.
 2. Use the ordinary upload Charter to validate `collection_run → file → extract → parse → candidate → job → assessment`.
 3. Add or refine read-only observers for billing and retry/idempotency facts against a dedicated test workspace.
 4. Add `seedTestCandidate` and `resetTestScope` only after the test workspace and cleanup contract are explicit.

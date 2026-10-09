@@ -9,6 +9,7 @@ import { ProjectMapSchema, ProofkitConfigSchema, type ProjectMap, type ProofkitC
 import { resolveProjectContext, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
 
 export { defaultWorkspaceRoot, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
+export { captureSourceState } from "./source-state.js";
 
 type PackageJson = {
   name?: string;

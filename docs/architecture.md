@@ -175,6 +175,8 @@ The high-level MCP tools are `create_test_mission`, `approve_test_plan`, `start_
 
 `MissionComparison` reports `verified-in-scope`, `defect-reproduced` or `inconclusive`, with bounded Run pairs, before/after evidence references, defect outcomes and gaps. `verified-in-scope` requires a baseline failed Mission with a confirmed product Finding linked to an independent business source artifact, all corresponding candidate Oracles passing with new source facts, and a complete candidate Mission gate including required replay and negative cases. Scope changes, missing evidence or an unfinished candidate remain inconclusive. A comparison can establish that a symptom was not reproduced under the configured test scope; it cannot attribute that change to a specific source edit or establish whole-project correctness.
 
+The discovery task also captures a bounded Git source fingerprint before surface execution, and the verification task captures it again after execution. Only the Git HEAD, SHA-256 digest, counts and completeness state enter Mission observations; raw diffs and untracked file contents are not saved. Tracked changes and relevant untracked source files contribute to the digest. If a project is not its own Git root or capture exceeds a bound, source provenance is `unknown`. The comparison reports whether the source fingerprint changed between Missions and whether it stayed stable during the candidate Mission. A detected mid-run change makes repair verification `inconclusive`. This is a best-effort worktree fingerprint, not a commit attestation or proof of which edit caused the observed outcome.
+
 ### Mission audit records
 
 The mission protocol keeps five related records with separate responsibilities:

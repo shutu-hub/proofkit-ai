@@ -70,14 +70,14 @@ workflow 完成事实必须同时匹配 `run_id`、`candidate.id`、`job.id` 和
 
 ## ProofKit 的第一条真实 Charter
 
-默认使用 `.proofkit/charters/aihr-resume-upload.yml`，覆盖：
+参考 Charter 为 ProofKit 仓库的 `.proofkit/charters/aihr-resume-upload.yml`；实际接入时复制到外部测试工作区的同名相对路径。它覆盖：
 
 1. 通过网关创建普通简历 collection run。
 2. 使用与桌面端一致的 multipart 合约上传脱敏 PDF。
 3. 轮询文件、候选人、岗位关系、评估和 workflow usage 公开事实。
 4. 独立 Oracle 再次读取这些事实，要求 `extract_status=done`、`parse_status=matched`、候选人存在、岗位关系指向当前文件，并按 Charter 决定是否必须 `assessment.task_status=success`。
 
-`.proofkit/charters/aihr-online-resume.yml` 保留为在线简历兼容流程，覆盖 online intake、结构化处理、PDF 生成和后续业务状态。
+`.proofkit/charters/aihr-online-resume.yml` 保留为在线简历兼容流程，覆盖 online intake、结构化处理、PDF 生成和后续业务状态。普通上传和在线简历两个参考 Charter 目前都没有真实 UI 断言，因此不能直接登记为 `core` 目录用例，也不能把连接器执行称为完整 Web/Electron 验收。
 
 证据只保存：run/task/file/candidate/job/assessment 的 opaque ID、状态、计数、错误码和稳定哈希。不会保存 source_text、原始 PDF、cookie、token、手机号或完整候选人资料。
 
@@ -115,7 +115,7 @@ $env:AIHR_PROOFKIT_CANDIDATE_UID = "<test-candidate-uid>"
 $env:AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID = "<test-platform-account>"
 $env:AIHR_PROOFKIT_SOURCE_TEXT = "<脱敏测试简历正文>"
 $env:AIHR_PROOFKIT_SOURCE_CHANNEL = "boss"
-$env:AIHR_PROOFKIT_FIXTURE_PATH = "fixtures/proofkit-resume.pdf"
+$env:AIHR_PROOFKIT_FIXTURE_PATH = "fixtures/proofkit-resume.pdf"  # 相对于外部测试工作区根目录
 $env:AIHR_PROOFKIT_TEST_SCOPE = "proofkit:resume-upload"
 $env:AIHR_PROOFKIT_CLIENT_ITEM_KEY = "proofkit:resume-upload:case-001"
 $env:AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT = "false"  # only set true for an explicitly isolated remote test environment
@@ -125,7 +125,19 @@ $env:AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT = "false"  # only set true for an 
 
 先确认 AIHR gateway、resume-collection、candidate、job、integration 和 assessment worker 都连接到隔离的 local/test 环境。AIHR `devlocal` 默认请求 `http://127.0.0.1:8080/api/v1`；如果使用共享测试环境，显式设置 ProofKit API 地址，不能把测试数据发到生产环境。
 
-在 AIHR 仓库的终端启动桌面应用并开放仅监听本机的 CDP 端口：
+源码根目录与测试工作区必须分开。当前本地只读接入使用：
+
+```powershell
+$proofkitRoot = "D:\code\proofkit-ai"
+$sourceRoot = "D:\code\Python\AIHR-Microservices"
+$testWorkspace = Join-Path $proofkitRoot ".proofkit\aihr-local-workspace"
+Set-Location $proofkitRoot
+pnpm --filter @proofkit/cli dev -- doctor --root $sourceRoot --workspace $testWorkspace
+```
+
+`doctor` 已识别 AIHR 的 Web、Electron 和后端入口；外部工作区的连接器已成功加载，提供 9 个受控 capability 和 3 个业务 Oracle。三个参考 Charter 也已复制到外部工作区，但尚未登记为自然语言可执行目录用例。以上操作不启动 AIHR、不访问业务接口，也不修改 AIHR 源码。
+
+真实业务验收还需要独立的 local/test 网关、异步 worker、脱敏 PDF、测试租户与账号，以及真实页面断言。先在 AIHR 仓库的终端启动隔离的桌面应用，并开放仅监听本机的 CDP 端口：
 
 ```powershell
 $env:AIHR_ELECTRON_DEBUG_PORT = "9222"
@@ -141,26 +153,14 @@ pnpm build
 pnpm test
 ```
 
-将文档前面的测试 Token、租户、workspace、job、候选人、脱敏简历 fixture 和幂等键环境变量设置为隔离测试数据。然后在 ProofKit 仓库运行默认的普通上传 Charter：
+脱敏 PDF 放在 `$testWorkspace\fixtures\proofkit-resume.pdf`；连接器把 `AIHR_PROOFKIT_FIXTURE_PATH` 解析到外部测试工作区，避免在 AIHR 源码中加入测试文件。当前普通上传 Charter 只定义网关 capability 和业务 Oracle，`assertions: []`。它可以作为连接器合约参考，却不能证明页面点击或 Electron 简历抓取成功。待真实页面路径与稳定断言核实后，应在外部工作区补充对应的 UI 动作/断言、登记 `core` Charter，再通过 MCP `run_test` 或 CLI Mission 执行。
 
-```powershell
-pnpm --filter @proofkit/cli dev -- run "验证 AIHR 普通简历上传链路" `
-  --root D:\code\proofkit-ai `
-  --charter .proofkit/charters/aihr-resume-upload.yml `
-  --adapter electron `
-  --cdp http://127.0.0.1:9222 `
-  --no-start `
-  --allow-capability-writes
-```
-
-`--allow-capability-writes` 是 Runner 的第二道显式授权；Charter 自身仍须声明 `sideEffectPolicy: allow`。Electron 的调试端口由 `AIHR_ELECTRON_DEBUG_PORT` 固定为 `9222`，因此命令直接使用 `--cdp`，不依赖 `DevToolsActivePort` 文件。普通上传 Charter 通过网关创建 collection run 并上传 PDF，再轮询文件、候选人关系、assessment 和 workflow usage。当前集成验证覆盖了网关上传和业务观察；Electron 页面点击、平台简历抓取和真实 worker 链路仍需在隔离环境中联调。
-
-测试结束后，终端会返回 `runId`、verdict 和 HTML 报告位置。报告及 JSONL 时间线默认写入 `.proofkit/runs/<runId>/`。只有在 verdict 为 `passed` 且 oracle 观察到目标业务终态时才算通过；先确认报告里的 test workspace、workflow 和 assessment 证据，再据此判定是否达到预期。
+任何真实上传都会写入隔离测试环境。执行前需要把外部工作区的 `policies.sideEffects` 设置为 `allow`，Charter 继续声明 `sideEffectPolicy: allow`，并在 CLI 运行时显式传入 `--allow-capability-writes`；MCP 则由服务启动者设置 `PROOFKIT_ALLOW_CAPABILITY_WRITES=1`。连接器的 preflight 还会检查测试 scope、幂等键、租户和端点。只有 UI 断言和独立业务 Oracle 都有证据并通过，才可认定核心链路通过；Run 结果保存在 `$testWorkspace\.proofkit\runs\<runId>\`。
 
 ## 下一阶段
 
-1. 把普通上传 Charter 接入真实 Electron/CDP surface，并把 UI 操作与上述业务 Oracle 绑定到同一个 run。
+1. 把普通上传 Charter 接入真实 Electron/CDP surface，并把 UI 操作与上述业务 Oracle 绑定到同一个 Run。
 2. 在真实隔离环境中验证 `collection_run → file → extract → parse → assessment`。
 3. 增加重试、重复提交、计费幂等和取消恢复场景。
-4. 在 AIHR 自己的仓库加入极薄的 `.proofkit/integration.mjs` 代理文件，让用户只需执行 `proofkit run --charter ...`。
-5. 再加入自动项目扫描和基于代码/路由/迁移的 Charter 建议，但所有写操作仍必须由项目集成的 allowlist 能力承载。
+4. 在外部工作区登记经过验证的 Charter，让自然语言请求直接选中它，不向 AIHR 源码写入 ProofKit 文件。
+5. 继续改进基于代码/路由的测试建议，但所有写操作仍由 allowlist capability 承载。

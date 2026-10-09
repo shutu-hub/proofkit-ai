@@ -160,6 +160,19 @@ export const RunEventSchema = z.object({
 });
 export type RunEvent = z.infer<typeof RunEventSchema>;
 
+/** A bounded, read-only fingerprint of the tested repository at Mission execution time. */
+export const SourceStateSchema = z.object({
+  method: z.enum(["git", "unavailable"]),
+  headSha: z.string().regex(/^[a-f0-9]{40,64}$/i).optional(),
+  worktreeSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  complete: z.boolean(),
+  trackedDiffBytes: z.number().int().nonnegative().default(0),
+  untrackedFiles: z.number().int().nonnegative().default(0),
+  reason: z.string().optional(),
+  capturedAt: z.string(),
+});
+export type SourceState = z.infer<typeof SourceStateSchema>;
+
 export const ProjectMapSchema = z.object({
   root: z.string(),
   packageManager: z.string().optional(),
@@ -674,6 +687,10 @@ export const MissionComparisonSchema = z.object({
   baselineScopeHash: z.string().regex(/^[a-f0-9]{64}$/),
   candidateScopeHash: z.string().regex(/^[a-f0-9]{64}$/),
   scopeMatched: z.boolean(),
+  baselineSourceState: SourceStateSchema.optional(),
+  candidateSourceState: SourceStateSchema.optional(),
+  sourceChange: z.enum(["changed", "unchanged", "unknown"]),
+  candidateSourceStability: z.enum(["stable", "changed-during-run", "unknown"]),
   status: z.enum(["verified-in-scope", "defect-reproduced", "inconclusive"]),
   reason: z.string().min(1),
   gaps: z.array(z.string()),

@@ -4,10 +4,10 @@ import { resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
+import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
-import { initProject, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
+import { captureSourceState, initProject, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
 import { CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
@@ -391,10 +391,14 @@ export class LocalRunnerService {
     firstFailure?: TestMission["firstFailure"];
     diagnosis?: TestMission["diagnosis"];
     repairSuggestions: TestMission["repairSuggestions"];
+    sourceState?: SourceState;
+    finalSourceState?: SourceState;
     comparison?: MissionComparison;
     comparisonUnavailable?: string;
   }> {
     const mission = await this.missionAgent.load(validateMissionId(missionId));
+    const sourceState = SourceStateSchema.safeParse([...mission.observations].reverse().find((item) => item.kind === "project.source-state")?.data);
+    const finalSourceState = SourceStateSchema.safeParse([...mission.observations].reverse().find((item) => item.kind === "project.source-state-final")?.data);
     let comparison: MissionComparison | undefined;
     let comparisonUnavailable: string | undefined;
     if (mission.replayOfMissionId && ["completed", "failed", "blocked", "cancelled"].includes(mission.status)) {
@@ -432,6 +436,8 @@ export class LocalRunnerService {
       firstFailure: mission.firstFailure,
       diagnosis: mission.diagnosis,
       repairSuggestions: mission.repairSuggestions,
+      ...(sourceState.success ? { sourceState: sourceState.data } : {}),
+      ...(finalSourceState.success ? { finalSourceState: finalSourceState.data } : {}),
       ...(comparison ? { comparison } : {}),
       ...(comparisonUnavailable ? { comparisonUnavailable } : {}),
     };
@@ -470,7 +476,7 @@ export class LocalRunnerService {
     type SurfaceRunKind = "primary" | "replay" | "negative";
 
     const discover = async (_input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
-      const project = await this.discover();
+      const [project, sourceState] = await Promise.all([this.discover(), captureSourceState(this.root)]);
       const observation = ObservationSchema.parse({
         observationId: `${context.task.taskId}-${Date.now()}`,
         source: "planner",
@@ -478,7 +484,14 @@ export class LocalRunnerService {
         data: project,
         observedAt: new Date().toISOString(),
       });
-      return { output: project, observations: [observation] };
+      const revisionObservation = ObservationSchema.parse({
+        observationId: `source-state-${context.task.taskId}-${Date.now()}`,
+        source: "planner",
+        kind: "project.source-state",
+        data: sourceState,
+        observedAt: sourceState.capturedAt,
+      });
+      return { output: project, observations: [observation, revisionObservation] };
     };
 
     const collectSurfaceRun = async (summary: RunSummary, context: MissionToolContext, adapter: LocalAdapterName, runKind: SurfaceRunKind, sourceRunId?: string, negativeCaseId?: string, expectedVerdict?: Verdict, charterId?: string): Promise<MissionToolResult> => {
@@ -633,7 +646,7 @@ export class LocalRunnerService {
       return collectSurfaceRun(summary, context, adapter, "negative", undefined, negativeCase.caseId, negativeCase.expectedVerdict ?? "passed", charterId);
     };
 
-    const verify = async (_input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
+    const verifyOutcome = async (_input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
       if (context.mission.suite) {
         return verifySuiteMission(context.mission);
       }
@@ -694,6 +707,18 @@ export class LocalRunnerService {
       const inconclusive = expectedRuns.some((item) => item.data.outcomeMatched !== true && item.data.verdict === "inconclusive");
       const verdict = failed ? "failed" : inconclusive ? "inconclusive" : "passed";
       return { output: { verified: verdict === "passed", runVerdict: verdict, surfaces: expectedSurfaces }, verdict };
+    };
+    const verify = async (input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
+      const result = await verifyOutcome(input, context);
+      const sourceState = await captureSourceState(this.root);
+      const observation = ObservationSchema.parse({
+        observationId: `source-state-final-${context.task.taskId}-${Date.now()}`,
+        source: "planner",
+        kind: "project.source-state-final",
+        data: sourceState,
+        observedAt: sourceState.capturedAt,
+      });
+      return { ...result, observations: [...(result.observations ?? []), observation] };
     };
     return [
       { name: "project.discover", description: "Inspect the local project without modifying it.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },

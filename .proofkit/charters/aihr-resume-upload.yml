@@ -5,7 +5,7 @@ sideEffectPolicy: allow
 preconditions:
   - AIHR gateway and asynchronous workers are running in an isolated test environment
   - AIHR_PROOFKIT_ACCESS_TOKEN and actor headers point to a test workspace
-  - AIHR_PROOFKIT_FIXTURE_PATH points to a sanitized PDF inside the project root
+  - AIHR_PROOFKIT_FIXTURE_PATH points to a sanitized PDF inside the external test workspace
   - AIHR_PROOFKIT_JOB_ID and AIHR_PROOFKIT_CLIENT_ITEM_KEY identify this test scope
 actions:
   - kind: capability

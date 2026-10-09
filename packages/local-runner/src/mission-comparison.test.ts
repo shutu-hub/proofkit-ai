@@ -17,7 +17,8 @@ describe("Mission repair comparison", () => {
     expect(result.defects[0]?.baselineEvidence[0]?.kind).toBe("business");
     expect(result.defects[0]?.candidateEvidence[0]?.kind).toBe("business");
     expect(result.runs).toEqual([expect.objectContaining({ surface: "web", runKind: "primary", baselineBusinessFacts: 1, candidateBusinessFacts: 1 })]);
-    expect(result.reason).toContain("does not establish which source change");
+    expect(result).toMatchObject({ sourceChange: "unknown" });
+    expect(result.reason).toContain("Source change could not be established");
   });
 
   it("reports the same defect when the replay Oracle still fails with source facts", async () => {
@@ -72,6 +73,36 @@ describe("Mission repair comparison", () => {
     fixture.candidate.status = "running";
     fixture.candidate.verdict = undefined;
     expect((await fixture.compare()).status).toBe("inconclusive");
+  });
+
+  it("reports changed, unchanged, and unavailable source fingerprints separately from business success", async () => {
+    const fixture = await createFixture();
+    const source = (missionId: string, digest: string) => ({
+      observationId: `source-${missionId}`, source: "planner" as const, kind: "project.source-state",
+      data: { method: "git", headSha: "a".repeat(40), worktreeSha256: digest, complete: true, trackedDiffBytes: 0, untrackedFiles: 0, capturedAt: new Date().toISOString() },
+      evidence: [], observedAt: new Date().toISOString(),
+    });
+    fixture.baseline.observations.push(source("before", "b".repeat(64)));
+    fixture.candidate.observations.push(source("after", "c".repeat(64)));
+    fixture.candidate.observations.push({ ...source("after-final", "c".repeat(64)), kind: "project.source-state-final" });
+    expect(await fixture.compare()).toMatchObject({ status: "verified-in-scope", sourceChange: "changed", candidateSourceStability: "stable" });
+    fixture.candidate.observations.at(-2)!.data.worktreeSha256 = "b".repeat(64);
+    fixture.candidate.observations.at(-1)!.data.worktreeSha256 = "b".repeat(64);
+    const unchanged = await fixture.compare();
+    expect(unchanged.sourceChange).toBe("unchanged");
+    expect(unchanged.reason).toContain("did not change");
+    fixture.candidate.observations.at(-1)!.data.complete = false;
+    expect((await fixture.compare()).candidateSourceStability).toBe("unknown");
+  });
+
+  it("refuses repair verification if the candidate source changed during the Run", async () => {
+    const fixture = await createFixture();
+    const now = new Date().toISOString();
+    fixture.candidate.observations.push({ observationId: "source-start", source: "planner", kind: "project.source-state", data: { method: "git", headSha: "a".repeat(40), worktreeSha256: "b".repeat(64), complete: true, capturedAt: now }, evidence: [], observedAt: now });
+    fixture.candidate.observations.push({ observationId: "source-end", source: "planner", kind: "project.source-state-final", data: { method: "git", headSha: "a".repeat(40), worktreeSha256: "c".repeat(64), complete: true, capturedAt: now }, evidence: [], observedAt: now });
+    const result = await fixture.compare();
+    expect(result).toMatchObject({ status: "inconclusive", candidateSourceStability: "changed-during-run" });
+    expect(result.gaps).toContain("Candidate source changed while the Mission was executing.");
   });
 });
 
