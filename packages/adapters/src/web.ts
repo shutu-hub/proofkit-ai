@@ -1,6 +1,6 @@
 import type { Browser, BrowserContext, Locator, Page, Request, Response } from "playwright-core";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceControl, SurfaceSnapshot } from "@proofkit/contracts";
-import type { AdapterEvent, SurfaceAdapter } from "@proofkit/runner";
+import type { AdapterEvent, SurfaceAdapter, SurfaceActionContext } from "@proofkit/runner";
 
 export type WebAdapterOptions = {
   baseUrl?: string;
@@ -20,6 +20,7 @@ export type WebAdapterOptions = {
 
 export class WebAdapter implements SurfaceAdapter {
   readonly name: string = "web";
+  readonly supportsFileInputs = true;
   protected browser?: Browser;
   protected context?: BrowserContext;
   protected activePage?: Page;
@@ -73,14 +74,15 @@ export class WebAdapter implements SurfaceAdapter {
     const page = this.page();
     const { candidates, total } = await page.locator("button, input:not([type=hidden]), textarea, select, a[href], [role=button], [role=link], [role=textbox], [role=combobox], [role=checkbox], [role=radio]").evaluateAll((nodes) => {
       const visible = nodes.filter((element) => element instanceof HTMLElement
-        && element.getClientRects().length > 0
-        && getComputedStyle(element).visibility !== "hidden"
-        && element.getAttribute("aria-hidden") !== "true");
+        && ((element instanceof HTMLInputElement && element.type === "file")
+          || (element.getClientRects().length > 0
+            && getComputedStyle(element).visibility !== "hidden"
+            && element.getAttribute("aria-hidden") !== "true")));
       const candidates = visible.slice(0, 60).map((element) => {
         const html = element as HTMLElement;
         const tag = html.tagName.toLowerCase();
         const type = html.getAttribute("type")?.toLowerCase();
-        const role = html.getAttribute("role") ?? (tag === "a" ? "link" : tag === "button" || type === "button" || type === "submit" ? "button"
+        const role = type === "file" ? "file-input" : html.getAttribute("role") ?? (tag === "a" ? "link" : tag === "button" || type === "button" || type === "submit" ? "button"
           : type === "checkbox" ? "checkbox" : type === "radio" ? "radio" : tag === "select" ? "combobox" : "textbox");
         const labelled = html instanceof HTMLInputElement || html instanceof HTMLTextAreaElement || html instanceof HTMLSelectElement
           ? html.labels?.[0]?.innerText : undefined;
@@ -89,7 +91,9 @@ export class WebAdapter implements SurfaceAdapter {
         const testIdAttribute = html.hasAttribute("data-testid") ? "data-testid" : html.hasAttribute("data-test") ? "data-test" : undefined;
         const testId = testIdAttribute ? html.getAttribute(testIdAttribute) ?? undefined : undefined;
         const id = html.id || undefined;
-        return { tag, role, name: name.trim(), id, idSelector: id ? `#${CSS.escape(id)}` : undefined,
+        return { tag, role, inputType: tag === "input" ? type ?? "text" : undefined,
+          visible: html.getClientRects().length > 0 && getComputedStyle(html).visibility !== "hidden" && html.getAttribute("aria-hidden") !== "true",
+          name: name.trim(), id, idSelector: id ? `#${CSS.escape(id)}` : undefined,
           testId, testIdAttribute, disabled: html.hasAttribute("disabled") || html.getAttribute("aria-disabled") === "true" };
       });
       return { candidates, total: visible.length };
@@ -99,6 +103,7 @@ export class WebAdapter implements SurfaceAdapter {
       const rawName = candidate.name.slice(0, 120);
       const name = sanitizeSurfaceText(rawName, 120);
       const control: SurfaceControl = { tag: candidate.tag, role: candidate.role, disabled: candidate.disabled,
+        visible: candidate.visible, ...(candidate.inputType ? { inputType: candidate.inputType } : {}),
         ...(name ? { name } : {}) };
       const selectors: Array<{ value: string; kind: NonNullable<SurfaceControl["selectorKind"]> }> = [];
       if (candidate.testId && candidate.testIdAttribute && sanitizeSurfaceText(candidate.testId, 120) === candidate.testId) {
@@ -110,6 +115,7 @@ export class WebAdapter implements SurfaceAdapter {
       if (rawName && name === rawName && ["button", "link", "textbox", "combobox", "checkbox", "radio"].includes(candidate.role)) {
         selectors.push({ value: `role=${candidate.role}[name=${JSON.stringify(rawName)}]`, kind: "role" });
       }
+      if (candidate.inputType === "file") selectors.push({ value: 'input[type="file"]', kind: "css" });
       for (const selector of selectors) {
         if (await page.locator(selector.value).count().catch(() => 0) !== 1) continue;
         control.selector = selector.value;
@@ -119,7 +125,7 @@ export class WebAdapter implements SurfaceAdapter {
       controls.push(control);
     }
     return { ...snapshot, controls, controlsTruncated: total > candidates.length,
-      frameCount: page.frames().length, metadata: { ...snapshot.metadata, controlScope: "main-frame" } };
+      frameCount: page.frames().length, metadata: { ...snapshot.metadata, controlScope: "main-frame", includesHiddenFileInputs: true } };
   }
 
   async snapshot(): Promise<SurfaceSnapshot> {
@@ -138,7 +144,7 @@ export class WebAdapter implements SurfaceAdapter {
     };
   }
 
-  async act(action: Action): Promise<ActionReceipt> {
+  async act(action: Action, context?: SurfaceActionContext): Promise<ActionReceipt> {
     const page = this.page();
     const startedAt = new Date().toISOString();
     const started = Date.now();
@@ -157,6 +163,18 @@ export class WebAdapter implements SurfaceAdapter {
       case "press":
         await (await uniqueActionLocator(page, action.selector)).press(action.key);
         break;
+      case "setInputFiles": {
+        const files = context?.inputFiles;
+        if (!files || files.length !== action.files.length || files.some((file, index) => file.fixture !== action.files[index])) {
+          throw new Error("File fixtures must be resolved by the runner");
+        }
+        // Upload libraries commonly hide the native input behind a styled button.
+        const input = await uniqueActionLocator(page, action.selector, "attached");
+        const isFileInput = await input.evaluate((element) => element instanceof HTMLInputElement && element.type === "file");
+        if (!isFileInput) throw new Error("File selection requires an input[type=file] element");
+        await input.setInputFiles(files.map(({ name, mimeType, buffer }) => ({ name, mimeType, buffer })));
+        break;
+      }
       case "waitForText":
         await page.getByText(action.text, { exact: false }).first().waitFor({ state: "visible", timeout: action.timeoutMs ?? 10_000 });
         break;
@@ -286,9 +304,9 @@ async function hasVisibleText(page: Page, text: string): Promise<boolean> {
   return false;
 }
 
-async function uniqueActionLocator(page: Page, selector: string): Promise<Locator> {
+async function uniqueActionLocator(page: Page, selector: string, state: "visible" | "attached" = "visible"): Promise<Locator> {
   const locator = page.locator(selector);
-  await locator.first().waitFor({ state: "visible", timeout: 10_000 });
+  await locator.first().waitFor({ state, timeout: 10_000 });
   const count = await locator.count();
   if (count !== 1) throw new Error(`Action selector matched ${count} elements: ${sanitizeSurfaceText(selector, 120)}`);
   return locator;

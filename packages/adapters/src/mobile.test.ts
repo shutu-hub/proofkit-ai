@@ -9,6 +9,12 @@ afterEach(() => {
 });
 
 describe("MobileAdapter", () => {
+  it("explicitly blocks browser file selection without calling the mobile driver", async () => {
+    globalThis.fetch = vi.fn() as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    await expect(adapter.act({ kind: "setInputFiles", selector: "#file", files: [".proofkit/fixtures/resume.pdf"] })).rejects.toThrow("not supported");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
   it("runs a bounded W3C WebDriver session and maps actions to driver commands", async () => {
     const requests: Array<{ path: string; method: string; body?: string }> = [];
     globalThis.fetch = vi.fn(async (input, init) => {

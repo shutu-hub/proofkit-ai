@@ -97,6 +97,20 @@ The reference connector now requires evaluation and worker task success together
 
 **Gate:** seeded defects in upload, extraction, identity, relation and billing are found with linked evidence; retries do not create duplicate billable facts.
 
+**File-input evidence:** `pnpm test:smoke:upload` now runs real hidden file
+inputs in Chrome and an isolated Electron renderer, real multipart requests,
+and independent server facts. Set `PROOFKIT_ELECTRON_PATH` to an installed
+Electron executable; `PROOFKIT_BROWSER_PATH` optionally selects Chromium.
+The smoke creates its own app and test profile. A release Mission executes six Runs across both
+surfaces (primary, replay and invalid-file negative case). The fixture checks
+ordered multi-file bytes, Chinese filenames and hashes, detects a UI-success /
+wrong-server-bytes defect, and verifies the restored fixture by direct replay.
+Changed or missing fixtures block file selection and prevent repair
+certification. Ambiguous selectors and non-file controls fail without product
+findings or uploads. Upload evidence omits input content and the source tree
+remains unchanged. This validates the transport and evidence contract; live
+AIHR parsing, platform acquisition, billing and worker retries remain open.
+
 The default AIHR development request is `core`. The ordinary PDF upload Charter is the default business path; the online intake Charter remains a compatibility flow. A resume acquisition run must include at least one surface assertion and one independent business Oracle for its terminal state. `release` compares and replays the Web and Electron paths; explicitly configured negative or recovery cases are also executed and included in the evidence gate.
 
 ## Phase 4: failure diagnosis and repair loop

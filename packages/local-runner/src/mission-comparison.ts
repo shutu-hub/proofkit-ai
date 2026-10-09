@@ -16,6 +16,7 @@ import {
 } from "@proofkit/contracts";
 import { sha256 } from "@proofkit/evidence";
 import { sameProjectPath } from "@proofkit/project";
+import { sameInputFileFacts } from "@proofkit/runner";
 
 type Surface = "web" | "electron" | "mobile";
 type RunKind = "primary" | "replay" | "negative";
@@ -78,7 +79,10 @@ export async function compareMissionRecords(
       baselineEvidence: before ? compactEvidence(before.observation.evidence) : [],
       candidateEvidence: after ? compactEvidence(after.observation.evidence) : [],
     });
-    if (before && after) compareTargetBinding(before.summary, after.summary, slot, gaps);
+    if (before && after) {
+      compareTargetBinding(before.summary, after.summary, slot, gaps);
+      compareInputFiles(before.summary, after.summary, slot, gaps);
+    }
   }
   const structuralIssue = gaps.length > 0;
 
@@ -176,6 +180,18 @@ export async function compareMissionRecords(
     omittedDefects: Math.max(0, defects.length - 25),
     comparedAt: new Date().toISOString(),
   });
+}
+
+function compareInputFiles(baseline: RunSummary, candidate: RunSummary, slot: Slot, gaps: string[]): void {
+  for (const [index, action] of baseline.charter.actions.entries()) {
+    if (action.kind !== "setInputFiles") continue;
+    const stepId = `step-${String(index + 1).padStart(3, "0")}`;
+    const before = baseline.steps.find((step) => step.stepId === stepId)?.inputFiles;
+    const after = candidate.steps.find((step) => step.stepId === stepId)?.inputFiles;
+    if (!before?.length || !after?.length || !sameInputFileFacts(before, after)) {
+      gaps.push(`${slotLabel(slot)} ${stepId} fixture facts are missing or changed.`);
+    }
+  }
 }
 
 function compareTargetBinding(baseline: RunSummary, candidate: RunSummary, slot: Slot, gaps: string[]): void {

@@ -81,6 +81,14 @@ try {
     assert.ok(runTest);
     assert.ok(runTest.inputSchema.properties?.charter);
     assert.ok(runTest.inputSchema.properties?.coverage);
+    const deniedUpload = await withDeadline(client.callTool({ name: "run_test", arguments: {
+      intent: "Verify prepared resume upload", surface: "web",
+      charter: { intent: "Verify prepared resume upload", level: "quick", sideEffectPolicy: "deny",
+        actions: [{ kind: "setInputFiles", selector: 'input[type="file"]', files: [".proofkit/fixtures/resume.pdf"] }],
+        assertions: [{ kind: "text-visible", text: "ready" }] },
+    } }), 10_000, "Installed MCP file-input policy");
+    assert.equal(deniedUpload.isError, true);
+    assert.match(deniedUpload.content.find((content) => content.type === "text")?.text ?? "", /interactive action setInputFiles requires sideEffectPolicy=allow/);
     const discovered = await withDeadline(client.callTool({ name: "discover_project", arguments: {} }), 10_000, "MCP project discovery");
     const item = discovered.content.find((content) => content.type === "text");
     assert.ok(item);
@@ -115,7 +123,7 @@ try {
   const workspaceFiles = await readdir(join(workspace, ".proofkit"));
   assert.equal(workspaceFiles.includes("missions"), false);
   assert.equal(workspaceFiles.includes("runs"), false);
-  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-cli-scope", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "scope-source-and-workspace-unchanged"] }, null, 2));
+  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-cli-scope", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "scope-source-and-workspace-unchanged"] }, null, 2));
 } finally {
   const safeRoot = resolve(scratch);
   if (!safeRoot.startsWith(resolve(tempParent) + sep) || !basename(safeRoot).startsWith("proofkit-distribution-")) {

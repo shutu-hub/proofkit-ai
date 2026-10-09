@@ -28,6 +28,30 @@ describe("Mission repair comparison", () => {
     expect(result.defects[0]?.outcome).toBe("reproduced");
   });
 
+  it("requires identical saved input bytes even when the candidate business Oracle passes", async () => {
+    const fixture = await createFixture();
+    const action = { kind: "setInputFiles" as const, selector: "#resume", files: [".proofkit/fixtures/resume.pdf"] };
+    fixture.baseline.charter!.actions = [action];
+    fixture.candidate.charter!.actions = [action];
+    const fact = { fixture: action.files[0]!, name: "resume.pdf", sizeBytes: 12, sha256: "a".repeat(64), mimeType: "application/pdf" };
+    const setInputs = async (runId: string, facts?: typeof fact[]) => {
+      const path = join(fixture.evidenceDir, runId, "run.json");
+      const run = RunSummarySchema.parse(JSON.parse(await readFile(path, "utf8")));
+      run.charter.actions = [action];
+      run.steps = [{ stepId: "step-001", action, status: "passed", artifacts: [], ...(facts ? { inputFiles: facts } : {}) }];
+      await writeFile(path, JSON.stringify(run));
+    };
+    await setInputs("before-primary", [fact]);
+    await setInputs("after-primary", [fact]);
+    expect((await fixture.compare()).status).toBe("verified-in-scope");
+    await setInputs("after-primary", [{ ...fact, sha256: "b".repeat(64) }]);
+    const changed = await fixture.compare();
+    expect(changed.status).toBe("inconclusive");
+    expect(changed.gaps).toContain("web/primary step-001 fixture facts are missing or changed.");
+    await setInputs("after-primary");
+    expect((await fixture.compare()).status).toBe("inconclusive");
+  });
+
   it("does not verify a changed Charter scope or an unrelated Mission", async () => {
     const fixture = await createFixture();
     fixture.candidate.charter = { ...fixture.candidate.charter!, intent: "test another workflow" };

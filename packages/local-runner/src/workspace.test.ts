@@ -88,6 +88,10 @@ describe("external test workspace", () => {
       .rejects.toThrow("outside the configured origin");
     await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], actions: [{ kind: "click", selector: "#submit" }] } }))
       .rejects.toThrow("interactive action click requires sideEffectPolicy=allow");
+    await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], actions: [{ kind: "setInputFiles", selector: "#resume", files: [".proofkit/fixtures/resume.pdf"] }] } }))
+      .rejects.toThrow("interactive action setInputFiles requires sideEffectPolicy=allow");
+    await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], sideEffectPolicy: "allow", actions: [{ kind: "setInputFiles", selector: "#resume", files: [".proofkit/fixtures/resume.pdf"] }] } }))
+      .rejects.toThrow("requires policies.sideEffects=allow");
     const incomplete = await service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [] } });
     expect(incomplete.plan.planning).toMatchObject({ source: "submitted", evidenceGaps: ["business-oracle"] });
     expect(await readdir(root)).toEqual(["package.json"]);

@@ -36,6 +36,7 @@ See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for
 - Polls asynchronous HTTP business state to a bounded terminal verdict; a timeout remains inconclusive.
 - Records action receipts, before/after snapshots, network and console events, screenshots, and a JSONL timeline.
 - Supports `fill` values supplied by an environment variable reference; the saved Charter and Run record retain the variable name so a replay can use the current test credential.
+- Selects prepared `.proofkit/fixtures/` files through unique Web/Electron file inputs, including hidden inputs. `setInputFiles` accepts 1–10 files with a 20 MiB total limit, records file hashes rather than contents, and blocks replay when input identity cannot be verified.
 - Classifies configured page errors, console errors and failed responses as linked runtime findings; `record` reports them without changing a passing business verdict, while `fail` makes them a run failure.
 - Reports `passed`, `failed`, `blocked`, `cancelled`, or `inconclusive`; missing evidence never becomes a pass.
 - Links a replay Mission to its source and compares the same saved scope, Run matrix, and independent business facts. A repair is only `verified-in-scope` when the original evidenced defect is absent from a complete passing replay.
@@ -276,6 +277,7 @@ Screenshots are supporting evidence. They do not override failed API, worker, fi
 ## Safety and data
 
 - Use a dedicated test profile and test data. CDP attachment controls the selected browser session.
+- File selection requires an allowed scenario and workspace side-effect policy. Input facts prove selected bytes; business Oracles prove the outcome. Fixtures are checked at the file step, and page snapshots or screenshots can retain application echoes of file contents.
 - Keep CDP bound to loopback; never expose a debugging port to a public network.
 - MCP model planning and configured business oracles accept loopback endpoints only. Model-generated navigation stays within the configured or explicitly supplied Web origin; interactive model actions require `sideEffects: allow` in the project config.
 - ProofKit core does not seed or mutate application databases. Project-specific test writes must be explicit typed capabilities in the project integration, restricted to test environments and paired with cleanup.
@@ -295,6 +297,13 @@ node tests/electron-smoke.mjs
 ```
 
 The Electron smoke test uses an isolated temporary profile. The Web smoke test serves a local fixture page. Neither contacts a production system.
+
+For real file-input verification across Web and Electron, set
+`PROOFKIT_ELECTRON_PATH` to a local Electron executable and run
+`pnpm test:smoke:upload`. Set `PROOFKIT_BROWSER_PATH` when Chromium is not at
+the default location. This smoke creates its own Electron app and profile,
+checks multipart bytes against independent server facts, and retains local
+reports for passing, defective and repaired scenarios.
 
 ## Design principles
 

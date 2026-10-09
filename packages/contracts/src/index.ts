@@ -28,10 +28,25 @@ export const TestLevelSelectionSchema = z.object({
 });
 export type TestLevelSelection = z.infer<typeof TestLevelSelectionSchema>;
 
+/** Portable, workspace-relative references to explicitly prepared test fixtures. */
+export const FixturePathSchema = z.string().max(1024).refine((value) => {
+  const parts = value.split("/");
+  return parts[0] === ".proofkit" && parts[1] === "fixtures" && parts.length >= 3
+    && !/[\\:\x00-\x1f]/.test(value)
+    && parts.every((part) => part.length > 0 && part !== "." && part !== ".." && !/[. ]$/.test(part));
+}, "Use a normalized .proofkit/fixtures/<file> path within the test workspace");
+
+export const InputFileFactSchema = z.object({
+  fixture: FixturePathSchema, name: z.string().min(1), sizeBytes: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/), mimeType: z.string().min(1),
+});
+export type InputFileFact = z.infer<typeof InputFileFactSchema>;
+
 export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("goto"), url: z.string().url() }),
   z.object({ kind: z.literal("click"), selector: z.string().min(1) }),
   z.object({ kind: z.literal("fill"), selector: z.string().min(1), value: FillValueSchema }),
+  z.object({ kind: z.literal("setInputFiles"), selector: z.string().min(1), files: z.array(FixturePathSchema).min(1).max(10) }).strict(),
   z.object({ kind: z.literal("press"), selector: z.string().min(1), key: z.string().min(1) }),
   z.object({ kind: z.literal("waitForText"), text: z.string().min(1), timeoutMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("screenshot"), name: z.string().min(1).optional() }),
@@ -126,7 +141,9 @@ export const SurfaceControlSchema = z.object({
   role: z.string().min(1),
   name: z.string().max(120).optional(),
   selector: z.string().min(1).optional(),
-  selectorKind: z.enum(["test-id", "id", "role"]).optional(),
+  selectorKind: z.enum(["test-id", "id", "role", "css"]).optional(),
+  inputType: z.string().optional(),
+  visible: z.boolean().optional(),
   disabled: z.boolean(),
 });
 export type SurfaceControl = z.infer<typeof SurfaceControlSchema>;
@@ -201,6 +218,9 @@ export const StepResultSchema = z.object({
   action: ActionSchema,
   status: z.enum(["passed", "failed", "blocked"]),
   receipt: ActionReceiptSchema.optional(),
+  inputFiles: z.array(InputFileFactSchema).optional(),
+  /** Present only when replay checks the selected bytes against its source Run. */
+  replayInputMatched: z.boolean().optional(),
   beforeSnapshot: SurfaceSnapshotSchema.optional(),
   afterSnapshot: SurfaceSnapshotSchema.optional(),
   artifacts: z.array(z.string()).default([]),

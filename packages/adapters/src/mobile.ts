@@ -1,5 +1,6 @@
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceSnapshot } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceAdapter } from "@proofkit/runner";
+import { BlockedError } from "@proofkit/runner";
 
 export type MobileAdapterOptions = {
   /** Appium or another W3C WebDriver compatible server URL. */
@@ -65,6 +66,7 @@ export class MobileAdapter implements SurfaceAdapter {
   }
 
   async act(action: Action): Promise<ActionReceipt> {
+    if (action.kind === "setInputFiles") throw new BlockedError("File selection is not supported by the mobile adapter");
     const startedAt = new Date().toISOString();
     const started = Date.now();
     const before = await this.readUrl();

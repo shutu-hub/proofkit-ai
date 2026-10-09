@@ -1,6 +1,9 @@
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
 import { OracleResultSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, TargetBindingSchema, type RuntimeFinding } from "@proofkit/contracts";
 import { z } from "zod";
+import { inputFileFacts, resolveInputFiles, sameInputFileFacts, type InputFileFact, type SurfaceActionContext } from "./input-files.js";
+export type { SurfaceActionContext, ResolvedInputFile, InputFileFact } from "./input-files.js";
+export { sameInputFileFacts } from "./input-files.js";
 
 // Project integrations receive this schema runtime through the loader. This
 // avoids forcing every project that adds `.proofkit/integration.mjs` to add a
@@ -29,10 +32,11 @@ export type AdapterEvent = {
 
 export interface SurfaceAdapter {
   readonly name: string;
+  readonly supportsFileInputs?: boolean;
   connect(): Promise<void>;
   discover(): Promise<SurfaceSnapshot>;
   snapshot(): Promise<SurfaceSnapshot>;
-  act(action: Action): Promise<ActionReceipt>;
+  act(action: Action, context?: SurfaceActionContext): Promise<ActionReceipt>;
   assert(assertion: Assertion): Promise<AssertionResult>;
   capture(label: string): Promise<Uint8Array | undefined>;
   subscribeEvents(listener: (event: AdapterEvent) => void): Promise<() => void>;
@@ -113,6 +117,9 @@ export type ExecutionOptions = {
   capabilities?: CapabilityDefinition<any, any>[];
   environment?: "test" | "staging" | "local";
   allowCapabilityWrites?: boolean;
+  allowFileUploads?: boolean;
+  /** Saved facts from the source Run; absent or changed bytes must block a replay. */
+  expectedInputFiles?: Record<string, InputFileFact[]>;
   signal?: AbortSignal;
   timeoutMs?: number;
   integration?: { name: string; version?: string };
@@ -132,6 +139,8 @@ export class ExecutionRunner {
   private readonly capabilities: Map<string, CapabilityDefinition<any, any>>;
   private readonly environment: "test" | "staging" | "local";
   private readonly allowCapabilityWrites: boolean;
+  private readonly allowFileUploads: boolean;
+  private readonly expectedInputFiles?: Record<string, InputFileFact[]>;
   private readonly setup?: ExecutionOptions["setup"];
   private readonly targetBinding?: ExecutionOptions["targetBinding"];
   private readonly targetBindingPolicy: NonNullable<ExecutionOptions["targetBindingPolicy"]>;
@@ -156,6 +165,8 @@ export class ExecutionRunner {
     if (this.capabilities.size !== (options.capabilities ?? []).length) throw new Error("Duplicate capability name");
     this.environment = options.environment ?? "test";
     this.allowCapabilityWrites = options.allowCapabilityWrites ?? false;
+    this.allowFileUploads = options.allowFileUploads ?? false;
+    this.expectedInputFiles = options.expectedInputFiles;
     this.setup = options.setup;
     this.targetBinding = options.targetBinding;
     this.targetBindingPolicy = options.targetBindingPolicy ?? "block-different";
@@ -220,6 +231,10 @@ export class ExecutionRunner {
     try {
       throwIfAborted(signal);
       assertFillEnvironment(charter.actions);
+      if (charter.actions.some((action) => action.kind === "setInputFiles")) {
+        if (charter.sideEffectPolicy !== "allow" || !this.allowFileUploads) throw new BlockedError("File selection requires sideEffectPolicy=allow and runner allowFileUploads");
+        if (!this.adapter.supportsFileInputs) throw new BlockedError(`File selection is not supported by the ${this.adapter.name} adapter`);
+      }
       await inspectAndRecordTarget("before-setup");
       if (this.preflight) {
         let result: IntegrationPreflightResult;
@@ -273,9 +288,31 @@ export class ExecutionRunner {
             step.beforeSnapshot = beforeSnapshot;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-before`, beforeSnapshot));
             const runtimeAction = resolveRuntimeAction(action);
+            let actionContext: SurfaceActionContext | undefined;
+            if (action.kind === "setInputFiles") {
+              if (this.expectedInputFiles) step.replayInputMatched = false;
+              try {
+                actionContext = { inputFiles: await withAbort(resolveInputFiles(this.workspaceRoot, action.files, signal), signal, `${stepId} fixture read`) };
+              } catch (error) {
+                if (signal.aborted) throw error;
+                throw new BlockedError(toError(error).message);
+              }
+              const files = inputFileFacts(actionContext.inputFiles!);
+              step.inputFiles = files;
+              const artifact = await this.store.writeJson(runId, `${stepId}-input-files`, { files });
+              step.artifacts.push(artifact);
+              await this.emit({ runId, timestamp: new Date().toISOString(), type: "artifact.created", stepId, payload: { path: artifact, kind: "input-files", files } });
+              if (this.expectedInputFiles) {
+                const expected = this.expectedInputFiles[stepId];
+                if (!expected?.length || !sameInputFileFacts(expected, files)) {
+                  throw new BlockedError("Replay fixture facts are missing or changed; create a new Mission for different test inputs");
+                }
+                step.replayInputMatched = true;
+              }
+            }
             let receipt: ActionReceipt;
             try {
-              receipt = await withAbort(this.adapter.act(runtimeAction), signal, `${stepId} action`);
+              receipt = await withAbort(this.adapter.act(runtimeAction, actionContext), signal, `${stepId} action`);
             } catch (error) {
               if (signal.aborted) throw error;
               if (action.kind === "fill" && typeof action.value !== "string" && runtimeAction.kind === "fill" && typeof runtimeAction.value === "string") {
@@ -283,7 +320,9 @@ export class ExecutionRunner {
               }
               throw error;
             }
-            step.receipt = receipt;
+            step.receipt = actionContext?.inputFiles
+              ? { ...receipt, metadata: { ...receipt.metadata, inputFiles: inputFileFacts(actionContext.inputFiles) } }
+              : receipt;
             const afterSnapshot = await withAbort(action.kind === "observe" ? this.adapter.discover() : this.adapter.snapshot(), signal, `${stepId} snapshot`);
             step.afterSnapshot = afterSnapshot;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-after`, afterSnapshot));
@@ -295,7 +334,6 @@ export class ExecutionRunner {
               summary.findings.push(`${stepId}: screenshot unavailable (${toError(error).message})`);
             }
           }
-          summary.artifacts.push(...step.artifacts);
         } catch (error) {
           const cause = toError(error);
           step.status = cause instanceof BlockedError ? "blocked" : "failed";
@@ -303,6 +341,7 @@ export class ExecutionRunner {
           executionError = cause;
           summary.findings.push(`${stepId}: ${cause.message}`);
         }
+        summary.artifacts.push(...step.artifacts);
         summary.steps.push(step);
         await this.store.writeSummary(summary);
         await this.emit({ runId, timestamp: new Date().toISOString(), type: "step.completed", stepId, payload: { status: step.status, error: step.error } });

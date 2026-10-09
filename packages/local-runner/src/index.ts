@@ -8,7 +8,7 @@ import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSur
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
-import { CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
+import { BlockedError, CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
 import { compareMissionRecords } from "./mission-comparison.js";
@@ -26,6 +26,8 @@ const SURFACE_CANCELLATION_GRACE_MS = 10_000;
 
 export type LocalRunInput = {
   signal?: AbortSignal;
+  /** Internal replay association used to validate fixture identity against saved Run facts. */
+  replayOfRunId?: string;
   intent?: string;
   charter?: TestCharter;
   charterPath?: string;
@@ -406,7 +408,7 @@ export class LocalRunnerService {
     const scenarios = [{ actions: charter.actions, sideEffectPolicy: charter.sideEffectPolicy }, ...(charter.negativeCases ?? [])];
     for (const scenario of scenarios) {
       for (const action of scenario.actions) {
-        if (this.restrictWebOrigins && (action.kind === "click" || action.kind === "fill" || action.kind === "press") && scenario.sideEffectPolicy !== "allow") {
+        if (this.restrictWebOrigins && (action.kind === "click" || action.kind === "fill" || action.kind === "press" || action.kind === "setInputFiles") && scenario.sideEffectPolicy !== "allow") {
           throw new Error(`${label} interactive action ${action.kind} requires sideEffectPolicy=allow`);
         }
         if (action.kind !== "capability") continue;
@@ -677,7 +679,13 @@ export class LocalRunnerService {
         throw new Error(`Run ${summary.runId} returned evidence for a different Charter`);
       }
       const actualVerdict = summary.verdict ?? "inconclusive";
-      const outcomeMatched = expectedVerdict === undefined ? undefined : actualVerdict === expectedVerdict;
+      // A stop before a file step leaves no per-step mismatch flag. Such a
+      // replay still cannot certify an expected negative outcome: its input
+      // identity was never checked against the baseline.
+      const replayInputMismatch = summary.steps.some((step) => step.replayInputMatched === false)
+        || (sourceRunId !== undefined && summary.charter.actions.some((action, index) => action.kind === "setInputFiles"
+          && summary.steps.find((step) => step.stepId === `step-${String(index + 1).padStart(3, "0")}`)?.replayInputMatched !== true));
+      const outcomeMatched = expectedVerdict === undefined ? undefined : !replayInputMismatch && actualVerdict === expectedVerdict;
       const effectiveVerdict: Verdict = expectedVerdict === undefined
         ? actualVerdict
         : outcomeMatched ? "passed" : actualVerdict === "passed" ? "failed" : actualVerdict;
@@ -743,7 +751,8 @@ export class LocalRunnerService {
               category: "test",
               status: "confirmed",
               title: "Negative case outcome did not match expectation",
-              message: `Expected ${expectedVerdict}, but the surface run ended with ${actualVerdict}.`,
+              message: replayInputMismatch ? "Replay input files were missing, changed or unverified; the expected negative outcome cannot validate different test inputs."
+                : `Expected ${expectedVerdict}, but the surface run ended with ${actualVerdict}.`,
               evidence,
               createdAt: summary.endedAt ?? summary.startedAt,
             })]
@@ -773,6 +782,20 @@ export class LocalRunnerService {
       };
     };
 
+    const fileReplaySource = async (charter: TestCharter, context: MissionToolContext, adapter: LocalAdapterName,
+      charterId?: string, negativeCaseId?: string): Promise<string | undefined> => {
+      if (!context.mission.replayOfMissionId || !charter.actions.some((action) => action.kind === "setInputFiles")) return undefined;
+      const baseline = await this.missionAgent.load(context.mission.replayOfMissionId);
+      const sources = baseline.observations.filter((item) => item.kind === "surface.run" && item.data.surface === adapter
+        && item.charterId === charterId && (negativeCaseId
+          ? item.data.runKind === "negative" && item.data.negativeCaseId === negativeCaseId
+          : item.data.runKind === "primary" || item.data.runKind === undefined));
+      if (sources.length !== 1 || typeof sources[0]?.data.runId !== "string") {
+        throw new BlockedError("File replay requires a unique matching baseline Run");
+      }
+      return sources[0].data.runId;
+    };
+
     const runCharter = async (input: { charter?: TestCharter; charterId?: string; adapter?: LocalAdapterName }, context: MissionToolContext): Promise<MissionToolResult> => {
       if (context.mission.suite && context.task.charterId !== input.charterId) throw new Error("Suite task Charter ID does not match its input");
       const charter = context.mission.suite
@@ -781,9 +804,10 @@ export class LocalRunnerService {
       if (!charter) throw new Error("Mission has no Test Charter to execute");
       const charterId = context.mission.suite ? input.charterId : typeof charter.metadata.catalogId === "string" ? charter.metadata.catalogId : undefined;
       const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
-      const started = await this.start({ charter, adapter, signal: context.signal });
+      const baselineRunId = await fileReplaySource(charter, context, adapter, charterId);
+      const started = await this.start({ charter, adapter, signal: context.signal, replayOfRunId: baselineRunId });
       const summary = await this.wait(started.runId);
-      return collectSurfaceRun(summary, context, adapter, "primary", undefined, undefined, undefined, charterId);
+      return collectSurfaceRun(summary, context, adapter, "primary", baselineRunId, undefined, undefined, charterId);
     };
 
     const replayCharter = async (input: { charterId?: string; adapter?: LocalAdapterName }, context: MissionToolContext): Promise<MissionToolResult> => {
@@ -831,9 +855,10 @@ export class LocalRunnerService {
         metadata: { ...baseCharter.metadata, negativeCaseId: negativeCase.caseId },
       });
       const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
-      const started = await this.start({ charter, adapter, signal: context.signal });
+      const baselineRunId = await fileReplaySource(charter, context, adapter, charterId, negativeCase.caseId);
+      const started = await this.start({ charter, adapter, signal: context.signal, replayOfRunId: baselineRunId });
       const summary = await this.wait(started.runId);
-      return collectSurfaceRun(summary, context, adapter, "negative", undefined, negativeCase.caseId, negativeCase.expectedVerdict ?? "passed", charterId);
+      return collectSurfaceRun(summary, context, adapter, "negative", baselineRunId, negativeCase.caseId, negativeCase.expectedVerdict ?? "passed", charterId);
     };
 
     const verifyOutcome = async (_input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
@@ -987,7 +1012,7 @@ export class LocalRunnerService {
       requireAssertions: levelProfile.evidencePolicy.requireAssertions,
       requireBusinessOracle: levelProfile.evidencePolicy.requireBusinessOracle,
       allowedActionKinds: policy === "allow"
-        ? ["goto", "click", "fill", "press", "waitForText", "screenshot", "observe"]
+        ? ["goto", "click", "fill", "press", "setInputFiles", "waitForText", "screenshot", "observe"]
         : ["goto", "waitForText", "screenshot", "observe"],
       allowedOracleNames: [...new Set([
         ...this.config.oracles.map((oracle) => oracle.name),
@@ -1106,11 +1131,17 @@ export class LocalRunnerService {
 
   async replay(runId: string, input: Omit<LocalRunInput, "intent" | "charter" | "charterPath"> = {}): Promise<LocalRunStatus> {
     const previous = await this.loadRunSummary(validateRunId(runId));
-    return this.start({ ...input, charter: previous.charter });
+    return this.start({ ...input, charter: previous.charter, replayOfRunId: previous.runId });
   }
 
   private async execute(runId: string, input: LocalRunInput, signal: AbortSignal): Promise<RunSummary> {
     const charter = TestCharterSchema.parse(await this.resolveCharter(input));
+    const replaySource = input.replayOfRunId ? await this.loadRunSummary(validateRunId(input.replayOfRunId)) : undefined;
+    const expectedInputFiles = replaySource ? Object.fromEntries(replaySource.charter.actions.flatMap((action, index) => {
+      if (action.kind !== "setInputFiles") return [];
+      const stepId = `step-${String(index + 1).padStart(3, "0")}`;
+      return [[stepId, replaySource.steps.find((step) => step.stepId === stepId)?.inputFiles ?? []]];
+    })) : undefined;
     if (this.restrictWebOrigins) this.validateMissionCharterSafety("MCP Charter", charter, input.adapter ?? "web");
     if (this.restrictWebOrigins && charter.sideEffectPolicy === "allow" && this.config.policies.sideEffects !== "allow") {
       throw new Error("MCP interactive runs require sideEffects=allow in project config");
@@ -1167,6 +1198,8 @@ export class LocalRunnerService {
       capabilities: this.capabilities,
       environment: this.config.policies.environment,
       allowCapabilityWrites: this.allowCapabilityWrites,
+      allowFileUploads: this.config.policies.sideEffects === "allow",
+      expectedInputFiles,
       preflight: this.integration?.preflight,
       signal,
       timeoutMs: this.config.run.timeoutMs,

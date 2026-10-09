@@ -48,6 +48,7 @@ The public installation boundary is a single `proofkit-ai` npm tarball with `pro
     config.yaml                 # bound to the source project
     integration.mjs             # optional trusted business connector
     charters/
+    fixtures/                   # explicitly prepared file-input fixtures
     missions/<mission-id>.json
     runs/<run-id>/
       run.json
@@ -122,6 +123,34 @@ Go files with a Gin import use a conservative file-local extractor rather than t
 For an explicit release suite, each catalog Charter may declare static Web or API `routeTargets`, optionally qualified by the repository-relative source path. An API target additionally declares its HTTP method and exact gateway origin. The suite verifier reconciles declarations against the Project Map and reports candidate, mapped and observed counts. A Web candidate becomes observed only when a mapped Charter has passing primary and replay results on every required surface and each Run's snapshots or receipts contain a matching URL path. An API candidate needs matching method, origin and path in a 2xx browser response event for each required Run, plus the same independent business gate. The Run's `events.jsonl` is linked as network evidence. Mission coverage observations retain only matched declared route patterns and configured API origins; concrete path parameters, runtime queries and fragments are not copied into them. Duplicate route paths from different files remain unobserved when the runtime URL cannot identify the owning source. Missing, ambiguous, and unobserved mappings remain visible. Coverage gaps are informational rather than a new suite verdict gate; backend-only calls are outside browser traffic evidence. The inventory marks `truncated` when file, entry-point or route-hint caps are reached. This is a measured candidate-route slice, not an estimate of total product or statement coverage.
 
 A `capability` action names a project-registered operation with schema-validated input and output. The Runner checks its environment allowlist, deadline and side-effect class. `write` requires both a Charter `allow` policy and a separate Runner `allowCapabilityWrites` opt-in, which defaults to false. Only the capability's evidence projection is persisted; a project integration must choose opaque IDs and sanitized facts. An optional `<workspaceRoot>/.proofkit/integration.mjs` supplies those capabilities, oracles and lifecycle hooks without adding test code to the application's business modules.
+
+### File inputs and replay identity
+
+`setInputFiles` selects 1–10 prepared files referenced by portable
+`.proofkit/fixtures/<file>` paths relative to the test workspace. Each action
+has a 20 MiB aggregate limit. The ExecutionRunner resolves real paths, rejects
+fixture-root redirection and escapes, checks regular-file identity around
+opening, and reads bounded bytes. File selection requires the Charter's
+`sideEffectPolicy: allow`, the Runner's `allowFileUploads` opt-in (derived from
+workspace `policies.sideEffects: allow`), and an adapter declaring file support.
+These policy checks precede connection; fixture reads occur at the file step,
+so preceding actions may already have run.
+
+Web and Electron share Playwright execution. A file selector must match one
+attached `HTMLInputElement` of type `file`; hidden inputs are supported without
+opening a native dialog. The adapter receives transient bytes, a basename and
+an extension-derived MIME type, never an operating-system path. Run evidence
+retains fixture reference, name, size, SHA-256 and MIME type. Those facts prove
+selected input identity; an independent Oracle must prove server storage and
+the required business terminal state. Upload actions do not persist file
+contents, but page snapshots and screenshots can show application echoes.
+
+Run replay and direct Mission replay compare file facts with the matching
+baseline Run, separately for each Charter, surface and negative case. Missing,
+changed or unreached inputs cannot certify an expected blocked negative
+outcome. Repair comparison is inconclusive when either side lacks matching
+facts. Different inputs require a new Mission. The mobile adapter currently
+blocks this action; the fixture checks are not a hostile-filesystem sandbox.
 
 ### Test scope inspection
 

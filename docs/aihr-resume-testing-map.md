@@ -8,6 +8,27 @@ ProofKit 不复制 AIHR 业务代码，也不直接开放数据库、任意 SQL�
 
 ## 已核对的真实链路
 
+### 候选人管理手动录入（独立场景）
+
+当前 `apps/micro-candidate-management/src/components/ManualCandidateDrawer.vue`
+使用 Element Plus 上传控件，`auto-upload=false`、单文件、PDF/JPG/PNG、
+20 MiB 上限。`src/api/candidate-intake.api.ts` 提交 `file`、`target_job_id`、
+`name` 等 FormData 到网关的 `/api/v1/resume-collection/candidate-intakes`。
+
+`services/resume-collection-service/internal/service/manual_candidate_intake.go`
+先校验有效岗位，再保存文件、创建候选人与简历版本、绑定岗位，随后排队解析。
+返回的 file/candidate/resumeVersion/job/jobCandidate 身份及成功提示不证明解析终态；
+解析排队失败时，候选人和岗位关系可能已创建。人才库加入失败作为 warning 返回。
+因此此场景需要单独的关系、解析及重复提交验证，不能直接复用 collection run
+或在线平台采集的终态假设。
+
+ProofKit 的 `setInputFiles` 可以直接操作这类隐藏文件控件：将脱敏样本放在
+外部工作区 `.proofkit/fixtures/`，通过 `inspect_surface` 获取唯一定位线索，
+补齐表单、提交、正向 UI 断言和独立业务 Oracle。当前上传 smoke 已验证真实
+Web/Electron 文件传输与同输入回放，但尚未完成该 AIHR 页面实测，也尚未实现
+此手动录入场景专用的业务连接器。已有 capability 上传的环境变量样本路径
+仍按该连接器契约使用，不与 `setInputFiles` 的工作区路径规则混用。
+
 ### 桌面端采集/上传
 
 ```text

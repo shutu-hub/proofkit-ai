@@ -38,7 +38,7 @@ For an unfamiliar project, first call `inspect_test_scope({ surface: "electron",
 
 For a large repository, use a module path or name, for example `inspect_test_scope({ focus: "resume-collection", level: "core", surface: "web", limit: 50 })`. Focus now prioritizes retention before route/entry caps, rather than filtering only the first global candidates. A matching eligible Charter alias also prioritizes its declared routes; `inventory.retentionFocus` records the normalized query. Totals describe retained candidates, with duplicate declarations in one source collapsed; `omitted` describes response details omitted from that slice. File discovery and reads remain bounded, so `truncated` must still be reported. Route-text focus cannot recover unscanned files, and filesystem discovery only prioritizes paths it has discovered.
 
-Before drafting a new Charter, call `inspect_surface({ surface: "web" })` or `inspect_surface({ surface: "electron" })` against an already running local page. It records a read-only observation Run and returns bounded visible controls, including a selector only when it matched exactly one element at inspection time. The result says `testVerdict: "not-asserted"`; it is reconnaissance, not a pass. Control hints cover the main frame only, are capped at 60, omit input values, and can become stale after navigation. Web/Electron `click`, `fill` and `press` recheck selector uniqueness during the test Run and fail on ambiguity. The Run keeps snapshot, screenshot and event evidence in the external workspace. Use isolated test data because screenshots can contain everything visible on the page.
+Before drafting a new Charter, call `inspect_surface({ surface: "web" })` or `inspect_surface({ surface: "electron" })` against an already running local page. It records a read-only observation Run and returns bounded controls, including hidden file inputs with `inputType: "file"` and `visible: false`, and a selector only when it matched exactly one element at inspection time. The result says `testVerdict: "not-asserted"`; it is reconnaissance, not a pass. Control hints cover the main frame only, are capped at 60, omit input values, and can become stale after navigation. Web/Electron `click`, `fill`, `press` and `setInputFiles` recheck selector uniqueness during the test Run and fail on ambiguity. The Run keeps snapshot, screenshot and event evidence in the external workspace. Use isolated test data because screenshots can contain everything visible on the page.
 
 When the workspace has no matching catalog entry, the host agent can inspect the source and `discover_project` result, then submit a complete structured Charter directly to `run_test` or `create_test_mission`. This is a one-Mission test contract; it does not modify the tested project or silently register a reusable catalog entry. For example, after the workspace has registered a read-only `resume.terminal` Oracle:
 
@@ -57,7 +57,33 @@ When the workspace has no matching catalog entry, the host agent can inspect the
 }
 ```
 
-ProofKit validates the submitted schema, registered Oracle and Capability names, navigation origin and side-effect policy before persisting the Mission. It recomputes planning gaps from the Charter and bounded Project Map; a submitted confidence score or claimed evidence gap does not decide readiness. MCP `click`, `fill` and `press` actions require `sideEffectPolicy: allow` in the affected scenario and `policies.sideEffects: allow` in the test workspace. Registered write Capabilities also require the separate process-level operator opt-in described below. After a workflow is proven, save its Charter in the external workspace catalog so later one-sentence requests reuse the reviewed test.
+ProofKit validates the submitted schema, registered Oracle and Capability names, navigation origin and side-effect policy before persisting the Mission. It recomputes planning gaps from the Charter and bounded Project Map; a submitted confidence score or claimed evidence gap does not decide readiness. MCP `click`, `fill`, `press` and `setInputFiles` actions require `sideEffectPolicy: allow` in the affected scenario and `policies.sideEffects: allow` in the test workspace. Registered write Capabilities also require the separate process-level operator opt-in described below. After a workflow is proven, save its Charter in the external workspace catalog so later one-sentence requests reuse the reviewed test.
+
+For a file-upload workflow, prepare a synthetic fixture at
+`<workspaceRoot>/.proofkit/fixtures/resume.pdf`, inspect the page's actual file
+input, and use its unique selector in the Charter:
+
+```yaml
+actions:
+  - kind: setInputFiles
+    selector: 'input[type="file"][name="resume"]'
+    files: [.proofkit/fixtures/resume.pdf]
+```
+
+The selector is an example; discover the application's actual control first.
+Web/Electron support hidden file inputs. One action accepts 1–10 files with a
+20 MiB total limit. Its input facts record names, sizes, SHA-256 and MIME types,
+without recording the uploaded bytes. Include any form fields and submit
+action, a positive page assertion, and an independent business Oracle for
+`core` or `release`. File selection alone proves neither a submitted request
+nor completed processing. Snapshots and screenshots can retain page echoes;
+use synthetic inputs. Mobile file selection is currently blocked.
+
+Preserve fixture bytes and order for `replay_mission`. Primary and negative
+Runs use their own baseline input facts. Changed, missing or unchecked inputs
+prevent expected negative outcomes from passing and make repair comparison
+inconclusive; create a new Mission for a new input dataset. Fixture validation
+occurs at the file action, so earlier form actions may already have executed.
 
 For repair verification, replay the failed Mission after the application change. The new Mission stores `replayOfMissionId`; once it finishes, `get_mission_evidence` includes a comparison with the source Mission. `compare_missions` reads the same comparison directly. It requires a direct replay, the same project/workspace and saved Charter or suite scope, a confirmed baseline product finding linked to a materialized business source artifact, and a complete passing candidate with its own independent source facts. Primary, required replay, and declared negative Runs are paired by Charter, surface and run kind. A missing Run, changed scope, unmaterialized artifact or unfinished candidate is `inconclusive`; a repeated evidenced Oracle failure is `defect-reproduced`. `verified-in-scope` does not identify which source change fixed the symptom.
 
