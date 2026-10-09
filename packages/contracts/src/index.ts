@@ -101,11 +101,24 @@ export const TestCharterSchema = z.object({
 /** Existing workspace Charters may omit planning metadata. New plans populate it explicitly. */
 export type TestCharter = z.infer<typeof TestCharterSchema>;
 
+export const SurfaceControlSchema = z.object({
+  tag: z.string().min(1),
+  role: z.string().min(1),
+  name: z.string().max(120).optional(),
+  selector: z.string().min(1).optional(),
+  selectorKind: z.enum(["test-id", "id", "role"]).optional(),
+  disabled: z.boolean(),
+});
+export type SurfaceControl = z.infer<typeof SurfaceControlSchema>;
+
 export const SurfaceSnapshotSchema = z.object({
   capturedAt: z.string(),
   url: z.string().optional(),
   title: z.string().optional(),
   text: z.string().optional(),
+  controls: z.array(SurfaceControlSchema).max(60).optional(),
+  controlsTruncated: z.boolean().optional(),
+  frameCount: z.number().int().positive().optional(),
   metadata: z.record(z.string(), z.unknown()).default({}),
 });
 export type SurfaceSnapshot = z.infer<typeof SurfaceSnapshotSchema>;

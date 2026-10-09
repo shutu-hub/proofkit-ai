@@ -45,6 +45,16 @@ try {
   await waitForCdp("http://127.0.0.1:9229/json/version");
   const portFile = join(userData, "DevToolsActivePort");
   await writeFile(portFile, "9229\n/devtools/browser/proofkit-smoke\n", "utf8");
+  const inspectionAdapter = new ElectronAdapter({ devtoolsActivePortPath: portFile });
+  try {
+    await inspectionAdapter.connect();
+    const snapshot = await inspectionAdapter.discover();
+    assert.equal(snapshot.metadata.surface, "electron");
+    assert.equal(snapshot.url, "data:text/html;base64,[CONTENT REDACTED]");
+    assert.equal(snapshot.controls?.find((control) => control.name === "Fetch resume")?.selector, "#fetch");
+  } finally {
+    await inspectionAdapter.close();
+  }
   const adapter = new ElectronAdapter({ devtoolsActivePortPath: portFile });
   const charter = planIntent("验证 Electron 简历获取", { expect: ["Resume desktop", "Resume ready"] });
   charter.oracles = ["resume-workflow"];

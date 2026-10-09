@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
+import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningQuality, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
@@ -49,6 +49,20 @@ export type LocalRunStatus = {
   summary?: RunSummary;
   error?: string;
   report?: string;
+};
+
+export type SurfaceInspectionInput = Pick<LocalRunInput, "adapter" | "url" | "cdp" | "devtoolsPortFile" | "headful" | "signal">;
+export type SurfaceInspection = {
+  inspectionId: string;
+  surface: "web" | "electron";
+  status: "observed" | "failed" | "blocked" | "cancelled";
+  /** Inspection records what was visible; it does not assert product success. */
+  testVerdict: "not-asserted";
+  snapshot?: SurfaceSnapshot;
+  targetBinding?: TargetBinding;
+  runtimeHealth?: RunSummary["runtimeHealth"];
+  findings: string[];
+  evidence: EvidenceRef[];
 };
 
 export type MissionCreateOptions = {
@@ -160,6 +174,43 @@ export class LocalRunnerService {
 
   async discover(): Promise<ProjectMap> {
     return scanProject(this.root);
+  }
+
+  async inspectSurface(input: SurfaceInspectionInput = {}): Promise<SurfaceInspection> {
+    const surface = input.adapter ?? "web";
+    if (surface === "mobile") throw new Error("Surface inspection currently supports Web and Electron; mobile inspection needs device-backed semantics");
+    if (surface === "web" && !(input.url || input.cdp || this.config.surfaces.web?.baseUrl || this.config.surfaces.web?.cdpUrl)) {
+      throw new Error("Web inspection needs a configured baseUrl, CDP endpoint, or explicit URL");
+    }
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(input.signal?.reason);
+    if (input.signal?.aborted) onAbort();
+    else input.signal?.addEventListener("abort", onAbort, { once: true });
+    const deadline = setTimeout(() => controller.abort(new Error("Surface inspection exceeded 30 seconds")), 30_000);
+    try {
+      const charter = TestCharterSchema.parse({
+        intent: `Inspect the current ${surface} surface`, level: "quick", mode: "deterministic",
+        actions: [{ kind: "observe" }], assertions: [], sideEffectPolicy: "deny",
+        metadata: { purpose: "surface-inspection" },
+      });
+      const started = await this.start({ ...input, adapter: surface, charter, start: false, signal: controller.signal });
+      const summary = await this.wait(started.runId);
+      const observed = summary.steps.find((step) => step.action.kind === "observe")?.afterSnapshot;
+      return {
+        inspectionId: summary.runId,
+        surface,
+        status: observed ? "observed" : summary.verdict === "blocked" || summary.verdict === "cancelled" ? summary.verdict : "failed",
+        testVerdict: "not-asserted",
+        ...(observed ? { snapshot: { ...observed, text: observed.text?.slice(0, 2_000) } } : {}),
+        ...(summary.targetBinding ? { targetBinding: summary.targetBinding } : {}),
+        runtimeHealth: summary.runtimeHealth,
+        findings: summary.findings.filter((finding) => finding !== "No executable assertion or business oracle was declared.").slice(0, 10),
+        evidence: this.runEvidence(summary),
+      };
+    } finally {
+      clearTimeout(deadline);
+      input.signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   listCharters(): ProofkitConfig["charters"] {
@@ -544,6 +595,21 @@ export class LocalRunnerService {
       });
       return { output: project, observations: [observation, revisionObservation] };
     };
+    const inspect = async (_input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
+      if (context.mission.surface === "api" || context.mission.surface === "mobile") {
+        throw new Error("Surface inspection currently supports Web and Electron");
+      }
+      const result = await this.inspectSurface({ adapter: context.mission.surface, signal: context.signal });
+      const observation = ObservationSchema.parse({
+        observationId: `surface-inspection-${context.task.taskId}-${Date.now()}`,
+        source: "surface",
+        kind: "surface.inspected",
+        data: { inspectionId: result.inspectionId, surface: result.surface, status: result.status,
+          controlCount: result.snapshot?.controls?.length ?? 0, controlsTruncated: result.snapshot?.controlsTruncated ?? false },
+        observedAt: result.snapshot?.capturedAt ?? new Date().toISOString(),
+      });
+      return { output: result, observations: [observation], evidence: result.evidence };
+    };
 
     const collectSurfaceRun = async (summary: RunSummary, context: MissionToolContext, adapter: LocalAdapterName, runKind: SurfaceRunKind, sourceRunId?: string, negativeCaseId?: string, expectedVerdict?: Verdict, charterId?: string): Promise<MissionToolResult> => {
       if (context.mission.suite && summary.charter.metadata.catalogId !== charterId) {
@@ -790,7 +856,7 @@ export class LocalRunnerService {
     };
     return [
       { name: "project.discover", description: "Inspect the local project without modifying it.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
-      { name: "surface.inspect", description: "Inspect the configured Web, Electron or mobile surface.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
+      { name: "surface.inspect", description: "Inspect the configured Web or Electron surface without declaring a product verdict.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: 40_000, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({}), execute: inspect },
       { name: "surface.run-charter", description: "Run a validated charter through the existing deterministic runner and collect evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ charter: TestCharterSchema.optional(), charterId: z.string().optional(), adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runCharter },
       { name: "surface.replay-charter", description: "Replay the preceding surface run using the saved charter and preserve a second evidence trail.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ charterId: z.string().optional(), adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: replayCharter },
       { name: "surface.run-negative-charter", description: "Run an explicitly declared negative or recovery Charter and collect independent evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ charterId: z.string().optional(), negativeCase: NegativeCaseSchema, adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runNegativeCharter },

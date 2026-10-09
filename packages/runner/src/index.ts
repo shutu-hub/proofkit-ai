@@ -273,7 +273,7 @@ export class ExecutionRunner {
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-before`, beforeSnapshot));
             const receipt = await withAbort(this.adapter.act(action), signal, `${stepId} action`);
             step.receipt = receipt;
-            const afterSnapshot = await withAbort(this.adapter.snapshot(), signal, `${stepId} snapshot`);
+            const afterSnapshot = await withAbort(action.kind === "observe" ? this.adapter.discover() : this.adapter.snapshot(), signal, `${stepId} snapshot`);
             step.afterSnapshot = afterSnapshot;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-after`, afterSnapshot));
             try {

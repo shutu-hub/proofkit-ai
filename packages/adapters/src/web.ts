@@ -1,5 +1,5 @@
-import type { Browser, BrowserContext, Page, Request, Response } from "playwright-core";
-import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceSnapshot } from "@proofkit/contracts";
+import type { Browser, BrowserContext, Locator, Page, Request, Response } from "playwright-core";
+import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceControl, SurfaceSnapshot } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceAdapter } from "@proofkit/runner";
 
 export type WebAdapterOptions = {
@@ -69,7 +69,57 @@ export class WebAdapter implements SurfaceAdapter {
   }
 
   async discover(): Promise<SurfaceSnapshot> {
-    return this.snapshot();
+    const snapshot = await this.snapshot();
+    const page = this.page();
+    const { candidates, total } = await page.locator("button, input:not([type=hidden]), textarea, select, a[href], [role=button], [role=link], [role=textbox], [role=combobox], [role=checkbox], [role=radio]").evaluateAll((nodes) => {
+      const visible = nodes.filter((element) => element instanceof HTMLElement
+        && element.getClientRects().length > 0
+        && getComputedStyle(element).visibility !== "hidden"
+        && element.getAttribute("aria-hidden") !== "true");
+      const candidates = visible.slice(0, 60).map((element) => {
+        const html = element as HTMLElement;
+        const tag = html.tagName.toLowerCase();
+        const type = html.getAttribute("type")?.toLowerCase();
+        const role = html.getAttribute("role") ?? (tag === "a" ? "link" : tag === "button" || type === "button" || type === "submit" ? "button"
+          : type === "checkbox" ? "checkbox" : type === "radio" ? "radio" : tag === "select" ? "combobox" : "textbox");
+        const labelled = html instanceof HTMLInputElement || html instanceof HTMLTextAreaElement || html instanceof HTMLSelectElement
+          ? html.labels?.[0]?.innerText : undefined;
+        const name = [html.getAttribute("aria-label"), labelled, html.getAttribute("placeholder"), html.innerText, html.getAttribute("title")]
+          .find((value) => typeof value === "string" && value.trim().length > 0) ?? "";
+        const testIdAttribute = html.hasAttribute("data-testid") ? "data-testid" : html.hasAttribute("data-test") ? "data-test" : undefined;
+        const testId = testIdAttribute ? html.getAttribute(testIdAttribute) ?? undefined : undefined;
+        const id = html.id || undefined;
+        return { tag, role, name: name.trim(), id, idSelector: id ? `#${CSS.escape(id)}` : undefined,
+          testId, testIdAttribute, disabled: html.hasAttribute("disabled") || html.getAttribute("aria-disabled") === "true" };
+      });
+      return { candidates, total: visible.length };
+    });
+    const controls: SurfaceControl[] = [];
+    for (const candidate of candidates) {
+      const rawName = candidate.name.slice(0, 120);
+      const name = sanitizeSurfaceText(rawName, 120);
+      const control: SurfaceControl = { tag: candidate.tag, role: candidate.role, disabled: candidate.disabled,
+        ...(name ? { name } : {}) };
+      const selectors: Array<{ value: string; kind: NonNullable<SurfaceControl["selectorKind"]> }> = [];
+      if (candidate.testId && candidate.testIdAttribute && sanitizeSurfaceText(candidate.testId, 120) === candidate.testId) {
+        selectors.push({ value: `[${candidate.testIdAttribute}=${JSON.stringify(candidate.testId)}]`, kind: "test-id" });
+      }
+      if (candidate.idSelector && candidate.id && sanitizeSurfaceText(candidate.id, 120) === candidate.id) {
+        selectors.push({ value: candidate.idSelector, kind: "id" });
+      }
+      if (rawName && name === rawName && ["button", "link", "textbox", "combobox", "checkbox", "radio"].includes(candidate.role)) {
+        selectors.push({ value: `role=${candidate.role}[name=${JSON.stringify(rawName)}]`, kind: "role" });
+      }
+      for (const selector of selectors) {
+        if (await page.locator(selector.value).count().catch(() => 0) !== 1) continue;
+        control.selector = selector.value;
+        control.selectorKind = selector.kind;
+        break;
+      }
+      controls.push(control);
+    }
+    return { ...snapshot, controls, controlsTruncated: total > candidates.length,
+      frameCount: page.frames().length, metadata: { ...snapshot.metadata, controlScope: "main-frame" } };
   }
 
   async snapshot(): Promise<SurfaceSnapshot> {
@@ -81,9 +131,9 @@ export class WebAdapter implements SurfaceAdapter {
     ]);
     return {
       capturedAt: new Date().toISOString(),
-      url,
-      title,
-      text: text.slice(0, 20_000),
+      url: sanitizeSurfaceUrl(url),
+      title: sanitizeSurfaceText(title, 200),
+      text: sanitizeSurfaceText(text, 20_000),
       metadata: { adapter: this.name },
     };
   }
@@ -98,13 +148,13 @@ export class WebAdapter implements SurfaceAdapter {
         await page.goto(action.url, { waitUntil: "domcontentloaded" });
         break;
       case "click":
-        await page.locator(action.selector).first().click();
+        await (await uniqueActionLocator(page, action.selector)).click();
         break;
       case "fill":
-        await page.locator(action.selector).first().fill(action.value);
+        await (await uniqueActionLocator(page, action.selector)).fill(action.value);
         break;
       case "press":
-        await page.locator(action.selector).first().press(action.key);
+        await (await uniqueActionLocator(page, action.selector)).press(action.key);
         break;
       case "waitForText":
         await page.getByText(action.text, { exact: false }).first().waitFor({ state: "visible", timeout: action.timeoutMs ?? 10_000 });
@@ -121,9 +171,9 @@ export class WebAdapter implements SurfaceAdapter {
       startedAt,
       endedAt: new Date().toISOString(),
       durationMs: Date.now() - started,
-      urlBefore,
-      urlAfter: page.url(),
-      titleAfter: await page.title().catch(() => ""),
+      urlBefore: sanitizeSurfaceUrl(urlBefore),
+      urlAfter: sanitizeSurfaceUrl(page.url()),
+      titleAfter: sanitizeSurfaceText(await page.title().catch(() => ""), 200),
       metadata: { adapter: this.name },
     };
   }
@@ -235,6 +285,14 @@ async function hasVisibleText(page: Page, text: string): Promise<boolean> {
   return false;
 }
 
+async function uniqueActionLocator(page: Page, selector: string): Promise<Locator> {
+  const locator = page.locator(selector);
+  await locator.first().waitFor({ state: "visible", timeout: 10_000 });
+  const count = await locator.count();
+  if (count !== 1) throw new Error(`Action selector matched ${count} elements: ${sanitizeSurfaceText(selector, 120)}`);
+  return locator;
+}
+
 /** Never choose the first tab by accident when an attached browser has several pages. */
 export async function selectAttachedPage(pages: Page[], options: Pick<WebAdapterOptions, "baseUrl" | "targetUrlPrefix" | "targetTitleContains">): Promise<Page | undefined> {
   const explicitTarget = Boolean(options.targetUrlPrefix || options.targetTitleContains);
@@ -258,4 +316,27 @@ export async function selectAttachedPage(pages: Page[], options: Pick<WebAdapter
 
 function applicationPageUrl(url: string): boolean {
   return Boolean(url) && !/^(about:|devtools:|chrome:|chrome-extension:|chrome-error:|edge:)/i.test(url);
+}
+
+function sanitizeSurfaceUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol === "data:") return `data:${url.pathname.split(",", 1)[0]},[CONTENT REDACTED]`;
+    if (url.protocol === "blob:") return "blob:[CONTENT REDACTED]";
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch { return value.split(/[?#]/, 1)[0] ?? ""; }
+}
+
+function sanitizeSurfaceText(value: string, limit: number): string {
+  let text = value.slice(0, limit);
+  text = text.replace(/https?:\/\/[^\s"'<>]+/gi, (candidate) => sanitizeSurfaceUrl(candidate));
+  text = text.replace(/\bBearer\s+[A-Za-z0-9._~+/-]+/gi, "Bearer [REDACTED]");
+  text = text.replace(/\b(authorization|cookie|password|secret|token|access[_-]?key|api[_-]?key)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[REDACTED]");
+  text = text.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[REDACTED_EMAIL]");
+  text = text.replace(/\b1[3-9]\d{9}\b/g, "[REDACTED_PHONE]");
+  return text;
 }

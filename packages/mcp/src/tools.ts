@@ -13,6 +13,16 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "inspect_surface",
+    "Observe the configured Web or Electron page and return bounded visible controls with unique selector hints and evidence links. This is reconnaissance, not a product pass verdict.",
+    { surface: z.enum(["web", "electron"]).default("web"), url: z.string().url().optional() },
+    async ({ surface, url }) => {
+      if (surface === "electron" && url) throw new Error("Electron inspection uses the configured CDP page selector; url is only for Web");
+      return result(await runner.inspectSurface({ adapter: surface, url: surfaceUrl(url, runner) }));
+    },
+  );
+
+  server.tool(
     "list_test_charters",
     "List curated, workspace-owned tests that can be selected by natural language or charterId.",
     {},

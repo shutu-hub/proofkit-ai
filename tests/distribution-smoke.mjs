@@ -54,6 +54,7 @@ try {
   try {
     await withDeadline(client.connect(transport), 10_000, "MCP connection");
     const listed = await withDeadline(client.listTools(), 10_000, "MCP tool listing");
+    assert.ok(listed.tools.some((tool) => tool.name === "inspect_surface"));
     const runTest = listed.tools.find((tool) => tool.name === "run_test");
     assert.ok(runTest);
     assert.ok(runTest.inputSchema.properties?.charter);

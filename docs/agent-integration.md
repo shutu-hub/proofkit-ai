@@ -8,6 +8,7 @@ Register one local MCP server for the project root. Clients with MCP support, in
 
 ```text
 discover_project
+inspect_surface
 list_test_charters
 list_test_suites
 run_test
@@ -29,6 +30,8 @@ compare_missions
 ```
 
 The response contains `missionId`, the resolved level and the running status. The agent then polls the status until the mission reaches a terminal state and reads evidence once. For a review-first workflow, call `create_test_mission`, inspect the task graph, call `approve_test_plan`, and then call `start_mission`.
+
+Before drafting a new Charter, call `inspect_surface({ surface: "web" })` or `inspect_surface({ surface: "electron" })` against an already running local page. It records a read-only observation Run and returns bounded visible controls, including a selector only when it matched exactly one element at inspection time. The result says `testVerdict: "not-asserted"`; it is reconnaissance, not a pass. Control hints cover the main frame only, are capped at 60, omit input values, and can become stale after navigation. Web/Electron `click`, `fill` and `press` recheck selector uniqueness during the test Run and fail on ambiguity. The Run keeps snapshot, screenshot and event evidence in the external workspace. Use isolated test data because screenshots can contain everything visible on the page.
 
 When the workspace has no matching catalog entry, the host agent can inspect the source and `discover_project` result, then submit a complete structured Charter directly to `run_test` or `create_test_mission`. This is a one-Mission test contract; it does not modify the tested project or silently register a reusable catalog entry. For example, after the workspace has registered a read-only `resume.terminal` Oracle:
 
@@ -164,6 +167,7 @@ The same lifecycle is available without an agent:
 
 ```bash
 proofkit mission create "测试简历获取" --surface electron --level core
+proofkit inspect --adapter electron --cdp http://127.0.0.1:9222
 proofkit mission create "测试简历获取" --surface electron --charter .proofkit/charters/resume-core.yml
 proofkit mission run <mission-id> --approve
 proofkit mission status <mission-id>

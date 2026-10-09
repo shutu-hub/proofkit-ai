@@ -15,6 +15,7 @@
     "typecheck": "pnpm -r build && pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:smoke:web": "pnpm build && node tests/web-smoke.mjs",
+    "test:smoke:inspect": "pnpm build && node tests/inspection-smoke.mjs",
     "test:smoke:electron": "pnpm build && node tests/electron-smoke.mjs",
     "test:smoke:local:web": "pnpm build && node tests/local-runner-aihr-smoke.mjs web",
     "test:smoke:local:electron": "pnpm build && node tests/local-runner-aihr-smoke.mjs electron",

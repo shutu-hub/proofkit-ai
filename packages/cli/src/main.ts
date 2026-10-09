@@ -61,6 +61,24 @@ export function createProgram(): Command {
       console.log(output);
     });
 
+  program.command("inspect")
+    .description("Observe the current Web or Electron surface and list bounded selector hints")
+    .option("--root <path>", "project root", ".")
+    .option("--adapter <adapter>", "web or electron", "web")
+    .option("--url <url>", "Web entry URL")
+    .option("--cdp <url>", "local CDP endpoint")
+    .option("--devtools-port-file <path>", "Electron DevToolsActivePort path")
+    .option("--headful", "launch a visible Web browser")
+    .action(async (options: RootOptions & { adapter: string; url?: string; cdp?: string; devtoolsPortFile?: string; headful?: boolean }) => {
+      if (options.adapter !== "web" && options.adapter !== "electron") throw new Error("Inspection adapter must be web or electron");
+      if (options.adapter === "electron" && options.url) throw new Error("Electron inspection uses CDP page selection, not --url");
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+      const inspection = await runner.inspectSurface({ adapter: options.adapter, url: options.url, cdp: options.cdp,
+        devtoolsPortFile: options.devtoolsPortFile, headful: options.headful });
+      console.log(JSON.stringify(inspection, null, 2));
+      if (inspection.status !== "observed") process.exitCode = 1;
+    });
+
   program.command("charters")
     .description("List curated tests configured in the external test workspace")
     .option("--root <path>", "project root", ".")
