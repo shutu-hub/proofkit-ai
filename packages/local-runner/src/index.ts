@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
@@ -461,6 +462,8 @@ export class LocalRunnerService {
       const effectiveVerdict: Verdict = expectedVerdict === undefined
         ? actualVerdict
         : outcomeMatched ? "passed" : actualVerdict === "passed" ? "failed" : actualVerdict;
+      const routeTargets = context.mission.suite?.charters.find((item) => item.charterId === charterId)?.routeTargets ?? [];
+      const apiTraffic = await this.matchedApiRouteTargets(summary.runId, adapter, routeTargets);
       const evidence = this.runEvidence(summary);
       const observation = ObservationSchema.parse({
         observationId: `${context.task.taskId}-${summary.runId}`,
@@ -483,7 +486,9 @@ export class LocalRunnerService {
           oracles: summary.oracles.length,
           passedOracles: summary.oracles.filter((item) => item.passed === true).length,
           businessEvidence: summary.oracles.reduce((count, oracle) => count + (oracle.sourceEvidenceCount ?? 0), 0),
-          matchedRoutePaths: matchedWebRouteTargets(summary, context.mission.suite?.charters.find((item) => item.charterId === charterId)?.routeTargets ?? []),
+          matchedRoutePaths: matchedWebRouteTargets(summary, routeTargets),
+          matchedApiTargets: apiTraffic.matched,
+          networkLogAvailable: apiTraffic.available,
         },
         evidence,
         observedAt: new Date().toISOString(),
@@ -671,16 +676,46 @@ export class LocalRunnerService {
   }
 
   private runEvidence(summary: RunSummary): EvidenceRef[] {
-    const paths = new Set([`${summary.runId}/run.json`, `${summary.runId}/report.html`, ...summary.artifacts]);
+    const eventsPath = resolve(this.evidenceDir, summary.runId, "events.jsonl");
+    const paths = new Set([`${summary.runId}/run.json`, `${summary.runId}/report.html`, ...(existsSync(eventsPath) ? [`${summary.runId}/events.jsonl`] : []), ...summary.artifacts]);
     const oracleArtifacts = new Map(summary.oracles.map((oracle) => [oracle.evidence.at(-1), oracle.sourceEvidenceCount ?? 0]));
     return [...paths].map((path) => EvidenceRefSchema.parse({
       evidenceId: `${summary.runId}:${path}`,
-      kind: path.endsWith(".png") ? "screenshot" : path.endsWith("report.html") || (oracleArtifacts.has(path) && !oracleArtifacts.get(path))
+      kind: path.endsWith("events.jsonl") ? "network" : path.endsWith(".png") ? "screenshot" : path.endsWith("report.html") || (oracleArtifacts.has(path) && !oracleArtifacts.get(path))
         ? "report" : oracleArtifacts.has(path) ? "business" : "snapshot",
       path: resolve(this.evidenceDir, path),
       description: `Evidence captured by run ${summary.runId}`,
       capturedAt: summary.endedAt ?? summary.startedAt,
     }));
+  }
+
+  private async matchedApiRouteTargets(runId: string, adapter: LocalAdapterName, targets: RouteCoverageTarget[]): Promise<{
+    matched: Extract<RouteCoverageTarget, { kind: "api" }>[];
+    available: boolean;
+  }> {
+    const path = resolve(this.evidenceDir, runId, "events.jsonl");
+    if (!existsSync(path)) return { matched: [], available: false };
+    const apiTargets = targets.filter((target): target is Extract<RouteCoverageTarget, { kind: "api" }> => target.kind === "api");
+    if (apiTargets.length === 0) return { matched: [], available: true };
+    const matched = new Map<string, Extract<RouteCoverageTarget, { kind: "api" }>>();
+    try {
+      for await (const event of this.evidence.readEvents(runId)) {
+        const payload = event.payload;
+        if (event.type !== "adapter.event" || payload.adapter !== adapter || payload.eventType !== "response") continue;
+        if (typeof payload.url !== "string" || typeof payload.method !== "string" || typeof payload.status !== "number") continue;
+        if (payload.status < 200 || payload.status >= 300) continue;
+        let responseUrl: URL;
+        try { responseUrl = new URL(payload.url); } catch { continue; }
+        for (const target of apiTargets) {
+          if (responseUrl.origin !== new URL(target.origin).origin || payload.method !== target.method || !routeMatches(target.path, responseUrl.pathname)) continue;
+          matched.set(`${target.method}\0${target.origin}\0${target.path}`, target);
+        }
+      }
+      return { matched: [...matched.values()], available: true };
+    } catch {
+      // A missing or malformed log cannot establish API coverage.
+      return { matched: [], available: false };
+    }
   }
 
   async plan(intent: string, options: PlanOptions = {}): Promise<TestCharter> {

@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { parse, stringify } from "yaml";
-import { ProjectMapSchema, ProofkitConfigSchema, type ProjectMap, type ProofkitConfig } from "@proofkit/contracts";
+import { ProjectMapSchema, ProofkitConfigSchema, type ProjectMap, type ProofkitConfig, type RouteHttpMethod } from "@proofkit/contracts";
 import { resolveProjectContext, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
 
 export { defaultWorkspaceRoot, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
@@ -181,6 +181,7 @@ type InventoryRouteHint = {
   path: string;
   source: string;
   line: number;
+  method?: RouteHttpMethod;
 };
 
 const SOURCE_EXTENSIONS = new Set([".cjs", ".css", ".go", ".java", ".js", ".jsx", ".mjs", ".py", ".rs", ".scss", ".ts", ".tsx", ".vue"]);
@@ -219,7 +220,7 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
     entryPoints.push(entry);
   };
   const addRoute = (route: InventoryRouteHint) => {
-    const key = `${route.kind}:${route.path}:${route.source}:${route.line}`;
+    const key = `${route.kind}:${route.path}:${route.method ?? ""}:${route.source}:${route.line}`;
     if (seenRoutes.has(key) || routeHints.length >= MAX_ROUTE_HINTS * 5) return;
     seenRoutes.add(key);
     routeHints.push(route);
@@ -362,8 +363,8 @@ async function readRouteHints(path: string, source: string, add: (route: Invento
     for (const match of line.matchAll(/\bpath\s*:\s*["'`]([^"'`]+)["'`]/g)) {
       if (isStaticRoute(match[1])) add({ kind: "web", path: match[1], source, line: index + 1 });
     }
-    for (const match of line.matchAll(/\b(?:get|post|put|patch|delete|head)\s*\(\s*["'`]([^"'`]+)["'`]/gi)) {
-      if (isStaticRoute(match[1])) add({ kind: "api", path: match[1], source, line: index + 1 });
+    for (const match of line.matchAll(/\b(get|post|put|patch|delete|head|options)\s*\(\s*["'`]([^"'`]+)["'`]/gi)) {
+      if (isStaticRoute(match[2])) add({ kind: "api", path: match[2], source, line: index + 1, method: match[1]!.toUpperCase() as RouteHttpMethod });
     }
   });
   return true;

@@ -68,9 +68,14 @@ charters:
       - kind: web
         path: /resumes
         source: apps/resume/src/router.ts
+      - kind: api
+        method: POST
+        path: /api/v1/resumes
+        origin: http://127.0.0.1:8080
+        source: services/gateway/router.ts
 ```
 
-`source` may be omitted when the scanned route path is unique. `get_mission_evidence.suiteScope.routeCoverage` reports candidate, mapped and observed route counts, bounded gap details with omitted counts, stale or ambiguous declarations, and whether the project inventory was truncated. A Web route is **observed** only when a mapped Charter passes with business evidence and both its primary and replay runs visit that path on every required surface. The saved Mission keeps the mapping used for the run, even if the catalog later changes. API route hints remain mapped but unobserved until network-to-route correlation is implemented. These counts describe static candidate routes, not whole-project coverage.
+`source` may be omitted when the scanned route path is unique. An API target also needs its HTTP method and the exact gateway origin, so a same-path request to another service cannot count. `get_mission_evidence.suiteScope.routeCoverage` reports candidate, mapped and observed route counts, bounded gap details with omitted counts, stale or ambiguous declarations, and whether the project inventory was truncated. A route is **observed** only when its mapped Charter passes with independent business evidence on every required surface and both primary and replay runs visit the Web path or receive a matching 2xx API response. The response is linked to that Run's network event log; no runtime URL is copied into the Mission coverage observation. The saved Mission keeps the mapping used for the run, even if the catalog later changes. Coverage gaps are informational and do not change a suite's workflow verdict. These counts describe static candidate routes, not whole-project coverage; calls made only by a backend worker are not browser network observations.
 
 The final evidence gate is checked per primary run and required replay, not across pooled runs. An Oracle must return at least one sanitized observation fact; ProofKit's own Oracle result file does not count as that fact. A negative case cannot make an unverified main path green.
 

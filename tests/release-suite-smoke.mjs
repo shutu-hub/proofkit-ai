@@ -22,6 +22,10 @@ const routeFile = join(sourceRoot, "apps", "web", "src", "router.ts");
 const routeSource = "export const resume = { path: '/resume' };\nexport const login = { path: '/login' };\nexport const settings = { path: '/settings' };\n";
 await mkdir(dirname(routeFile), { recursive: true });
 await writeFile(routeFile, routeSource);
+const apiRouteFile = join(sourceRoot, "services", "gateway", "router.ts");
+const apiRouteSource = "router.post('/api/v1/resume/start', handler);\nrouter.post('/api/v1/login/start', handler);\n";
+await mkdir(dirname(apiRouteFile), { recursive: true });
+await writeFile(apiRouteFile, apiRouteSource);
 
 let defect = false;
 const state = { resume: "pending", login: "pending" };
@@ -96,7 +100,10 @@ try {
     surfaces,
     policies: { environment: "test", sideEffects: "allow" },
     run: { timeoutMs: 15_000 },
-    charters: ["resume", "login"].map((flow) => ({ id: flow, path: `.proofkit/charters/${flow}.yml`, aliases: [flow], level: "release", surfaces: ["web", "electron"], routeTargets: [{ kind: "web", path: `/${flow}`, source: "apps/web/src/router.ts" }] })),
+    charters: ["resume", "login"].map((flow) => ({ id: flow, path: `.proofkit/charters/${flow}.yml`, aliases: [flow], level: "release", surfaces: ["web", "electron"], routeTargets: [
+      { kind: "web", path: `/${flow}`, source: "apps/web/src/router.ts" },
+      { kind: "api", method: "POST", path: `/api/v1/${flow}/start`, origin: baseUrl, source: "services/gateway/router.ts" },
+    ] })),
     suites: [{ id: "release-critical", aliases: ["上线完整回归"], level: "release", charterIds: ["resume", "login"], surfaces: ["web", "electron"] }],
     oracles: ["resume", "login"].map((flow) => ({ name: `${flow}-terminal`, url: `${baseUrl}/api/v1/${flow}/status`, statusPointer: "/data/state", successValues: ["done"], failureValues: ["wrong"], intervalMs: 100, deadlineMs: 3_000 })),
   });
@@ -110,11 +117,12 @@ try {
   assert.equal(good.status.mission.verdict, "passed", JSON.stringify(good.status.mission.findings));
   assert.equal(good.evidence.suiteScope.results.length, 4);
   assert.ok(good.evidence.suiteScope.results.every((item) => item.verdict === "passed" && item.replay.sourceRunId === item.primary.runId));
-  assert.deepEqual({ candidates: good.evidence.suiteScope.routeCoverage.candidateRoutes, mapped: good.evidence.suiteScope.routeCoverage.mappedCandidates, observed: good.evidence.suiteScope.routeCoverage.observedCandidates }, { candidates: 3, mapped: 2, observed: 2 });
+  assert.deepEqual({ candidates: good.evidence.suiteScope.routeCoverage.candidateRoutes, mapped: good.evidence.suiteScope.routeCoverage.mappedCandidates, observed: good.evidence.suiteScope.routeCoverage.observedCandidates }, { candidates: 5, mapped: 4, observed: 4 });
   assert.ok(good.evidence.suiteScope.routeCoverage.gaps.some((item) => item.path === "/settings" && item.status === "unmapped"));
   const goodRunIds = good.evidence.suiteScope.results.flatMap((item) => [item.primary.runId, item.replay.runId]);
   assert.equal(new Set(goodRunIds).size, 8);
-  for (const item of good.evidence.evidence.filter((evidence) => evidence.kind === "business" || evidence.kind === "report")) await readFile(item.path);
+  assert.ok(good.evidence.evidence.some((item) => item.kind === "network"));
+  for (const item of good.evidence.evidence.filter((evidence) => ["business", "report", "network"].includes(evidence.kind))) await readFile(item.path);
 
   defect = true;
   const bad = await runSuite(client);
@@ -122,11 +130,12 @@ try {
   assert.equal(bad.status.mission.firstFailure.kind, "business-oracle");
   assert.ok(bad.evidence.suiteScope.results.filter((item) => item.charterId === "resume").every((item) => item.verdict === "failed"));
   assert.ok(bad.evidence.suiteScope.results.filter((item) => item.charterId === "login").every((item) => item.verdict === "passed"));
-  assert.equal(bad.evidence.suiteScope.routeCoverage.observedCandidates, 1);
+  assert.equal(bad.evidence.suiteScope.routeCoverage.observedCandidates, 2);
   assert.ok(bad.status.mission.findings.some((item) => item.category === "product" && item.status === "confirmed" && item.charterId === "resume" && item.evidence.length > 0));
-  assert.deepEqual(await readdir(sourceRoot), ["apps", "package.json"]);
+  assert.deepEqual(await readdir(sourceRoot), ["apps", "package.json", "services"]);
   assert.equal(await readFile(routeFile, "utf8"), routeSource);
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "route-coverage-gaps", "independent-failure", "real-evidence-files", "source-unchanged"] }, null, 2));
+  assert.equal(await readFile(apiRouteFile, "utf8"), apiRouteSource);
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "real-evidence-files", "source-unchanged"] }, null, 2));
 } finally {
   await client?.close();
   await mcpServer?.close();

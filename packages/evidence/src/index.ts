@@ -1,7 +1,9 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join, relative, resolve } from "node:path";
-import { RunSummarySchema, type RunEvent, type RunSummary } from "@proofkit/contracts";
+import { createInterface } from "node:readline";
+import { RunEventSchema, RunSummarySchema, type RunEvent, type RunSummary } from "@proofkit/contracts";
 
 const REDACT_KEYS = /authorization|cookie|password|secret|token|access[_-]?key|phone|mobile/i;
 
@@ -41,6 +43,24 @@ export class EvidenceStore {
     const path = join(this.runDir(event.runId), "events.jsonl");
     await mkdir(dirname(path), { recursive: true });
     await appendFile(path, `${JSON.stringify(sanitizeEvidence(event))}\n`, "utf8");
+  }
+
+  /** Stream a completed run's audit log without loading an unbounded file. */
+  async *readEvents(runId: string): AsyncGenerator<RunEvent> {
+    if (!/^[a-zA-Z0-9_-]+$/.test(runId)) throw new Error("Invalid run id");
+    const input = createReadStream(join(this.runDir(runId), "events.jsonl"), { encoding: "utf8" });
+    const lines = createInterface({ input, crlfDelay: Infinity });
+    try {
+      for await (const line of lines) {
+        if (!line.trim()) continue;
+        const event = RunEventSchema.parse(JSON.parse(line));
+        if (event.runId !== runId) throw new Error(`Event log contains another run: ${event.runId}`);
+        yield event;
+      }
+    } finally {
+      lines.close();
+      input.destroy();
+    }
   }
 
   async writeSummary(summary: RunSummary): Promise<void> {

@@ -1,4 +1,4 @@
-import type { Browser, BrowserContext, Page } from "playwright-core";
+import type { Browser, BrowserContext, Page, Response } from "playwright-core";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceSnapshot } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceAdapter } from "@proofkit/runner";
 
@@ -131,7 +131,7 @@ export class WebAdapter implements SurfaceAdapter {
   async subscribeEvents(listener: (event: AdapterEvent) => void): Promise<() => void> {
     const page = this.page();
     const onRequest = (request: { method(): string; url(): string }) => listener({ type: "request", payload: { method: request.method(), url: request.url() } });
-    const onResponse = (response: { status(): number; url(): string }) => listener({ type: "response", payload: { status: response.status(), url: response.url() } });
+    const onResponse = (response: Response) => listener({ type: "response", payload: { method: response.request().method(), status: response.status(), url: response.url() } });
     const onConsole = (message: { type(): string; text(): string }) => listener({ type: "console", payload: { level: message.type(), text: message.text() } });
     const onPageError = (error: Error) => listener({ type: "pageerror", payload: { message: error.message } });
     page.on("request", onRequest);

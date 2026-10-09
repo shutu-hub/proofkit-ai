@@ -135,6 +135,22 @@ describe("explicit release suites", () => {
     expect((await service.missionEvidence(mission.missionId)).suiteScope?.routeCoverage?.observedCandidates).toBe(2);
   });
 
+  it("requires matching API method, origin and successful responses in every required run", async () => {
+    for (const network of ["valid", "wrong-method", "wrong-origin", "bad-status", "missing-replay-log"] as const) {
+      const service = await createSuiteService();
+      service.config.charters[0]!.routeTargets!.push({ kind: "api", method: "GET", path: "/api/v1/people", origin: "http://127.0.0.1:8765", source: "services/gateway/router.ts" });
+      stubRuns(service, { network });
+      const mission = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+      await service.startMission(mission.missionId, { approve: true });
+      const completed = await service.waitMission(mission.missionId);
+      const coverage = (await service.missionEvidence(mission.missionId)).suiteScope?.routeCoverage;
+      expect(completed.verdict).toBe("passed");
+      expect(coverage).toMatchObject({ candidateRoutes: 6, mappedCandidates: 3, observedCandidates: network === "valid" ? 3 : 2 });
+      if (network !== "valid") expect(coverage?.gaps).toContainEqual(expect.objectContaining({ kind: "api", path: "/api/v1/people", status: "mapped-unobserved" }));
+      if (network === "missing-replay-log") expect(coverage?.gaps.find((item) => item.path === "/api/v1/people")?.reason).toContain("unavailable");
+    }
+  });
+
   it("rejects a suite whose Charter is missing a required surface or business Oracle", async () => {
     const service = await createSuiteService({ loginSurfaces: ["web"] });
     await expect(service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" }))
@@ -193,7 +209,7 @@ async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[];
   return LocalRunnerService.create({ root, workspaceRoot });
 }
 
-function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; dynamicResume?: boolean } = {}) {
+function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-log" } = {}) {
   const summaries = new Map<string, RunSummary>();
   const started: Array<{ charterId: string; surface: LocalAdapterName; negativeCaseId?: string }> = [];
   const replayed: Array<{ sourceRunId: string; charterId: string; surface: LocalAdapterName }> = [];
@@ -222,12 +238,22 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     summaries.set(runId, summary);
     return summary;
   };
+  const writeNetworkEvent = async (summary: RunSummary, surface: LocalAdapterName, kind: "primary" | "replay" | "negative") => {
+    if (!options.network || options.network === "missing-replay-log" && kind === "replay") return;
+    const runDir = join(service.evidenceDir, summary.runId);
+    await mkdir(runDir, { recursive: true });
+    await writeFile(join(runDir, "events.jsonl"), `${JSON.stringify({
+      runId: summary.runId, timestamp: summary.endedAt, type: "adapter.event",
+      payload: { adapter: surface, eventType: "response", method: options.network === "wrong-method" ? "POST" : "GET", status: options.network === "bad-status" ? 500 : 200, url: `${options.network === "wrong-origin" ? "http://127.0.0.1:9999" : "http://127.0.0.1:8765"}/api/v1/people?private=hidden` },
+    })}\n`);
+  };
   service.start = async (input) => {
     const charter = input.charter!;
     const surface = input?.adapter ?? "web";
     const negativeCaseId = typeof charter.metadata.negativeCaseId === "string" ? charter.metadata.negativeCaseId : undefined;
     started.push({ charterId: String(charter.metadata.catalogId), surface, negativeCaseId });
     const summary = summaryFor(charter, surface, negativeCaseId ? "negative" : "primary");
+    await writeNetworkEvent(summary, surface, negativeCaseId ? "negative" : "primary");
     return { runId: summary.runId, status: "completed", verdict: summary.verdict, summary };
   };
   service.replay = async (sourceRunId, input) => {
@@ -236,6 +262,7 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     const surface = input?.adapter ?? "web";
     replayed.push({ sourceRunId, charterId: String(source.charter.metadata.catalogId), surface });
     const summary = summaryFor(source.charter, surface, "replay");
+    await writeNetworkEvent(summary, surface, "replay");
     return { runId: summary.runId, status: "completed", verdict: summary.verdict, summary };
   };
   service.wait = async (runId) => {

@@ -149,22 +149,14 @@ export const RunSummarySchema = z.object({
 });
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 
-export type RunEvent = {
-  runId: string;
-  timestamp: string;
-  type:
-    | "run.started"
-    | "run.completed"
-    | "step.started"
-    | "step.completed"
-    | "assertion.completed"
-    | "oracle.completed"
-    | "adapter.event"
-    | "artifact.created"
-    | "finding.created";
-  stepId?: string;
-  payload: Record<string, unknown>;
-};
+export const RunEventSchema = z.object({
+  runId: z.string(),
+  timestamp: z.string(),
+  type: z.enum(["run.started", "run.completed", "step.started", "step.completed", "assertion.completed", "oracle.completed", "adapter.event", "artifact.created", "finding.created"]),
+  stepId: z.string().optional(),
+  payload: z.record(z.string(), z.unknown()),
+});
+export type RunEvent = z.infer<typeof RunEventSchema>;
 
 export const ProjectMapSchema = z.object({
   root: z.string(),
@@ -201,6 +193,7 @@ export const ProjectMapSchema = z.object({
       path: z.string().min(1),
       source: z.string().min(1),
       line: z.number().int().positive(),
+      method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).optional(),
     })).default([]),
   }).default({}),
   generatedAt: z.string(),
@@ -208,12 +201,25 @@ export const ProjectMapSchema = z.object({
 export type ProjectMap = z.infer<typeof ProjectMapSchema>;
 
 /** A curated test case in the external workspace, selected by explicit aliases. */
-export const RouteCoverageTargetSchema = z.object({
-  kind: z.enum(["web", "api"]),
-  path: z.string().min(1).max(256).refine((value) => value.startsWith("/") && !/[?#\s{}$]/.test(value), "Use a static route path without a query or fragment"),
-  /** Repository-relative path, required when the same route appears in multiple files. */
-  source: z.string().min(1).refine((value) => !value.startsWith("/") && !value.includes("\\") && !value.split("/").includes(".."), "Use a repository-relative source path").optional(),
-});
+export const RouteHttpMethodSchema = z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
+export type RouteHttpMethod = z.infer<typeof RouteHttpMethodSchema>;
+const RoutePathSchema = z.string().min(1).max(256).refine((value) => value.startsWith("/") && !/[?#\s{}$]/.test(value), "Use a static route path without a query or fragment");
+/** Repository-relative source path, useful when the same route appears in multiple files. */
+const RouteSourceSchema = z.string().min(1).max(512).refine((value) => !value.startsWith("/") && !value.includes("\\") && !value.split("/").includes(".."), "Use a repository-relative source path");
+export const RouteCoverageTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("web"), path: RoutePathSchema, source: RouteSourceSchema.optional() }),
+  z.object({
+    kind: z.literal("api"), path: RoutePathSchema, source: RouteSourceSchema.optional(),
+    method: RouteHttpMethodSchema,
+    /** Exact origin of the test gateway; path-only matches are not sufficient. */
+    origin: z.string().url().refine((value) => {
+      try {
+        const url = new URL(value);
+        return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && value.replace(/\/$/, "") === url.origin;
+      } catch { return false; }
+    }, "Use an HTTP(S) origin without a path, credentials, query or fragment"),
+  }),
+]);
 export type RouteCoverageTarget = z.infer<typeof RouteCoverageTargetSchema>;
 
 export const CharterCatalogEntrySchema = z.object({

@@ -14,7 +14,7 @@ describe("scanProject", () => {
     await mkdir(join(root, "apps", "desktop"), { recursive: true });
     await writeFile(join(root, "package.json"), JSON.stringify({ name: "fixture", packageManager: "pnpm@10", scripts: { dev: "vite" }, devDependencies: { vite: "1" } }));
     await writeFile(join(root, "apps", "desktop", "package.json"), JSON.stringify({ name: "desktop", scripts: { dev: "electron ." }, dependencies: { electron: "1" } }));
-    await writeFile(join(root, "apps", "desktop", "main.ts"), "router.get('/health', handler);\n");
+    await writeFile(join(root, "apps", "desktop", "main.ts"), "router.get('/health', handler); router.post('/health', handler);\n");
     await writeFile(join(root, "apps", "desktop", "router.ts"), "export const routes = [{ path: '/resume' }];\n");
     await writeFile(join(root, "apps", "desktop", "extra-routes.ts"), "export const routes = [{ path: '/login' }, { path: '/settings' }];\n");
     await mkdir(join(root, "apps", "desktop", "tests"), { recursive: true });
@@ -33,7 +33,8 @@ describe("scanProject", () => {
       expect.objectContaining({ kind: "web", path: "apps/desktop/router.ts" }),
     ]));
     expect(map.inventory.routeHints).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "api", path: "/health", source: "apps/desktop/main.ts", line: 1 }),
+      expect.objectContaining({ kind: "api", method: "GET", path: "/health", source: "apps/desktop/main.ts", line: 1 }),
+      expect.objectContaining({ kind: "api", method: "POST", path: "/health", source: "apps/desktop/main.ts", line: 1 }),
       expect.objectContaining({ kind: "web", path: "/resume", source: "apps/desktop/router.ts", line: 1 }),
       expect.objectContaining({ kind: "web", path: "/login", source: "apps/desktop/extra-routes.ts", line: 1 }),
       expect.objectContaining({ kind: "web", path: "/settings", source: "apps/desktop/extra-routes.ts", line: 1 }),

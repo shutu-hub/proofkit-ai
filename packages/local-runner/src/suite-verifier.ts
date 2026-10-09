@@ -1,8 +1,8 @@
-import { FailureBoundarySchema, FindingSchema, ProjectMapSchema, type Observation, type TestMission, type Verdict } from "@proofkit/contracts";
+import { FailureBoundarySchema, FindingSchema, ProjectMapSchema, RouteCoverageTargetSchema, type Observation, type RouteCoverageTarget, type TestMission, type Verdict } from "@proofkit/contracts";
 import type { MissionToolResult } from "@proofkit/agent";
 
 type RunKind = "primary" | "replay" | "negative";
-type RunFact = { runId: string; verdict: Verdict; evidenceCount: number; matchedRoutePaths: string[]; sourceRunId?: string; negativeCaseId?: string; outcomeMatched?: boolean };
+type RunFact = { runId: string; verdict: Verdict; evidenceCount: number; matchedRoutePaths: string[]; matchedApiTargets: Extract<RouteCoverageTarget, { kind: "api" }>[]; networkLogAvailable: boolean; sourceRunId?: string; negativeCaseId?: string; outcomeMatched?: boolean };
 
 export type RouteCoverageSummary = {
   inventorySource: "git" | "filesystem";
@@ -12,9 +12,9 @@ export type RouteCoverageSummary = {
   mappedCandidates: number;
   observedCandidates: number;
   /** Bounded gap details keep the agent-facing result short; counts include all candidates. */
-  gaps: Array<{ kind: "web" | "api"; path: string; source: string; line: number; status: "unmapped" | "mapped-unobserved"; charterIds: string[]; reason?: string }>;
+  gaps: Array<{ kind: "web" | "api"; path: string; source: string; line: number; method?: string; status: "unmapped" | "mapped-unobserved"; charterIds: string[]; reason?: string }>;
   omittedGaps: number;
-  unresolvedTargets: Array<{ charterId: string; kind: "web" | "api"; path: string; source?: string; reason: "absent" | "ambiguous" }>;
+  unresolvedTargets: Array<{ charterId: string; kind: "web" | "api"; path: string; source?: string; method?: string; origin?: string; reason: "absent" | "ambiguous" }>;
   omittedUnresolvedTargets: number;
 };
 
@@ -111,11 +111,11 @@ function summarizeRouteCoverage(mission: TestMission, results: SuiteSurfaceResul
   if (!parsed.success || !mission.suite) return undefined;
   const inventory = parsed.data.inventory;
   const routeBySource = new Map<string, typeof inventory.routeHints[number]>();
-  for (const route of inventory.routeHints) routeBySource.set(`${route.kind}\0${route.path}\0${route.source}`, route);
+  for (const route of inventory.routeHints) routeBySource.set(`${route.kind}\0${route.path}\0${route.method ?? ""}\0${route.source}`, route);
   const routes = [...routeBySource.values()];
   const sourcesByPath = new Map<string, Set<string>>();
   for (const route of routes) {
-    const key = `${route.kind}\0${route.path}`;
+    const key = `${route.kind}\0${route.path}\0${route.method ?? ""}`;
     const sources = sourcesByPath.get(key) ?? new Set<string>();
     sources.add(route.source);
     sourcesByPath.set(key, sources);
@@ -126,13 +126,13 @@ function summarizeRouteCoverage(mission: TestMission, results: SuiteSurfaceResul
   for (const { charterId, routeTargets } of mission.suite.charters) {
     for (const target of routeTargets ?? []) {
       declaredTargets++;
-      const matches = routes.filter((route) => route.kind === target.kind && route.path === target.path && (!target.source || route.source === target.source));
+      const matches = routes.filter((route) => route.kind === target.kind && route.path === target.path && (target.kind !== "api" || route.method === target.method) && (!target.source || route.source === target.source));
       if (matches.length !== 1) {
         unresolved.push({ charterId, ...target, reason: matches.length === 0 ? "absent" : "ambiguous" });
         continue;
       }
       const route = matches[0]!;
-      const key = `${route.kind}\0${route.path}\0${route.source}`;
+      const key = `${route.kind}\0${route.path}\0${route.method ?? ""}\0${route.source}`;
       const charterIds = mapped.get(key) ?? new Set<string>();
       charterIds.add(charterId);
       mapped.set(key, charterIds);
@@ -142,16 +142,19 @@ function summarizeRouteCoverage(mission: TestMission, results: SuiteSurfaceResul
   let mappedCandidates = 0;
   let observedCandidates = 0;
   for (const route of routes) {
-    const key = `${route.kind}\0${route.path}\0${route.source}`;
+    const key = `${route.kind}\0${route.path}\0${route.method ?? ""}\0${route.source}`;
     const charterIds = [...(mapped.get(key) ?? [])];
     if (charterIds.length > 0) mappedCandidates++;
-    const ambiguousRuntimePath = (sourcesByPath.get(`${route.kind}\0${route.path}`)?.size ?? 0) > 1;
-    const observed = route.kind === "web" && !ambiguousRuntimePath && charterIds.some((charterId) =>
+    const ambiguousRuntimePath = (sourcesByPath.get(`${route.kind}\0${route.path}\0${route.method ?? ""}`)?.size ?? 0) > 1;
+    const observed = !ambiguousRuntimePath && charterIds.some((charterId) =>
       mission.suite!.surfaces.every((surface) => {
         const result = results.find((item) => item.charterId === charterId && item.surface === surface);
+        const matched = (fact: RunFact | undefined) => route.kind === "web"
+          ? fact?.matchedRoutePaths.includes(route.path)
+          : route.method !== undefined && fact?.matchedApiTargets.some((target) => target.path === route.path && target.method === route.method);
         return result?.verdict === "passed"
-          && result.primary?.matchedRoutePaths.includes(route.path)
-          && result.replay?.matchedRoutePaths.includes(route.path);
+          && matched(result.primary)
+          && matched(result.replay);
       }));
     if (observed) {
       observedCandidates++;
@@ -160,7 +163,9 @@ function summarizeRouteCoverage(mission: TestMission, results: SuiteSurfaceResul
         ...route,
         status: charterIds.length > 0 ? "mapped-unobserved" : "unmapped",
         charterIds,
-        ...(route.kind === "api" && charterIds.length > 0 ? { reason: "API traffic is not yet correlated with route hints" } : {}),
+        ...(route.kind === "api" && charterIds.length > 0 ? { reason: charterIds.some((charterId) => results.some((result) => result.charterId === charterId && (!result.primary?.networkLogAvailable || !result.replay?.networkLogAvailable)))
+          ? "Network event log is unavailable for a required run"
+          : "No matching successful API response on every required run" } : {}),
         ...(ambiguousRuntimePath && charterIds.length > 0 ? { reason: "Runtime URL cannot identify which source owns this route" } : {}),
       });
     }
@@ -213,11 +218,20 @@ function runFact(item: Observation): RunFact | undefined {
   const runId = item.data.runId;
   const verdict = item.data.verdict;
   if (typeof runId !== "string" || !isVerdict(verdict)) return undefined;
+  const matchedApiTargets: Extract<RouteCoverageTarget, { kind: "api" }>[] = [];
+  if (Array.isArray(item.data.matchedApiTargets)) {
+    for (const value of item.data.matchedApiTargets) {
+      const parsed = RouteCoverageTargetSchema.safeParse(value);
+      if (parsed.success && parsed.data.kind === "api") matchedApiTargets.push(parsed.data);
+    }
+  }
   return {
     runId,
     verdict,
     evidenceCount: item.evidence.length,
     matchedRoutePaths: Array.isArray(item.data.matchedRoutePaths) ? item.data.matchedRoutePaths.filter((path): path is string => typeof path === "string" && path.startsWith("/")) : [],
+    matchedApiTargets,
+    networkLogAvailable: item.data.networkLogAvailable === true,
     ...(typeof item.data.sourceRunId === "string" ? { sourceRunId: item.data.sourceRunId } : {}),
     ...(typeof item.data.negativeCaseId === "string" ? { negativeCaseId: item.data.negativeCaseId } : {}),
     ...(typeof item.data.outcomeMatched === "boolean" ? { outcomeMatched: item.data.outcomeMatched } : {}),
