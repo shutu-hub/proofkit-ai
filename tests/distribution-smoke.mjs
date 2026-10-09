@@ -50,6 +50,10 @@ try {
   assert.equal(scope.routes.mapped, 0);
   assert.equal(scope.routes.items.length, 1);
   assert.equal(scope.routes.omitted, 1);
+  const focusedScope = JSON.parse((await command(process.execPath, [cli, "scope", "--root", source, "--workspace", workspace, "--focus", "RESUMES"], scratch)).stdout);
+  assert.equal(focusedScope.inventory.retentionFocus, "resumes");
+  assert.equal(focusedScope.routes.matched, 1);
+  assert.equal(focusedScope.routes.items[0].path, "/resumes");
 
   assert.match(await readFile(mcp, "utf8"), /^#!\/usr\/bin\/env node/);
   const npmBin = await npmExecutable();
@@ -80,6 +84,7 @@ try {
     const testScope = JSON.parse(scopeItem.text);
     assert.equal(testScope.testVerdict, "not-asserted");
     assert.equal(testScope.selection.level, "core");
+    assert.equal(testScope.inventory.retentionFocus, "resumes");
     assert.equal(testScope.routes.total, 2);
     assert.equal(testScope.routes.matched, 1);
     assert.equal(testScope.routes.items[0].source, "router.ts");

@@ -324,6 +324,8 @@ export const ProjectMapSchema = z.object({
       items: z.array(RouteDiscoveryDiagnosticSchema).max(20),
       omitted: z.number().int().nonnegative(),
     }).optional(),
+    /** Literal focus prioritizes retention before inventory caps; it is not semantic coverage. */
+    retentionFocus: z.string().min(1).max(128).optional(),
   }).default({}),
   generatedAt: z.string(),
 });

@@ -5,9 +5,10 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { parse, stringify } from "yaml";
-import { ProjectMapSchema, ProofkitConfigSchema, type ProjectMap, type ProofkitConfig, type RouteHttpMethod } from "@proofkit/contracts";
+import { ProjectMapSchema, ProofkitConfigSchema, type ProjectMap, type ProofkitConfig, type RouteHttpMethod, type RouteCoverageTarget } from "@proofkit/contracts";
 import { resolveProjectContext, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
 import { extractGinRoutes } from "./gin-routes.js";
+import { BoundedInventory } from "./bounded-inventory.js";
 
 export { defaultWorkspaceRoot, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
 export { captureSourceState } from "./source-state.js";
@@ -53,7 +54,14 @@ const DEFAULT_INTEGRATION = `// ProofKit capabilities and business oracles live 
 
 export { reconcileRouteDeclarations, type RouteDeclaration, type UnresolvedRouteTarget } from "./route-map.js";
 
-export async function scanProject(projectRoot = process.cwd()): Promise<ProjectMap> {
+export type ProjectScanOptions = {
+  /** Prioritize a literal source/route substring before the bounded inventory is retained. */
+  focus?: string;
+  /** Reviewed declarations belonging to a focused catalog alias. Used only with focus. */
+  routeTargets?: RouteCoverageTarget[];
+};
+
+export async function scanProject(projectRoot = process.cwd(), options: ProjectScanOptions = {}): Promise<ProjectMap> {
   const root = resolve(projectRoot);
   const packageJson = await readJson<PackageJson>(join(root, "package.json"));
   const packagePaths = await findPackageJsons(root);
@@ -88,7 +96,7 @@ export async function scanProject(projectRoot = process.cwd()): Promise<ProjectM
     web: Boolean(allDeps.vite || allDeps.vue || allDeps.react || packageHasWeb || packages.some((item) => item.path.startsWith("apps/"))),
     backend: (await hasDir("services")) || Boolean(await firstMatchingFile(root, ["go.mod", "pom.xml", "build.gradle"])) || packages.some((item) => item.path.startsWith("services/")),
   };
-  const inventory = await scanInventory(root, packageJson?.scripts ?? {}, packages, dependencyNames);
+  const inventory = await scanInventory(root, packageJson?.scripts ?? {}, packages, dependencyNames, options);
 
   return ProjectMapSchema.parse({
     root,
@@ -213,7 +221,7 @@ const MAX_ROUTE_HINTS = 200;
 const MAX_SOURCE_BYTES = 1_000_000;
 const execFileAsync = promisify(execFile);
 
-async function scanInventory(root: string, rootScripts: Record<string, string>, packages: Array<{ path: string; scripts: Record<string, string> }>, dependencies: Set<string>): Promise<{
+async function scanInventory(root: string, rootScripts: Record<string, string>, packages: Array<{ path: string; scripts: Record<string, string> }>, dependencies: Set<string>, options: ProjectScanOptions): Promise<{
   filesScanned: number;
   truncated: boolean;
   source: "git" | "filesystem";
@@ -224,34 +232,38 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
   entryPoints: InventoryEntryPoint[];
   routeHints: InventoryRouteHint[];
   routeDiagnostics: NonNullable<ProjectMap["inventory"]["routeDiagnostics"]>;
+  retentionFocus?: string;
 }> {
-  const entryPoints: InventoryEntryPoint[] = [];
-  const routeHints: InventoryRouteHint[] = [];
-  const seenEntries = new Set<string>();
-  const seenRoutes = new Set<string>();
-  const routeDiagnostics: NonNullable<ProjectMap["inventory"]["routeDiagnostics"]> = { total: 0, items: [], omitted: 0 };
+  const focus = options.focus?.trim().normalize("NFKC").toLowerCase();
+  if (focus !== undefined && (!focus || focus.length > 128)) throw new Error("Inventory focus must contain 1–128 normalized characters");
+  const matches = (value: string) => Boolean(focus && value.normalize("NFKC").toLowerCase().includes(focus));
+  const targets = focus ? options.routeTargets ?? [] : [];
+  const sourceMatches = (path: string) => matches(path) || targets.some((target) => target.source === path);
+  const routeRank = (route: InventoryRouteHint) => targets.some((target) => target.kind === route.kind && target.path === route.path && (target.kind !== "api" || target.method === route.method) && (!target.source || target.source === route.source))
+    ? 2 : matches(route.path) || matches(route.source) ? 1 : 0;
+  const directoryMatches = (path: string) => matches(path) || Boolean(focus && focus.startsWith(`${path.normalize("NFKC").toLowerCase()}/`)) || targets.some((target) => target.source?.startsWith(`${path}/`));
+  const entries = new BoundedInventory<InventoryEntryPoint>(200,
+    (left, right) => Number(sourceMatches(right.path)) - Number(sourceMatches(left.path)) || inventoryPriority(right.path) - inventoryPriority(left.path) || left.path.localeCompare(right.path) || left.kind.localeCompare(right.kind),
+    (entry) => `${entry.kind}:${entry.path}`);
+  const routes = new BoundedInventory<InventoryRouteHint>(MAX_ROUTE_HINTS,
+    (left, right) => routeRank(right) - routeRank(left) || inventoryPriority(right.source) - inventoryPriority(left.source) || left.source.localeCompare(right.source) || left.line - right.line,
+    (route) => `${route.kind}:${route.path}:${route.method ?? ""}:${route.source}:${route.line}`);
+  type Diagnostic = NonNullable<ProjectMap["inventory"]["routeDiagnostics"]>["items"][number];
+  const diagnostics = new BoundedInventory<Diagnostic>(20,
+    (left, right) => Number(sourceMatches(right.source)) - Number(sourceMatches(left.source)) || inventoryPriority(right.source) - inventoryPriority(left.source) || left.source.localeCompare(right.source) || left.line - right.line,
+    (item) => `${item.source}:${item.line}:${item.reason}`);
+  let diagnosticTotal = 0;
   let filesScanned = 0;
   let truncated = false;
   let sourceFiles = 0;
   let testFiles = 0;
   let configFiles = 0;
 
-  const addEntry = (entry: InventoryEntryPoint) => {
-    const key = `${entry.kind}:${entry.path}`;
-    if (seenEntries.has(key) || entryPoints.length >= 1_000) return;
-    seenEntries.add(key);
-    entryPoints.push(entry);
-  };
-  const addRoute = (route: InventoryRouteHint) => {
-    const key = `${route.kind}:${route.path}:${route.method ?? ""}:${route.source}:${route.line}`;
-    if (seenRoutes.has(key) || routeHints.length >= MAX_ROUTE_HINTS * 5) return;
-    seenRoutes.add(key);
-    routeHints.push(route);
-  };
-  const addDiagnostic = (diagnostic: typeof routeDiagnostics.items[number]) => {
-    routeDiagnostics.total++;
-    if (routeDiagnostics.items.length < 20) routeDiagnostics.items.push(diagnostic);
-    else routeDiagnostics.omitted++;
+  const addEntry = (entry: InventoryEntryPoint) => entries.add(entry);
+  const addRoute = (route: InventoryRouteHint) => routes.add(route);
+  const addDiagnostic = (diagnostic: Diagnostic) => {
+    diagnosticTotal++;
+    diagnostics.add(diagnostic);
   };
 
   const addScriptEntries = (packagePath: string, scripts: Record<string, string>) => {
@@ -279,8 +291,8 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
 
   const gitFiles = await listGitFiles(root);
   const source = gitFiles ? "git" : "filesystem";
-  const candidates = (gitFiles ?? await listFilesystemFiles(root)).filter(shouldIncludeInventoryPath);
-  candidates.sort((left, right) => inventoryPriority(right) - inventoryPriority(left) || left.localeCompare(right));
+  const candidates = (gitFiles ?? await listFilesystemFiles(root, sourceMatches, directoryMatches)).filter(shouldIncludeInventoryPath);
+  candidates.sort((left, right) => Number(sourceMatches(right)) - Number(sourceMatches(left)) || inventoryPriority(right) - inventoryPriority(left) || left.localeCompare(right));
   truncated = candidates.length > MAX_INVENTORY_FILES;
   for (const path of candidates.slice(0, MAX_INVENTORY_FILES)) {
     const absolute = resolve(root, path);
@@ -308,9 +320,7 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
   ] as Array<[string, string]>).filter(([dependency]) => dependencies.has(dependency)).map(([, framework]) => framework);
   if (testFiles > 0) testFrameworks.push("repository-tests");
 
-  entryPoints.sort((left, right) => inventoryPriority(right.path) - inventoryPriority(left.path) || left.path.localeCompare(right.path) || left.kind.localeCompare(right.kind));
-  routeHints.sort((left, right) => inventoryPriority(right.source) - inventoryPriority(left.source) || left.source.localeCompare(right.source) || left.line - right.line);
-  truncated ||= entryPoints.length > 200 || routeHints.length > MAX_ROUTE_HINTS;
+  truncated ||= entries.truncated || routes.truncated;
   return {
     filesScanned,
     truncated,
@@ -319,9 +329,10 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
     testFiles,
     configFiles,
     testFrameworks: [...new Set(testFrameworks)].sort(),
-    entryPoints: entryPoints.slice(0, 200),
-    routeHints: routeHints.slice(0, MAX_ROUTE_HINTS),
-    routeDiagnostics,
+    entryPoints: entries.items,
+    routeHints: routes.items,
+    routeDiagnostics: { total: diagnosticTotal, items: diagnostics.items, omitted: Math.max(0, diagnosticTotal - diagnostics.items.length) },
+    ...(focus ? { retentionFocus: focus } : {}),
   };
 }
 
@@ -346,9 +357,9 @@ async function listGitFiles(root: string): Promise<string[] | undefined> {
   }
 }
 
-async function listFilesystemFiles(root: string): Promise<string[]> {
+async function listFilesystemFiles(root: string, sourceMatches: (path: string) => boolean, directoryMatches: (path: string) => boolean): Promise<string[]> {
   const files: string[] = [];
-  const directories: string[][] = [[], [], [], [root]];
+  const directories: string[][] = [[], [], [], [root], [], [], [], []];
   const nextDirectory = (): string | undefined => {
     for (let priority = directories.length - 1; priority >= 0; priority--) {
       const directory = directories[priority]?.shift();
@@ -359,12 +370,13 @@ async function listFilesystemFiles(root: string): Promise<string[]> {
   for (let directory = nextDirectory(); directory && files.length <= MAX_INVENTORY_FILES; directory = nextDirectory()) {
     let entries;
     try { entries = await readdir(directory, { withFileTypes: true }); } catch { continue; }
-    entries.sort((left, right) => left.name.localeCompare(right.name));
+    entries.sort((left, right) => Number(sourceMatches(relative(root, join(directory, right.name)).replaceAll("\\", "/"))) - Number(sourceMatches(relative(root, join(directory, left.name)).replaceAll("\\", "/"))) || left.name.localeCompare(right.name));
     for (const entry of entries) {
       if (entry.isDirectory()) {
         if (!entry.name.startsWith(".") && !IGNORED_DIRECTORIES.has(entry.name.toLowerCase())) {
           const child = join(directory, entry.name);
-          directories[inventoryPriority(relative(root, child))]!.push(child);
+          const path = relative(root, child).replaceAll("\\", "/");
+          directories[inventoryPriority(path) + (directoryMatches(path) ? 4 : 0)]!.push(child);
         }
       } else if (entry.isFile()) {
         files.push(relative(root, join(directory, entry.name)).replaceAll("\\", "/"));

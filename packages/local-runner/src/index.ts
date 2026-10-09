@@ -6,7 +6,7 @@ import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
 import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
-import { assessPlanningQuality, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
+import { assessPlanningQuality, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
 import { CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
@@ -179,8 +179,13 @@ export class LocalRunnerService {
 
   async inspectTestScope(input: TestScopeInput = {}): Promise<TestScope> {
     const request = TestScopeInputSchema.parse(input);
+    const focus = request.focus?.normalize("NFKC").toLowerCase();
+    const matches = (...values: Array<string | undefined>) => Boolean(focus && values.some((value) => value?.normalize("NFKC").toLowerCase().includes(focus)));
+    const routeTargets = this.config.charters.filter((entry) => supportsCatalogCharter(entry, request.level, request.surface)
+      && matches(entry.id, entry.path, ...entry.aliases, ...(entry.routeTargets ?? []).flatMap((target) => [target.path, target.source])))
+      .flatMap((entry) => entry.routeTargets ?? []);
     return inspectTestScope({
-      project: await this.discover(), workspaceRoot: this.workspaceRoot, config: this.config,
+      project: focus ? await scanProject(this.root, { focus, routeTargets }) : await this.discover(), workspaceRoot: this.workspaceRoot, config: this.config,
       integration: this.integration, capabilities: this.capabilities, oracles: this.oracles,
       allowCapabilityWrites: this.allowCapabilityWrites,
       checkCharter: async (entry) => {

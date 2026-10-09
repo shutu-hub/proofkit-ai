@@ -13,6 +13,28 @@ afterEach(async () => {
 });
 
 describe("read-only test scope", () => {
+  it("retains an eligible alias's reviewed routes before global caps without executing checks", async () => {
+    const { runner, callbacks } = await fixture();
+    const routePath = "apps/web/src/router.ts";
+    const source = `${Array.from({ length: 1_101 }, (_, index) => `const r${index} = { path: '/other/${index}' };`).join("\n")}\nconst target = { path: '/resume' };`;
+    await writeFile(join(runner.root, routePath), source);
+    const before = await sourceFiles(runner.root);
+    const ordinary = await runner.inspectTestScope();
+    expect(ordinary.routes.total).toBe(200);
+    expect(ordinary.routes.items.some((route) => route.path === "/resume")).toBe(false);
+    const scope = await runner.inspectTestScope({ focus: "简历", limit: 50 });
+    expect(scope.inventory).toMatchObject({ retentionFocus: "简历", truncated: true });
+    expect(scope.routes).toMatchObject({ total: 200, matched: 1, mapped: 1, omitted: 0 });
+    expect(scope.routes.items[0]).toMatchObject({ path: "/resume", source: routePath, line: 1_102, status: "declared", charterIds: ["resume-core"] });
+    expect(scope.catalog.items[0]?.check.planReady).toBe(true);
+    expect(scope.limitations).toContainEqual(expect.stringContaining("retained candidate slice"));
+    expect(scope.limitations).toContainEqual(expect.stringContaining("unscanned files"));
+    expect(scope).toMatchObject({ testVerdict: "not-asserted", executionChecks: "not-run" });
+    expect(await sourceFiles(runner.root)).toEqual(before);
+    expect((await readdir(runner.workspaceRoot)).sort()).toEqual(["charters"]);
+    for (const callback of Object.values(callbacks)) expect(callback).not.toHaveBeenCalled();
+  });
+
   it("maps composed Gin paths and exposes unresolved declarations without running checks", async () => {
     const { runner, callbacks } = await fixture();
     await writeFile(join(runner.root, "services", "gateway-service", "main.go"), `package routes

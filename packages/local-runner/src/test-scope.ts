@@ -69,6 +69,8 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   if (inventory.truncated) limitations.push("Project inventory is truncated; counts describe only the scanned candidate slice");
   if (inventory.routeDiagnostics?.total) limitations.push(`${inventory.routeDiagnostics.total} Gin route declarations could not be resolved statically; diagnostic locations are hints, not executable route paths`);
   if (focus) limitations.push("Focus is a literal substring filter; the focused view is not whole-project coverage");
+  if (inventory.retentionFocus) limitations.push("Focus prioritizes matching source files, entry points and routes before inventory retention caps; totals describe the retained candidate slice, not all project routes");
+  if (inventory.retentionFocus && inventory.truncated) limitations.push("File discovery and source reads remain bounded; route-text focus cannot recover declarations from unscanned files, and filesystem focus prioritizes only discovered paths");
   return TestScopeSchema.parse({
     schemaVersion: 1, testVerdict: "not-asserted", executionChecks: "not-run",
     projectRoot: project.root, workspaceRoot: context.workspaceRoot,
