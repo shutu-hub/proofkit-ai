@@ -146,10 +146,42 @@ try {
   assert.equal(comparison.status, "verified-in-scope", JSON.stringify(comparison.gaps));
   assert.ok(comparison.defects.length >= 2 && comparison.defects.every((item) => item.outcome === "not-reproduced" && item.charterId === "resume"));
   assert.equal(comparison.runs.length, 8);
+
+  // A partial static inventory must not prevent acceptance of a declared core flow.
+  const extraRouteFile = join(sourceRoot, "apps", "web", "src", "extra-router.ts");
+  const extraRouteSource = Array.from({ length: 230 }, (_, index) => `const route${index} = { path: '/extra-${index}' };`).join("\n");
+  await writeFile(extraRouteFile, extraRouteSource);
+  const savedResume = JSON.parse(await readFile(join(workspaceRoot, ".proofkit", "charters", "resume.yml"), "utf8"));
+  const coreCharter = TestCharterSchema.parse({ ...savedResume, level: "core" });
+  const scopedMissions = [];
+  for (const surface of ["web", "electron"]) {
+    const started = payload(await client.callTool({ name: "run_test", arguments: { intent: "测试简历核心链路", charter: coreCharter, surface } }));
+    assert.equal(started.readiness.ready, true);
+    assert.deepEqual(started.planning.evidenceGaps, []);
+    assert.equal(started.planning.coverage.requested, "declared");
+    assert.equal(started.planning.coverage.inventory, "partial");
+    assert.equal(started.planning.coverage.workflowCoverage, "unmeasured");
+    assert.ok(started.planning.coverage.gaps.includes("project-map-truncated"));
+    const status = await waitForMission(client, started.missionId);
+    assert.equal(status.mission.verdict, "passed", JSON.stringify(status.mission.findings));
+    const evidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
+    assert.deepEqual(evidence.planning.coverage, started.planning.coverage);
+    assert.ok(evidence.evidence.some((item) => item.kind === "business"));
+    for (const item of evidence.evidence.filter((item) => item.kind === "business")) await readFile(item.path);
+    scopedMissions.push(started.missionId);
+  }
+  for (const selection of [{ charter: coreCharter }, { suiteId: "release-critical" }]) {
+    const whole = payload(await client.callTool({ name: "run_test", arguments: { intent: "测试整个项目", surface: "web", ...selection } }));
+    assert.equal(whole.running, false);
+    assert.equal(whole.readiness.ready, false);
+    assert.equal(whole.planning.coverage.requested, "project");
+    assert.ok(whole.planning.evidenceGaps.includes("project-workflow-coverage"));
+  }
   assert.deepEqual(await readdir(sourceRoot), ["apps", "package.json", "services"]);
   assert.equal(await readFile(routeFile, "utf8"), routeSource);
   assert.equal(await readFile(apiRouteFile, "utf8"), apiRouteSource);
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "real-evidence-files", "source-unchanged"] }, null, 2));
+  assert.equal(await readFile(extraRouteFile, "utf8"), extraRouteSource);
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged"] }, null, 2));
 } finally {
   await client?.close();
   await mcpServer?.close();
@@ -166,16 +198,21 @@ async function runSuite(mcpClient) {
   const started = payload(await mcpClient.callTool({ name: "run_test", arguments: { intent: "上线完整回归", suiteId: "release-critical", surface: "web" } }));
   assert.equal(started.readiness.ready, true);
   assert.equal(started.suiteId, "release-critical");
-  let status;
-  for (let attempt = 0; attempt < 500; attempt++) {
-    status = payload(await mcpClient.callTool({ name: "get_mission_status", arguments: { missionId: started.missionId } }));
-    if (["completed", "failed", "blocked", "cancelled"].includes(status.mission.status)) break;
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-  }
-  assert.ok(status && ["completed", "failed", "blocked", "cancelled"].includes(status.mission.status), "release suite did not finish");
+  const status = await waitForMission(mcpClient, started.missionId);
   const evidence = payload(await mcpClient.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
   assert.equal(evidence.verdict, status.mission.verdict);
   return { started, status, evidence };
+}
+
+async function waitForMission(mcpClient, missionId) {
+  let status;
+  for (let attempt = 0; attempt < 500; attempt++) {
+    status = payload(await mcpClient.callTool({ name: "get_mission_status", arguments: { missionId } }));
+    if (["completed", "failed", "blocked", "cancelled"].includes(status.mission.status)) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  }
+  assert.ok(status && ["completed", "failed", "blocked", "cancelled"].includes(status.mission.status), "Mission did not finish");
+  return status;
 }
 
 function payload(result) {

@@ -37,7 +37,7 @@ describe("IntentPlanner", () => {
       .toEqual(["surface-assertion", "business-oracle"]);
   });
 
-  it("marks a truncated Project Map without trusting provider gap claims", async () => {
+  it("reports partial discovery separately from executable scenario proof without trusting provider claims", async () => {
     const planner = new StructuredPlanner({
       name: "openai-compatible",
       async plan() {
@@ -53,7 +53,10 @@ describe("IntentPlanner", () => {
       projectMap: { ...projectMap, inventory: { ...projectMap.inventory, truncated: true } },
       constraints: { requireAssertions: true, requireBusinessOracle: true, allowedOracleNames: ["resume-terminal"] },
     });
-    expect(charter.planning).toMatchObject({ source: "model", evidenceGaps: ["project-map-truncated"] });
+    expect(charter.planning).toMatchObject({ source: "model", evidenceGaps: [], coverage: {
+      requested: "declared", source: "default", inventory: "partial", workflowCoverage: "unmeasured",
+      gaps: ["project-map-truncated", "project-workflow-coverage"],
+    } });
     expect(charter.planning?.confidence).toBeLessThan(1);
     expect(charter.planning?.confidence).toBe(assessPlanningQuality(charter, {
       projectMap: { ...projectMap, inventory: { ...projectMap.inventory, truncated: true } },
@@ -61,6 +64,17 @@ describe("IntentPlanner", () => {
       source: "deterministic",
     }).confidence);
     expect(charter.planning?.evidenceGaps).not.toContain("invented-gap");
+  });
+
+  it("keeps a whole-project request unproven even when a model narrows its Charter and reports confidence", async () => {
+    const planner = new StructuredPlanner({ name: "model", async plan() {
+      return { intent: "check one page", level: "quick", actions: [{ kind: "observe" }],
+        assertions: [{ kind: "text-visible", text: "ready" }],
+        planning: { confidence: 1, evidenceGaps: [], coverage: { requested: "declared", source: "explicit", reason: "model claim", inventory: "bounded", workflowCoverage: "unmeasured", gaps: [] } },
+      };
+    } });
+    const charter = await planner.plan({ intent: "测试整个项目", projectMap, constraints: { level: "quick", requireAssertions: true } });
+    expect(charter.planning).toMatchObject({ evidenceGaps: ["project-workflow-coverage"], coverage: { requested: "project", source: "inferred" } });
   });
 
   it("resolves explicit and natural-language test levels without upgrading the request", () => {

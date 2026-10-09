@@ -6,7 +6,7 @@ import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
 import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
-import { assessPlanningQuality, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
+import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
 import { CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
@@ -83,6 +83,7 @@ export type MissionCreateOptions = {
   sideEffectPolicy?: SideEffectPolicy;
   policy?: Partial<TestMission["policy"]>;
   level?: TestLevel;
+  coverage?: PlanOptions["coverage"];
 };
 
 export type MissionStatus = {
@@ -271,8 +272,13 @@ export class LocalRunnerService {
     const selected = input.charter || selectedSuite ? undefined : !hasAdHocOptions || input.charterId
       ? selectCatalogCharter(this.config.charters, { intent: input.intent, level: levelSelection.resolved, surface, charterId: input.charterId })
       : undefined;
+    const projectMap = input.charter || selected || selectedSuite ? await this.discover() : undefined;
+    const coverage = assessPlanningCoverage(input.intent, projectMap, input.coverage);
     if (selectedSuite) {
       const suite = await this.loadSuite(selectedSuite.entry);
+      suite.charters = suite.charters.map((item) => ({ ...item,
+        charter: TestCharterSchema.parse({ ...item.charter, planning: withPlanningCoverage(item.charter.planning, coverage) }),
+      }));
       const sideEffectPolicy: SideEffectPolicy = suite.charters.some((item) => item.charter.sideEffectPolicy === "allow")
         ? "allow" : suite.charters.some((item) => item.charter.sideEffectPolicy === "confirm") ? "confirm" : "deny";
       if (input.policy?.sideEffectPolicy && input.policy.sideEffectPolicy !== sideEffectPolicy) {
@@ -298,14 +304,16 @@ export class LocalRunnerService {
         ? TestCharterSchema.parse({
           ...submitted,
           planning: assessPlanningQuality(submitted, {
-            projectMap: await this.discover(),
+            projectMap,
             constraints: {
               level: levelSelection.resolved,
               url: this.config.surfaces.web?.baseUrl,
               requireAssertions: true,
               requireBusinessOracle: getTestLevelProfile(levelSelection.resolved).evidencePolicy.requireBusinessOracle,
+              coverage: input.coverage,
             },
             source: "submitted",
+            coverageIntent: input.intent,
           }),
         })
         : submitted;
@@ -326,12 +334,16 @@ export class LocalRunnerService {
         mode: input.mode,
         sideEffectPolicy: input.sideEffectPolicy,
         level: input.level,
+        coverage: input.coverage,
       });
     }
     if (charter.level !== levelSelection.resolved) {
       throw new Error(`Charter level ${charter.level} does not match requested level ${levelSelection.resolved}`);
     }
-    const normalizedCharter = TestCharterSchema.parse({ ...charter, levelSelection: charter.levelSelection ?? levelSelection });
+    const normalizedCharter = TestCharterSchema.parse({ ...charter,
+      levelSelection: charter.levelSelection ?? levelSelection,
+      ...(projectMap ? { planning: withPlanningCoverage(charter.planning, coverage) } : {}),
+    });
     if (selected) this.validateCatalogCharter(selected.entry.id, normalizedCharter, surface);
     else if (input.charter && this.restrictWebOrigins) this.validateMissionCharterSafety("Submitted Charter", normalizedCharter, surface);
     if (input.policy?.sideEffectPolicy && input.policy.sideEffectPolicy !== normalizedCharter.sideEffectPolicy) {
@@ -949,6 +961,7 @@ export class LocalRunnerService {
       sideEffectPolicy: policy,
       oracleNames: options.oracleNames,
       level: levelSelection.resolved,
+      coverage: options.coverage,
       requireAssertions: levelProfile.evidencePolicy.requireAssertions,
       requireBusinessOracle: levelProfile.evidencePolicy.requireBusinessOracle,
       allowedActionKinds: policy === "allow"

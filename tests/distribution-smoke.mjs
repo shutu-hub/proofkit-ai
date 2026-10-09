@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { parse as parseYaml } from "yaml";
 
 const projectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const tempParent = await realpath(tmpdir());
@@ -54,6 +55,11 @@ try {
   assert.equal(focusedScope.inventory.retentionFocus, "resumes");
   assert.equal(focusedScope.routes.matched, 1);
   assert.equal(focusedScope.routes.items[0].path, "/resumes");
+  const cliPlan = parseYaml((await command(process.execPath, [cli, "plan", "check one page", "--root", source, "--workspace", workspace, "--level", "quick", "--expect", "ready", "--coverage", "project"], scratch)).stdout);
+  assert.equal(cliPlan.planning.coverage.requested, "project");
+  assert.equal(cliPlan.planning.coverage.source, "explicit");
+  assert.equal(cliPlan.planning.coverage.inventory, "bounded");
+  assert.ok(cliPlan.planning.evidenceGaps.includes("project-workflow-coverage"));
 
   assert.match(await readFile(mcp, "utf8"), /^#!\/usr\/bin\/env node/);
   const npmBin = await npmExecutable();
@@ -73,6 +79,7 @@ try {
     const runTest = listed.tools.find((tool) => tool.name === "run_test");
     assert.ok(runTest);
     assert.ok(runTest.inputSchema.properties?.charter);
+    assert.ok(runTest.inputSchema.properties?.coverage);
     const discovered = await withDeadline(client.callTool({ name: "discover_project", arguments: {} }), 10_000, "MCP project discovery");
     const item = discovered.content.find((content) => content.type === "text");
     assert.ok(item);
@@ -90,6 +97,15 @@ try {
     assert.equal(testScope.routes.items[0].source, "router.ts");
     assert.equal(testScope.routes.items[0].line, 1);
     assert.equal(testScope.routes.items[0].status, "unmapped");
+    const planned = await withDeadline(client.callTool({ name: "plan_test", arguments: { intent: "test the entire project", level: "quick", expect: ["ready"] } }), 10_000, "MCP coverage planning");
+    assert.equal(planned.isError, undefined);
+    const planItem = planned.content.find((content) => content.type === "text");
+    assert.ok(planItem);
+    const plan = JSON.parse(planItem.text).charter;
+    assert.equal(plan.planning.coverage.requested, "project");
+    assert.equal(plan.planning.coverage.source, "inferred");
+    assert.equal(plan.planning.coverage.workflowCoverage, "unmeasured");
+    assert.ok(plan.planning.evidenceGaps.includes("project-workflow-coverage"));
   } finally {
     await client.close();
   }
@@ -98,7 +114,7 @@ try {
   const workspaceFiles = await readdir(join(workspace, ".proofkit"));
   assert.equal(workspaceFiles.includes("missions"), false);
   assert.equal(workspaceFiles.includes("runs"), false);
-  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-cli-scope", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-test-scope", "scope-source-and-workspace-unchanged"] }, null, 2));
+  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-cli-scope", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "scope-source-and-workspace-unchanged"] }, null, 2));
 } finally {
   const safeRoot = resolve(scratch);
   if (!safeRoot.startsWith(resolve(tempParent) + sep) || !basename(safeRoot).startsWith("proofkit-distribution-")) {

@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
-import type { RunMode, SideEffectPolicy, TestLevel } from "@proofkit/contracts";
+import type { RunMode, SideEffectPolicy, TestCoverage, TestLevel } from "@proofkit/contracts";
 import { EvidenceStore } from "@proofkit/evidence";
 import { IntentPlanner, loadCharter } from "@proofkit/planner";
 import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
@@ -115,6 +115,7 @@ export function createProgram(): Command {
     .option("--expect <text>", "visible text assertion", collect, [])
     .option("--oracle <name>", "configured business oracle", collect, [])
     .option("--level <level>", "quick, core or release")
+    .option("--coverage <scope>", "declared scenarios or project workflow coverage")
     .option("--mode <mode>", "deterministic, guided or explore", "guided")
     .option("--side-effects <policy>", "deny, confirm or allow")
     .option("--out <path>", "write YAML output")
@@ -127,6 +128,7 @@ export function createProgram(): Command {
         expect: options.expect,
         oracleNames: options.oracle.length ? options.oracle : undefined,
         level: options.level as TestLevel,
+        coverage: options.coverage as TestCoverage | undefined,
         mode: options.mode as RunMode,
         sideEffectPolicy: options.sideEffects as SideEffectPolicy | undefined,
       });
@@ -208,6 +210,7 @@ export function createProgram(): Command {
     .option("--charter <path>", "load a Charter from the test workspace")
     .option("--charter-id <id>", "select a curated test by catalog ID")
     .option("--suite-id <id>", "select an explicit release suite by ID")
+    .option("--coverage <scope>", "declared scenarios or project workflow coverage")
     .option("--url <url>", "entry URL")
     .option("--expect <text>", "visible text assertion", collect, [])
     .option("--oracle <name>", "configured business oracle", collect, [])
@@ -222,6 +225,7 @@ export function createProgram(): Command {
         charter: options.charter ? await loadCharter(resolveWithinWorkspace(runner.workspaceRoot, options.charter)) : undefined,
         charterId: options.charterId,
         suiteId: options.suiteId,
+        coverage: options.coverage as TestCoverage | undefined,
         surface: options.surface as LocalAdapterName,
         url: options.url,
         expect: options.expect,
@@ -362,6 +366,7 @@ type PlanCommandOptions = RootOptions & {
   sideEffects?: string;
   out?: string;
   level?: string;
+  coverage?: string;
 };
 
 type MissionCreateCommandOptions = PlanCommandOptions & {

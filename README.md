@@ -8,6 +8,8 @@ It is designed for workflows where a green button is not enough: a resume must b
 
 > Early development: the first vertical slice supports Chromium-based Web and Electron applications. CLI and data formats are still evolving.
 
+See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for the host-agent integration, execution layers and current capability boundaries.
+
 ## What it does
 
 - Maps workspace manifests and common Web, Electron, and backend entry points.
@@ -17,6 +19,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Matches one-sentence requests to curated, workspace-owned Charters by explicit aliases; ambiguous matches require a Charter ID, and missing assertions or business Oracles stop automatic execution.
 - Converts intent into a saved YAML Test Charter that can be reviewed and edited.
 - Records plan quality, missing inputs and evidence gaps; a model's self-reported confidence cannot make a Mission pass.
+- Separates test intensity from acceptance scope: a partial source map does not block a complete declared module scenario, while whole-project acceptance stays gated until workflow coverage can be proved.
 - Executes Web and Electron actions through Playwright, including CDP attachment.
 - Executes mobile actions through a W3C WebDriver/Appium-compatible server when a mobile surface is configured.
 - Starts local project processes with health checks and captures runtime events in the same run timeline.

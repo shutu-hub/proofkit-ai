@@ -103,6 +103,36 @@ describe("explicit release suites", () => {
     expect(evidence.planning?.evidenceGaps).toEqual(["project-map-truncated"]);
   });
 
+  it("keeps declared suite acceptance independent of partial discovery and preserves project gates on replay", async () => {
+    const service = await createSuiteService();
+    const routeSource = Array.from({ length: 230 }, (_, index) => `const route${index} = { path: '/extra-${index}' };`).join("\n");
+    const routePath = join(service.root, "apps", "web", "src", "extra-router.ts");
+    await writeFile(routePath, routeSource);
+    stubRuns(service);
+    const declared = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    expect(declared.plan.planning).toMatchObject({ evidenceGaps: [], coverage: { requested: "declared", inventory: "partial", workflowCoverage: "unmeasured" } });
+    await service.startMission(declared.missionId, { approve: true });
+    expect((await service.waitMission(declared.missionId)).verdict).toBe("passed");
+
+    const single = await service.createMission({ intent: "测试整个项目", surface: "web", charterId: "resume" });
+    expect(single.plan.planning).toMatchObject({ coverage: { requested: "project", source: "inferred" }, evidenceGaps: ["project-map-truncated", "project-workflow-coverage"] });
+    const whole = await service.createMission({ intent: "测试整个项目", surface: "web", suiteId: "release-critical" });
+    expect(whole.plan.planning?.coverage).toMatchObject({ requested: "project", inventory: "partial", workflowCoverage: "unmeasured" });
+    expect(whole.suite?.charters.every((item) => item.charter.planning?.coverage?.requested === "project")).toBe(true);
+    await service.startMission(whole.missionId, { approve: true });
+    expect((await service.waitMission(whole.missionId)).verdict).toBe("inconclusive");
+    const evidence = await service.missionEvidence(whole.missionId);
+    expect(evidence.suiteScope?.results.every((item) => item.verdict === "passed")).toBe(true);
+    expect(evidence.planning?.evidenceGaps).toContain("project-workflow-coverage");
+
+    const replay = await service.replayMission(whole.missionId);
+    const replayed = await service.waitMission(replay.mission.missionId);
+    expect(replayed.verdict).toBe("inconclusive");
+    expect(replayed.plan.planning?.coverage).toEqual(whole.plan.planning?.coverage);
+    expect(replayed.plan.planning?.evidenceGaps).toEqual(whole.plan.planning?.evidenceGaps);
+    expect(await readFile(routePath, "utf8")).toBe(routeSource);
+  });
+
   it("counts a mapped route as observed only after passing primary and replay visits on both surfaces", async () => {
     const service = await createSuiteService();
     stubRuns(service);

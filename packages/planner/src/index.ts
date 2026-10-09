@@ -1,4 +1,5 @@
 export * from "./core.js";
+export { assessPlanningCoverage, planningCoverageRequirements, withPlanningCoverage } from "./coverage.js";
 export { requiredCatalogSurfaces, supportsCatalogCharter, supportsCatalogSuite, selectCatalogCharter, selectCatalogSuite, type CatalogSelection, type SuiteSelection } from "./catalog.js";
 export {
   evaluatePlannerBenchmark,

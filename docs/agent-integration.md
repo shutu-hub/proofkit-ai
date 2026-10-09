@@ -120,6 +120,7 @@ If a one-sentence request has no suitable Charter and the planner cannot supply 
 The status result is intentionally short and structured:
 
 - resolved test level and why it was selected;
+- requested acceptance scope, static inventory completeness and outstanding workflow coverage gaps;
 - mission and run verdict;
 - task graph and first failed boundary;
 - bounded `AgentStep` summaries showing the agent decision, selected tool, lifecycle status and links to observations/evidence;
@@ -169,6 +170,19 @@ For MCP, the operator sets `PROOFKIT_ALLOW_CAPABILITY_WRITES=1` when launching t
 | “在 Android 模拟器上测试登录” | `core` | Use the configured `mobile` W3C WebDriver surface with the same assertions, Oracles and evidence contract. |
 
 If the user does not specify a level, ProofKit selects `core`. An explicit `quick` request is never silently upgraded by the planner.
+
+## Choosing acceptance scope
+
+`level` describes test intensity; `coverage` describes what the verdict accepts. The default `declared` scope accepts only the saved Charter or suite scenarios. A successful release suite remains acceptance of those scenarios, even if the source scan contains more routes. A partial inventory is retained in `planning.coverage` and does not by itself stop a complete declared module test.
+
+For a whole-project request, retain the user's original intent and send `coverage: "project"`. ProofKit also recognizes common whole-project phrases, but the host agent is responsible for faithful scope selection. Whole-project workflow inventory and execution coverage proof are not implemented, so this request currently returns a planning gate rather than a whole-project pass. Missing assertions or independent business proof still block automatic core execution. An explicit caller choice of `declared` is recorded; never use it to silently narrow the user's request. Saved legacy gates require replanning and are not cleared by replay.
+
+```javascript
+run_test({ intent: "测试简历获取核心链路", level: "core", coverage: "declared", surface: "electron" });
+run_test({ intent: "上线前测试整个项目", level: "release", coverage: "project", suiteId: "release-critical" });
+```
+
+The first call can run a ready registered or submitted workflow; the second reports missing whole-project proof. `planning.coverage.inventory` is `bounded`, `partial` or `not-scanned`, and `workflowCoverage` is currently `unmeasured`. The agent must describe a passed declared test as the saved scenario's result and retain these coverage limits in its final explanation.
 
 ## CLI fallback
 

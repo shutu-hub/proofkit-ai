@@ -77,7 +77,7 @@ describe("MCP external workspace", () => {
     }
   });
 
-  it("runs an agent-submitted core Charter without a catalog or source-project changes", async () => {
+  it("runs a submitted core scenario in a large project while preserving coverage and business gates", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mcp-submitted-source-"));
     const workspaceRoot = await mkdtemp(join(tmpdir(), "proofkit-mcp-submitted-workspace-"));
     let client: Client | undefined;
@@ -88,6 +88,8 @@ describe("MCP external workspace", () => {
       vi.spyOn(WebAdapter.prototype, "close").mockResolvedValue();
       vi.spyOn(WebAdapter.prototype, "assert").mockImplementation(async (assertion) => ({ assertion, passed: true, message: "ready", evidence: [] }));
       await writeFile(join(root, "package.json"), '{"name":"submitted-source","devDependencies":{"vite":"1"}}');
+      const router = Array.from({ length: 230 }, (_, index) => `const route${index} = { path: '/feature-${index}' };`).join("\n");
+      await writeFile(join(root, "router.ts"), router);
       await mkdir(join(workspaceRoot, ".proofkit"));
       await writeFile(join(workspaceRoot, ".proofkit", "config.yaml"), JSON.stringify({ project: { root } }));
       await writeFile(join(workspaceRoot, ".proofkit", "integration.mjs"), `
@@ -104,11 +106,26 @@ describe("MCP external workspace", () => {
       };
       const started = payload(await client.callTool({ name: "run_test", arguments: { intent: charter.intent, charter } }));
       expect(started).toMatchObject({ level: "core", planning: { source: "submitted", evidenceGaps: [] }, readiness: { ready: true }, running: true });
+      expect(started.planning.coverage).toMatchObject({ requested: "declared", inventory: "partial", workflowCoverage: "unmeasured", gaps: ["project-map-truncated", "project-workflow-coverage"] });
       const final = await waitForMission(client, started.missionId);
       expect(final.mission.verdict).toBe("passed");
       const evidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
       expect(evidence.evidence).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "business" })]));
-      expect(await readdir(root)).toEqual(["package.json"]);
+      expect(evidence.planning.coverage).toEqual(started.planning.coverage);
+      const connections = vi.mocked(WebAdapter.prototype.connect).mock.calls.length;
+      const whole = payload(await client.callTool({ name: "run_test", arguments: { intent: "测试整个项目", charter } }));
+      expect(whole).toMatchObject({ running: false, readiness: { ready: false }, planning: { coverage: { requested: "project", source: "inferred" }, evidenceGaps: ["project-map-truncated", "project-workflow-coverage"] } });
+      const missingOracle = payload(await client.callTool({ name: "run_test", arguments: { intent: charter.intent, charter: { ...charter, oracles: [] } } }));
+      expect(missingOracle).toMatchObject({ running: false, readiness: { ready: false }, planning: { evidenceGaps: ["business-oracle"] } });
+      expect(vi.mocked(WebAdapter.prototype.connect).mock.calls).toHaveLength(connections);
+      const narrowed = payload(await client.callTool({ name: "create_test_mission", arguments: { intent: "测试整个项目", charter, coverage: "declared" } }));
+      expect(narrowed.plan.planning).toMatchObject({ evidenceGaps: [], coverage: { requested: "declared", source: "explicit", inventory: "partial" } });
+      await client.callTool({ name: "start_mission", arguments: { missionId: whole.missionId, approve: true } });
+      const incomplete = await waitForMission(client, whole.missionId);
+      expect(incomplete.mission.verdict).toBe("inconclusive");
+      expect(incomplete.mission.firstFailure).toMatchObject({ kind: "evidence", message: expect.stringContaining("project-workflow-coverage") });
+      expect((await readdir(root)).sort()).toEqual(["package.json", "router.ts"]);
+      expect(await readFile(join(root, "router.ts"), "utf8")).toBe(router);
     } finally {
       await client?.close();
       await server?.close();

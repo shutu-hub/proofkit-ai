@@ -13,6 +13,7 @@ import {
   MissionPolicySchema,
   ObservationSchema,
   PlanningQualitySchema,
+  PlanningCoverageSchema,
   RepairSuggestionSchema,
   TaskNodeSchema,
   TestMissionSchema,
@@ -109,12 +110,19 @@ function planningQuality(input: MissionPlanInput, source?: PlanningQuality["sour
   }
   if (input.suite) {
     const qualities = input.suite.charters.map((item) => PlanningQualitySchema.parse(item.charter.planning ?? {}));
+    const coverages = qualities.flatMap((item) => item.coverage ? [item.coverage] : []);
+    const coverage = coverages.find((item) => item.requested === "project") ?? coverages[0];
     return PlanningQualitySchema.parse({
       source: source ?? "catalog",
       confidence: qualities.length === 0 ? 0 : Math.min(...qualities.map((item) => item.confidence)),
       assumptions: [...new Set(qualities.flatMap((item) => item.assumptions))],
       missingInputs: [...new Set(qualities.flatMap((item) => item.missingInputs))],
       evidenceGaps: [...new Set(qualities.flatMap((item) => item.evidenceGaps))],
+      ...(coverage ? { coverage: PlanningCoverageSchema.parse({ ...coverage,
+        inventory: coverages.some((item) => item.inventory === "partial") ? "partial"
+          : coverages.some((item) => item.inventory === "not-scanned") ? "not-scanned" : "bounded",
+        gaps: [...new Set(coverages.flatMap((item) => item.gaps))],
+      }) } : {}),
     });
   }
   return PlanningQualitySchema.parse({ source: source ?? "deterministic", confidence: 0, missingInputs: ["validated Test Charter"] });

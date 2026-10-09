@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestMission } from "@proofkit/contracts";
-import { hasPositiveSurfaceAssertion, TestCharterSchema, TestScopeInputSchema } from "@proofkit/contracts";
+import { hasPositiveSurfaceAssertion, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 
 export function registerTools(server: McpServer, runner: LocalRunnerService): void {
@@ -51,6 +51,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       charter: TestCharterSchema.optional(),
       charterId: z.string().min(1).optional(),
       suiteId: z.string().min(1).optional(),
+      coverage: TestCoverageSchema.optional().describe("declared limits acceptance to the saved scenarios; project requires whole-project workflow coverage proof"),
       surface: z.enum(["web", "electron", "mobile"]).default("web"),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
@@ -59,7 +60,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
     },
-    async ({ intent, charter, charterId, suiteId, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, charter, charterId, suiteId, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
+    async ({ intent, charter, charterId, suiteId, coverage, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, charter, charterId, suiteId, coverage, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
   );
 
   server.tool(
@@ -70,6 +71,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       charter: TestCharterSchema.optional(),
       charterId: z.string().min(1).optional(),
       suiteId: z.string().min(1).optional(),
+      coverage: TestCoverageSchema.optional().describe("declared limits acceptance to the saved scenarios; project requires whole-project workflow coverage proof"),
       level: z.enum(["quick", "core", "release"]).optional(),
       surface: z.enum(["web", "electron", "mobile"]).default("web"),
       url: z.string().url().optional(),
@@ -79,8 +81,8 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
       autoApprove: z.boolean().default(true),
     },
-    async ({ intent, charter, charterId, suiteId, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
-      const mission = await runner.createMission({ intent, charter, charterId, suiteId, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
+    async ({ intent, charter, charterId, suiteId, coverage, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
+      const mission = await runner.createMission({ intent, charter, charterId, suiteId, coverage, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
       const readiness = missionReadiness(mission);
       const started = autoApprove && readiness.ready
         ? await runner.startMission(mission.missionId, { approve: true })
@@ -143,6 +145,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "Turn a natural-language intent into a validated, reviewable ProofKit Test Charter. Planning does not execute the project.",
     {
       intent: z.string().min(1),
+      coverage: TestCoverageSchema.optional(),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
       oracleNames: z.array(z.string().min(1)).optional(),
@@ -150,8 +153,8 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
     },
-    async ({ intent, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result({
-      charter: await runner.plan(intent, { url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy }),
+    async ({ intent, coverage, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result({
+      charter: await runner.plan(intent, { coverage, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy }),
     }),
   );
 

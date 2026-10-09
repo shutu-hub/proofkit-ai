@@ -76,12 +76,26 @@ export type NegativeCase = z.infer<typeof NegativeCaseSchema>;
  * and what it still needs; they are deliberately separate from execution
  * evidence so a confident-sounding model response cannot masquerade as proof.
  */
+export const TestCoverageSchema = z.enum(["declared", "project"]);
+export type TestCoverage = z.infer<typeof TestCoverageSchema>;
+/** Static discovery is not evidence of complete business workflow coverage. */
+export const PlanningCoverageSchema = z.object({
+  requested: TestCoverageSchema,
+  source: z.enum(["explicit", "inferred", "default"]),
+  reason: z.string().min(1),
+  inventory: z.enum(["not-scanned", "bounded", "partial"]),
+  workflowCoverage: z.literal("unmeasured"),
+  gaps: z.array(z.string().min(1)).default([]),
+});
+export type PlanningCoverage = z.infer<typeof PlanningCoverageSchema>;
+
 export const PlanningQualitySchema = z.object({
   source: z.enum(["catalog", "deterministic", "model", "submitted"]).default("deterministic"),
   confidence: z.number().min(0).max(1).default(0),
   assumptions: z.array(z.string().min(1)).default([]),
   missingInputs: z.array(z.string().min(1)).default([]),
   evidenceGaps: z.array(z.string().min(1)).default([]),
+  coverage: PlanningCoverageSchema.optional(),
 });
 export type PlanningQuality = z.infer<typeof PlanningQualitySchema>;
 export function normalizePlanningQuality(value?: PlanningQuality): PlanningQuality {

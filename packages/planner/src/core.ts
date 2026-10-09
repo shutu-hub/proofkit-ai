@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
-import { hasPositiveSurfaceAssertion, normalizePlanningQuality, PlanningQualitySchema, RunModeSchema, ProjectMapSchema, SideEffectPolicySchema, TestCharterSchema, TestLevelSchema, type Assertion, type PlanningQuality, type ProjectMap, type RunMode, type SideEffectPolicy, type TestCharter, type TestLevel } from "@proofkit/contracts";
+import { hasPositiveSurfaceAssertion, normalizePlanningQuality, PlanningQualitySchema, RunModeSchema, ProjectMapSchema, SideEffectPolicySchema, TestCharterSchema, TestCoverageSchema, TestLevelSchema, type Assertion, type PlanningQuality, type ProjectMap, type RunMode, type SideEffectPolicy, type TestCharter, type TestLevel } from "@proofkit/contracts";
 import { z } from "zod";
 import { resolveTestLevel } from "./test-levels.js";
+import { assessPlanningCoverage, planningCoverageRequirements } from "./coverage.js";
 
 export { getTestLevelProfile, resolveTestLevel, type TestLevelProfile } from "./test-levels.js";
 export const PlannerConstraintsSchema = z.object({
@@ -12,6 +13,7 @@ export const PlannerConstraintsSchema = z.object({
   sideEffectPolicy: SideEffectPolicySchema.optional(),
   oracleNames: z.array(z.string().min(1)).optional(),
   level: TestLevelSchema.optional(),
+  coverage: TestCoverageSchema.optional(),
   allowedActionKinds: z.array(z.string().min(1)).optional(),
   allowedOracleNames: z.array(z.string().min(1)).optional(),
   requireAssertions: z.boolean().optional(),
@@ -19,7 +21,7 @@ export const PlannerConstraintsSchema = z.object({
 }).strict();
 
 export type PlannerConstraints = z.infer<typeof PlannerConstraintsSchema>;
-export type PlanOptions = Pick<PlannerConstraints, "url" | "expect" | "mode" | "sideEffectPolicy" | "oracleNames" | "level"> & {
+export type PlanOptions = Pick<PlannerConstraints, "url" | "expect" | "mode" | "sideEffectPolicy" | "oracleNames" | "level" | "coverage"> & {
   requireAssertions?: boolean;
   requireBusinessOracle?: boolean;
 };
@@ -39,6 +41,8 @@ export type PlanningAssessmentInput = {
   projectMap?: ProjectMap;
   constraints?: PlannerConstraints;
   source?: PlanningQuality["source"];
+  /** The user's request can have broader scope than a submitted Charter's intent. */
+  coverageIntent?: string;
 };
 
 /** Recompute quality from the validated Charter instead of trusting model confidence. */
@@ -66,10 +70,10 @@ export function assessPlanningQuality(charter: TestCharter, input: PlanningAsses
     add(evidenceGaps, "negative-case");
   }
   if (charter.actions.some((action) => action.kind === "goto") && !constraints.url) add(missingInputs, "经批准的目标 Web origin");
-  if (input.projectMap?.inventory.truncated) {
-    add(missingInputs, "完整项目地图（当前扫描被截断）");
-    add(evidenceGaps, "project-map-truncated");
-  }
+  const coverage = assessPlanningCoverage(input.coverageIntent ?? charter.intent, input.projectMap, constraints.coverage);
+  const coverageRequirements = planningCoverageRequirements(coverage);
+  missingInputs.push(...coverageRequirements.missingInputs);
+  evidenceGaps.push(...coverageRequirements.evidenceGaps);
   if (input.projectMap && input.projectMap.inventory.entryPoints.length === 0) add(assumptions, "未从源码扫描中识别到约定的应用入口");
   if (input.projectMap?.inventory.routeDiagnostics?.total) add(assumptions, `有 ${input.projectMap.inventory.routeDiagnostics.total} 条 Gin 路由声明无法静态解析，项目地图不代表完整业务覆盖`);
 
@@ -77,7 +81,7 @@ export function assessPlanningQuality(charter: TestCharter, input: PlanningAsses
   // produced deterministically. The source is recorded for audit, not scoring.
   const baseline = input.projectMap ? 0.75 : 0.6;
   const confidence = Math.max(0, Math.min(1, baseline - missingInputs.length * 0.12 - evidenceGaps.length * 0.08));
-  return PlanningQualitySchema.parse({ source, confidence, assumptions, missingInputs, evidenceGaps });
+  return PlanningQualitySchema.parse({ source, confidence, assumptions, missingInputs, evidenceGaps, coverage });
 }
 
 export class IntentPlanner {
@@ -212,7 +216,7 @@ export class StructuredPlanner {
       ...charter,
       level: levelSelection.resolved,
       levelSelection,
-      planning: assessPlanningQuality({ ...charter, level: levelSelection.resolved }, { projectMap: input.projectMap, constraints: input.constraints, source }),
+      planning: assessPlanningQuality({ ...charter, level: levelSelection.resolved }, { projectMap: input.projectMap, constraints: input.constraints, source, coverageIntent: input.intent }),
       metadata: { ...charter.metadata, planner: this.provider.name, testLevel: levelSelection.resolved },
     });
   }
