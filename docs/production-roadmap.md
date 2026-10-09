@@ -27,6 +27,8 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Load a project-owned `.proofkit/integration.mjs` module.
 - Merge typed capabilities, business oracles and setup/cleanup into the same Runner lifecycle.
 - Enforce a total run deadline and external cancellation.
+- Enforce a separate Mission deadline across reconnaissance, surface runs,
+  recovery and final verification, with a persisted timeout Finding.
 - Expose cancellation through the CLI and MCP.
 - Treat adapter, process and integration cleanup failures as non-green results.
 - Keep Agent tool failures as suspected test findings until an independent product oracle confirms a defect.

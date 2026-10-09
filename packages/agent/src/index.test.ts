@@ -52,6 +52,41 @@ describe("MissionAgent", () => {
     expect(result.plan.graph.tasks.find((task) => task.taskId === "execute-charter")?.status).toBe("blocked");
   });
 
+  it("enforces the mission-wide timeout and records an environment finding", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-mission-timeout-"));
+    const tools = new InMemoryMissionToolRegistry([
+      {
+        name: "project.discover",
+        description: "slow discover",
+        sideEffect: "none",
+        environments: ["test"],
+        timeoutMs: 1_000,
+        inputSchema: z.object({}),
+        execute: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          return {};
+        },
+      },
+    ]);
+    const agent = new MissionAgent({ store: new JsonMissionStore(root), tools });
+    const created = await agent.create({
+      intent: "timeout mission",
+      projectRoot: root,
+      surface: "web",
+      policy: { requireApproval: false, timeoutMs: 20 },
+    });
+
+    const result = await agent.run(created.missionId);
+
+    expect(result.status).toBe("cancelled");
+    expect(result.verdict).toBe("cancelled");
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "Mission timed out", category: "environment" }),
+    ]));
+    expect(result.toolCalls[0]?.status).toBe("cancelled");
+    expect(result.agentSteps[0]?.status).toBe("cancelled");
+  });
+
   it("blocks an unregistered or disallowed tool with a finding", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mission-"));
     const agent = new MissionAgent({ store: new JsonMissionStore(root), tools: new InMemoryMissionToolRegistry() });

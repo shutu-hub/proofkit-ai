@@ -306,10 +306,13 @@ export class MissionAgent {
     mission = recovery.mission;
     const recoveryTaskIds = recovery.retryTaskIds;
     if (mission.status === "blocked" || mission.status === "cancelled" || mission.status === "failed") return mission;
-    mission = await this.save({ ...mission, status: "running" });
     const controller = new AbortController();
     const detach = relayAbort(options.signal, controller);
+    const timeout = setTimeout(() => {
+      controller.abort(new MissionTimeoutError(mission.policy.timeoutMs));
+    }, mission.policy.timeoutMs);
     try {
+      mission = await this.save({ ...mission, status: "running" });
       for (let step = 0; step < mission.policy.maxSteps; step++) {
         throwIfAborted(controller.signal);
         const current = await this.load(mission.missionId);
@@ -329,7 +332,19 @@ export class MissionAgent {
       return this.save({ ...mission, status: "blocked", verdict: "blocked", findings: [...mission.findings, finding("agent-step-limit", "medium", "test", "Agent step limit reached", "Mission exceeded its configured maxSteps.")] });
     } catch (error) {
       if (controller.signal.aborted) {
-        return this.save({ ...mission, status: "cancelled", verdict: "cancelled", findings: [...mission.findings, finding("mission-cancelled", "info", "environment", "Mission cancelled", toError(error).message)] });
+        const timedOut = isMissionTimeout(controller.signal.reason);
+        return this.save({
+          ...mission,
+          status: "cancelled",
+          verdict: "cancelled",
+          findings: [...mission.findings, finding(
+            timedOut ? "mission-timeout" : "mission-cancelled",
+            timedOut ? "medium" : "info",
+            "environment",
+            timedOut ? "Mission timed out" : "Mission cancelled",
+            toError(error).message,
+          )],
+        });
       }
       const cause = toError(error);
       const current = await this.load(mission.missionId).catch(() => mission);
@@ -340,6 +355,7 @@ export class MissionAgent {
         findings: [...current.findings, finding("mission-system-failure", "high", "test", "Mission execution failed", cause.message, "suspected")],
       });
     } finally {
+      clearTimeout(timeout);
       detach();
     }
   }
@@ -498,6 +514,7 @@ export class MissionAgent {
       const cause = toError(error);
       const cancelled = toolController.signal.aborted && signal.aborted;
       const status = cancelled ? "cancelled" : "failed";
+      const timedOut = cancelled && isMissionTimeout(signal.reason);
       const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: cause.message });
       const agentStep = completeAgentStep(startedMission.agentSteps, agentStepId, {
         status: status === "cancelled" ? "cancelled" : "failed",
@@ -510,7 +527,14 @@ export class MissionAgent {
         ...failedTask,
         agentSteps: replaceAgentStep(startedMission.agentSteps, agentStep),
         toolCalls: replaceToolCall(startedMission.toolCalls, call),
-        findings: [...startedMission.findings, finding(`task-${task.taskId}`, status === "cancelled" ? "info" : "medium", status === "cancelled" ? "environment" : "test", `Task ${task.taskId} did not complete`, cause.message, status === "cancelled" ? "confirmed" : "suspected")],
+        findings: [...startedMission.findings, finding(
+          timedOut ? "mission-timeout" : `task-${task.taskId}`,
+          timedOut ? "medium" : status === "cancelled" ? "info" : "medium",
+          status === "cancelled" ? "environment" : "test",
+          timedOut ? "Mission timed out" : `Task ${task.taskId} did not complete`,
+          cause.message,
+          status === "cancelled" ? "confirmed" : "suspected",
+        )],
         status: status === "cancelled" ? "cancelled" : "failed",
         verdict: status === "cancelled" ? "cancelled" : "failed",
       });
@@ -634,6 +658,17 @@ function validateMissionId(value: string): string {
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+class MissionTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Mission exceeded its total timeout of ${timeoutMs}ms`);
+    this.name = "MissionTimeoutError";
+  }
+}
+
+function isMissionTimeout(reason: unknown): reason is MissionTimeoutError {
+  return reason instanceof MissionTimeoutError || (reason instanceof Error && reason.name === "MissionTimeoutError");
 }
 
 function throwIfAborted(signal: AbortSignal): void {
