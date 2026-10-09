@@ -134,7 +134,7 @@ describe("ProofKit MCP tools", () => {
     expect(result).toMatchObject({
       running: false,
       readiness: { ready: false, missing: ["至少一个明确的正向表面断言", "至少一个独立业务 Oracle"] },
-      next: ["list_test_charters", "list_test_suites", "plan_test"],
+      next: ["list_test_charters", "list_test_suites", "plan_test", "run_test"],
     });
     expect(runner.startMission).not.toHaveBeenCalled();
     await client.close();

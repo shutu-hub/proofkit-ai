@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { RunMode, SideEffectPolicy, TestLevel } from "@proofkit/contracts";
 import { EvidenceStore } from "@proofkit/evidence";
-import { IntentPlanner } from "@proofkit/planner";
+import { IntentPlanner, loadCharter } from "@proofkit/planner";
 import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
 import { initProject, loadConfig, resolveProjectContext, resolveWithinWorkspace, scanProject } from "@proofkit/project";
 
@@ -174,6 +174,7 @@ export function createProgram(): Command {
     .description("Create a reviewable mission plan from a natural-language intent")
     .option("--root <path>", "project root", ".")
     .option("--surface <surface>", "web, electron or mobile", "web")
+    .option("--charter <path>", "load a Charter from the test workspace")
     .option("--charter-id <id>", "select a curated test by catalog ID")
     .option("--suite-id <id>", "select an explicit release suite by ID")
     .option("--url <url>", "entry URL")
@@ -187,6 +188,7 @@ export function createProgram(): Command {
       const runner = await LocalRunnerService.create({ root, workspaceRoot: options.workspace });
       const created = await runner.createMission({
         intent,
+        charter: options.charter ? await loadCharter(resolveWithinWorkspace(runner.workspaceRoot, options.charter)) : undefined,
         charterId: options.charterId,
         suiteId: options.suiteId,
         surface: options.surface as LocalAdapterName,
@@ -333,6 +335,7 @@ type PlanCommandOptions = RootOptions & {
 
 type MissionCreateCommandOptions = PlanCommandOptions & {
   surface: string;
+  charter?: string;
   charterId?: string;
   suiteId?: string;
 };

@@ -28,9 +28,10 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "create_test_mission",
-    "Create a reviewable AI test mission from a natural-language intent. The mission plans work without modifying the tested project.",
+    "Create a reviewable AI test mission from natural language, a catalog ID, or an agent-submitted structured Charter. The tested project is not modified.",
     {
       intent: z.string().min(1),
+      charter: TestCharterSchema.optional(),
       charterId: z.string().min(1).optional(),
       suiteId: z.string().min(1).optional(),
       surface: z.enum(["web", "electron", "mobile"]).default("web"),
@@ -41,14 +42,15 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
     },
-    async ({ intent, charterId, suiteId, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, charterId, suiteId, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
+    async ({ intent, charter, charterId, suiteId, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, charter, charterId, suiteId, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
   );
 
   server.tool(
     "run_test",
-    "Run a natural-language ProofKit test mission at the requested intensity. Poll get_mission_status and read get_mission_evidence for the final auditable result.",
+    "Run a natural-language ProofKit test mission at the requested intensity. Supply a structured Charter when no catalog entry covers the requested workflow. Poll status and evidence for the final result.",
     {
       intent: z.string().min(1),
+      charter: TestCharterSchema.optional(),
       charterId: z.string().min(1).optional(),
       suiteId: z.string().min(1).optional(),
       level: z.enum(["quick", "core", "release"]).optional(),
@@ -60,8 +62,8 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
       autoApprove: z.boolean().default(true),
     },
-    async ({ intent, charterId, suiteId, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
-      const mission = await runner.createMission({ intent, charterId, suiteId, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
+    async ({ intent, charter, charterId, suiteId, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
+      const mission = await runner.createMission({ intent, charter, charterId, suiteId, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
       const readiness = missionReadiness(mission);
       const started = autoApprove && readiness.ready
         ? await runner.startMission(mission.missionId, { approve: true })
@@ -234,7 +236,7 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
   const profile = mission.plan.executionProfile;
   const terminal = ["completed", "failed", "blocked", "cancelled"];
   const next = !readiness.ready && mission.status === "awaiting-approval"
-    ? ["list_test_charters", "list_test_suites", "plan_test"]
+    ? ["list_test_charters", "list_test_suites", "plan_test", "run_test"]
     : mission.status === "awaiting-approval"
     ? ["approve_test_plan"]
     : started.running || mission.status === "running"

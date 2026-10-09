@@ -30,6 +30,25 @@ compare_missions
 
 The response contains `missionId`, the resolved level and the running status. The agent then polls the status until the mission reaches a terminal state and reads evidence once. For a review-first workflow, call `create_test_mission`, inspect the task graph, call `approve_test_plan`, and then call `start_mission`.
 
+When the workspace has no matching catalog entry, the host agent can inspect the source and `discover_project` result, then submit a complete structured Charter directly to `run_test` or `create_test_mission`. This is a one-Mission test contract; it does not modify the tested project or silently register a reusable catalog entry. For example, after the workspace has registered a read-only `resume.terminal` Oracle:
+
+```json
+{
+  "intent": "检查简历页面和后台处理终态",
+  "surface": "web",
+  "charter": {
+    "intent": "检查简历页面和后台处理终态",
+    "level": "core",
+    "sideEffectPolicy": "deny",
+    "actions": [{ "kind": "goto", "url": "http://127.0.0.1:5173/resumes" }],
+    "assertions": [{ "kind": "text-visible", "text": "简历" }],
+    "oracles": ["resume.terminal"]
+  }
+}
+```
+
+ProofKit validates the submitted schema, registered Oracle and Capability names, navigation origin and side-effect policy before persisting the Mission. It recomputes planning gaps from the Charter and bounded Project Map; a submitted confidence score or claimed evidence gap does not decide readiness. MCP `click`, `fill` and `press` actions require `sideEffectPolicy: allow` in the affected scenario and `policies.sideEffects: allow` in the test workspace. Registered write Capabilities also require the separate process-level operator opt-in described below. After a workflow is proven, save its Charter in the external workspace catalog so later one-sentence requests reuse the reviewed test.
+
 For repair verification, replay the failed Mission after the application change. The new Mission stores `replayOfMissionId`; once it finishes, `get_mission_evidence` includes a comparison with the source Mission. `compare_missions` reads the same comparison directly. It requires a direct replay, the same project/workspace and saved Charter or suite scope, a confirmed baseline product finding linked to a materialized business source artifact, and a complete passing candidate with its own independent source facts. Primary, required replay, and declared negative Runs are paired by Charter, surface and run kind. A missing Run, changed scope, unmaterialized artifact or unfinished candidate is `inconclusive`; a repeated evidenced Oracle failure is `defect-reproduced`. `verified-in-scope` does not identify which source change fixed the symptom.
 
 The result also includes `sourceChange` and `candidateSourceStability`. These come from bounded, read-only Git fingerprints captured before execution and after verification; only digests and counts are stored. `sourceChange=unknown` means the source state could not be captured completely. A candidate whose source changed during its own run is inconclusive even if the business checks passed.
@@ -84,7 +103,7 @@ charters:
 
 The final evidence gate is checked per primary run and required replay, not across pooled runs. An Oracle must return at least one sanitized observation fact; ProofKit's own Oracle result file does not count as that fact. A negative case cannot make an unverified main path green.
 
-If a one-sentence request has no suitable Charter and the planner cannot supply an assertion or required Oracle, `run_test` returns `readiness.ready=false` and does not start the surface. The agent should use `list_test_charters` or `plan_test` and fill the missing test contract. Readiness checks structural prerequisites; they do not prove the assertion is meaningful.
+If a one-sentence request has no suitable Charter and the planner cannot supply an assertion or required Oracle, `run_test` returns `readiness.ready=false` and does not start the surface. The agent can inspect the project, use `list_test_charters` or `plan_test`, then call `run_test` again with a complete structured Charter. Readiness checks structural prerequisites; they do not prove the assertion is meaningful.
 
 ## What the agent receives
 
@@ -145,6 +164,7 @@ The same lifecycle is available without an agent:
 
 ```bash
 proofkit mission create "测试简历获取" --surface electron --level core
+proofkit mission create "测试简历获取" --surface electron --charter .proofkit/charters/resume-core.yml
 proofkit mission run <mission-id> --approve
 proofkit mission status <mission-id>
 proofkit mission evidence <mission-id>

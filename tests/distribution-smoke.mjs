@@ -36,6 +36,7 @@ try {
   assert.match(await readFile(cli, "utf8"), /^#!\/usr\/bin\/env node/);
   assert.equal((await command(process.execPath, [cli, "--version"], scratch)).stdout.trim(), packed.version);
   assert.equal((await npm(["exec", "--prefix", installDir, "--", "proofkit", "--version"], scratch)).stdout.trim(), packed.version);
+  assert.match((await npm(["exec", "--prefix", installDir, "--", "proofkit", "mission", "create", "--help"], scratch)).stdout, /--charter <path>/);
   await command(process.execPath, [cli, "init", "--root", source, "--workspace", workspace], scratch);
   const doctor = await command(process.execPath, [cli, "doctor", "--root", source, "--workspace", workspace], scratch);
   assert.match(doctor.stdout, /web surface\s+detected/);
@@ -53,7 +54,9 @@ try {
   try {
     await withDeadline(client.connect(transport), 10_000, "MCP connection");
     const listed = await withDeadline(client.listTools(), 10_000, "MCP tool listing");
-    assert.ok(listed.tools.some((tool) => tool.name === "run_test"));
+    const runTest = listed.tools.find((tool) => tool.name === "run_test");
+    assert.ok(runTest);
+    assert.ok(runTest.inputSchema.properties?.charter);
     const discovered = await withDeadline(client.callTool({ name: "discover_project", arguments: {} }), 10_000, "MCP project discovery");
     const item = discovered.content.find((content) => content.type === "text");
     assert.ok(item);
@@ -61,7 +64,7 @@ try {
   } finally {
     await client.close();
   }
-  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-init-doctor", "installed-mcp-bin-stdio-discovery"] }, null, 2));
+  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema"] }, null, 2));
 } finally {
   const safeRoot = resolve(scratch);
   if (!safeRoot.startsWith(resolve(tempParent) + sep) || !basename(safeRoot).startsWith("proofkit-distribution-")) {

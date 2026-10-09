@@ -56,6 +56,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Create a fixed Web/Electron benchmark with known workflows and seeded defects.
 - Use the bounded project test map to measure candidate entry-point and route coverage; partial scans must remain visible through the `truncated` flag. Static Web and method-qualified API route measurement is implemented for explicit release suites; entry-point execution evidence remains open.
 - Register known business Charters by explicit aliases so one-sentence Agent requests reuse verified workflows; stop automatic execution when a required assertion or Oracle is missing.
+- Let a host coding agent submit a structured Charter directly to `run_test` or `create_test_mission` when no catalog entry exists; recompute planning gaps and validate registered operations, origin and side-effect policy before Mission persistence. CLI Mission creation also accepts a workspace-owned Charter file.
 - Extend the explicit multi-Charter release suite with measured project-map coverage. It now snapshots reviewed route-to-Charter declarations, reports absent or ambiguous mappings, and counts Web paths or matching 2xx API responses as observed only after passing primary and replay runs on every required surface. Registered release Charters outside the suite and unmapped static routes remain visible gaps.
 - Measure plan validity, workflow coverage, assertion quality, false passes and model cost.
 - Add a review gate for write actions and report planner uncertainty.

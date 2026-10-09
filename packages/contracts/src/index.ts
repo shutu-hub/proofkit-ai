@@ -71,7 +71,7 @@ export type NegativeCase = z.infer<typeof NegativeCaseSchema>;
  * evidence so a confident-sounding model response cannot masquerade as proof.
  */
 export const PlanningQualitySchema = z.object({
-  source: z.enum(["catalog", "deterministic", "model"]).default("deterministic"),
+  source: z.enum(["catalog", "deterministic", "model", "submitted"]).default("deterministic"),
   confidence: z.number().min(0).max(1).default(0),
   assumptions: z.array(z.string().min(1)).default([]),
   missingInputs: z.array(z.string().min(1)).default([]),

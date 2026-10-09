@@ -30,6 +30,46 @@ function payload(result: unknown) {
 }
 
 describe("MCP external workspace", () => {
+  it("runs an agent-submitted core Charter without a catalog or source-project changes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-mcp-submitted-source-"));
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "proofkit-mcp-submitted-workspace-"));
+    let client: Client | undefined;
+    let server: McpServer | undefined;
+    try {
+      vi.spyOn(WebAdapter.prototype, "connect").mockResolvedValue();
+      vi.spyOn(WebAdapter.prototype, "subscribeEvents").mockResolvedValue(() => {});
+      vi.spyOn(WebAdapter.prototype, "close").mockResolvedValue();
+      vi.spyOn(WebAdapter.prototype, "assert").mockImplementation(async (assertion) => ({ assertion, passed: true, message: "ready", evidence: [] }));
+      await writeFile(join(root, "package.json"), '{"name":"submitted-source","devDependencies":{"vite":"1"}}');
+      await mkdir(join(workspaceRoot, ".proofkit"));
+      await writeFile(join(workspaceRoot, ".proofkit", "config.yaml"), JSON.stringify({ project: { root } }));
+      await writeFile(join(workspaceRoot, ".proofkit", "integration.mjs"), `
+        export default { name: 'submitted-fixture', oracles: [{ name: 'fixture.terminal', check: async () => ({
+          name: 'fixture.terminal', passed: true, message: 'done', evidence: [JSON.stringify({ state: 'done' })],
+        }) }] };
+      `);
+      server = await createProofkitMcp({ root, workspaceRoot });
+      client = await connect(server);
+      const charter = {
+        intent: "验证新项目核心状态", level: "core", actions: [],
+        assertions: [{ kind: "text-visible", text: "ready" }], oracles: ["fixture.terminal"], sideEffectPolicy: "deny",
+        planning: { source: "model", confidence: 1, evidenceGaps: ["invented-gap"] },
+      };
+      const started = payload(await client.callTool({ name: "run_test", arguments: { intent: charter.intent, charter } }));
+      expect(started).toMatchObject({ level: "core", planning: { source: "submitted", evidenceGaps: [] }, readiness: { ready: true }, running: true });
+      const final = await waitForMission(client, started.missionId);
+      expect(final.mission.verdict).toBe("passed");
+      const evidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
+      expect(evidence.evidence).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "business" })]));
+      expect(await readdir(root)).toEqual(["package.json"]);
+    } finally {
+      await client?.close();
+      await server?.close();
+      vi.restoreAllMocks();
+      await Promise.all([root, workspaceRoot].map((path) => rm(path, { recursive: true, force: true })));
+    }
+  });
+
   it("runs a curated write workflow only with the operator's process-level opt-in", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mcp-write-source-"));
     const workspaceRoot = await mkdtemp(join(tmpdir(), "proofkit-mcp-write-workspace-"));

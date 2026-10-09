@@ -29,6 +29,10 @@ describe("CLI workspace onboarding", () => {
     expect(await readFile(join(workspace, "charters", "ready.yml"), "utf8")).toContain("text-visible");
     expect(stdout).toHaveBeenCalled();
     log.mockClear();
+    await run("mission", "create", "verify ready", "--charter", "charters/ready.yml");
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ level: "quick", charter: { assertions: [{ kind: "text-visible", text: "ready" }] } });
+    await expect(run("mission", "create", "verify ready", "--charter", "../outside.yml")).rejects.toThrow("within the ProofKit workspace");
+    log.mockClear();
     await run("mission", "create", "verify ready", "--expect", "ready", "--level", "quick");
     const mission = JSON.parse(String(log.mock.calls[0]?.[0]));
     expect(mission.projectRoot).toBe(root);

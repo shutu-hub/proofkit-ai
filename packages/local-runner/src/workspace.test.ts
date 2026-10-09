@@ -73,6 +73,26 @@ describe("external test workspace", () => {
     await expect(restricted.createMission({ intent: "简历获取", surface: "web" })).rejects.toThrow("outside the configured origin");
   });
 
+  it("validates agent-submitted plans before persisting a Mission", async () => {
+    const { root, workspaceRoot } = await fixture();
+    const service = await LocalRunnerService.create({ root, workspaceRoot, restrictWebOrigins: true });
+    const submitted = TestCharterSchema.parse({
+      intent: "测试核心流程", level: "core", actions: [],
+      assertions: [{ kind: "text-visible", text: "ready" }], oracles: ["missing"], sideEffectPolicy: "deny",
+    });
+    await expect(service.createMission({ intent: submitted.intent, charter: submitted }))
+      .rejects.toThrow("unregistered Oracle");
+    await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], actions: [{ kind: "capability", name: "missing", input: {} }] } }))
+      .rejects.toThrow("unregistered capability");
+    await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], actions: [{ kind: "goto", url: "https://example.com" }] } }))
+      .rejects.toThrow("outside the configured origin");
+    await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], actions: [{ kind: "click", selector: "#submit" }] } }))
+      .rejects.toThrow("interactive action click requires sideEffectPolicy=allow");
+    const incomplete = await service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [] } });
+    expect(incomplete.plan.planning).toMatchObject({ source: "submitted", evidenceGaps: ["business-oracle"] });
+    expect(await readdir(root)).toEqual(["package.json"]);
+  });
+
   it("runs an external Charter and connector, then reads and replays a Mission after restart", async () => {
     const { root, workspaceRoot } = await fixture();
     await mkdir(join(workspaceRoot, ".proofkit", "fixtures"));

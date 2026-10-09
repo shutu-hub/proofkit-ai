@@ -792,6 +792,18 @@ describe("LocalRunnerService", () => {
     expect(status.status).toBe("failed");
   });
 
+  it("applies the interactive-action policy to direct MCP runs as well as Missions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-mcp-action-policy-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ workspaceRoot: root, root, restrictWebOrigins: true });
+    const started = await service.start({ charter: {
+      intent: "submit a form", level: "quick", mode: "guided", preconditions: [],
+      actions: [{ kind: "click", selector: "#submit" }],
+      assertions: [{ kind: "text-visible", text: "saved" }], sideEffectPolicy: "deny", metadata: {},
+    } });
+    await expect(service.wait(started.runId)).rejects.toThrow("interactive action click requires sideEffectPolicy=allow");
+  });
+
   it("blocks off-origin navigation in MCP mode before creating evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-local-"));
     roots.push(root);

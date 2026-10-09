@@ -180,6 +180,7 @@ export class LocalRunnerService {
       ? TestLevelSelectionSchema.parse({ resolved: "release", source: "inferred", reason: `选定的测试套件 ${input.suiteId} 要求 release 级别`, confidence: 1 })
       : resolveTestLevel(input.intent, input.level ?? input.charter?.level ?? catalogLevel);
     const hasAdHocOptions = Boolean(input.url || input.expect?.length || input.oracleNames?.length || input.mode || input.sideEffectPolicy);
+    if (input.charter && hasAdHocOptions) throw new Error("A submitted Charter cannot be combined with ad-hoc planning options");
     if (input.charterId && hasAdHocOptions) throw new Error("charterId cannot be combined with ad-hoc planning options");
     if (input.suiteId && hasAdHocOptions) throw new Error("suiteId cannot be combined with ad-hoc planning options");
     const selectedSuite = input.charter || input.charterId || (hasAdHocOptions && !input.suiteId)
@@ -214,7 +215,22 @@ export class LocalRunnerService {
     }
     let charter: TestCharter;
     if (input.charter) {
-      charter = input.charter;
+      const submitted = TestCharterSchema.parse(input.charter);
+      charter = this.restrictWebOrigins
+        ? TestCharterSchema.parse({
+          ...submitted,
+          planning: assessPlanningQuality(submitted, {
+            projectMap: await this.discover(),
+            constraints: {
+              level: levelSelection.resolved,
+              url: this.config.surfaces.web?.baseUrl,
+              requireAssertions: true,
+              requireBusinessOracle: getTestLevelProfile(levelSelection.resolved).evidencePolicy.requireBusinessOracle,
+            },
+            source: "submitted",
+          }),
+        })
+        : submitted;
     } else if (selected) {
       const saved = await loadCharter(resolveWithinWorkspace(this.workspaceRoot, selected.entry.path));
       if (saved.level !== selected.entry.level) {
@@ -239,6 +255,7 @@ export class LocalRunnerService {
     }
     const normalizedCharter = TestCharterSchema.parse({ ...charter, levelSelection: charter.levelSelection ?? levelSelection });
     if (selected) this.validateCatalogCharter(selected.entry.id, normalizedCharter, surface);
+    else if (input.charter && this.restrictWebOrigins) this.validateMissionCharterSafety("Submitted Charter", normalizedCharter, surface);
     if (input.policy?.sideEffectPolicy && input.policy.sideEffectPolicy !== normalizedCharter.sideEffectPolicy) {
       throw new Error("Mission policy side effects must match the selected Charter");
     }
@@ -279,33 +296,42 @@ export class LocalRunnerService {
     if (getTestLevelProfile(charter.level).evidencePolicy.requireBusinessOracle && !charter.oracles?.length) {
       throw new Error(`Test catalog entry ${id} needs an independent business Oracle for ${charter.level}`);
     }
+    this.validateMissionCharterSafety(`Test catalog entry ${id}`, charter, surface);
+  }
+
+  private validateMissionCharterSafety(label: string, charter: TestCharter, surface: LocalAdapterName): void {
     const availableOracles = new Set([...this.oracles.map((oracle) => oracle.name), ...this.config.oracles.map((oracle) => oracle.name)]);
     for (const oracle of [...(charter.oracles ?? []), ...(charter.negativeCases ?? []).flatMap((item) => item.oracles)]) {
-      if (!availableOracles.has(oracle)) throw new Error(`Test catalog entry ${id} references an unregistered Oracle: ${oracle}`);
+      if (!availableOracles.has(oracle)) throw new Error(`${label} references an unregistered Oracle: ${oracle}`);
       const configured = this.config.oracles.find((item) => item.name === oracle);
       if (this.restrictWebOrigins && configured && !isLoopback(new URL(configured.url).hostname)) {
-        throw new Error(`Test catalog entry ${id} requires a loopback Oracle in MCP mode: ${oracle}`);
+        throw new Error(`${label} requires a loopback Oracle in MCP mode: ${oracle}`);
       }
     }
     const availableCapabilities = new Map(this.capabilities.map((capability) => [capability.name, capability]));
     const scenarios = [{ actions: charter.actions, sideEffectPolicy: charter.sideEffectPolicy }, ...(charter.negativeCases ?? [])];
     for (const scenario of scenarios) {
       for (const action of scenario.actions) {
+        if (this.restrictWebOrigins && (action.kind === "click" || action.kind === "fill" || action.kind === "press") && scenario.sideEffectPolicy !== "allow") {
+          throw new Error(`${label} interactive action ${action.kind} requires sideEffectPolicy=allow`);
+        }
         if (action.kind !== "capability") continue;
         const capability = availableCapabilities.get(action.name);
-        if (!capability) throw new Error(`Test catalog entry ${id} references an unregistered capability: ${action.name}`);
+        if (!capability) throw new Error(`${label} references an unregistered capability: ${action.name}`);
         if (capability.sideEffect === "write" && scenario.sideEffectPolicy !== "allow") {
-          throw new Error(`Test catalog entry ${id} must allow write capability ${action.name} in its scenario`);
+          throw new Error(`${label} must allow write capability ${action.name} in its scenario`);
         }
       }
     }
     if (this.restrictWebOrigins && scenarios.some((scenario) => scenario.sideEffectPolicy === "allow") && this.config.policies.sideEffects !== "allow") {
-      throw new Error(`Test catalog entry ${id} requires policies.sideEffects=allow in the test workspace`);
+      throw new Error(`${label} requires policies.sideEffects=allow in the test workspace`);
     }
     this.validateWebOrigins(charter, { adapter: surface });
     for (const negativeCase of charter.negativeCases ?? []) {
       this.validateWebOrigins({ ...charter, actions: negativeCase.actions }, { adapter: surface });
     }
+    this.validateCdpEndpoint({ adapter: surface });
+    this.validateMobileEndpoint({ adapter: surface });
   }
 
   async approveMission(missionId: string): Promise<TestMission> {
@@ -957,6 +983,7 @@ export class LocalRunnerService {
 
   private async execute(runId: string, input: LocalRunInput, signal: AbortSignal): Promise<RunSummary> {
     const charter = TestCharterSchema.parse(await this.resolveCharter(input));
+    if (this.restrictWebOrigins) this.validateMissionCharterSafety("MCP Charter", charter, input.adapter ?? "web");
     if (this.restrictWebOrigins && charter.sideEffectPolicy === "allow" && this.config.policies.sideEffects !== "allow") {
       throw new Error("MCP interactive runs require sideEffects=allow in project config");
     }
