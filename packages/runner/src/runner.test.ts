@@ -196,6 +196,24 @@ describe("ExecutionRunner", () => {
     expect(await readFile(join(root, "capability-run", "report.html"), "utf8")).toContain("oracle-1.json");
   });
 
+  it("persists Oracle source facts separately from the verdict report", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-oracle-facts-"));
+    const facts = { state: "failed", candidateId: "opaque-123" };
+    const summary = await new ExecutionRunner(new FakeAdapter(), {
+      evidenceDir: root,
+      oracles: [{ name: "resume-terminal", check: async () => ({ name: "resume-terminal", passed: false, message: "incorrect binding", evidence: [JSON.stringify(facts)] }) }],
+    }).run({ intent: "check resume facts", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [], oracles: ["resume-terminal"], sideEffectPolicy: "deny", metadata: {} }, "facts-run");
+
+    const oracle = summary.oracles[0]!;
+    expect(oracle.sourceEvidenceCount).toBe(1);
+    expect(oracle.sourceEvidenceArtifacts).toEqual(["facts-run/artifacts/oracle-1-source.json"]);
+    expect(oracle.evidence).toEqual(["facts-run/artifacts/oracle-1-source.json", "facts-run/artifacts/oracle-1.json"]);
+    expect(JSON.parse(await readFile(join(root, "facts-run", "artifacts", "oracle-1-source.json"), "utf8"))).toMatchObject({ facts: [facts] });
+    const report = await readFile(join(root, "facts-run", "artifacts", "oracle-1.json"), "utf8");
+    expect(report).not.toContain("opaque-123");
+    expect(report).toContain("oracle-1-source.json");
+  });
+
   it("does not accept a business oracle result with a different registered name", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-oracle-name-"));
     const summary = await new ExecutionRunner(new FakeAdapter(), {

@@ -485,7 +485,9 @@ export class LocalRunnerService {
           passedAssertions: summary.assertions.filter((item) => item.passed).length,
           oracles: summary.oracles.length,
           passedOracles: summary.oracles.filter((item) => item.passed === true).length,
-          businessEvidence: summary.oracles.reduce((count, oracle) => count + (oracle.sourceEvidenceCount ?? 0), 0),
+          businessEvidence: summary.oracles.reduce((count, oracle) => count + ((oracle.sourceEvidenceArtifacts ?? []).some((path) =>
+            evidence.some((item) => item.kind === "business" && item.evidenceId === `${summary.runId}:${path}`))
+            ? oracle.sourceEvidenceCount ?? 0 : 0), 0),
           matchedRoutePaths: matchedWebRouteTargets(summary, routeTargets),
           matchedApiTargets: apiTraffic.matched,
           networkLogAvailable: apiTraffic.available,
@@ -678,11 +680,12 @@ export class LocalRunnerService {
   private runEvidence(summary: RunSummary): EvidenceRef[] {
     const eventsPath = resolve(this.evidenceDir, summary.runId, "events.jsonl");
     const paths = new Set([`${summary.runId}/run.json`, `${summary.runId}/report.html`, ...(existsSync(eventsPath) ? [`${summary.runId}/events.jsonl`] : []), ...summary.artifacts]);
-    const oracleArtifacts = new Map(summary.oracles.map((oracle) => [oracle.evidence.at(-1), oracle.sourceEvidenceCount ?? 0]));
+    const oracleReports = new Set(summary.oracles.map((oracle) => oracle.evidence.at(-1)));
+    const oracleSourceArtifacts = new Set(summary.oracles.flatMap((oracle) => oracle.sourceEvidenceArtifacts ?? []));
     return [...paths].map((path) => EvidenceRefSchema.parse({
       evidenceId: `${summary.runId}:${path}`,
-      kind: path.endsWith("events.jsonl") ? "network" : path.endsWith(".png") ? "screenshot" : path.endsWith("report.html") || (oracleArtifacts.has(path) && !oracleArtifacts.get(path))
-        ? "report" : oracleArtifacts.has(path) ? "business" : "snapshot",
+      kind: path.endsWith("events.jsonl") ? "network" : path.endsWith(".png") ? "screenshot" : path.endsWith("report.html") || oracleReports.has(path)
+        ? "report" : oracleSourceArtifacts.has(path) ? "business" : "snapshot",
       path: resolve(this.evidenceDir, path),
       description: `Evidence captured by run ${summary.runId}`,
       capturedAt: summary.endedAt ?? summary.startedAt,

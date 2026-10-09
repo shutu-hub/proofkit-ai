@@ -267,9 +267,18 @@ export class ExecutionRunner {
           throwIfAborted(signal);
           const result = OracleResultSchema.parse(await withAbort(oracle.check({ runId, charter, steps: summary.steps, assertions: summary.assertions, signal }), signal, `Oracle ${oracle.name}`));
           if (result.name !== oracle.name) throw new Error(`Oracle ${oracle.name} returned a result for ${result.name}`);
-          const sourceEvidenceCount = result.evidence.filter((item) => item.trim().length > 0).length;
-          const artifact = await this.store.writeJson(runId, `oracle-${summary.oracles.length + 1}`, { ...result, sourceEvidenceCount });
-          const recordedResult: OracleResult = { ...result, sourceEvidenceCount, evidence: [...result.evidence, artifact] };
+          const sourceFacts = result.evidence.filter((item) => item.trim().length > 0).map((item) => {
+            try { return JSON.parse(item) as unknown; } catch { return item; }
+          });
+          const sourceEvidenceCount = sourceFacts.length;
+          const index = summary.oracles.length + 1;
+          const sourceEvidenceArtifacts = sourceEvidenceCount > 0
+            ? [await this.store.writeJson(runId, `oracle-${index}-source`, { oracle: result.name, facts: sourceFacts })]
+            : [];
+          const report = { ...result, evidence: sourceEvidenceArtifacts, sourceEvidenceCount, sourceEvidenceArtifacts };
+          const artifact = await this.store.writeJson(runId, `oracle-${index}`, report);
+          const recordedResult: OracleResult = { ...report, evidence: [...sourceEvidenceArtifacts, artifact] };
+          summary.artifacts.push(...sourceEvidenceArtifacts);
           summary.artifacts.push(artifact);
           summary.oracles.push(recordedResult);
           await this.emit({ runId, timestamp: new Date().toISOString(), type: "oracle.completed", payload: recordedResult });

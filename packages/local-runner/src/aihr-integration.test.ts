@@ -268,6 +268,8 @@ describe("AIHR project integration", () => {
     expect(summary.steps.every((step) => step.status === "passed")).toBe(true);
     expect(summary.oracles).toHaveLength(1);
     expect(summary.oracles[0]).toMatchObject({ name: "aihr.resumeCollectionPipeline", passed: mode === "success" });
+    expect(summary.oracles[0]?.sourceEvidenceArtifacts).toEqual([`${summary.runId}/artifacts/oracle-1-source.json`]);
+    expect(summary.oracles[0]?.evidence).toEqual([`${summary.runId}/artifacts/oracle-1-source.json`, `${summary.runId}/artifacts/oracle-1.json`]);
     if (mode === "relation-old-file") {
       expect(summary.oracles[0]?.sourceLocations).toContain("services/resume-collection-service/internal/service/resume_post_processor.go");
     }

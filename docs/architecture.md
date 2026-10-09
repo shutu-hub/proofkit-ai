@@ -226,7 +226,7 @@ The mission references run evidence through typed `EvidenceRef` records. A missi
 
 Every event has a run ID and timestamp. Each step stores before/after snapshots and the action receipt. Screenshot capture is best-effort with a bounded adapter timeout; an offscreen or unavailable renderer is recorded as a finding and cannot silently turn into a business failure or hold the run for the browser's default long timeout.
 
-An Oracle result is validated against its registered name and schema. `sourceEvidenceCount` records how many nonempty evidence items the Oracle supplied before the Runner writes its own result file. That result file is an audit record, not an independent business fact: an Oracle with no source evidence cannot satisfy a `core` or `release` business gate or confirm a product defect. The project-owned Oracle remains responsible for supplying sanitized, trustworthy facts from the tested system.
+An Oracle result is validated against its registered name and schema. The Runner stores nonempty Oracle source facts in a separate `oracle-N-source.json` artifact and records its path in `sourceEvidenceArtifacts`; the Oracle verdict is stored in `oracle-N.json`. Raw facts are not duplicated in the Run summary or verdict report. A confirmed business Finding, Diagnosis or RepairSuggestion must cite the source artifact as `business` evidence; the Oracle's own verdict report cannot confirm a product defect. Mission gates count `sourceEvidenceCount` only when the corresponding source artifact is linked as business evidence in that Run. The project-owned Oracle remains responsible for supplying sanitized, trustworthy facts from the tested system.
 
 ## Verdict model
 

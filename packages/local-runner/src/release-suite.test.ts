@@ -223,6 +223,7 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     const verdict: Verdict = failed ? "failed" : "passed";
     const now = new Date().toISOString();
     const oracleArtifact = `${runId}/oracle.json`;
+    const sourceArtifact = `${runId}/oracle-source.json`;
     const summary: RunSummary = {
       runId, startedAt: now, endedAt: now, status: "completed", verdict, charter,
       steps: kind === "negative" ? [] : [{
@@ -231,8 +232,8 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
         afterSnapshot: { capturedAt: now, url: `http://127.0.0.1:8765/${visited ? options.dynamicResume && charterId === "resume" ? "resumes/private-candidate-123" : charterId : ""}`, metadata: {} },
       }],
       assertions: kind === "negative" ? [] : [{ assertion: charter.assertions[0]!, passed: true, message: "visible", evidence: [`${runId}/snapshot.json`] }],
-      oracles: [{ name: `${charterId}-oracle`, passed: !failed, message: failed ? "business state is wrong" : "business state is done", evidence: [oracleArtifact], sourceEvidenceCount: missing ? 0 : 1, observedAt: now }],
-      artifacts: [`${runId}/snapshot.json`, oracleArtifact],
+      oracles: [{ name: `${charterId}-oracle`, passed: !failed, message: failed ? "business state is wrong" : "business state is done", evidence: missing ? [oracleArtifact] : [sourceArtifact, oracleArtifact], sourceEvidenceCount: missing ? 0 : 1, sourceEvidenceArtifacts: missing ? [] : [sourceArtifact], observedAt: now }],
+      artifacts: [`${runId}/snapshot.json`, ...(missing ? [] : [sourceArtifact]), oracleArtifact],
       findings: [],
     };
     summaries.set(runId, summary);

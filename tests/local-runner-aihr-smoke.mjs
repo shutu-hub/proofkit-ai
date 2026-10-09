@@ -141,6 +141,9 @@ try {
   assert.equal(failed.verdict, "failed");
   assert.equal(failed.firstFailure.kind, "business-oracle");
   assert.ok(failed.findings.some((finding) => finding.category === "product" && finding.status === "confirmed" && finding.evidence.length > 0));
+  assert.ok(failed.findings.some((finding) => finding.category === "product" && finding.evidence.some((item) => item.kind === "business" && item.path.endsWith("oracle-1-source.json"))));
+  assert.ok(failed.diagnosis?.evidence.some((item) => item.kind === "business"));
+  assert.ok(failed.repairSuggestions.some((suggestion) => suggestion.evidence.some((item) => item.kind === "business")));
   const failedRunId = failed.observations.find((item) => item.kind === "surface.run").data.runId;
   assert.equal((await service.wait(failedRunId)).assertions[0].passed, true);
   assert.equal(uploaded, 3);

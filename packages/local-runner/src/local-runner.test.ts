@@ -30,8 +30,8 @@ describe("LocalRunnerService", () => {
       charter,
       steps: [],
       assertions: [{ assertion: { kind: "text-visible", text: "ready" }, passed: true, message: "ready is visible", evidence: ["fixture-run/after.json"] }],
-      oracles: [{ name: "fixture-terminal", passed: true, message: "fixture is complete", evidence: [JSON.stringify({ status: "complete" }), "fixture-run/oracle-1.json"], sourceEvidenceCount: 1, observedAt: new Date().toISOString() }],
-      artifacts: ["fixture-run/after.json", "fixture-run/oracle-1.json"],
+      oracles: [{ name: "fixture-terminal", passed: true, message: "fixture is complete", evidence: ["fixture-run/oracle-1-source.json", "fixture-run/oracle-1.json"], sourceEvidenceCount: 1, sourceEvidenceArtifacts: ["fixture-run/oracle-1-source.json"], observedAt: new Date().toISOString() }],
+      artifacts: ["fixture-run/after.json", "fixture-run/oracle-1-source.json", "fixture-run/oracle-1.json"],
       findings: [],
     };
     service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
@@ -158,7 +158,7 @@ describe("LocalRunnerService", () => {
     expect(completed.findings.some((finding) => finding.message.includes("web 主运行") && finding.message.includes("独立业务 Oracle"))).toBe(true);
   });
 
-  it("does not treat an oracle's own report as independent business evidence", async () => {
+  it("does not treat an oracle's report or unmaterialized source count as independent business evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-oracle-facts-gate-"));
     roots.push(root);
     const service = new LocalRunnerService({ workspaceRoot: root, root });
@@ -171,7 +171,7 @@ describe("LocalRunnerService", () => {
     const summary: RunSummary = {
       runId: "oracle-no-facts", startedAt: now, endedAt: now, status: "completed", verdict: "passed", charter, steps: [],
       assertions: [{ assertion, passed: true, message: "Ready", evidence: ["oracle-no-facts/after.json"] }],
-      oracles: [{ name: "resume-terminal", passed: true, message: "complete", evidence: ["oracle-no-facts/artifacts/oracle-1.json"], sourceEvidenceCount: 0 }],
+      oracles: [{ name: "resume-terminal", passed: true, message: "complete", evidence: ["oracle-no-facts/artifacts/oracle-1.json"], sourceEvidenceCount: 1 }],
       artifacts: ["oracle-no-facts/after.json", "oracle-no-facts/artifacts/oracle-1.json"], findings: [],
     };
     service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
@@ -257,8 +257,8 @@ describe("LocalRunnerService", () => {
         charter,
         steps: [],
         assertions: [{ assertion: charter.assertions[0]!, passed: true, message: `${adapter} ready`, evidence: [`release-run-${sequence}/after.json`] }],
-        oracles: [{ name: "fixture-terminal", passed: true, message: `${adapter} terminal`, evidence: [JSON.stringify({ status: "complete" }), `release-run-${sequence}/oracle.json`], sourceEvidenceCount: 1, observedAt: new Date().toISOString() }],
-        artifacts: [`release-run-${sequence}/after.json`, `release-run-${sequence}/oracle.json`, `release-run-${sequence}/trace.json`],
+        oracles: [{ name: "fixture-terminal", passed: true, message: `${adapter} terminal`, evidence: [`release-run-${sequence}/oracle-source.json`, `release-run-${sequence}/oracle.json`], sourceEvidenceCount: 1, sourceEvidenceArtifacts: [`release-run-${sequence}/oracle-source.json`], observedAt: new Date().toISOString() }],
+        artifacts: [`release-run-${sequence}/after.json`, `release-run-${sequence}/oracle-source.json`, `release-run-${sequence}/oracle.json`, `release-run-${sequence}/trace.json`],
         findings: [],
       };
     };
@@ -404,11 +404,12 @@ describe("LocalRunnerService", () => {
           name,
           passed: true,
           message: "oracle passed",
-          evidence: [`${runId}/oracle.json`],
+          evidence: [`${runId}/oracle-source.json`, `${runId}/oracle.json`],
           sourceEvidenceCount: 1,
+          sourceEvidenceArtifacts: [`${runId}/oracle-source.json`],
           observedAt: now,
         })),
-        artifacts: [`${runId}/after.json`, `${runId}/oracle.json`],
+        artifacts: [`${runId}/after.json`, `${runId}/oracle-source.json`, `${runId}/oracle.json`],
         findings: [],
       };
       summaries.set(runId, summary);
@@ -545,8 +546,8 @@ describe("LocalRunnerService", () => {
         charter: input.charter,
         steps: [],
         assertions: negative ? [] : input.charter.assertions.map((assertion) => ({ assertion, passed: true, message: "passed", evidence: [`${runId}/after.json`] })),
-        oracles: negative ? [] : [{ name: "resume-terminal", passed: true, message: "passed", evidence: [JSON.stringify({ status: "complete" }), `${runId}/oracle.json`], sourceEvidenceCount: 1, observedAt: now }],
-        artifacts: [`${runId}/after.json`, `${runId}/oracle.json`],
+        oracles: negative ? [] : [{ name: "resume-terminal", passed: true, message: "passed", evidence: [`${runId}/oracle-source.json`, `${runId}/oracle.json`], sourceEvidenceCount: 1, sourceEvidenceArtifacts: [`${runId}/oracle-source.json`], observedAt: now }],
+        artifacts: [`${runId}/after.json`, ...(negative ? [] : [`${runId}/oracle-source.json`]), `${runId}/oracle.json`],
         findings: negative ? ["expected authorization rejection"] : [],
       };
       summaries.set(runId, summary);
