@@ -89,10 +89,11 @@ export function createProgram(): Command {
     });
 
   program.command("run <intent>")
-    .description("Execute a Test Charter against a Web or Electron surface")
+    .description("Execute a Test Charter against a Web, Electron or mobile surface")
     .option("--root <path>", "project root", ".")
     .option("--charter <path>", "load an existing YAML charter")
-    .option("--adapter <adapter>", "web or electron", "web")
+    .option("--adapter <adapter>", "web, electron or mobile", "web")
+    .option("--mobile-server <url>", "Appium/W3C WebDriver server URL")
     .option("--url <url>", "entry URL")
     .option("--cdp <url>", "CDP endpoint")
     .option("--devtools-port-file <path>", "Electron DevToolsActivePort path")
@@ -121,6 +122,7 @@ export function createProgram(): Command {
         url: options.url,
         cdp: options.cdp,
         devtoolsPortFile: options.devtoolsPortFile,
+        mobileServer: options.mobileServer,
         headful: options.headful,
         start: options.start,
         expect: options.expect,
@@ -147,7 +149,7 @@ export function createProgram(): Command {
   mission.command("create <intent>")
     .description("Create a reviewable mission plan from a natural-language intent")
     .option("--root <path>", "project root", ".")
-    .option("--surface <surface>", "web or electron", "web")
+    .option("--surface <surface>", "web, electron or mobile", "web")
     .option("--url <url>", "entry URL")
     .option("--expect <text>", "visible text assertion", collect, [])
     .option("--oracle <name>", "configured business oracle", collect, [])
@@ -234,7 +236,8 @@ export function createProgram(): Command {
     .option("--root <path>", "project root", ".")
     .option("--evidence-dir <path>", "run artifact directory", ".proofkit/runs")
     .option("--rerun", "execute the saved charter again")
-    .option("--adapter <adapter>", "web or electron", "web")
+    .option("--adapter <adapter>", "web, electron or mobile", "web")
+    .option("--mobile-server <url>", "Appium/W3C WebDriver server URL")
     .option("--cdp <url>", "CDP endpoint")
     .option("--devtools-port-file <path>", "Electron DevToolsActivePort path")
     .option("--headful", "launch a visible browser")
@@ -257,6 +260,7 @@ export function createProgram(): Command {
         adapter: options.adapter as LocalAdapterName,
         cdp: options.cdp,
         devtoolsPortFile: options.devtoolsPortFile,
+        mobileServer: options.mobileServer,
         headful: options.headful,
       });
       const summary = await runner.wait(started.runId);
@@ -295,6 +299,7 @@ type RunCommandOptions = PlanCommandOptions & {
   adapter: string;
   cdp?: string;
   devtoolsPortFile?: string;
+  mobileServer?: string;
   headful?: boolean;
   start: boolean;
   evidenceDir: string;
@@ -309,6 +314,7 @@ type ReplayOptions = RootOptions & {
   adapter: string;
   cdp?: string;
   devtoolsPortFile?: string;
+  mobileServer?: string;
   headful?: boolean;
   allowCapabilityWrites?: boolean;
 };

@@ -45,7 +45,7 @@ The protocol deliberately separates the audit layers: `AgentStep` explains why a
 
 ## Project onboarding
 
-The zero application-code-change path needs a local Web or Electron endpoint and a ProofKit config. A new project's test files default to `~/.proofkit/workspaces/<project-name>-<path-hash>/.proofkit/`. CLI `--workspace` and MCP `PROOFKIT_WORKSPACE_ROOT` select an explicit test workspace; `--root` / `PROOFKIT_ROOT` always identify the tested source. An existing project-local `.proofkit` remains compatible unless an explicit workspace is supplied.
+The zero application-code-change path needs a local Web, Electron or Appium-compatible mobile endpoint and a ProofKit config. A new project's test files default to `~/.proofkit/workspaces/<project-name>-<path-hash>/.proofkit/`. CLI `--workspace` and MCP `PROOFKIT_WORKSPACE_ROOT` select an explicit test workspace; `--root` / `PROOFKIT_ROOT` always identify the tested source. An existing project-local `.proofkit` remains compatible unless an explicit workspace is supplied.
 
 Optional `<workspaceRoot>/.proofkit/integration.mjs` adds typed capabilities, business Oracles and setup/cleanup for workflows such as resume acquisition. It is trusted local code, not sandboxed JavaScript, and uses the same lifecycle as CLI and MCP. A business connector is needed when UI observations alone cannot establish the requested outcome.
 
@@ -60,6 +60,7 @@ The integration should expose opaque IDs and sanitized facts. It should not expo
 | “快速看一下登录页能不能打开” | `quick` | Run the shortest observable path and return quickly. |
 | “测试简历获取核心链路” | `core` | Require an independent business result and retain replayable evidence. |
 | “上线前完整回归 Web 和 Electron” | `release` | Run both surfaces and replay each; require the matrix and business evidence. Any negative or recovery cases declared in the Charter also run on every required surface; a case may declare an expected `failed` or `blocked` outcome. |
+| “在 Android 模拟器上测试登录” | `core` | Use the configured `mobile` W3C WebDriver surface with the same assertions, Oracles and evidence contract. |
 
 If the user does not specify a level, ProofKit selects `core`. An explicit `quick` request is never silently upgraded by the planner.
 

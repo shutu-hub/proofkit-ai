@@ -1,6 +1,6 @@
 # ProofKit AI
 
-**Evidence-driven system testing for web and Electron.**
+**Evidence-driven system testing for Web, Electron and mobile.**
 
 ProofKit turns a short product instruction into a reviewable test charter, runs it against a real browser or Electron app, observes the result, and stores the evidence behind every verdict.
 
@@ -13,6 +13,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Maps workspace manifests and common Web, Electron, and backend entry points.
 - Converts intent into a saved YAML Test Charter that can be reviewed and edited.
 - Executes Web and Electron actions through Playwright, including CDP attachment.
+- Executes mobile actions through a W3C WebDriver/Appium-compatible server when a mobile surface is configured.
 - Starts local project processes with health checks and captures runtime events in the same run timeline.
 - Observes read-only business HTTP endpoints through a redacted oracle instead of treating a UI click as proof of success.
 - Accepts programmatically registered, schema-validated project capabilities; only an explicit evidence projection is persisted.
@@ -96,6 +97,20 @@ pnpm --filter @proofkit/cli dev -- run "resume check" \
   --adapter electron \
   --devtools-port-file /path/to/user-data/DevToolsActivePort
 ```
+
+For a mobile surface, configure an Appium or W3C WebDriver server in the external workspace:
+
+```yaml
+surfaces:
+  mobile:
+    serverUrl: http://127.0.0.1:4723
+    platformName: Android
+    deviceName: emulator-5554
+    automationName: UiAutomator2
+    app: /path/to/app.apk
+```
+
+Then run the same Charter with `--adapter mobile`. Mobile selectors may use `accessibility=`, `id=`, `xpath=`, `class=` or `css=` prefixes. The mobile driver must be loopback when invoked through MCP.
 
 Relative Charter and output paths resolve against the selected test workspace. Runs are stored under `<workspaceRoot>/.proofkit/runs/<run-id>/` by default. Each run contains `run.json`, `events.jsonl`, artifacts, and `report.html`.
 

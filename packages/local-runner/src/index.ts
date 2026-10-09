@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, type MissionTool, type MissionToolResult } from "@proofkit/agent";
-import { ElectronAdapter, WebAdapter } from "@proofkit/adapters";
+import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
 import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, TestCharterSchema, type EvidenceRef, type NegativeCase, type ProofkitConfig, type ProjectMap, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter, type TestLevel, type TestMission, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
@@ -14,7 +14,7 @@ import { ProjectMissionStore } from "./mission-store.js";
 
 export { loadProjectIntegration } from "./integration.js";
 
-export type LocalAdapterName = "web" | "electron";
+export type LocalAdapterName = "web" | "electron" | "mobile";
 
 export type LocalRunInput = {
   intent?: string;
@@ -24,6 +24,7 @@ export type LocalRunInput = {
   url?: string;
   cdp?: string;
   devtoolsPortFile?: string;
+  mobileServer?: string;
   headful?: boolean;
   start?: boolean;
   expect?: string[];
@@ -52,6 +53,7 @@ export type MissionCreateOptions = {
   url?: string;
   cdp?: string;
   devtoolsPortFile?: string;
+  mobileServer?: string;
   expect?: string[];
   oracleNames?: string[];
   mode?: RunMode;
@@ -152,7 +154,7 @@ export class LocalRunnerService {
 
   async createMission(input: MissionCreateOptions): Promise<TestMission> {
     const surface = input.surface ?? input.adapter ?? "web";
-    if (surface === "mobile" || surface === "api") throw new Error(`Mission surface is not enabled by the local runner: ${surface}`);
+    if (surface === "api") throw new Error(`Mission surface is not enabled by the local runner: ${surface}`);
     const levelSelection = resolveTestLevel(input.intent, input.level ?? input.charter?.level);
     const charter = input.charter ?? await this.plan(input.intent, {
       url: input.url,
@@ -491,10 +493,10 @@ export class LocalRunnerService {
     };
     return [
       { name: "project.discover", description: "Inspect the local project without modifying it.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
-      { name: "surface.inspect", description: "Inspect the configured Web or Electron surface.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
-      { name: "surface.run-charter", description: "Run a validated charter through the existing deterministic runner and collect evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ charter: TestCharterSchema.optional(), adapter: z.enum(["web", "electron"]).optional() }), execute: runCharter },
-      { name: "surface.replay-charter", description: "Replay the preceding surface run using the saved charter and preserve a second evidence trail.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ adapter: z.enum(["web", "electron"]).optional() }), execute: replayCharter },
-      { name: "surface.run-negative-charter", description: "Run an explicitly declared negative or recovery Charter and collect independent evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ negativeCase: NegativeCaseSchema, adapter: z.enum(["web", "electron"]).optional() }), execute: runNegativeCharter },
+      { name: "surface.inspect", description: "Inspect the configured Web, Electron or mobile surface.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
+      { name: "surface.run-charter", description: "Run a validated charter through the existing deterministic runner and collect evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ charter: TestCharterSchema.optional(), adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runCharter },
+      { name: "surface.replay-charter", description: "Replay the preceding surface run using the saved charter and preserve a second evidence trail.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: replayCharter },
+      { name: "surface.run-negative-charter", description: "Run an explicitly declared negative or recovery Charter and collect independent evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ negativeCase: NegativeCaseSchema, adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runNegativeCharter },
       { name: "mission.verify", description: "Verify the terminal verdict and evidence completeness of the preceding run.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: verify },
     ];
   }
@@ -638,6 +640,7 @@ export class LocalRunnerService {
     }
     this.validateWebOrigins(charter, input);
     this.validateCdpEndpoint(input);
+    this.validateMobileEndpoint(input);
     if (this.restrictWebOrigins && this.config.project.start && input.start !== false) {
       throw new Error("MCP runs cannot execute project.start; start the project through the CLI or use startProject=false");
     }
@@ -757,6 +760,22 @@ export class LocalRunnerService {
         devtoolsActivePortPath: input.devtoolsPortFile ?? this.config.surfaces.electron?.devtoolsActivePort,
       });
     }
+    if ((input.adapter ?? "web") === "mobile") {
+      const mobile = this.config.surfaces.mobile;
+      return new MobileAdapter({
+        serverUrl: input.mobileServer ?? mobile?.serverUrl ?? "http://127.0.0.1:4723",
+        capabilities: {
+          ...mobile?.capabilities,
+          ...(mobile?.platformName ? { platformName: mobile.platformName } : {}),
+          ...(mobile?.deviceName ? { "appium:deviceName": mobile.deviceName } : {}),
+          ...(mobile?.automationName ? { "appium:automationName": mobile.automationName } : {}),
+          ...(mobile?.app ? { "appium:app": mobile.app } : {}),
+          ...(mobile?.appPackage ? { "appium:appPackage": mobile.appPackage } : {}),
+          ...(mobile?.appActivity ? { "appium:appActivity": mobile.appActivity } : {}),
+          ...(mobile?.noReset !== undefined ? { "appium:noReset": mobile.noReset } : {}),
+        },
+      });
+    }
     if ((input.adapter ?? "web") !== "web") throw new Error(`Unsupported adapter: ${input.adapter}`);
     return new WebAdapter({
       baseUrl: input.url ?? this.config.surfaces.web?.baseUrl,
@@ -785,6 +804,14 @@ export class LocalRunnerService {
     const cdp = input.cdp ?? (input.adapter === "electron" ? this.config.surfaces.electron?.cdpUrl : this.config.surfaces.web?.cdpUrl);
     if (cdp && !isLoopback(new URL(cdp).hostname)) {
       throw new Error("CDP endpoint must use loopback in MCP runs");
+    }
+  }
+
+  private validateMobileEndpoint(input: LocalRunInput): void {
+    if (!this.restrictWebOrigins || input.adapter !== "mobile") return;
+    const serverUrl = input.mobileServer ?? this.config.surfaces.mobile?.serverUrl;
+    if (serverUrl && !isLoopback(new URL(serverUrl).hostname)) {
+      throw new Error("Mobile WebDriver endpoint must use loopback in MCP runs");
     }
   }
 

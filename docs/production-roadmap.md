@@ -80,15 +80,17 @@ The default AIHR development request is `core`. The ordinary PDF upload Charter 
 
 **Gate:** seeded defects have a correct failure boundary and a repair suggestion that is rejected when evidence is insufficient.
 
-## Phase 5: mobile and protocol extensions
+## Phase 5: mobile and protocol extensions — adapter slice complete
 
 **Goal:** add mobile coverage without changing the Run, Evidence or Verdict contracts.
 
-- Maestro adapter for common Android/iOS/Web accessibility flows.
-- Appium adapter for native and hybrid cases Maestro cannot cover.
+- W3C WebDriver/Appium adapter for common Android/iOS/native and hybrid flows.
+- Keep Maestro or device-cloud provisioning as separate adapters so the local Runner does not own device lifecycle.
 - Keploy-style traffic fixtures for deterministic asynchronous backend setup.
 
-**Gate:** one business Charter runs on Web, Electron and a mobile adapter with surface-specific actions but the same business Oracle contract.
+**Current evidence:** `@proofkit/adapters` has a tested W3C WebDriver mobile adapter, and the contracts, Local Runner, CLI and MCP accept `mobile` as a surface. The test uses a fake driver protocol; an emulator-backed business run remains required.
+
+**Gate:** one business Charter runs on Web, Electron and a real mobile adapter with surface-specific actions but the same business Oracle contract.
 
 ## Phase 6: team and CI operations
 

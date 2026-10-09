@@ -17,7 +17,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "Create a reviewable AI test mission from a natural-language intent. The mission plans work without modifying the tested project.",
     {
       intent: z.string().min(1),
-      surface: z.enum(["web", "electron"]).default("web"),
+      surface: z.enum(["web", "electron", "mobile"]).default("web"),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
       oracleNames: z.array(z.string().min(1)).optional(),
@@ -34,7 +34,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     {
       intent: z.string().min(1),
       level: z.enum(["quick", "core", "release"]).optional(),
-      surface: z.enum(["web", "electron"]).default("web"),
+      surface: z.enum(["web", "electron", "mobile"]).default("web"),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
       oracleNames: z.array(z.string().min(1)).optional(),
@@ -112,11 +112,12 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "start_run",
-    "Start an evidence-producing Web or Electron test in the configured local project. Returns immediately with a run ID.",
+    "Start an evidence-producing Web, Electron or mobile test in the configured local project. Returns immediately with a run ID.",
     {
       intent: z.string().min(1).optional(),
       charter: TestCharterSchema.optional(),
-      adapter: z.enum(["web", "electron"]).default("web"),
+      adapter: z.enum(["web", "electron", "mobile"]).default("web"),
+      mobileServer: z.string().url().optional(),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
       oracleNames: z.array(z.string().min(1)).optional(),
@@ -126,10 +127,11 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       oracleUrl: z.string().url().optional(),
       oracleName: z.string().min(1).optional(),
     },
-    async ({ intent, charter, adapter, url, expect, oracleNames, level, mode, startProject, oracleUrl, oracleName }) => result(await runner.start({
+    async ({ intent, charter, adapter, mobileServer, url, expect, oracleNames, level, mode, startProject, oracleUrl, oracleName }) => result(await runner.start({
       intent,
       charter,
       adapter,
+      mobileServer,
       url: surfaceUrl(url, runner),
       expect,
       oracleNames,
@@ -174,11 +176,12 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "Replay a previous validated charter against the configured adapter and create a new evidence run.",
     {
       runId: z.string().min(1),
-      adapter: z.enum(["web", "electron"]).optional(),
+      adapter: z.enum(["web", "electron", "mobile"]).optional(),
+      mobileServer: z.string().url().optional(),
       url: z.string().url().optional(),
       startProject: z.boolean().default(false),
     },
-    async ({ runId, adapter, url, startProject }) => result(await runner.replay(runId, { adapter, url: surfaceUrl(url, runner), start: startProject })),
+    async ({ runId, adapter, mobileServer, url, startProject }) => result(await runner.replay(runId, { adapter, mobileServer, url: surfaceUrl(url, runner), start: startProject })),
   );
 }
 

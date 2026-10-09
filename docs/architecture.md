@@ -4,7 +4,7 @@
 
 ProofKit is a local-first, evidence-driven system verification tool. It connects user intent to real Web/Electron execution, then connects the observed result to independent assertions and a reviewable report. CLI, MCP and CI all use the same `@proofkit/local-runner` lifecycle.
 
-The first implementation supports Web and Electron. Mobile, native desktop, protocol replay, cloud orchestration, and hosted device management are extension points, not first-release dependencies.
+The first implementation supports Web and Electron. A mobile adapter now speaks the W3C WebDriver protocol used by Appium-compatible servers; device provisioning, hosted device management and protocol replay remain deployment concerns outside the local kernel.
 
 ## Current system shape
 
@@ -19,7 +19,7 @@ flowchart TD
   Local --> Agent[Mission task graph + recoverable agent loop]
   Agent --> Runs[Local Runner run lifecycle]
   Runs --> Kernel[Execution Runner]
-  Kernel --> Surface[Web / Electron adapters]
+  Kernel --> Surface[Web / Electron / Mobile adapters]
   Kernel --> Runtime[Project process health + lifecycle]
   Kernel --> Integration[Typed domain capabilities + business oracles]
   Surface --> Evidence[Snapshots + events + evidence artifacts]
@@ -74,7 +74,7 @@ Initialization writes to the test workspace. If an existing source project alrea
 | `project` | Manifest/config discovery and project map | Business test execution |
 | `planner` | Intent scaffolding and charter parsing/validation | Unvalidated model-authored commands |
 | `runner` | Run lifecycle, step orchestration and verdict reduction | Browser-specific APIs |
-| `adapters` | Web/Electron interaction and surface event collection | Business pass/fail policy |
+| `adapters` | Web/Electron/Mobile interaction and surface event collection | Business pass/fail policy |
 | `runtime` | Local application process lifecycle, health checks and process events | Business pass/fail policy or arbitrary model-authored commands |
 | `oracles` | Independent business assertions and bounded read-only HTTP observation | Surface interaction or model-only success claims |
 | `evidence` | Run layout, timeline, redaction and report artifacts | Credentials or production data access |
@@ -140,7 +140,7 @@ The MCP server exposes both run-level tools (`discover_project`, `plan_test`, `s
 
 ### Surface Adapter
 
-An adapter exposes `connect`, `discover`, `snapshot`, `act`, `assert`, `capture`, `subscribeEvents` and `close`. Browser locator details stay inside the adapter. The runner receives typed receipts and snapshots and can therefore support a future mobile/native adapter without changing the run model.
+An adapter exposes `connect`, `discover`, `snapshot`, `act`, `assert`, `capture`, `subscribeEvents` and `close`. Browser and driver locator details stay inside the adapter. Web and Electron use Playwright; mobile uses a W3C WebDriver/Appium session with `accessibility=`, `id=`, `xpath=`, `class=` and `css=` selector prefixes. The runner receives typed receipts and snapshots, so business Charters, Oracles and Evidence remain unchanged across surfaces. Mobile driver events are currently represented through snapshots and action receipts; device logs and video are future evidence sources.
 
 ### Evidence
 

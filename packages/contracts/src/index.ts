@@ -206,6 +206,17 @@ export const ProofkitConfigSchema = z.object({
       cdpUrl: z.string().optional(),
       devtoolsActivePort: z.string().optional(),
     }).optional(),
+    mobile: z.object({
+      serverUrl: z.string().url().default("http://127.0.0.1:4723"),
+      platformName: z.string().min(1).optional(),
+      deviceName: z.string().min(1).optional(),
+      automationName: z.string().min(1).optional(),
+      app: z.string().min(1).optional(),
+      appPackage: z.string().min(1).optional(),
+      appActivity: z.string().min(1).optional(),
+      noReset: z.boolean().optional(),
+      capabilities: z.record(z.string(), z.unknown()).default({}),
+    }).optional(),
   }).default({}),
   planning: z.object({
     provider: z.enum(["deterministic", "openai-compatible"]).default("deterministic"),
