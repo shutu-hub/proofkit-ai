@@ -18,6 +18,7 @@
     "dev": "pnpm --filter @proofkit/cli dev"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",

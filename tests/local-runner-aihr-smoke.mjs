@@ -6,9 +6,12 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ProofkitConfigSchema, TestCharterSchema } from "../packages/contracts/dist/index.js";
 import { LocalRunnerService } from "../packages/local-runner/dist/index.js";
-import { loadCharter } from "../packages/planner/dist/index.js";
+import { createProofkitMcp } from "../packages/mcp/dist/server.js";
+import { IntentPlanner, loadCharter } from "../packages/planner/dist/index.js";
 
 // Real adapters and the complete Local Runner/Mission lifecycle. The gateway
 // and PDF are isolated fixtures, not a running AIHR deployment or real data.
@@ -65,6 +68,8 @@ Object.assign(process.env, {
 
 let electronChild;
 let profile;
+let mcpServer;
+let mcpClient;
 try {
   const surfaces = { web: { baseUrl, executablePath: process.env.PROOFKIT_BROWSER_PATH ?? (process.platform === "win32" ? "C:/Program Files/Google/Chrome/Application/chrome.exe" : undefined) } };
   if (surface === "electron") {
@@ -83,9 +88,34 @@ try {
     await waitForDevtools(portFile, () => spawnError ?? (electronChild.exitCode === null ? undefined : new Error("Electron exited before CDP was ready")));
     surfaces.electron = { devtoolsActivePort: portFile };
   }
-  const service = await LocalRunnerService.create({ root, workspaceRoot, config: ProofkitConfigSchema.parse({ surfaces, policies: { environment: "test", sideEffects: "allow" } }), allowCapabilityWrites: true });
-  assert.equal((await service.discover()).packageName, "aihr-isolated-source");
   const ordinary = await loadCharter(join(repoRoot, ".proofkit", "charters", "aihr-resume-upload.yml"));
+  const charter = TestCharterSchema.parse({
+    ...ordinary,
+    actions: [...ordinary.actions, { kind: "goto", url: baseUrl }, { kind: "click", selector: "#check" }, { kind: "waitForText", text: "Resume ready" }],
+    assertions: [{ kind: "text-visible", text: "Resume ready" }],
+  });
+  await writeFile(join(workspaceRoot, ".proofkit", "charters", "aihr-resume-core-fixture.yml"), new IntentPlanner().toYaml(charter));
+  await writeFile(join(workspaceRoot, ".proofkit", "config.yaml"), JSON.stringify(ProofkitConfigSchema.parse({
+    project: { root },
+    surfaces,
+    policies: { environment: "test", sideEffects: "allow" },
+    charters: [{
+      id: "aihr-resume-core-fixture",
+      path: ".proofkit/charters/aihr-resume-core-fixture.yml",
+      aliases: ["简历获取"],
+      level: "core",
+      surfaces: ["web", "electron"],
+    }],
+  })));
+  const service = await LocalRunnerService.create({ root, workspaceRoot, allowCapabilityWrites: true });
+  assert.equal((await service.discover()).packageName, "aihr-isolated-source");
+  assert.equal(service.listCharters()[0].id, "aihr-resume-core-fixture");
+  mcpServer = await createProofkitMcp({ root, workspaceRoot, allowCapabilityWrites: true });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  mcpClient = new Client({ name: "proofkit-aihr-smoke", version: "1" });
+  await Promise.all([mcpServer.connect(serverTransport), mcpClient.connect(clientTransport)]);
+  const catalog = mcpPayload(await mcpClient.callTool({ name: "list_test_charters", arguments: {} }));
+  assert.equal(catalog.charters[0].id, "aihr-resume-core-fixture");
 
   // Run the checked-in Charter unchanged, including env references and defaults.
   const defaultRun = await service.start({ charterPath: ".proofkit/charters/aihr-resume-upload.yml", adapter: surface });
@@ -95,13 +125,8 @@ try {
   assert.equal(defaultSummary.steps[1].capabilityOutput.fileSha256, fixtureSha256);
   assert.ok(defaultSummary.artifacts.some((artifact) => artifact.endsWith("/preflight.json")), "AIHR preflight evidence is missing");
 
-  // Add a real surface path to the business Charter to exercise the core gate.
-  const charter = TestCharterSchema.parse({
-    ...ordinary,
-    actions: [...ordinary.actions, { kind: "goto", url: baseUrl }, { kind: "click", selector: "#check" }, { kind: "waitForText", text: "Resume ready" }],
-    assertions: [{ kind: "text-visible", text: "Resume ready" }],
-  });
-  const success = await runMission(service, charter);
+  // The real MCP entrypoint selects the saved Charter from one sentence.
+  const success = await runMcpMission(mcpClient, "测试简历获取");
   assert.equal(success.verdict, "passed", JSON.stringify(success.findings));
   assert.ok(success.evidence.some((evidence) => evidence.kind === "screenshot"));
   const successRunId = success.observations.find((item) => item.kind === "surface.run").data.runId;
@@ -112,7 +137,7 @@ try {
 
   // Seed a stale backend binding while the real UI still reports success.
   mode = "stale-binding";
-  const failed = await runMission(service, charter);
+  const failed = await runMcpMission(mcpClient, "测试简历获取");
   assert.equal(failed.verdict, "failed");
   assert.equal(failed.firstFailure.kind, "business-oracle");
   assert.ok(failed.findings.some((finding) => finding.category === "product" && finding.status === "confirmed" && finding.evidence.length > 0));
@@ -179,8 +204,10 @@ try {
   const cancelledReport = cancelled.mission.evidence.find((item) => item.kind === "report");
   assert.match(await readFile(cancelledReport.path, "utf8"), /cancelled/);
   assert.deepEqual(await readdir(root), ["package.json"]);
-  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, idempotencyMission: idempotencyMission.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "core-mission", "stale-binding-detection", "idempotency-negative-case", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
+  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, idempotencyMission: idempotencyMission.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "mcp-one-sentence-core", "mcp-evidence", "core-mission", "stale-binding-detection", "idempotency-negative-case", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
 } finally {
+  await mcpClient?.close();
+  await mcpServer?.close();
   if (electronChild && electronChild.exitCode === null) {
     const exited = new Promise((resolveExit) => electronChild.once("exit", resolveExit));
     electronChild.kill();
@@ -194,6 +221,31 @@ async function runMission(service, charter) {
   const mission = await service.createMission({ intent: charter.intent, surface, charter });
   await service.startMission(mission.missionId, { approve: true });
   return service.waitMission(mission.missionId);
+}
+
+async function runMcpMission(client, intent) {
+  const started = mcpPayload(await client.callTool({ name: "run_test", arguments: { intent, surface } }));
+  assert.equal(started.catalogId, "aihr-resume-core-fixture");
+  assert.equal(started.level, "core");
+  assert.equal(started.levelSelection.source, "default");
+  assert.equal(started.readiness.ready, true);
+  let status;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    status = mcpPayload(await client.callTool({ name: "get_mission_status", arguments: { missionId: started.missionId } }));
+    if (["completed", "failed", "blocked", "cancelled"].includes(status.mission.status)) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  assert.ok(status && ["completed", "failed", "blocked", "cancelled"].includes(status.mission.status), "MCP Mission did not finish");
+  const evidence = mcpPayload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
+  assert.equal(evidence.verdict, status.mission.verdict);
+  assert.ok(evidence.evidence.some((item) => item.kind === "business"), "MCP business evidence is missing");
+  return status.mission;
+}
+
+function mcpPayload(result) {
+  const item = result.content.find((content) => content.type === "text");
+  assert.ok(item, "MCP tool returned no text content");
+  return JSON.parse(item.text);
 }
 
 async function handleRequest(request, response) {
