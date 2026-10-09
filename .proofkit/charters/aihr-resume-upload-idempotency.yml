@@ -1,0 +1,94 @@
+intent: 验证 AIHR 普通简历重复提交不会创建第二份文件
+level: core
+mode: deterministic
+sideEffectPolicy: allow
+preconditions:
+  - AIHR gateway and asynchronous workers are running in an isolated test environment
+  - AIHR_PROOFKIT_TEST_SCOPE and AIHR_PROOFKIT_CLIENT_ITEM_KEY identify this test scope
+  - the duplicate case uses a stable, namespaced client item key
+actions:
+  - kind: capability
+    name: aihr.createResumeCollectionRun
+    input:
+      sourceChannel: "$env:AIHR_PROOFKIT_SOURCE_CHANNEL"
+      taskName: proofkit-idempotency-primary
+      candidateUid: "$env:AIHR_PROOFKIT_CANDIDATE_UID"
+      conversationId: "$env:AIHR_PROOFKIT_CONVERSATION_ID"
+      bossAccountId: "$env:AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID"
+  - kind: capability
+    name: aihr.uploadResumeFile
+    input:
+      fixturePath: "$env:AIHR_PROOFKIT_FIXTURE_PATH"
+      sourceChannel: "$env:AIHR_PROOFKIT_SOURCE_CHANNEL"
+      originalFilename: proofkit-idempotency.pdf
+      targetJobIds:
+        - "$env:AIHR_PROOFKIT_JOB_ID"
+      clientItemKey: "$env:AIHR_PROOFKIT_CLIENT_ITEM_KEY"
+      resumeRole: online
+      bossAccountId: "$env:AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID"
+      candidateUid: "$env:AIHR_PROOFKIT_CANDIDATE_UID"
+      conversationId: "$env:AIHR_PROOFKIT_CONVERSATION_ID"
+  - kind: capability
+    name: aihr.waitResumeCollectionPipeline
+    input:
+      jobId: "$env:AIHR_PROOFKIT_JOB_ID"
+      maxWaitMs: 300000
+      pollIntervalMs: 1000
+      requireCandidateBinding: true
+      requireAssessmentSuccess: true
+      requireWorkflowUsage: true
+assertions:
+  - kind: text-visible
+    text: Resume fixture
+oracles:
+  - aihr.resumeCollectionPipeline
+metadata:
+  aihr:
+    jobId: "$env:AIHR_PROOFKIT_JOB_ID"
+    requireCandidateBinding: true
+    requireAssessmentSuccess: true
+    requireWorkflowUsage: true
+negativeCases:
+  - caseId: duplicate-upload
+    title: 相同 clientItemKey 的重复上传应复用同一文件
+    actions:
+      - kind: capability
+        name: aihr.createResumeCollectionRun
+        input:
+          sourceChannel: "$env:AIHR_PROOFKIT_SOURCE_CHANNEL"
+          taskName: proofkit-idempotency-negative
+          candidateUid: "$env:AIHR_PROOFKIT_CANDIDATE_UID"
+          conversationId: "$env:AIHR_PROOFKIT_CONVERSATION_ID"
+          bossAccountId: "$env:AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID"
+      - kind: capability
+        name: aihr.uploadResumeFile
+        input:
+          fixturePath: "$env:AIHR_PROOFKIT_FIXTURE_PATH"
+          sourceChannel: "$env:AIHR_PROOFKIT_SOURCE_CHANNEL"
+          originalFilename: proofkit-idempotency.pdf
+          targetJobIds:
+            - "$env:AIHR_PROOFKIT_JOB_ID"
+          clientItemKey: proofkit:local-smoke:idempotency:negative
+          resumeRole: online
+          bossAccountId: "$env:AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID"
+          candidateUid: "$env:AIHR_PROOFKIT_CANDIDATE_UID"
+          conversationId: "$env:AIHR_PROOFKIT_CONVERSATION_ID"
+      - kind: capability
+        name: aihr.uploadResumeFile
+        input:
+          fixturePath: "$env:AIHR_PROOFKIT_FIXTURE_PATH"
+          sourceChannel: "$env:AIHR_PROOFKIT_SOURCE_CHANNEL"
+          originalFilename: proofkit-idempotency.pdf
+          targetJobIds:
+            - "$env:AIHR_PROOFKIT_JOB_ID"
+          clientItemKey: proofkit:local-smoke:idempotency:negative
+          resumeRole: online
+          bossAccountId: "$env:AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID"
+          candidateUid: "$env:AIHR_PROOFKIT_CANDIDATE_UID"
+          conversationId: "$env:AIHR_PROOFKIT_CONVERSATION_ID"
+    assertions: []
+    oracles:
+      - aihr.resumeUploadIdempotency
+    sideEffectPolicy: allow
+    metadata:
+      category: idempotency

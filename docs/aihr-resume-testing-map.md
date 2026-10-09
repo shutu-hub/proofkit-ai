@@ -87,6 +87,7 @@ workflow 完成事实必须同时匹配 `run_id`、`candidate.id`、`job.id` 和
 | --- | --- |
 | 网关鉴权/租户错误 | HTTP 状态、业务错误码、request id |
 | intake 重复提交 | 同一 workspace/workflow/source hash 返回同一任务，不重复生成文件 |
+| 普通上传重复提交 | 同一命名空间 `client_item_key` 的第二次上传返回 `duplicate=true`，并复用同一 `file_id` 与文件哈希 |
 | worker 重试 | attempt_count、next_retry_at、终态 error_code |
 | 结构化失败 | structured_status、校验错误数量、workflow last_error_code |
 | PDF/对象存储失败 | workflow 失败阶段、错误码、无绿色结果 |

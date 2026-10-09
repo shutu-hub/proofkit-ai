@@ -32,7 +32,7 @@ export function createIntegration({ z: injectedZ, root }) {
       readWorkflowUsageCapability(),
       readBillingUsageCapability(),
     ],
-    oracles: [createResumeCollectionPipelineOracle(state), createOnlineResumePipelineOracle(state)],
+    oracles: [createResumeCollectionPipelineOracle(state), createOnlineResumePipelineOracle(state), createResumeUploadIdempotencyOracle(state)],
     preflight: aihrPreflight,
     setup: async ({ runId }) => {
       state.set(runId, { createdAt: new Date().toISOString() });
@@ -211,7 +211,8 @@ function createResumeFileUploadCapability(state, projectRoot) {
         candidateId: positiveString(data.candidate_id),
       };
       const current = state.get(runId) ?? {};
-      state.set(runId, { ...current, collectionRunId: result.runId ?? current.collectionRunId, uploadedFile: result, fixtureSha256: fixture.sha256, sourceChannel: result.sourceChannel });
+      const uploadHistory = [...(current.uploadHistory ?? []), result];
+      state.set(runId, { ...current, collectionRunId: result.runId ?? current.collectionRunId, uploadedFile: result, uploadHistory, fixtureSha256: fixture.sha256, sourceChannel: result.sourceChannel });
       return result;
     },
     evidence: (output) => ({
@@ -771,6 +772,33 @@ function createOnlineResumePipelineOracle(state) {
         : result.parseStatus === "matched" && result.extractStatus === "done" && Boolean(result.candidateId) && (!requireAssessmentSuccess || result.assessmentTaskStatus === "success");
       const facts = { ...result, passed, requireAssessmentSuccess };
       return { name: "aihr.onlineResumePipeline", passed, message: passed ? "AIHR online resume facts reached the requested terminal state." : `AIHR online resume pipeline is not valid: phase=${result.workflowPhase}, extract=${result.extractStatus ?? "unknown"}, parse=${result.parseStatus ?? "unknown"}, assessment_task=${result.assessmentTaskStatus ?? "unknown"}.`, evidence: [JSON.stringify(facts)], ...(passed === false ? { sourceLocations: ["services/resume-collection-service/internal/service/structured_online_resume.go", "services/resume-collection-service/internal/service/resume_post_processor.go"] } : {}), observedAt: new Date().toISOString() };
+    },
+  };
+}
+
+function createResumeUploadIdempotencyOracle(state) {
+  return {
+    name: "aihr.resumeUploadIdempotency",
+    async check({ runId }) {
+      const history = state.get(runId)?.uploadHistory ?? [];
+      const first = history[0];
+      const second = history[1];
+      const passed = Boolean(first && second && second.duplicate && first.fileSha256 === second.fileSha256 && first.fileId === second.fileId);
+      const evidence = {
+        uploadCount: history.length,
+        firstFileId: first?.fileId ?? null,
+        secondFileId: second?.fileId ?? null,
+        secondDuplicate: second?.duplicate ?? false,
+        sameFile: Boolean(first && second && first.fileId === second.fileId),
+        sameSha256: Boolean(first && second && first.fileSha256 === second.fileSha256),
+      };
+      return {
+        name: "aihr.resumeUploadIdempotency",
+        passed,
+        message: passed ? "Repeated AIHR upload was deduplicated to the same file." : `AIHR upload idempotency was not proven: uploads=${history.length}, duplicate=${second?.duplicate ?? false}.`,
+        evidence: [JSON.stringify(evidence)],
+        observedAt: new Date().toISOString(),
+      };
     },
   };
 }

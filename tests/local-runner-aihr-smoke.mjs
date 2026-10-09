@@ -24,6 +24,7 @@ await mkdir(join(workspaceRoot, ".proofkit", "fixtures"), { recursive: true });
 await mkdir(join(workspaceRoot, ".proofkit", "charters"));
 await copyFile(join(repoRoot, ".proofkit", "integration.mjs"), join(workspaceRoot, ".proofkit", "integration.mjs"));
 await copyFile(join(repoRoot, ".proofkit", "charters", "aihr-resume-upload.yml"), join(workspaceRoot, ".proofkit", "charters", "aihr-resume-upload.yml"));
+await copyFile(join(repoRoot, ".proofkit", "charters", "aihr-resume-upload-idempotency.yml"), join(workspaceRoot, ".proofkit", "charters", "aihr-resume-upload-idempotency.yml"));
 const fixture = Buffer.from("%PDF-1.4 isolated ProofKit gateway fixture\n", "utf8");
 await writeFile(join(workspaceRoot, ".proofkit", "fixtures", "resume.pdf"), fixture);
 const fixtureSha256 = createHash("sha256").update(fixture).digest("hex");
@@ -35,6 +36,7 @@ let currentFile;
 let uploaded = 0;
 let unrelatedReads = 0;
 const files = new Map();
+const idempotentUploads = new Map();
 const fixtureErrors = [];
 const server = createServer((request, response) => {
   void handleRequest(request, response).catch((error) => {
@@ -126,7 +128,17 @@ try {
   assert.equal(defaultSummary.projectRoot, root);
   assert.equal(defaultSummary.workspaceRoot, workspaceRoot);
   assert.deepEqual(await readdir(root), ["package.json"]);
-  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "core-mission", "stale-binding-detection", "selected-oracle-only"] }, null, 2));
+  mode = "success";
+  process.env.AIHR_PROOFKIT_CLIENT_ITEM_KEY = "proofkit:local-smoke:idempotency:primary";
+  const idempotencyCharter = await loadCharter(join(repoRoot, ".proofkit", "charters", "aihr-resume-upload-idempotency.yml"));
+  const idempotencyMission = await runMission(service, idempotencyCharter);
+  assert.equal(idempotencyMission.verdict, "passed", JSON.stringify(idempotencyMission.findings));
+  const idempotencyNegative = idempotencyMission.observations.find((item) => item.data.runKind === "negative" && item.data.negativeCaseId === "duplicate-upload");
+  assert.ok(idempotencyNegative, "idempotency negative run is missing");
+  const idempotencySummary = await service.wait(idempotencyNegative.data.runId);
+  assert.equal(idempotencySummary.oracles[0]?.name, "aihr.resumeUploadIdempotency");
+  assert.equal(idempotencySummary.oracles[0]?.passed, true);
+  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, idempotencyMission: idempotencyMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "core-mission", "stale-binding-detection", "idempotency-negative-case", "selected-oracle-only"] }, null, 2));
 } finally {
   if (electronChild && electronChild.exitCode === null) {
     const exited = new Promise((resolveExit) => electronChild.once("exit", resolveExit));
@@ -164,10 +176,18 @@ async function handleRequest(request, response) {
     assert.equal(form.get("run_id"), collectionRunId);
     assert.equal(form.get("target_job_ids"), "[505]");
     assert.equal(createHash("sha256").update(Buffer.from(await form.get("file").arrayBuffer())).digest("hex"), fixtureSha256);
-    currentFile = { file_id: String(++sequence), run_id: collectionRunId, file_sha256: fixtureSha256, candidate_id: "902", source_platform: "boss", status: "accepted", extract_status: "done", parse_status: "matched" };
-    files.set(currentFile.file_id, currentFile);
-    uploaded++;
-    send({ ...currentFile, duplicate: false });
+    const clientItemKey = String(form.get("client_item_key") ?? "");
+    const useIdempotencyFixture = clientItemKey.includes(":idempotency:");
+    if (useIdempotencyFixture && idempotentUploads.has(clientItemKey)) {
+      currentFile = idempotentUploads.get(clientItemKey);
+      send({ ...currentFile, duplicate: true });
+    } else {
+      currentFile = { file_id: String(++sequence), run_id: collectionRunId, file_sha256: fixtureSha256, candidate_id: "902", source_platform: "boss", status: "accepted", extract_status: "done", parse_status: "matched" };
+      files.set(currentFile.file_id, currentFile);
+      if (useIdempotencyFixture) idempotentUploads.set(clientItemKey, currentFile);
+      uploaded++;
+      send({ ...currentFile, duplicate: false });
+    }
   } else if (path.startsWith("/resume-collection/files/") && files.has(path.split("/").at(-1))) {
     send(files.get(path.split("/").at(-1)));
   } else if (path === "/jobs/505/candidates/902") {

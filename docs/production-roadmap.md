@@ -60,9 +60,10 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Seed a stale candidate-to-job resume binding and require the Oracle artifact to produce a confirmed product Finding, Diagnosis and RepairSuggestion.
 - Observe file creation, extraction, candidate identity, job binding, assessment terminal state and billing scope.
 - Correlate ProofKit `runId`, request IDs and opaque domain IDs.
+- Execute an explicit duplicate-upload negative case and require the connector Oracle to prove the same scoped `client_item_key` reuses the same file identity and digest.
 - Run the same Charter through Web and Electron, replay both runs, and compare terminal business facts.
 
-**Current evidence:** the isolated Web/Electron smoke proves upload binding, terminal extraction, candidate identity, job relation, assessment state and workflow usage, and detects the seeded stale relation with linked evidence. A real isolated AIHR workspace, billing assertions and retry/idempotency checks remain required before this phase is complete.
+**Current evidence:** the isolated Web/Electron smoke proves upload binding, terminal extraction, candidate identity, job relation, assessment state and workflow usage, detects the seeded stale relation with linked evidence, and runs a duplicate-upload negative case whose Oracle proves duplicate reuse. A real isolated AIHR workspace, billing assertions and worker retry checks remain required before this phase is complete.
 
 **Gate:** seeded defects in upload, extraction, identity, relation and billing are found with linked evidence; retries do not create duplicate billable facts.
 
