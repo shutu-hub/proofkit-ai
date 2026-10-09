@@ -13,6 +13,25 @@ afterEach(async () => {
 });
 
 describe("read-only test scope", () => {
+  it("maps composed Gin paths and exposes unresolved declarations without running checks", async () => {
+    const { runner, callbacks } = await fixture();
+    await writeFile(join(runner.root, "services", "gateway-service", "main.go"), `package routes
+import "github.com/gin-gonic/gin"
+func routes() {
+  api := gin.New().Group("/api/v1")
+  api.Group("/files").GET("/:file_id", handler)
+}
+func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
+`);
+    runner.config.charters[0]!.routeTargets = [{ kind: "api", path: "/api/v1/files/:file_id", method: "GET", origin: "http://localhost:8080" }];
+    const scope = await runner.inspectTestScope({ focus: "files" });
+    expect(scope.routes.items).toEqual([expect.objectContaining({ path: "/api/v1/files/:file_id", source: "services/gateway-service/main.go", line: 5, status: "declared", charterIds: ["resume-core"] })]);
+    expect(scope.inventory.routeDiagnostics).toMatchObject({ total: 1, omitted: 0 });
+    expect(scope.limitations).toContainEqual(expect.stringContaining("1 Gin route declarations"));
+    expect(scope).toMatchObject({ testVerdict: "not-asserted", executionChecks: "not-run" });
+    for (const callback of Object.values(callbacks)) expect(callback).not.toHaveBeenCalled();
+  });
+
   it("joins source-backed hints with validated plans and capability inputs without executing or writing", async () => {
     const { runner, callbacks } = await fixture();
     const before = await sourceFiles(runner.root);
@@ -100,7 +119,7 @@ describe("read-only test scope", () => {
     expect(scope.routes.mapped).toBe(1);
     expect(scope.routes.unresolvedTargets).toHaveLength(2);
     expect(scope.routes.items.find((item) => item.path === "/:file_id")?.status).toBe("unmapped");
-    expect(scope.limitations).toContainEqual(expect.stringContaining("grouped API prefixes"));
+    expect(scope.limitations).toContainEqual(expect.stringContaining("file-local prefix composition"));
   });
 
   it("bounds output, retains omitted counts, and marks partial inventory and literal focus", async () => {

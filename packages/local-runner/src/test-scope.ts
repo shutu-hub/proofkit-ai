@@ -61,12 +61,13 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const { entryPoints: _entries, routeHints: _routes, ...inventory } = project.inventory;
   const limitations = [
     "Static route-shaped literals and conventional entry points are candidate hints; no execution coverage or product verdict is calculated",
-    "Route scanning does not compose grouped API prefixes or relative child routes, and can include non-router literals",
+    "Gin routes use conservative file-local prefix composition; other extractors report literals, do not compose relative child routes, and can include non-router literals",
     "Declarations from eligible catalog entries can be mapped even when their saved plan is invalid; mapping is not proof of a ready or tested workflow",
     "Only returned eligible plans are read and checked; login, endpoints, fixtures, preflight and runtime capability inputs have not been checked",
     "Connector registration code is trusted and may run when the service is created; this inspection does not invoke setup, preflight, operations or business checks",
   ];
   if (inventory.truncated) limitations.push("Project inventory is truncated; counts describe only the scanned candidate slice");
+  if (inventory.routeDiagnostics?.total) limitations.push(`${inventory.routeDiagnostics.total} Gin route declarations could not be resolved statically; diagnostic locations are hints, not executable route paths`);
   if (focus) limitations.push("Focus is a literal substring filter; the focused view is not whole-project coverage");
   return TestScopeSchema.parse({
     schemaVersion: 1, testVerdict: "not-asserted", executionChecks: "not-run",

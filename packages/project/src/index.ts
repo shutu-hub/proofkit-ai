@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { parse, stringify } from "yaml";
 import { ProjectMapSchema, ProofkitConfigSchema, type ProjectMap, type ProofkitConfig, type RouteHttpMethod } from "@proofkit/contracts";
 import { resolveProjectContext, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
+import { extractGinRoutes } from "./gin-routes.js";
 
 export { defaultWorkspaceRoot, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
 export { captureSourceState } from "./source-state.js";
@@ -201,6 +202,7 @@ type InventoryRouteHint = {
   source: string;
   line: number;
   method?: RouteHttpMethod;
+  discovery?: "literal" | "gin";
 };
 
 const SOURCE_EXTENSIONS = new Set([".cjs", ".css", ".go", ".java", ".js", ".jsx", ".mjs", ".py", ".rs", ".scss", ".ts", ".tsx", ".vue"]);
@@ -221,11 +223,13 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
   testFrameworks: string[];
   entryPoints: InventoryEntryPoint[];
   routeHints: InventoryRouteHint[];
+  routeDiagnostics: NonNullable<ProjectMap["inventory"]["routeDiagnostics"]>;
 }> {
   const entryPoints: InventoryEntryPoint[] = [];
   const routeHints: InventoryRouteHint[] = [];
   const seenEntries = new Set<string>();
   const seenRoutes = new Set<string>();
+  const routeDiagnostics: NonNullable<ProjectMap["inventory"]["routeDiagnostics"]> = { total: 0, items: [], omitted: 0 };
   let filesScanned = 0;
   let truncated = false;
   let sourceFiles = 0;
@@ -243,6 +247,11 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
     if (seenRoutes.has(key) || routeHints.length >= MAX_ROUTE_HINTS * 5) return;
     seenRoutes.add(key);
     routeHints.push(route);
+  };
+  const addDiagnostic = (diagnostic: typeof routeDiagnostics.items[number]) => {
+    routeDiagnostics.total++;
+    if (routeDiagnostics.items.length < 20) routeDiagnostics.items.push(diagnostic);
+    else routeDiagnostics.omitted++;
   };
 
   const addScriptEntries = (packagePath: string, scripts: Record<string, string>) => {
@@ -287,7 +296,7 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
       sourceFiles += 1;
       const kind = classifyEntry(path);
       if (kind) addEntry({ kind, path, reason: "conventional entry point" });
-      if (!isTestFile(path) && !(await readRouteHints(absolute, path, addRoute))) truncated = true;
+      if (!isTestFile(path) && !(await readRouteHints(absolute, path, addRoute, addDiagnostic))) truncated = true;
     } else if (CONFIG_EXTENSIONS.has(extension) || /(^|\/)Dockerfile[^/]*$|\.env(?:\.|$)/i.test(path)) {
       configFiles += 1;
     }
@@ -312,6 +321,7 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
     testFrameworks: [...new Set(testFrameworks)].sort(),
     entryPoints: entryPoints.slice(0, 200),
     routeHints: routeHints.slice(0, MAX_ROUTE_HINTS),
+    routeDiagnostics,
   };
 }
 
@@ -370,20 +380,28 @@ function shouldIncludeInventoryPath(path: string): boolean {
   return directories.every((directory) => !directory.startsWith(".") && !IGNORED_DIRECTORIES.has(directory.toLowerCase()));
 }
 
-async function readRouteHints(path: string, source: string, add: (route: InventoryRouteHint) => void): Promise<boolean> {
+async function readRouteHints(path: string, source: string, add: (route: InventoryRouteHint) => void, diagnose: (diagnostic: NonNullable<ProjectMap["inventory"]["routeDiagnostics"]>["items"][number]) => void): Promise<boolean> {
   let content: string;
   try {
     const metadata = await stat(path);
     if (metadata.size > MAX_SOURCE_BYTES) return false;
     content = await readFile(path, "utf8");
   } catch { return false; }
+  if (extname(source) === ".go") {
+    const gin = extractGinRoutes(content, source);
+    if (gin) {
+      gin.routes.forEach(add);
+      gin.diagnostics.forEach(diagnose);
+      return true;
+    }
+  }
   const lines = content.split(/\r?\n/);
   lines.forEach((line, index) => {
     for (const match of line.matchAll(/\bpath\s*:\s*["'`]([^"'`]+)["'`]/g)) {
-      if (isStaticRoute(match[1])) add({ kind: "web", path: match[1], source, line: index + 1 });
+      if (isStaticRoute(match[1])) add({ kind: "web", path: match[1], source, line: index + 1, discovery: "literal" });
     }
     for (const match of line.matchAll(/\b(get|post|put|patch|delete|head|options)\s*\(\s*["'`]([^"'`]+)["'`]/gi)) {
-      if (isStaticRoute(match[2])) add({ kind: "api", path: match[2], source, line: index + 1, method: match[1]!.toUpperCase() as RouteHttpMethod });
+      if (isStaticRoute(match[2])) add({ kind: "api", path: match[2], source, line: index + 1, method: match[1]!.toUpperCase() as RouteHttpMethod, discovery: "literal" });
     }
   });
   return true;

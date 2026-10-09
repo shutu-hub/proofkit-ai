@@ -8,6 +8,7 @@ type RunFact = { runId: string; verdict: Verdict; evidenceCount: number; matched
 export type RouteCoverageSummary = {
   inventorySource: "git" | "filesystem";
   inventoryTruncated: boolean;
+  routeDiagnostics?: NonNullable<import("@proofkit/contracts").ProjectMap["inventory"]["routeDiagnostics"]>;
   candidateRoutes: number;
   declaredTargets: number;
   mappedCandidates: number;
@@ -147,6 +148,7 @@ function summarizeRouteCoverage(mission: TestMission, results: SuiteSurfaceResul
   return {
     inventorySource: inventory.source,
     inventoryTruncated: inventory.truncated,
+    ...(inventory.routeDiagnostics ? { routeDiagnostics: inventory.routeDiagnostics } : {}),
     candidateRoutes: routes.length,
     declaredTargets,
     mappedCandidates,

@@ -281,6 +281,14 @@ export const ProjectRouteHintSchema = z.object({
   source: z.string().min(1),
   line: z.number().int().positive(),
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).optional(),
+  /** Static extraction provenance, never runtime coverage. Older maps omit it. */
+  discovery: z.enum(["literal", "gin"]).optional(),
+});
+export const RouteDiscoveryDiagnosticSchema = z.object({
+  extractor: z.literal("gin"),
+  source: z.string().min(1),
+  line: z.number().int().positive(),
+  reason: z.enum(["dynamic-path", "unknown-router-prefix", "unsupported-router-operation"]),
 });
 
 export const ProjectMapSchema = z.object({
@@ -310,6 +318,12 @@ export const ProjectMapSchema = z.object({
     testFrameworks: z.array(z.string().min(1)).default([]),
     entryPoints: z.array(ProjectEntryPointSchema).default([]),
     routeHints: z.array(ProjectRouteHintSchema).default([]),
+    /** Unresolved static declarations are separate from scan truncation. */
+    routeDiagnostics: z.object({
+      total: z.number().int().nonnegative(),
+      items: z.array(RouteDiscoveryDiagnosticSchema).max(20),
+      omitted: z.number().int().nonnegative(),
+    }).optional(),
   }).default({}),
   generatedAt: z.string(),
 });

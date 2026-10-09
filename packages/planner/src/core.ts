@@ -71,6 +71,7 @@ export function assessPlanningQuality(charter: TestCharter, input: PlanningAsses
     add(evidenceGaps, "project-map-truncated");
   }
   if (input.projectMap && input.projectMap.inventory.entryPoints.length === 0) add(assumptions, "未从源码扫描中识别到约定的应用入口");
+  if (input.projectMap?.inventory.routeDiagnostics?.total) add(assumptions, `有 ${input.projectMap.inventory.routeDiagnostics.total} 条 Gin 路由声明无法静态解析，项目地图不代表完整业务覆盖`);
 
   // A model is not intrinsically more reliable than the same validated plan
   // produced deterministically. The source is recorded for audit, not scoring.

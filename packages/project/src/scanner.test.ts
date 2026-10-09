@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { initProject, scanProject } from "./index.js";
+import { initProject, reconcileRouteDeclarations, scanProject } from "./index.js";
+import { ProjectMapSchema } from "@proofkit/contracts";
 
 const execFileAsync = promisify(execFile);
 
@@ -128,6 +129,42 @@ describe("scanProject", () => {
     expect(map.inventory.sourceFiles).toBe(1);
     expect(map.inventory.routeHints).toHaveLength(0);
     expect(map.inventory.truncated).toBe(true);
+  });
+
+  it("maps fully qualified Gin routes and reports unknown helper prefixes separately", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-gin-inventory-"));
+    await writeFile(join(root, "router.go"), `package routes
+import "github.com/gin-gonic/gin"
+func routes() {
+  engine := gin.New()
+  files := engine.Group("/api/v1").Group("/files")
+  files.POST("", upload)
+  files.GET("/:file_id", detail)
+}
+func helper(api *gin.RouterGroup) { api.GET("/:id", detail) }
+`);
+    const map = await scanProject(root);
+    expect(map.inventory.truncated).toBe(false);
+    expect(map.inventory.routeHints).toEqual([
+      expect.objectContaining({ path: "/api/v1/files", method: "POST", line: 6, discovery: "gin" }),
+      expect.objectContaining({ path: "/api/v1/files/:file_id", method: "GET", line: 7 }),
+    ]);
+    expect(map.inventory.routeDiagnostics).toEqual({ total: 1, omitted: 0, items: [{ extractor: "gin", source: "router.go", line: 9, reason: "unknown-router-prefix" }] });
+    const mapping = reconcileRouteDeclarations(map.inventory.routeHints, [{ charterId: "files", routeTargets: [{ kind: "api", path: "/api/v1/files/:file_id", method: "GET", origin: "http://localhost:8080" }] }]);
+    expect(mapping.unresolvedTargets).toEqual([]);
+    expect(mapping.routes.find((item) => item.candidate.method === "GET")?.charterIds).toEqual(["files"]);
+  });
+
+  it("bounds Gin diagnostics without marking an otherwise complete file scan truncated", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-gin-diagnostic-cap-"));
+    await writeFile(join(root, "router.go"), `package routes\nimport "github.com/gin-gonic/gin"\nfunc routes(api *gin.RouterGroup) {\n${Array.from({ length: 25 }, (_, index) => `api.GET("/unknown${index}", handler)`).join("\n")}\n}`);
+    const map = await scanProject(root);
+    expect(map.inventory.truncated).toBe(false);
+    expect(map.inventory.routeHints).toEqual([]);
+    expect(map.inventory.routeDiagnostics).toMatchObject({ total: 25, omitted: 5 });
+    expect(map.inventory.routeDiagnostics?.items).toHaveLength(20);
+    const { routeDiagnostics: _diagnostics, ...legacyInventory } = map.inventory;
+    expect(ProjectMapSchema.parse({ ...map, inventory: legacyInventory }).inventory.routeDiagnostics).toBeUndefined();
   });
 
   it("creates a config and integration starter without overwriting either", async () => {

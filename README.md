@@ -74,6 +74,8 @@ proofkit scope --root /path/to/your/project --surface web --level core --limit 2
 proofkit scope --root /path/to/your/project --focus resume
 ```
 
+Scope routes are static candidates. Gin group prefixes are composed within a file; unresolved declarations appear in `inventory.routeDiagnostics` with source locations. Other framework literals may need manual interpretation. Neither route mapping nor inspection proves a business result.
+
 MCP clients use `inspect_test_scope` for the same view, then `inspect_surface` to observe the live page and `run_test` to execute a validated Charter. Scope inspection defaults to `core`; it returns `not-asserted`, full scanned counts, omitted counts and the inventory's truncation flag. `planReady` checks saved plan structure and registered operations, not login, test data or runtime readiness. Capability input hints omit defaults and user callbacks; runtime Zod validation remains authoritative. Workspace connector registration is trusted code loaded by the service; scope inspection invokes none of its execution hooks.
 
 Plan and review a test:
