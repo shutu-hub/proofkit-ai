@@ -207,6 +207,8 @@ The MCP server exposes both run-level tools (`discover_project`, `plan_test`, `s
 
 An adapter exposes `connect`, `discover`, `snapshot`, `act`, `assert`, `capture`, `subscribeEvents` and `close`. Browser and driver locator details stay inside the adapter. Web and Electron use Playwright; mobile uses a W3C WebDriver/Appium session with `accessibility=`, `id=`, `xpath=`, `class=` and `css=` selector prefixes. The runner receives typed receipts and snapshots, so business Charters, Oracles and Evidence remain unchanged across surfaces. Mobile driver events are currently represented through snapshots and action receipts; device logs and video are future evidence sources.
 
+CDP attachment selects an existing application page across browser contexts. It ignores DevTools and closed pages, waits up to five seconds for a target, and requires exactly one match. External workspace configuration may declare a URL prefix and/or title substring; Web uses its configured base URL origin when no explicit selector is set. Ambiguous or absent targets fail before actions execute instead of silently using the first tab or creating a blank one.
+
 ### Evidence
 
 Each run gets a unique directory with:

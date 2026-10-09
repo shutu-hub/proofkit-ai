@@ -39,6 +39,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
   active-resource risk and attempt to release any handle that arrives later.
 - Treat adapter, process and integration cleanup failures as non-green results.
 - Keep Agent tool failures as suspected test findings until an independent product oracle confirms a defect.
+- Select a unique CDP application page for Web/Electron attachment; reject ambiguous windows instead of running a Charter in an arbitrary renderer.
 - Run an integration preflight before project setup, adapter connection or write capabilities. A failed preflight is `blocked` with a sanitized `preflight.json` artifact.
 - Persist task attempts and recover interrupted read-only tasks; block interrupted side-effecting tasks for review instead of replaying them blindly.
 - Never let a rejected Mission promise leave a durable mission in an unexplained running state.

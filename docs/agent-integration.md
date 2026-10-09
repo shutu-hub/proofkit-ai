@@ -110,6 +110,17 @@ Optional `<workspaceRoot>/.proofkit/integration.mjs` adds typed capabilities, bu
 
 For example, register `node /path/to/proofkit-ai/packages/mcp/dist/server.js` with the environment variables `PROOFKIT_ROOT=/path/to/source` and `PROOFKIT_WORKSPACE_ROOT=/path/to/test-workspace`. Once the local surface and business checks are configured, the agent calls `run_test` and receives a Mission ID instead of repeatedly supplying CDP instructions.
 
+For a multi-window Electron app, select its renderer once in the external workspace configuration:
+
+```yaml
+surfaces:
+  electron:
+    cdpUrl: http://127.0.0.1:9222
+    targetTitleContains: AIHR
+```
+
+`targetUrlPrefix` can be used instead of or together with the title. Web CDP attachment supports the same fields. ProofKit waits briefly for the page to appear and stops if none or several pages match, so an agent cannot accidentally test an unrelated window.
+
 The integration should expose opaque IDs and sanitized facts. It should not expose arbitrary shell, SQL, filesystem or credential operations. Write capabilities require an explicit test environment, a Charter side-effect policy of `allow`, and the runner-level write opt-in.
 
 For MCP, the operator sets `PROOFKIT_ALLOW_CAPABILITY_WRITES=1` when launching the server. The workspace must also set `policies.sideEffects: allow`, and the selected Charter and capability must each allow the write. The agent cannot turn on this process-level switch through a tool argument. CLI uses `proofkit mission run <mission-id> --approve --allow-capability-writes`. Use this only with a dedicated test environment and the integration's preflight checks.

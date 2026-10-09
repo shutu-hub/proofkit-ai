@@ -5,6 +5,9 @@ import type { AdapterEvent, SurfaceAdapter } from "@proofkit/runner";
 export type WebAdapterOptions = {
   baseUrl?: string;
   cdpUrl?: string;
+  /** Selects one existing application page when attaching over CDP. */
+  targetUrlPrefix?: string;
+  targetTitleContains?: string;
   headless?: boolean;
   executablePath?: string;
   /**
@@ -30,6 +33,20 @@ export class WebAdapter implements SurfaceAdapter {
     const { chromium } = await import("playwright-core");
     if (this.options.cdpUrl) {
       this.browser = await chromium.connectOverCDP(this.options.cdpUrl);
+      const deadline = Date.now() + 5_000;
+      while (true) {
+        const pages = this.browser.contexts().flatMap((context) => context.pages());
+        const selected = await selectAttachedPage(pages, this.options);
+        if (selected) {
+          this.context = selected.context();
+          this.activePage = selected;
+          return;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error("CDP attachment found no matching application page. Open the app or configure targetUrlPrefix/targetTitleContains in the test workspace.");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
     } else {
       this.browser = await chromium.launch({
         headless: this.options.headless ?? true,
@@ -157,4 +174,29 @@ export class WebAdapter implements SurfaceAdapter {
     if (!this.activePage) throw new Error("Web adapter is not connected");
     return this.activePage;
   }
+}
+
+/** Never choose the first tab by accident when an attached browser has several pages. */
+export async function selectAttachedPage(pages: Page[], options: Pick<WebAdapterOptions, "baseUrl" | "targetUrlPrefix" | "targetTitleContains">): Promise<Page | undefined> {
+  const explicitTarget = Boolean(options.targetUrlPrefix || options.targetTitleContains);
+  const base = !explicitTarget && options.baseUrl ? new URL(options.baseUrl) : undefined;
+  const baseOrigin = base && ["http:", "https:"].includes(base.protocol) ? base.origin : undefined;
+  const matching: Page[] = [];
+  for (const page of pages) {
+    if (page.isClosed()) continue;
+    const url = page.url();
+    if (!applicationPageUrl(url)) continue;
+    if (options.targetUrlPrefix && !url.startsWith(options.targetUrlPrefix)) continue;
+    if (baseOrigin && new URL(url).origin !== baseOrigin) continue;
+    if (options.targetTitleContains && !(await page.title().catch(() => "")).includes(options.targetTitleContains)) continue;
+    matching.push(page);
+  }
+  if (matching.length > 1) {
+    throw new Error(`CDP attachment matched ${matching.length} application pages. Configure targetUrlPrefix and/or targetTitleContains to select one page.`);
+  }
+  return matching[0];
+}
+
+function applicationPageUrl(url: string): boolean {
+  return Boolean(url) && !/^(about:|devtools:|chrome:|chrome-extension:|chrome-error:|edge:)/i.test(url);
 }

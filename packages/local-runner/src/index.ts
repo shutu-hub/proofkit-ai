@@ -1029,6 +1029,8 @@ export class LocalRunnerService {
       return new ElectronAdapter({
         cdpUrl: input.cdp ?? this.config.surfaces.electron?.cdpUrl,
         devtoolsActivePortPath: input.devtoolsPortFile ?? this.config.surfaces.electron?.devtoolsActivePort,
+        targetUrlPrefix: this.config.surfaces.electron?.targetUrlPrefix,
+        targetTitleContains: this.config.surfaces.electron?.targetTitleContains,
       });
     }
     if ((input.adapter ?? "web") === "mobile") {
@@ -1051,6 +1053,8 @@ export class LocalRunnerService {
     return new WebAdapter({
       baseUrl: input.url ?? this.config.surfaces.web?.baseUrl,
       cdpUrl: input.cdp ?? this.config.surfaces.web?.cdpUrl,
+      targetUrlPrefix: this.config.surfaces.web?.targetUrlPrefix,
+      targetTitleContains: this.config.surfaces.web?.targetTitleContains,
       headless: !input.headful,
       executablePath: this.config.surfaces.web?.executablePath,
     });

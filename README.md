@@ -106,6 +106,8 @@ pnpm --filter @proofkit/cli dev -- run "resume check" \
   --devtools-port-file /path/to/user-data/DevToolsActivePort
 ```
 
+For CDP attachment, ProofKit waits for an application page and requires a unique target. If the browser or Electron app has several windows, set `surfaces.electron.targetUrlPrefix` or `targetTitleContains` in the external workspace's `.proofkit/config.yaml` (the Web surface accepts the same fields). It never picks an arbitrary first tab. A configured Web `baseUrl` also narrows attached pages to that origin when no explicit target is set.
+
 For a mobile surface, configure an Appium or W3C WebDriver server in the external workspace:
 
 ```yaml

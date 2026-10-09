@@ -13,7 +13,7 @@ export class ElectronAdapter extends WebAdapter {
   private readonly electronOptions: ElectronAdapterOptions;
 
   constructor(options: ElectronAdapterOptions = {}) {
-    super({ cdpUrl: options.cdpUrl });
+    super({ cdpUrl: options.cdpUrl, targetUrlPrefix: options.targetUrlPrefix, targetTitleContains: options.targetTitleContains });
     this.electronOptions = options;
   }
 

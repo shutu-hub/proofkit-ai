@@ -297,11 +297,15 @@ export const ProofkitConfigSchema = z.object({
     web: z.object({
       baseUrl: z.string().url().optional(),
       cdpUrl: z.string().url().optional(),
+      targetUrlPrefix: z.string().min(1).optional(),
+      targetTitleContains: z.string().min(1).optional(),
       executablePath: z.string().min(1).optional(),
     }).optional(),
     electron: z.object({
       cdpUrl: z.string().optional(),
       devtoolsActivePort: z.string().optional(),
+      targetUrlPrefix: z.string().min(1).optional(),
+      targetTitleContains: z.string().min(1).optional(),
     }).optional(),
     mobile: z.object({
       serverUrl: z.string().url().default("http://127.0.0.1:4723"),
