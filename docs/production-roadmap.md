@@ -114,6 +114,8 @@ Mission discovery and final verification now record bounded Git source fingerpri
 
 The Windows loopback target check now records a listener's Git checkout before surface actions and blocks a different checkout by default. Repair comparison becomes inconclusive when only one side has target association evidence, target origins differ, or either listener is associated with another checkout. This still does not attest served bytes or detect a listener replacement between checks.
 
+Mission evidence now includes a bounded result projection and a static HTML/JSON snapshot in the external workspace. The report preserves the saved verdict, scope limits, missing execution slots, raw versus expected negative outcomes, the first failure and direct replay comparison. Report generation checks local evidence containment and available SHA-256 digests; missing or changed artifacts remain unavailable without rewriting the acceptance result. The release-suite smoke opens real Web/Electron fixture results in Chrome, checks wide and narrow layouts, follows a Run evidence link, verifies the CLI report command, and compares the good, seeded-defect and repaired-fixture Missions. This verifies report delivery and fixture-scoped repair evidence, not live AIHR acceptance or proof that an application source edit caused the repair.
+
 **Gate:** seeded defects have a correct failure boundary and a repair suggestion that is rejected when evidence is insufficient.
 
 ## Phase 5: mobile and protocol extensions — adapter slice complete

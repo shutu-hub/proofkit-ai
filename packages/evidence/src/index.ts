@@ -5,6 +5,8 @@ import { dirname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { RunEventSchema, RunSummarySchema, type RunEvent, type RunSummary } from "@proofkit/contracts";
 
+export { MissionReportStore } from "./mission-report.js";
+
 const REDACT_KEYS = /authorization|cookie|password|secret|token|access[_-]?key|phone|mobile/i;
 
 export function sanitizeEvidence(value: unknown): unknown {

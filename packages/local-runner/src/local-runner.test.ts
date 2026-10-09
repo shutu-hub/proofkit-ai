@@ -55,6 +55,8 @@ describe("LocalRunnerService", () => {
     expect(completed.observations.some((item) => item.kind === "project.source-state")).toBe(true);
     expect(completed.observations.some((item) => item.kind === "project.source-state-final")).toBe(true);
 
+    const missionPath = join(root, ".proofkit", "missions", `${created.missionId}.json`);
+    const savedBeforeReport = await readFile(missionPath, "utf8");
     const evidence = await service.missionEvidence(created.missionId);
     expect(evidence).toMatchObject({
       missionId: created.missionId,
@@ -76,6 +78,23 @@ describe("LocalRunnerService", () => {
       expect.objectContaining({ kind: "report" }),
       expect.objectContaining({ kind: "business" }),
     ]));
+    expect(evidence.summary).toMatchObject({ missionId: created.missionId, verdict: "passed", expectedRuns: 1, observedRuns: 1 });
+    expect(evidence.summary.runs).toEqual([expect.objectContaining({ taskId: "execute-charter", runId: "fixture-run", surface: "web", verdict: "passed" })]);
+    expect(evidence.reportUnavailable).toBeUndefined();
+    expect(await readFile(evidence.report!, "utf8")).toContain("Scenario executions");
+    expect(await readFile(missionPath, "utf8")).toBe(savedBeforeReport);
+
+    // A blocked report path must not erase the saved test result or evidence.
+    const reportDir = join(root, ".proofkit", "missions", created.missionId);
+    await rm(reportDir, { recursive: true });
+    await writeFile(reportDir, "not a directory");
+    const unavailable = await service.missionEvidence(created.missionId);
+    expect(unavailable.report).toBeUndefined();
+    expect(unavailable.reportUnavailable).toContain("could not be written");
+    expect(unavailable.verdict).toBe("passed");
+    expect(unavailable.summary.verdict).toBe("passed");
+    expect(unavailable.evidence).toEqual(evidence.evidence);
+    expect(await readFile(missionPath, "utf8")).toBe(savedBeforeReport);
   });
 
   it("does not report a core mission as passed without an independent business oracle", async () => {

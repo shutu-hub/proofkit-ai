@@ -42,7 +42,7 @@ See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for
 - Records bounded Git source fingerprints before and after a Mission; comparison reports source changes and treats a mid-run change as inconclusive.
 - The default `core` mission runs one selected surface with an independent business Oracle and source facts. A `release` Mission can run one Charter or an explicitly configured multi-Charter suite across Web/Electron primary and replay runs. Every declared negative or recovery case has its own run and cannot supply missing main-path evidence. A suite reports registered release Charters outside its scope; it does not imply whole-project coverage.
 - Release suites reconcile reviewed route-to-Charter declarations with the bounded project map. Their result separates discovered, mapped and observed Web/API routes, reports stale or ambiguous mappings, and keeps partial scans explicit. API observation requires a matching successful HTTP response and the same independent business gate as the surface run.
-- Produces local JSON and HTML reports without a hosted service.
+- Produces a compact Mission result with acceptance scope, a scenario/surface execution matrix, first failure, evidence links and scoped repair comparison, plus local JSON and HTML snapshots.
 
 ## Quick start
 
@@ -156,6 +156,14 @@ surfaces:
 Then run the same Charter with `--adapter mobile`. Mobile selectors may use `accessibility=`, `id=`, `xpath=`, `class=` or `css=` prefixes. The mobile driver must be loopback when invoked through MCP.
 
 Relative Charter and output paths resolve against the selected test workspace. Runs are stored under `<workspaceRoot>/.proofkit/runs/<run-id>/` by default. Each run contains `run.json`, `events.jsonl`, artifacts, and `report.html`.
+
+For a Mission, `get_mission_evidence` returns `summary` and a `report` path. CLI users can generate the same result:
+
+```bash
+proofkit mission report <mission-id> --root /path/to/source --workspace /path/to/test-workspace
+```
+
+Open `<workspaceRoot>/.proofkit/missions/<mission-id>/report.html` for the compact result, or read its adjacent `summary.json`. These are snapshots of a saved Mission revision; regenerate during or after execution to see the latest state. The report preserves the saved acceptance verdict, shows missing executions and coverage limits, and distinguishes a negative case's expected outcome from its raw Run verdict. Evidence links become unavailable when a file is missing, outside its Run/workspace boundary, or differs from its recorded digest. A report-write failure returns `reportUnavailable` while retaining the structured result and original evidence.
 
 For an AI client, register `proofkit-mcp` after installing the tarball, or run the server from a source checkout. It exposes only project discovery, charter planning, run start, status, bounded evidence, and replay, and it uses the same Local Runner as the CLI. MCP does not execute the configured project start command; start your test environment first:
 

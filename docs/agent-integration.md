@@ -130,6 +130,10 @@ The status result is intentionally short and structured:
 
 The agent should report a product bug only for a `confirmed` product finding with linked evidence. A missing browser, permission, login, test data or business terminal observation is reported as `blocked` or `inconclusive` and includes the next required action.
 
+`get_mission_evidence` also returns a bounded `summary` and the path to a compact HTML `report`. Give the user this entry point alongside the verdict, tested scope and first actionable issue. The report shows the saved Mission verdict, per-scenario/platform results, missing runs, business proof, findings and replay comparison. A negative case retains its raw failed/blocked result and separately states whether it matched the declared expectation. Task counts are progress, not coverage. The adjacent `summary.json` exposes the same presentation contract without tool inputs/outputs or raw business payloads.
+
+Reports are static snapshots with revision and generation time. A new evidence request regenerates them; they do not refresh themselves. Missing files, rejected paths and recorded-digest mismatches appear as unavailable evidence rather than working links. When generation fails, `reportUnavailable` explains the limitation and the saved verdict/evidence remain readable. Report rendering never decides acceptance. Whole-project workflow coverage is still unmeasured.
+
 `get_mission_evidence.targetBindings` lists the source-to-target process association for each Web/Electron Run. On Windows, a loopback listener whose code path points to a different Git checkout blocks the Run by default; an unknown association is reported as `unverified`. A matching process path does not prove the server delivered the current source bytes, so the agent should not describe it as full source attestation. The test workspace may set `policies.targetBinding: record` for an intentional cross-checkout diagnostic.
 Repair comparison is `inconclusive` when one side has no target association record, the target origin changes, or either recorded listener belongs to a different checkout. Historical Runs with no association record on either side retain their existing comparison behavior; a repeated `unverified` association still cannot prove served-byte identity.
 
@@ -195,6 +199,7 @@ proofkit mission create "测试简历获取" --surface electron --charter .proof
 proofkit mission run <mission-id> --approve
 proofkit mission status <mission-id>
 proofkit mission evidence <mission-id>
+proofkit mission report <mission-id>
 ```
 
 This is useful for CI, debugging MCP configuration, and reproducing an agent result locally. CLI, MCP and CI share the same Local Runner, Mission files and run evidence format.

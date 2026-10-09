@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
-import { createRunId, EvidenceStore } from "@proofkit/evidence";
+import { createRunId, EvidenceStore, MissionReportStore } from "@proofkit/evidence";
 import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
@@ -15,6 +15,8 @@ import { compareMissionRecords } from "./mission-comparison.js";
 import { ProjectMissionStore } from "./mission-store.js";
 import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from "./suite-verifier.js";
 import { inspectTestScope } from "./test-scope.js";
+import { projectMissionResult } from "./mission-result.js";
+import type { MissionResult } from "@proofkit/contracts";
 
 export { loadProjectIntegration } from "./integration.js";
 
@@ -137,6 +139,7 @@ export class LocalRunnerService {
   readonly integration?: ProjectIntegration;
   private readonly records = new Map<string, LocalRunRecord>();
   private readonly evidence: EvidenceStore;
+  private readonly missionReports: MissionReportStore;
   private readonly restrictWebOrigins: boolean;
   private readonly oracles: BusinessOracle[];
   private readonly capabilities: CapabilityDefinition<any, any>[];
@@ -153,6 +156,7 @@ export class LocalRunnerService {
     this.config = loadConfigForContext(context, options.config);
     this.evidenceDir = resolve(this.workspaceRoot, options.evidenceDir ?? ".proofkit/runs");
     this.evidence = new EvidenceStore(this.evidenceDir);
+    this.missionReports = new MissionReportStore(this.workspaceRoot, this.evidenceDir);
     this.restrictWebOrigins = options.restrictWebOrigins ?? false;
     this.integration = options.integration;
     this.oracles = [...(this.integration?.oracles ?? []), ...(options.oracles ?? [])];
@@ -530,6 +534,9 @@ export class LocalRunnerService {
     finalSourceState?: SourceState;
     comparison?: MissionComparison;
     comparisonUnavailable?: string;
+    summary: MissionResult;
+    report?: string;
+    reportUnavailable?: string;
   }> {
     const mission = await this.missionAgent.load(validateMissionId(missionId));
     const sourceState = SourceStateSchema.safeParse([...mission.observations].reverse().find((item) => item.kind === "project.source-state")?.data);
@@ -543,19 +550,31 @@ export class LocalRunnerService {
         comparisonUnavailable = "The replay source Mission could not be loaded or compared in this workspace.";
       }
     }
+    const running = await this.missionAgent.isRunning(mission.missionId);
+    const suiteScope = summarizeSuiteScope(mission);
+    const summary = projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, comparison, comparisonUnavailable });
+    let report: string | undefined;
+    let reportUnavailable: string | undefined;
+    try {
+      report = await this.missionReports.writeReport(summary);
+    } catch {
+      // Evidence remains readable when the workspace is read-only or a report
+      // path escapes its ownership boundary. Rendering never changes a verdict.
+      reportUnavailable = "The Mission report could not be written inside this test workspace.";
+    }
     return {
       missionId: mission.missionId,
       replayOfMissionId: mission.replayOfMissionId,
       projectRoot: this.root,
       workspaceRoot: this.workspaceRoot,
       status: mission.status,
-      running: await this.missionAgent.isRunning(mission.missionId),
+      running,
       verdict: mission.verdict,
       level: mission.level,
       levelSelection: mission.levelSelection,
       planning: mission.plan.planning,
       executionProfile: mission.plan.executionProfile,
-      suiteScope: summarizeSuiteScope(mission),
+      suiteScope,
       taskSummary: mission.plan.graph.tasks.map((task) => ({
         taskId: task.taskId,
         ...(task.charterId ? { charterId: task.charterId } : {}),
@@ -581,6 +600,9 @@ export class LocalRunnerService {
       ...(finalSourceState.success ? { finalSourceState: finalSourceState.data } : {}),
       ...(comparison ? { comparison } : {}),
       ...(comparisonUnavailable ? { comparisonUnavailable } : {}),
+      summary,
+      ...(report ? { report } : {}),
+      ...(reportUnavailable ? { reportUnavailable } : {}),
     };
   }
 

@@ -253,10 +253,16 @@ Mission state is separate from run artifacts under the selected workspace:
 ```text
 .proofkit/
   missions/<mission-id>.json
+  missions/<mission-id>/summary.json
+  missions/<mission-id>/report.html
   runs/<run-id>/run.json
 ```
 
 The mission references run evidence through typed `EvidenceRef` records. A mission file is orchestration state and can be replayed; a run directory is immutable execution evidence and remains the source of truth for what the surface actually did. Agent decisions and tool receipts remain auditable in the mission, while screenshots, snapshots, reports and runtime events remain in the run evidence directory.
+
+`MissionResult` is a bounded presentation projection of that saved state, not another verdict reducer. `local-runner` pairs tasks and observations by Charter, surface, run kind and negative case; retains missing, duplicate and unassociated executions; and copies the persisted acceptance verdict. It caps execution rows at 200, findings at 20, repair proposals at 10 and evidence at six references per row, with omission counts. It excludes tool payloads and raw business facts. Negative cases preserve both the raw Run verdict and the saved expectation-match fact.
+
+`MissionReportStore` in `evidence` renders this projection as script-free HTML and JSON. `missionEvidence` and CLI `mission report` regenerate the static snapshot without changing Mission state or Run evidence. The page shows scope limits even when the declared tests pass; task counts and static route observations are not business coverage. Evidence links require membership in a displayed or compared Run, an allowlisted artifact path, a regular file, realpath containment and a matching digest when one was recorded. Escaping or cross-Run symlinks are rejected. Report generation failures leave structured evidence available. Digests validate evidence bytes at generation time; they do not attest the tested application, and links are not continuously checked after generation.
 
 Every event has a run ID and timestamp. Each step stores before/after snapshots and the action receipt. Screenshot capture is best-effort with a bounded adapter timeout; an offscreen or unavailable renderer is recorded as a finding and cannot silently turn into a business failure or hold the run for the browser's default long timeout.
 

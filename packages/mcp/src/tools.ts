@@ -114,7 +114,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "get_mission_evidence",
-    "Read bounded, traceable evidence references and findings for a mission.",
+    "Read traceable Mission evidence, a bounded result summary and its local HTML report path. Report generation does not execute tests or change the saved verdict.",
     { missionId: z.string().min(1) },
     async ({ missionId }) => result(await runner.missionEvidence(missionId)),
   );

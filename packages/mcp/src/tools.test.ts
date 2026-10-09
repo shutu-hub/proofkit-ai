@@ -181,6 +181,8 @@ describe("ProofKit MCP tools", () => {
         executionProfile: mission.plan.executionProfile,
         taskSummary: mission.plan.graph.tasks,
         agentSteps: [],
+        summary: { missionId: mission.missionId, verdict: "passed", expectedRuns: 1, observedRuns: 1 },
+        report: "test-workspace/.proofkit/missions/mission-test/report.html",
         evidence: [{ evidenceId: "evidence-1", kind: "business", path: "runs/x/oracle.json", capturedAt: new Date().toISOString() }],
         findings: [],
         repairSuggestions: [],
@@ -198,6 +200,8 @@ describe("ProofKit MCP tools", () => {
       verdict: "passed",
       level: "core",
       agentSteps: [],
+      summary: { missionId: "mission-test", verdict: "passed", expectedRuns: 1, observedRuns: 1 },
+      report: "test-workspace/.proofkit/missions/mission-test/report.html",
       evidence: [expect.objectContaining({ kind: "business" })],
     });
 

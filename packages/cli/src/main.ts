@@ -275,6 +275,16 @@ export function createProgram(): Command {
       console.log(JSON.stringify(await runner.missionEvidence(missionId), null, 2));
     });
 
+  mission.command("report <missionId>")
+    .description("Generate a compact HTML/JSON snapshot of a Mission's saved results")
+    .option("--root <path>", "project root", ".")
+    .action(async (missionId: string, options: RootOptions) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+      const evidence = await runner.missionEvidence(missionId);
+      console.log(JSON.stringify({ summary: evidence.summary, report: evidence.report, reportUnavailable: evidence.reportUnavailable }, null, 2));
+      if (!evidence.report) process.exitCode = 1;
+    });
+
   mission.command("replay <missionId>")
     .description("Replay a mission charter and wait for its final verdict")
     .option("--root <path>", "project root", ".")
@@ -283,8 +293,8 @@ export function createProgram(): Command {
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace, allowCapabilityWrites: options.allowCapabilityWrites });
       const started = await runner.replayMission(missionId);
       const completed = await runner.waitMission(started.mission.missionId);
-      const comparison = await runner.compareMissions(missionId, completed.missionId);
-      console.log(JSON.stringify({ missionId: completed.missionId, replayOfMissionId: missionId, status: completed.status, verdict: completed.verdict, comparison }, null, 2));
+      const evidence = await runner.missionEvidence(completed.missionId);
+      console.log(JSON.stringify({ missionId: completed.missionId, replayOfMissionId: missionId, status: completed.status, verdict: completed.verdict, comparison: evidence.comparison, summary: evidence.summary, report: evidence.report, reportUnavailable: evidence.reportUnavailable }, null, 2));
       if (completed.verdict !== "passed") process.exitCode = 1;
     });
 

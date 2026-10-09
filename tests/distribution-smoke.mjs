@@ -40,6 +40,7 @@ try {
   assert.equal((await command(process.execPath, [cli, "--version"], scratch)).stdout.trim(), packed.version);
   assert.equal((await npm(["exec", "--prefix", installDir, "--", "proofkit", "--version"], scratch)).stdout.trim(), packed.version);
   assert.match((await npm(["exec", "--prefix", installDir, "--", "proofkit", "mission", "create", "--help"], scratch)).stdout, /--charter <path>/);
+  assert.match((await npm(["exec", "--prefix", installDir, "--", "proofkit", "mission", "report", "--help"], scratch)).stdout, /Usage: proofkit mission report \[options\] <missionId>/);
   await command(process.execPath, [cli, "init", "--root", source, "--workspace", workspace], scratch);
   const doctor = await command(process.execPath, [cli, "doctor", "--root", source, "--workspace", workspace], scratch);
   assert.match(doctor.stdout, /web surface\s+detected/);

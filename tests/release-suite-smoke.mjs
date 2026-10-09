@@ -1,10 +1,13 @@
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { chromium } from "playwright-core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ProofkitConfigSchema, TestCharterSchema } from "../packages/contracts/dist/index.js";
@@ -146,6 +149,13 @@ try {
   assert.equal(comparison.status, "verified-in-scope", JSON.stringify(comparison.gaps));
   assert.ok(comparison.defects.length >= 2 && comparison.defects.every((item) => item.outcome === "not-reproduced" && item.charterId === "resume"));
   assert.equal(comparison.runs.length, 8);
+  const replayEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: replayStarted.mission.missionId } }));
+  assert.equal(replayEvidence.summary.comparison.status, "verified-in-scope");
+  await verifyMissionReports([good.evidence, bad.evidence, replayEvidence]);
+  const cli = await promisify(execFile)(process.execPath, [join(repoRoot, "packages", "cli", "dist", "main.js"), "mission", "report", good.started.missionId, "--root", sourceRoot, "--workspace", workspaceRoot], { timeout: 15_000 });
+  const cliReport = JSON.parse(cli.stdout);
+  assert.equal(cliReport.summary.verdict, "passed");
+  assert.equal(cliReport.report, good.evidence.report);
 
   // A partial static inventory must not prevent acceptance of a declared core flow.
   const extraRouteFile = join(sourceRoot, "apps", "web", "src", "extra-router.ts");
@@ -166,6 +176,8 @@ try {
     assert.equal(status.mission.verdict, "passed", JSON.stringify(status.mission.findings));
     const evidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
     assert.deepEqual(evidence.planning.coverage, started.planning.coverage);
+    assert.equal(evidence.summary.planning.coverage.inventory, "partial");
+    assert.ok((await readFile(evidence.report, "utf8")).includes("source inventory is partial"));
     assert.ok(evidence.evidence.some((item) => item.kind === "business"));
     for (const item of evidence.evidence.filter((item) => item.kind === "business")) await readFile(item.path);
     scopedMissions.push(started.missionId);
@@ -181,7 +193,7 @@ try {
   assert.equal(await readFile(routeFile, "utf8"), routeSource);
   assert.equal(await readFile(apiRouteFile, "utf8"), apiRouteSource);
   assert.equal(await readFile(extraRouteFile, "utf8"), extraRouteSource);
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged"] }, null, 2));
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
   await client?.close();
   await mcpServer?.close();
@@ -202,6 +214,54 @@ async function runSuite(mcpClient) {
   const evidence = payload(await mcpClient.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
   assert.equal(evidence.verdict, status.mission.verdict);
   return { started, status, evidence };
+}
+
+async function verifyMissionReports(results) {
+  const reviewRoot = join(caseRoot, "report-review");
+  await mkdir(reviewRoot, { recursive: true });
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.PROOFKIT_BROWSER_PATH ?? (process.platform === "win32" ? "C:/Program Files/Google/Chrome/Application/chrome.exe" : undefined) });
+  try {
+    const page = await browser.newPage();
+    const errors = [];
+    const externalRequests = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("request", (request) => { if (!request.url().startsWith("file:")) externalRequests.push(request.url()); });
+    for (const result of results) {
+      assert.equal(result.reportUnavailable, undefined);
+      assert.equal(result.summary.verdict, result.verdict);
+      assert.equal(result.summary.expectedRuns, 8);
+      assert.equal(result.summary.observedRuns, 8);
+      assert.equal(result.summary.runs.length, 8);
+      assert.ok(result.summary.runs.every((run) => run.taskId && run.runId));
+      assert.ok(result.summary.runs.every((run) => run.verdict === "failed" ? run.issue === "Tool returned verdict failed" : !run.issue));
+      const summary = JSON.parse(await readFile(join(dirname(result.report), "summary.json"), "utf8"));
+      assert.deepEqual(summary, result.summary);
+      const url = pathToFileURL(result.report).href;
+      await page.setViewportSize({ width: 1365, height: 950 });
+      await page.goto(url);
+      assert.equal(await page.locator("tbody tr").count(), 8);
+      assert.ok((await page.locator(".scope").innerText()).includes("Whole-project workflow coverage has not been measured"));
+      assert.ok((await page.locator("footer").innerText()).includes(`revision ${result.summary.revision}`));
+      assert.equal(await page.locator(".unavailable").count(), 0);
+      if (result.verdict === "failed") assert.ok((await page.locator("#first-failure").innerText()).length > 0);
+      if (result.summary.comparison) assert.ok((await page.locator(".comparison").innerText()).includes("Original defect not reproduced in tested scope"));
+      await page.screenshot({ path: join(reviewRoot, `${result.verdict}-${result.summary.comparison ? "replay" : "initial"}-desktop.png`), fullPage: true });
+      const reportLink = page.getByRole("link", { name: "Run report", exact: true }).first();
+      const expectedUrl = new URL(await reportLink.getAttribute("href"), url).href;
+      await reportLink.click();
+      assert.equal(page.url(), expectedUrl);
+      assert.ok((await page.locator("body").innerText()).includes("ProofKit"));
+      await page.goto(url);
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "Report page overflows the narrow viewport");
+      assert.ok(await page.locator(".table-wrap").evaluate((element) => element.scrollWidth > element.clientWidth), "Narrow matrix needs its own horizontal scroll");
+      await page.screenshot({ path: join(reviewRoot, `${result.verdict}-${result.summary.comparison ? "replay" : "initial"}-mobile.png`), fullPage: true });
+    }
+    assert.deepEqual(errors, []);
+    assert.deepEqual(externalRequests, []);
+  } finally {
+    await browser.close();
+  }
 }
 
 async function waitForMission(mcpClient, missionId) {

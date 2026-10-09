@@ -906,3 +906,80 @@ export const MissionComparisonSchema = z.object({
   comparedAt: z.string(),
 });
 export type MissionComparison = z.infer<typeof MissionComparisonSchema>;
+
+/** A bounded presentation of saved Mission facts, never a second verdict reducer. */
+export const MissionRunResultSchema = z.object({
+  taskId: z.string().optional(),
+  charterId: CatalogIdSchema.optional(),
+  title: z.string().min(1),
+  surface: MissionSurfaceSchema.optional(),
+  runKind: z.enum(["primary", "replay", "negative", "unknown"]),
+  negativeCaseId: z.string().optional(),
+  taskStatus: MissionTaskStatusSchema.optional(),
+  runId: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  /** Raw surface verdict; an expected failure is not a product defect. */
+  verdict: VerdictSchema.optional(),
+  expectedVerdict: VerdictSchema.optional(),
+  outcomeMatched: z.boolean().optional(),
+  assertions: z.object({ passed: z.number().int().nonnegative(), total: z.number().int().nonnegative() }).optional(),
+  oracles: z.object({ passed: z.number().int().nonnegative(), total: z.number().int().nonnegative() }).optional(),
+  businessFacts: z.number().int().nonnegative().optional(),
+  targetBinding: TargetBindingSchema.optional(),
+  evidence: z.array(EvidenceRefSchema).max(6),
+  omittedEvidence: z.number().int().nonnegative(),
+  issue: z.string().optional(),
+});
+export type MissionRunResult = z.infer<typeof MissionRunResultSchema>;
+
+export const MissionResultSchema = z.object({
+  schemaVersion: z.literal("1"),
+  missionId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  replayOfMissionId: z.string().optional(),
+  projectRoot: z.string().min(1),
+  workspaceRoot: z.string().min(1),
+  intent: z.string().min(1),
+  status: MissionStatusSchema,
+  running: z.boolean(),
+  verdict: VerdictSchema.optional(),
+  level: TestLevelSchema,
+  levelSelection: TestLevelSelectionSchema.optional(),
+  revision: z.number().int().nonnegative(),
+  updatedAt: z.string(),
+  generatedAt: z.string(),
+  planning: PlanningQualitySchema.optional(),
+  scope: z.object({
+    surfaces: z.array(MissionSurfaceSchema),
+    charterCount: z.number().int().nonnegative(),
+    suiteId: CatalogIdSchema.optional(),
+    uncoveredCharterIds: z.array(CatalogIdSchema),
+    routeCoverage: z.object({
+      inventoryTruncated: z.boolean(),
+      candidateRoutes: z.number().int().nonnegative(),
+      mappedCandidates: z.number().int().nonnegative(),
+      observedCandidates: z.number().int().nonnegative(),
+      gapCount: z.number().int().nonnegative(),
+      unresolvedTargetCount: z.number().int().nonnegative(),
+    }).optional(),
+  }),
+  tasks: z.object({
+    total: z.number().int().nonnegative(),
+    settled: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    blocked: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative(),
+  }),
+  expectedRuns: z.number().int().nonnegative(),
+  observedRuns: z.number().int().nonnegative(),
+  runs: z.array(MissionRunResultSchema).max(200),
+  omittedRunResults: z.number().int().nonnegative(),
+  findings: z.array(FindingSchema).max(20),
+  omittedFindings: z.number().int().nonnegative(),
+  confirmedProductFindings: z.number().int().nonnegative(),
+  firstFailure: FailureBoundarySchema.optional(),
+  diagnosis: DiagnosisSchema.optional(),
+  repairSuggestions: z.array(RepairSuggestionSchema).max(10),
+  omittedRepairSuggestions: z.number().int().nonnegative(),
+  comparison: MissionComparisonSchema.optional(),
+  comparisonUnavailable: z.string().optional(),
+});
+export type MissionResult = z.infer<typeof MissionResultSchema>;
