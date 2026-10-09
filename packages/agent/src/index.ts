@@ -347,6 +347,7 @@ export class InMemoryMissionToolRegistry implements MissionToolRegistry {
 
 export type MissionCreateInput = Omit<MissionPlanInput, "policy"> & {
   policy?: Partial<MissionPolicy>;
+  replayOfMissionId?: string;
 };
 
 export type MissionRunOptions = {
@@ -379,6 +380,7 @@ export class MissionAgent {
     const now = new Date().toISOString();
     const mission = TestMissionSchema.parse({
       missionId: `mission-${randomUUID().slice(0, 12)}`,
+      replayOfMissionId: input.replayOfMissionId,
       intent: input.intent,
       projectRoot: input.projectRoot,
       workspaceRoot: input.workspaceRoot,

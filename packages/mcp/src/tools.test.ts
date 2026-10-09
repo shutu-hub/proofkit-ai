@@ -28,6 +28,7 @@ describe("ProofKit MCP tools", () => {
       "get_mission_evidence",
       "cancel_mission",
       "replay_mission",
+      "compare_missions",
       "plan_test",
       "start_run",
       "get_run_status",
@@ -174,6 +175,17 @@ describe("ProofKit MCP tools", () => {
       evidence: [expect.objectContaining({ kind: "business" })],
     });
 
+    await client.close();
+    await server.close();
+  });
+
+  it("returns the scoped repair comparison through MCP without starting a Run", async () => {
+    const compareMissions = vi.fn(async () => ({ baselineMissionId: "before", candidateMissionId: "after", status: "verified-in-scope", scopeMatched: true }));
+    const runner = { config: { surfaces: {} }, compareMissions } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    const response = await client.callTool({ name: "compare_missions", arguments: { baselineMissionId: "before", candidateMissionId: "after" } });
+    expect(compareMissions).toHaveBeenCalledWith("before", "after");
+    expect(JSON.parse(textContent(response))).toMatchObject({ status: "verified-in-scope", scopeMatched: true });
     await client.close();
     await server.close();
   });

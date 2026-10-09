@@ -608,6 +608,8 @@ export type MissionPlan = z.infer<typeof MissionPlanSchema>;
 
 export const TestMissionSchema = z.object({
   missionId: z.string().min(1),
+  /** The direct source Mission when this Mission was created by replay. */
+  replayOfMissionId: z.string().min(1).optional(),
   intent: z.string().min(1),
   projectRoot: z.string().min(1),
   workspaceRoot: z.string().min(1).optional(),
@@ -634,3 +636,51 @@ export const TestMissionSchema = z.object({
   updatedAt: z.string(),
 });
 export type TestMission = z.infer<typeof TestMissionSchema>;
+
+export const MissionComparisonRunSchema = z.object({
+  charterId: CatalogIdSchema.optional(),
+  surface: z.enum(["web", "electron", "mobile"]),
+  runKind: z.enum(["primary", "replay", "negative"]),
+  negativeCaseId: z.string().optional(),
+  baselineRunId: z.string().optional(),
+  candidateRunId: z.string().optional(),
+  baselineVerdict: VerdictSchema.optional(),
+  candidateVerdict: VerdictSchema.optional(),
+  baselineBusinessFacts: z.number().int().nonnegative(),
+  candidateBusinessFacts: z.number().int().nonnegative(),
+  baselineEvidence: z.array(EvidenceRefSchema).default([]),
+  candidateEvidence: z.array(EvidenceRefSchema).default([]),
+});
+export type MissionComparisonRun = z.infer<typeof MissionComparisonRunSchema>;
+
+export const MissionComparisonDefectSchema = z.object({
+  charterId: CatalogIdSchema.optional(),
+  surface: z.enum(["web", "electron", "mobile"]),
+  oracleName: z.string().min(1),
+  baselineRunId: z.string().min(1),
+  candidateRunId: z.string().optional(),
+  outcome: z.enum(["not-reproduced", "reproduced", "unverified"]),
+  baselineEvidence: z.array(EvidenceRefSchema).min(1),
+  candidateEvidence: z.array(EvidenceRefSchema).default([]),
+});
+export type MissionComparisonDefect = z.infer<typeof MissionComparisonDefectSchema>;
+
+/** A comparison is a scoped observation, never proof of which source edit caused the change. */
+export const MissionComparisonSchema = z.object({
+  baselineMissionId: z.string().min(1),
+  candidateMissionId: z.string().min(1),
+  baselineVerdict: VerdictSchema.optional(),
+  candidateVerdict: VerdictSchema.optional(),
+  baselineScopeHash: z.string().regex(/^[a-f0-9]{64}$/),
+  candidateScopeHash: z.string().regex(/^[a-f0-9]{64}$/),
+  scopeMatched: z.boolean(),
+  status: z.enum(["verified-in-scope", "defect-reproduced", "inconclusive"]),
+  reason: z.string().min(1),
+  gaps: z.array(z.string()),
+  runs: z.array(MissionComparisonRunSchema),
+  omittedRuns: z.number().int().nonnegative(),
+  defects: z.array(MissionComparisonDefectSchema),
+  omittedDefects: z.number().int().nonnegative(),
+  comparedAt: z.string(),
+});
+export type MissionComparison = z.infer<typeof MissionComparisonSchema>;

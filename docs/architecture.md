@@ -167,7 +167,13 @@ Every task is persisted as `running` before its tool starts and receives a `star
 
 Mission status describes orchestration (`awaiting-approval`, `running`, `completed`, `failed`, `blocked`, or `cancelled`). The nested Run verdict describes the actual surface execution. A mission can therefore explain that a test was blocked by policy even when no product run was attempted.
 
-The high-level MCP tools are `create_test_mission`, `approve_test_plan`, `start_mission`, `get_mission_status`, `get_mission_evidence`, `cancel_mission` and `replay_mission`. The equivalent CLI is `proofkit mission create|approve|run|status|evidence|replay`. Existing run-level tools remain available for users who already have a charter.
+The high-level MCP tools are `create_test_mission`, `approve_test_plan`, `start_mission`, `get_mission_status`, `get_mission_evidence`, `cancel_mission`, `replay_mission` and `compare_missions`. The equivalent CLI is `proofkit mission create|approve|run|status|evidence|replay|compare`. Existing run-level tools remain available for users who already have a charter.
+
+### Repair verification
+
+`replay_mission` accepts a terminal Mission, copies its saved Charter or suite and test level, and persists `replayOfMissionId` in the new Mission. Comparison is read-only: it loads both Mission snapshots and their saved Run summaries, checks the direct replay relationship and scope fingerprint, then pairs `charterId × surface × primary/replay/negative case`. Source fact references must point to nonempty artifacts inside the selected evidence directory. An Oracle verdict file alone cannot confirm either the original defect or its disappearance.
+
+`MissionComparison` reports `verified-in-scope`, `defect-reproduced` or `inconclusive`, with bounded Run pairs, before/after evidence references, defect outcomes and gaps. `verified-in-scope` requires a baseline failed Mission with a confirmed product Finding linked to an independent business source artifact, all corresponding candidate Oracles passing with new source facts, and a complete candidate Mission gate including required replay and negative cases. Scope changes, missing evidence or an unfinished candidate remain inconclusive. A comparison can establish that a symptom was not reproduced under the configured test scope; it cannot attribute that change to a specific source edit or establish whole-project correctness.
 
 ### Mission audit records
 
@@ -191,7 +197,7 @@ The integration module is trusted local code, loaded only from inside the select
 
 Project configuration can register read-only HTTP oracles by name, JSON Pointer status path, terminal values, interval and deadline. Query bindings can carry the ProofKit `runId` or a sanitized scalar from an earlier capability step. The adapter never interprets these business facts. The URL is parsed and query parameters are encoded with the platform URL API.
 
-The MCP server exposes both run-level tools (`discover_project`, `plan_test`, `start_run`, `get_run_status`, `cancel_run`, `get_evidence`, `replay_run`) and mission-level tools (`create_test_mission`, `approve_test_plan`, `start_mission`, `get_mission_status`, `get_mission_evidence`, `cancel_mission`, `replay_mission`). MCP inputs are validated with Zod. The server is started against one configured local project; it does not accept arbitrary commands or paths. MCP runs cannot execute `project.start`; users start their test environment through the CLI or independently. Both surfaces call the same Local Runner and never create a second execution lifecycle.
+The MCP server exposes both run-level tools (`discover_project`, `plan_test`, `start_run`, `get_run_status`, `cancel_run`, `get_evidence`, `replay_run`) and mission-level tools (`create_test_mission`, `approve_test_plan`, `start_mission`, `get_mission_status`, `get_mission_evidence`, `cancel_mission`, `replay_mission`, `compare_missions`). MCP inputs are validated with Zod. The server is started against one configured local project; it does not accept arbitrary commands or paths. MCP runs cannot execute `project.start`; users start their test environment through the CLI or independently. Both surfaces call the same Local Runner and never create a second execution lifecycle.
 
 `list_test_charters` exposes curated IDs and aliases. High-level `run_test` selects one when possible and refuses to auto-start an incomplete Charter; its response names missing structural assertions or Oracles. Test-environment capability writes remain disabled in MCP unless the server operator starts it with `PROOFKIT_ALLOW_CAPABILITY_WRITES=1`; this process-level switch still requires an allow-policy Charter, allow-policy workspace and typed registered capability.
 

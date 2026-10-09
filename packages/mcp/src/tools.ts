@@ -113,6 +113,13 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "compare_missions",
+    "Compare an original Mission with its completed direct replay using saved Run evidence. A green comparison means only that the original business defect was not reproduced in the same configured scope.",
+    { baselineMissionId: z.string().min(1), candidateMissionId: z.string().min(1) },
+    async ({ baselineMissionId, candidateMissionId }) => result(await runner.compareMissions(baselineMissionId, candidateMissionId)),
+  );
+
+  server.tool(
     "plan_test",
     "Turn a natural-language intent into a validated, reviewable ProofKit Test Charter. Planning does not execute the project.",
     {
@@ -236,6 +243,7 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
         : ["start_mission", "get_mission_status"];
   return {
     missionId: mission.missionId,
+    ...(mission.replayOfMissionId ? { replayOfMissionId: mission.replayOfMissionId } : {}),
     projectRoot: mission.projectRoot,
     workspaceRoot: mission.workspaceRoot,
     status: mission.status,

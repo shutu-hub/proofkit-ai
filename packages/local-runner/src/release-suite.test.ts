@@ -46,6 +46,7 @@ describe("explicit release suites", () => {
 
     const replayedMission = await service.replayMission(mission.missionId);
     const replayed = await service.waitMission(replayedMission.mission.missionId);
+    expect(replayed.replayOfMissionId).toBe(mission.missionId);
     expect(replayed.suite?.suiteId).toBe("release-critical");
     expect(replayed.verdict).toBe("passed");
   });

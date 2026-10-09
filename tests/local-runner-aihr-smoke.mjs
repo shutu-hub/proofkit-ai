@@ -150,6 +150,21 @@ try {
   assert.equal(unrelatedReads, 0);
   assert.deepEqual(fixtureErrors, []);
   for (const evidence of [...success.evidence, ...failed.evidence]) await readFile(evidence.path);
+  mode = "success";
+  const replayStarted = mcpPayload(await mcpClient.callTool({ name: "replay_mission", arguments: { missionId: failed.missionId } }));
+  assert.equal(replayStarted.mission.replayOfMissionId, failed.missionId);
+  let replayStatus;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    replayStatus = mcpPayload(await mcpClient.callTool({ name: "get_mission_status", arguments: { missionId: replayStarted.mission.missionId } }));
+    if (["completed", "failed", "blocked", "cancelled"].includes(replayStatus.mission.status)) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  assert.equal(replayStatus.mission.verdict, "passed", JSON.stringify(replayStatus.mission.findings));
+  const comparison = mcpPayload(await mcpClient.callTool({ name: "compare_missions", arguments: { baselineMissionId: failed.missionId, candidateMissionId: replayStarted.mission.missionId } }));
+  assert.equal(comparison.status, "verified-in-scope", JSON.stringify(comparison.gaps));
+  assert.ok(comparison.defects.some((item) => item.outcome === "not-reproduced" && item.baselineEvidence[0]?.kind === "business" && item.candidateEvidence[0]?.kind === "business"));
+  const replayEvidence = mcpPayload(await mcpClient.callTool({ name: "get_mission_evidence", arguments: { missionId: replayStarted.mission.missionId } }));
+  assert.equal(replayEvidence.comparison.status, "verified-in-scope");
   const restarted = await LocalRunnerService.create({ root, workspaceRoot });
   assert.equal((await restarted.missionEvidence(success.missionId)).verdict, "passed");
   assert.equal((await restarted.status(failedRunId)).verdict, "failed");
@@ -207,7 +222,7 @@ try {
   const cancelledReport = cancelled.mission.evidence.find((item) => item.kind === "report");
   assert.match(await readFile(cancelledReport.path, "utf8"), /cancelled/);
   assert.deepEqual(await readdir(root), ["package.json"]);
-  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, idempotencyMission: idempotencyMission.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "mcp-one-sentence-core", "mcp-evidence", "core-mission", "stale-binding-detection", "idempotency-negative-case", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
+  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, idempotencyMission: idempotencyMission.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "mcp-one-sentence-core", "mcp-evidence", "core-mission", "stale-binding-detection", "evidence-backed-replay-comparison", "idempotency-negative-case", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
 } finally {
   await mcpClient?.close();
   await mcpServer?.close();

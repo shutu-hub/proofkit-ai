@@ -238,8 +238,19 @@ export function createProgram(): Command {
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace, allowCapabilityWrites: options.allowCapabilityWrites });
       const started = await runner.replayMission(missionId);
       const completed = await runner.waitMission(started.mission.missionId);
-      console.log(JSON.stringify({ missionId: completed.missionId, status: completed.status, verdict: completed.verdict }, null, 2));
+      const comparison = await runner.compareMissions(missionId, completed.missionId);
+      console.log(JSON.stringify({ missionId: completed.missionId, replayOfMissionId: missionId, status: completed.status, verdict: completed.verdict, comparison }, null, 2));
       if (completed.verdict !== "passed") process.exitCode = 1;
+    });
+
+  mission.command("compare <baselineMissionId> <candidateMissionId>")
+    .description("Compare a Mission with its direct replay using saved business evidence")
+    .option("--root <path>", "project root", ".")
+    .action(async (baselineMissionId: string, candidateMissionId: string, options: RootOptions) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+      const comparison = await runner.compareMissions(baselineMissionId, candidateMissionId);
+      console.log(JSON.stringify(comparison, null, 2));
+      if (comparison.status !== "verified-in-scope") process.exitCode = 1;
     });
 
   program.command("report <runId>")

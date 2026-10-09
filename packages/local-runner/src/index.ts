@@ -4,13 +4,14 @@ import { resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
+import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { initProject, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
 import { CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
+import { compareMissionRecords } from "./mission-comparison.js";
 import { ProjectMissionStore } from "./mission-store.js";
 import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from "./suite-verifier.js";
 
@@ -364,6 +365,7 @@ export class LocalRunnerService {
 
   async missionEvidence(missionId: string): Promise<{
     missionId: string;
+    replayOfMissionId?: string;
     projectRoot: string;
     workspaceRoot: string;
     status: TestMission["status"];
@@ -389,10 +391,22 @@ export class LocalRunnerService {
     firstFailure?: TestMission["firstFailure"];
     diagnosis?: TestMission["diagnosis"];
     repairSuggestions: TestMission["repairSuggestions"];
+    comparison?: MissionComparison;
+    comparisonUnavailable?: string;
   }> {
     const mission = await this.missionAgent.load(validateMissionId(missionId));
+    let comparison: MissionComparison | undefined;
+    let comparisonUnavailable: string | undefined;
+    if (mission.replayOfMissionId && ["completed", "failed", "blocked", "cancelled"].includes(mission.status)) {
+      try {
+        comparison = await this.compareMissions(mission.replayOfMissionId, mission.missionId);
+      } catch {
+        comparisonUnavailable = "The replay source Mission could not be loaded or compared in this workspace.";
+      }
+    }
     return {
       missionId: mission.missionId,
+      replayOfMissionId: mission.replayOfMissionId,
       projectRoot: this.root,
       workspaceRoot: this.workspaceRoot,
       status: mission.status,
@@ -418,13 +432,27 @@ export class LocalRunnerService {
       firstFailure: mission.firstFailure,
       diagnosis: mission.diagnosis,
       repairSuggestions: mission.repairSuggestions,
+      ...(comparison ? { comparison } : {}),
+      ...(comparisonUnavailable ? { comparisonUnavailable } : {}),
     };
+  }
+
+  async compareMissions(baselineMissionId: string, candidateMissionId: string): Promise<MissionComparison> {
+    const [baseline, candidate] = await Promise.all([
+      this.missionAgent.load(validateMissionId(baselineMissionId)),
+      this.missionAgent.load(validateMissionId(candidateMissionId)),
+    ]);
+    return compareMissionRecords(baseline, candidate, this.evidenceDir, (runId) => this.wait(runId));
   }
 
   async replayMission(missionId: string): Promise<MissionStatus> {
     const previous = await this.missionAgent.load(validateMissionId(missionId));
+    if (!["completed", "failed", "blocked", "cancelled"].includes(previous.status)) {
+      throw new Error("Only a terminal Mission can be replayed");
+    }
     await this.ensureWorkspace();
     const replay = await this.missionAgent.create({
+      replayOfMissionId: previous.missionId,
       intent: previous.intent,
       projectRoot: this.root,
       workspaceRoot: this.workspaceRoot,

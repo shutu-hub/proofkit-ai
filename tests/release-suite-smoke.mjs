@@ -132,10 +132,24 @@ try {
   assert.ok(bad.evidence.suiteScope.results.filter((item) => item.charterId === "login").every((item) => item.verdict === "passed"));
   assert.equal(bad.evidence.suiteScope.routeCoverage.observedCandidates, 2);
   assert.ok(bad.status.mission.findings.some((item) => item.category === "product" && item.status === "confirmed" && item.charterId === "resume" && item.evidence.length > 0));
+  defect = false;
+  const replayStarted = payload(await client.callTool({ name: "replay_mission", arguments: { missionId: bad.started.missionId } }));
+  assert.equal(replayStarted.mission.replayOfMissionId, bad.started.missionId);
+  let replayStatus;
+  for (let attempt = 0; attempt < 500; attempt++) {
+    replayStatus = payload(await client.callTool({ name: "get_mission_status", arguments: { missionId: replayStarted.mission.missionId } }));
+    if (["completed", "failed", "blocked", "cancelled"].includes(replayStatus.mission.status)) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  }
+  assert.equal(replayStatus.mission.verdict, "passed", JSON.stringify(replayStatus.mission.findings));
+  const comparison = payload(await client.callTool({ name: "compare_missions", arguments: { baselineMissionId: bad.started.missionId, candidateMissionId: replayStarted.mission.missionId } }));
+  assert.equal(comparison.status, "verified-in-scope", JSON.stringify(comparison.gaps));
+  assert.ok(comparison.defects.length >= 2 && comparison.defects.every((item) => item.outcome === "not-reproduced" && item.charterId === "resume"));
+  assert.equal(comparison.runs.length, 8);
   assert.deepEqual(await readdir(sourceRoot), ["apps", "package.json", "services"]);
   assert.equal(await readFile(routeFile, "utf8"), routeSource);
   assert.equal(await readFile(apiRouteFile, "utf8"), apiRouteSource);
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "real-evidence-files", "source-unchanged"] }, null, 2));
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "real-evidence-files", "source-unchanged"] }, null, 2));
 } finally {
   await client?.close();
   await mcpServer?.close();

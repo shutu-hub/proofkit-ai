@@ -15,6 +15,7 @@ get_mission_status
 get_mission_evidence
 cancel_mission
 replay_mission
+compare_missions
 ```
 
 `run_test` is the shortest path for an agent:
@@ -28,6 +29,8 @@ replay_mission
 ```
 
 The response contains `missionId`, the resolved level and the running status. The agent then polls the status until the mission reaches a terminal state and reads evidence once. For a review-first workflow, call `create_test_mission`, inspect the task graph, call `approve_test_plan`, and then call `start_mission`.
+
+For repair verification, replay the failed Mission after the application change. The new Mission stores `replayOfMissionId`; once it finishes, `get_mission_evidence` includes a comparison with the source Mission. `compare_missions` reads the same comparison directly. It requires a direct replay, the same project/workspace and saved Charter or suite scope, a confirmed baseline product finding linked to a materialized business source artifact, and a complete passing candidate with its own independent source facts. Primary, required replay, and declared negative Runs are paired by Charter, surface and run kind. A missing Run, changed scope, unmaterialized artifact or unfinished candidate is `inconclusive`; a repeated evidenced Oracle failure is `defect-reproduced`. `verified-in-scope` does not identify which source change fixed the symptom.
 
 For repeatable business workflows, register a curated Charter in the external workspace's `.proofkit/config.yaml`:
 

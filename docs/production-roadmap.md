@@ -92,6 +92,8 @@ The default AIHR development request is `core`. The ordinary PDF upload Charter 
 - Generate a repair proposal that cites the observed evidence.
 - Re-run the affected charter after a code change and compare before/after evidence.
 
+**Current evidence:** direct Mission replay provenance and a read-only `MissionComparison` now pair saved Run scope and independent business source artifacts. AIHR loopback Web/Electron smokes and a two-workflow release suite inject a business defect, restore the fixture, replay through MCP, and receive `verified-in-scope`; missing facts, changed scope and incomplete negative/replay slots are inconclusive. This demonstrates test-scope repair verification against fixtures, not causal proof of a source edit or live AIHR remediation. Source-location diagnosis and validated repair proposals still need broader seeded-defect and real-workspace evidence.
+
 **Gate:** seeded defects have a correct failure boundary and a repair suggestion that is rejected when evidence is insufficient.
 
 ## Phase 5: mobile and protocol extensions — adapter slice complete
