@@ -40,7 +40,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 
 ## Quick start
 
-Requirements: Node.js 22 or newer and pnpm 10.
+Requirements for source development: Node.js 22 or newer and pnpm 10.
 
 ```bash
 pnpm install
@@ -48,6 +48,17 @@ pnpm build
 pnpm --filter @proofkit/cli dev -- init --root /path/to/your/project
 pnpm --filter @proofkit/cli dev -- doctor --root /path/to/your/project
 ```
+
+The repository also builds one installable `proofkit-ai` npm tarball containing both `proofkit` and `proofkit-mcp`. The internal `@proofkit/*` packages remain development modules; users do not need to install them separately. Registry publication has not happened yet. To verify the artifact and install a locally built copy:
+
+```bash
+pnpm test:distribution
+pnpm pack --pack-destination /path/to/output
+npm install -g /path/to/output/proofkit-ai-0.1.0.tgz
+proofkit --version
+```
+
+The distribution test packs the project, installs only that tarball in a fresh temporary directory, runs CLI onboarding, and calls the installed MCP server over stdio. A registry release can later use `npm install -g proofkit-ai` with the same two commands.
 
 `--root` identifies the tested source. For a new project, ProofKit writes its test files to `~/.proofkit/workspaces/<project-name>-<path-hash>/.proofkit/`. Add `--workspace /path/to/test-workspace` to any command to select an explicit workspace. An existing source project's `.proofkit` keeps its legacy layout unless you supply `--workspace`.
 
@@ -128,7 +139,7 @@ Then run the same Charter with `--adapter mobile`. Mobile selectors may use `acc
 
 Relative Charter and output paths resolve against the selected test workspace. Runs are stored under `<workspaceRoot>/.proofkit/runs/<run-id>/` by default. Each run contains `run.json`, `events.jsonl`, artifacts, and `report.html`.
 
-For an AI client, build and register the optional local MCP server. It exposes only project discovery, charter planning, run start, status, bounded evidence, and replay, and it uses the same Local Runner as the CLI. MCP does not execute the configured project start command; start your test environment first:
+For an AI client, register `proofkit-mcp` after installing the tarball, or run the server from a source checkout. It exposes only project discovery, charter planning, run start, status, bounded evidence, and replay, and it uses the same Local Runner as the CLI. MCP does not execute the configured project start command; start your test environment first:
 
 ```bash
 pnpm --filter @proofkit/mcp build

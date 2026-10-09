@@ -35,6 +35,8 @@ The host coding agent supplies the user-facing reasoning and can inspect source 
 
 The implementation uses Node.js 22+, TypeScript, a pnpm workspace, Zod contracts, Playwright Core, the MCP SDK, YAML Charters and local JSON/JSONL artifacts. The core requires no hosted service or database. A `text-not-visible` assertion can reject a known error state; it cannot be the only surface assertion in an automatically accepted Mission, because absence alone does not prove that the intended page loaded. Web visibility is checked on rendered matches. The mobile adapter conservatively checks full driver source for this assertion until device-backed visibility semantics are validated.
 
+The public installation boundary is a single `proofkit-ai` npm tarball with `proofkit` and `proofkit-mcp` commands. Its build bundles the internal workspace modules, keeps third-party runtime dependencies explicit, and includes only the two entrypoints, README and license. A distribution smoke installs that tarball outside the repository and exercises both CLI and MCP. The internal `@proofkit/*` package names are not the user installation contract; npm registry publication has not occurred.
+
 ## Source and test workspace
 
 `ProjectContext` separates `projectRoot` (the tested source and process working directory) from `workspaceRoot` (ProofKit configuration, connectors, plans, mission state and evidence). New projects default to `~/.proofkit/workspaces/<project-name>-<path-hash>/`; users can choose an explicit workspace through CLI `--workspace` or MCP `PROOFKIT_WORKSPACE_ROOT`. `PROOFKIT_WORKSPACE_HOME` selects the parent directory for automatic workspaces.

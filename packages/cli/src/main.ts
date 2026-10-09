@@ -1,5 +1,8 @@
+#!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { RunMode, SideEffectPolicy, TestLevel } from "@proofkit/contracts";
 import { EvidenceStore } from "@proofkit/evidence";
@@ -11,7 +14,7 @@ export function createProgram(): Command {
   const program = new Command();
   program
     .name("proofkit")
-    .description("Evidence-driven AI system testing for web and Electron")
+    .description("Evidence-driven AI system testing for Web, Electron and mobile")
     .version("0.1.0");
 
   program.command("init")
@@ -373,9 +376,20 @@ export async function main(argv = process.argv): Promise<void> {
   await createProgram().parseAsync(argv);
 }
 
-if (process.argv[1]?.endsWith("main.ts") || process.argv[1]?.endsWith("main.js")) {
+if (invokedAsExecutable()) {
   main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
   });
+}
+
+function invokedAsExecutable(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    const entry = realpathSync.native(process.argv[1]);
+    const current = realpathSync.native(fileURLToPath(import.meta.url));
+    return process.platform === "win32" ? entry.toLowerCase() === current.toLowerCase() : entry === current;
+  } catch {
+    return false;
+  }
 }

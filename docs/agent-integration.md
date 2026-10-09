@@ -111,7 +111,7 @@ The zero application-code-change path needs a local Web, Electron or Appium-comp
 
 Optional `<workspaceRoot>/.proofkit/integration.mjs` adds typed capabilities, business Oracles and setup/cleanup for workflows such as resume acquisition. It is trusted local code, not sandboxed JavaScript, and uses the same lifecycle as CLI and MCP. A business connector is needed when UI observations alone cannot establish the requested outcome.
 
-For example, register `node /path/to/proofkit-ai/packages/mcp/dist/server.js` with the environment variables `PROOFKIT_ROOT=/path/to/source` and `PROOFKIT_WORKSPACE_ROOT=/path/to/test-workspace`. Once the local surface and business checks are configured, the agent calls `run_test` and receives a Mission ID instead of repeatedly supplying CDP instructions.
+For a locally installed `proofkit-ai` tarball, register its `proofkit-mcp` command with `PROOFKIT_ROOT=/path/to/source` and `PROOFKIT_WORKSPACE_ROOT=/path/to/test-workspace`. From a source checkout, use `node /path/to/proofkit-ai/packages/mcp/dist/server.js`. Both commands expose the same tools; the npm registry release is still pending. Once the local surface and business checks are configured, the agent calls `run_test` and receives a Mission ID instead of repeatedly supplying CDP instructions.
 
 For a multi-window Electron app, select its renderer once in the external workspace configuration:
 

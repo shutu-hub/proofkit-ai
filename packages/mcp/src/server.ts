@@ -1,5 +1,8 @@
+#!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { LocalRunnerService } from "@proofkit/local-runner";
 import { registerTools } from "./tools.js";
 
@@ -29,9 +32,20 @@ export async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-if (process.argv[1]?.endsWith("server.js") || process.argv[1]?.endsWith("server.ts")) {
+if (invokedAsExecutable()) {
   main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
   });
+}
+
+function invokedAsExecutable(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    const entry = realpathSync.native(process.argv[1]);
+    const current = realpathSync.native(fileURLToPath(import.meta.url));
+    return process.platform === "win32" ? entry.toLowerCase() === current.toLowerCase() : entry === current;
+  } catch {
+    return false;
+  }
 }
