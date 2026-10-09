@@ -270,6 +270,19 @@ export const SourceStateSchema = z.object({
 });
 export type SourceState = z.infer<typeof SourceStateSchema>;
 
+export const ProjectEntryPointSchema = z.object({
+  kind: z.enum(["web", "electron", "backend", "test", "script"]),
+  path: z.string().min(1),
+  reason: z.string().min(1),
+});
+export const ProjectRouteHintSchema = z.object({
+  kind: z.enum(["web", "api"]),
+  path: z.string().min(1),
+  source: z.string().min(1),
+  line: z.number().int().positive(),
+  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).optional(),
+});
+
 export const ProjectMapSchema = z.object({
   root: z.string(),
   packageManager: z.string().optional(),
@@ -295,18 +308,8 @@ export const ProjectMapSchema = z.object({
     testFiles: z.number().int().nonnegative().default(0),
     configFiles: z.number().int().nonnegative().default(0),
     testFrameworks: z.array(z.string().min(1)).default([]),
-    entryPoints: z.array(z.object({
-      kind: z.enum(["web", "electron", "backend", "test", "script"]),
-      path: z.string().min(1),
-      reason: z.string().min(1),
-    })).default([]),
-    routeHints: z.array(z.object({
-      kind: z.enum(["web", "api"]),
-      path: z.string().min(1),
-      source: z.string().min(1),
-      line: z.number().int().positive(),
-      method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).optional(),
-    })).default([]),
+    entryPoints: z.array(ProjectEntryPointSchema).default([]),
+    routeHints: z.array(ProjectRouteHintSchema).default([]),
   }).default({}),
   generatedAt: z.string(),
 });
@@ -377,6 +380,72 @@ export const TestSuiteSchema = z.object({
   }
 });
 export type TestSuite = z.infer<typeof TestSuiteSchema>;
+
+export const TestScopeInputSchema = z.object({
+  level: TestLevelSchema.default("core"),
+  surface: z.enum(["web", "electron", "mobile"]).default("web"),
+  /** Literal, case-insensitive substring; this is not semantic workflow selection. */
+  focus: z.string().trim().min(1).max(128).optional(),
+  limit: z.number().int().min(1).max(50).default(20),
+});
+export type TestScopeInput = z.input<typeof TestScopeInputSchema>;
+const ScopePlanCheckSchema = z.object({
+  eligible: z.boolean(),
+  planReady: z.boolean(),
+  issues: z.array(z.string()),
+});
+const ScopeCountSchema = z.number().int().nonnegative();
+/** Static planning observations have no execution or product verdict. */
+export const TestScopeSchema = z.object({
+  schemaVersion: z.literal(1),
+  testVerdict: z.literal("not-asserted"),
+  executionChecks: z.literal("not-run"),
+  projectRoot: z.string(),
+  workspaceRoot: z.string(),
+  selection: TestScopeInputSchema.extend({ requiredSurfaces: z.array(z.enum(["web", "electron", "mobile"])) }),
+  inventory: ProjectMapSchema.shape.inventory.removeDefault().omit({ entryPoints: true, routeHints: true }),
+  entryPoints: z.object({ total: ScopeCountSchema, matched: ScopeCountSchema, items: z.array(ProjectEntryPointSchema), omitted: ScopeCountSchema }),
+  routes: z.object({
+    total: ScopeCountSchema,
+    matched: ScopeCountSchema,
+    declaredTargets: ScopeCountSchema,
+    mapped: ScopeCountSchema,
+    unmapped: ScopeCountSchema,
+    items: z.array(ProjectRouteHintSchema.extend({ charterIds: z.array(z.string()), omittedCharterIds: ScopeCountSchema, status: z.enum(["declared", "unmapped"]), runtimeSourceAmbiguous: z.boolean() })),
+    omitted: ScopeCountSchema,
+    unresolvedTargets: z.array(RouteCoverageTargetSchema.and(z.object({ charterId: z.string(), reason: z.enum(["absent", "ambiguous"]) }))),
+    omittedUnresolvedTargets: ScopeCountSchema,
+  }),
+  catalog: z.object({
+    total: ScopeCountSchema, eligible: ScopeCountSchema, matched: ScopeCountSchema, omitted: ScopeCountSchema,
+    items: z.array(z.object({
+      id: z.string(), path: z.string(), aliases: z.array(z.string()), omittedAliases: ScopeCountSchema,
+      level: TestLevelSchema, surfaces: z.array(z.enum(["web", "electron", "mobile"])),
+      check: ScopePlanCheckSchema,
+    })),
+  }),
+  suites: z.object({
+    total: ScopeCountSchema, eligible: ScopeCountSchema, matched: ScopeCountSchema, omitted: ScopeCountSchema,
+    items: z.array(z.object({ id: z.string(), charterIds: z.array(z.string()), omittedCharterIds: ScopeCountSchema, check: ScopePlanCheckSchema })),
+  }),
+  integration: z.object({ name: z.string(), version: z.string().optional(), preflightRegistered: z.boolean(), setupRegistered: z.boolean() }).optional(),
+  capabilities: z.object({
+    total: ScopeCountSchema, matched: ScopeCountSchema, omitted: ScopeCountSchema,
+    items: z.array(z.object({
+      name: z.string(), description: z.string(), sideEffect: z.enum(["none", "read", "write"]),
+      environments: z.array(z.enum(["test", "staging", "local"])), environmentAllowed: z.boolean(), operatorWriteOptIn: z.boolean(),
+      inputShape: z.object({ hint: z.record(z.unknown()).optional(), partial: z.boolean(), limitations: z.array(z.string()) }),
+    })),
+  }),
+  oracles: z.object({
+    total: ScopeCountSchema, matched: ScopeCountSchema, omitted: ScopeCountSchema,
+    items: z.array(z.object({ name: z.string(), kind: z.enum(["registered", "configured-http"]) })),
+  }),
+  limitations: z.array(z.string()),
+  next: z.array(z.string()),
+  generatedAt: z.string(),
+});
+export type TestScope = z.infer<typeof TestScopeSchema>;
 
 export const ProofkitConfigSchema = z.object({
   project: z.object({

@@ -18,6 +18,7 @@ describe("ProofKit MCP tools", () => {
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       "discover_project",
+      "inspect_test_scope",
       "inspect_surface",
       "list_test_charters",
       "list_test_suites",
@@ -40,6 +41,8 @@ describe("ProofKit MCP tools", () => {
     expect(listed.tools.some((tool) => tool.name.includes("shell"))).toBe(false);
     const runTest = listed.tools.find((tool) => tool.name === "run_test");
     expect(runTest?.inputSchema).toMatchObject({ properties: { level: { enum: ["quick", "core", "release"] } } });
+    const scope = listed.tools.find((tool) => tool.name === "inspect_test_scope");
+    expect(scope?.inputSchema).toMatchObject({ properties: { level: { default: "core" }, limit: { maximum: 50 } } });
 
     await client.close();
     await server.close();
@@ -135,7 +138,7 @@ describe("ProofKit MCP tools", () => {
     expect(result).toMatchObject({
       running: false,
       readiness: { ready: false, missing: ["至少一个明确的正向表面断言", "至少一个独立业务 Oracle"] },
-      next: ["list_test_charters", "list_test_suites", "plan_test", "run_test"],
+      next: ["inspect_test_scope", "inspect_surface", "plan_test", "run_test"],
     });
     expect(runner.startMission).not.toHaveBeenCalled();
     await client.close();

@@ -4,9 +4,9 @@ import { resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
+import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
-import { assessPlanningQuality, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
+import { assessPlanningQuality, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
 import { CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
@@ -14,6 +14,7 @@ import { loadProjectIntegration } from "./integration.js";
 import { compareMissionRecords } from "./mission-comparison.js";
 import { ProjectMissionStore } from "./mission-store.js";
 import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from "./suite-verifier.js";
+import { inspectTestScope } from "./test-scope.js";
 
 export { loadProjectIntegration } from "./integration.js";
 
@@ -174,6 +175,27 @@ export class LocalRunnerService {
 
   async discover(): Promise<ProjectMap> {
     return scanProject(this.root);
+  }
+
+  async inspectTestScope(input: TestScopeInput = {}): Promise<TestScope> {
+    const request = TestScopeInputSchema.parse(input);
+    return inspectTestScope({
+      project: await this.discover(), workspaceRoot: this.workspaceRoot, config: this.config,
+      integration: this.integration, capabilities: this.capabilities, oracles: this.oracles,
+      allowCapabilityWrites: this.allowCapabilityWrites,
+      checkCharter: async (entry) => {
+        const charter = await loadCharter(resolveWithinWorkspace(this.workspaceRoot, entry.path));
+        if (charter.level !== entry.level) throw new Error(`Test catalog entry ${entry.id} declares ${entry.level}, but its Charter is ${charter.level}`);
+        const surfaces = requiredCatalogSurfaces(request.level, request.surface);
+        for (const surface of surfaces) this.validateCatalogCharter(entry.id, charter, surface);
+        if (charter.planning?.evidenceGaps.length) throw new Error(`Saved planning evidence gaps: ${charter.planning.evidenceGaps.join(", ")}`);
+      },
+      checkSuite: async (entry) => {
+        const suite = await this.loadSuite(entry);
+        const gaps = suite.charters.flatMap((item) => item.charter.planning?.evidenceGaps ?? []);
+        if (gaps.length) throw new Error(`Saved suite planning evidence gaps: ${gaps.join(", ")}`);
+      },
+    }, request);
   }
 
   async inspectSurface(input: SurfaceInspectionInput = {}): Promise<SurfaceInspection> {

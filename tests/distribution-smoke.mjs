@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,8 @@ try {
   await Promise.all([mkdir(packDir), mkdir(installDir), mkdir(source)]);
   await writeFile(join(source, "package.json"), JSON.stringify({ name: "external-web-fixture", dependencies: { vite: "*" } }));
   await writeFile(join(source, "index.html"), "<!doctype html><title>External fixture</title>");
+  const routerSource = "const routes = [{ path: '/resumes' }, { path: '/login' }];\n";
+  await writeFile(join(source, "router.ts"), routerSource);
 
   const packed = parsePackOutput((await npm(["pack", "--pack-destination", packDir, "--json", "--silent"], projectRoot)).stdout);
   assert.equal(packed.name, "proofkit-ai");
@@ -40,6 +42,14 @@ try {
   await command(process.execPath, [cli, "init", "--root", source, "--workspace", workspace], scratch);
   const doctor = await command(process.execPath, [cli, "doctor", "--root", source, "--workspace", workspace], scratch);
   assert.match(doctor.stdout, /web surface\s+detected/);
+  const scope = JSON.parse((await command(process.execPath, [cli, "scope", "--root", source, "--workspace", workspace, "--limit", "1"], scratch)).stdout);
+  assert.equal(scope.testVerdict, "not-asserted");
+  assert.equal(scope.executionChecks, "not-run");
+  assert.equal(scope.selection.level, "core");
+  assert.equal(scope.routes.total, 2);
+  assert.equal(scope.routes.mapped, 0);
+  assert.equal(scope.routes.items.length, 1);
+  assert.equal(scope.routes.omitted, 1);
 
   assert.match(await readFile(mcp, "utf8"), /^#!\/usr\/bin\/env node/);
   const npmBin = await npmExecutable();
@@ -55,6 +65,7 @@ try {
     await withDeadline(client.connect(transport), 10_000, "MCP connection");
     const listed = await withDeadline(client.listTools(), 10_000, "MCP tool listing");
     assert.ok(listed.tools.some((tool) => tool.name === "inspect_surface"));
+    assert.ok(listed.tools.some((tool) => tool.name === "inspect_test_scope"));
     const runTest = listed.tools.find((tool) => tool.name === "run_test");
     assert.ok(runTest);
     assert.ok(runTest.inputSchema.properties?.charter);
@@ -62,10 +73,27 @@ try {
     const item = discovered.content.find((content) => content.type === "text");
     assert.ok(item);
     assert.equal(JSON.parse(item.text).detected.web, true);
+    const inspected = await withDeadline(client.callTool({ name: "inspect_test_scope", arguments: { focus: "RESUMES" } }), 10_000, "MCP test scope inspection");
+    assert.equal(inspected.isError, undefined);
+    const scopeItem = inspected.content.find((content) => content.type === "text");
+    assert.ok(scopeItem);
+    const testScope = JSON.parse(scopeItem.text);
+    assert.equal(testScope.testVerdict, "not-asserted");
+    assert.equal(testScope.selection.level, "core");
+    assert.equal(testScope.routes.total, 2);
+    assert.equal(testScope.routes.matched, 1);
+    assert.equal(testScope.routes.items[0].source, "router.ts");
+    assert.equal(testScope.routes.items[0].line, 1);
+    assert.equal(testScope.routes.items[0].status, "unmapped");
   } finally {
     await client.close();
   }
-  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema"] }, null, 2));
+  assert.deepEqual((await readdir(source)).sort(), ["index.html", "package.json", "router.ts"]);
+  assert.equal(await readFile(join(source, "router.ts"), "utf8"), routerSource);
+  const workspaceFiles = await readdir(join(workspace, ".proofkit"));
+  assert.equal(workspaceFiles.includes("missions"), false);
+  assert.equal(workspaceFiles.includes("runs"), false);
+  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-cli-scope", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-test-scope", "scope-source-and-workspace-unchanged"] }, null, 2));
 } finally {
   const safeRoot = resolve(scratch);
   if (!safeRoot.startsWith(resolve(tempParent) + sep) || !basename(safeRoot).startsWith("proofkit-distribution-")) {

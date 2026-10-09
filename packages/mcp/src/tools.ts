@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestMission } from "@proofkit/contracts";
-import { hasPositiveSurfaceAssertion, TestCharterSchema } from "@proofkit/contracts";
+import { hasPositiveSurfaceAssertion, TestCharterSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 
 export function registerTools(server: McpServer, runner: LocalRunnerService): void {
@@ -10,6 +10,13 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "Scan the configured local project and report its Web, Electron, backend, scripts, and workspace packages.",
     {},
     async () => result(await runner.discover()),
+  );
+
+  server.tool(
+    "inspect_test_scope",
+    "Read candidate source entry points, route declarations, level/surface-compatible plan checks, and registered business capabilities/Oracles. Optional focus is a literal substring. This does not run tests or prove coverage.",
+    TestScopeInputSchema.shape,
+    async (input) => result(await runner.inspectTestScope(input)),
   );
 
   server.tool(
@@ -246,7 +253,7 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
   const profile = mission.plan.executionProfile;
   const terminal = ["completed", "failed", "blocked", "cancelled"];
   const next = !readiness.ready && mission.status === "awaiting-approval"
-    ? ["list_test_charters", "list_test_suites", "plan_test", "run_test"]
+    ? ["inspect_test_scope", "inspect_surface", "plan_test", "run_test"]
     : mission.status === "awaiting-approval"
     ? ["approve_test_plan"]
     : started.running || mission.status === "running"

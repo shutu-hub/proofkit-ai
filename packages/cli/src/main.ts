@@ -79,6 +79,19 @@ export function createProgram(): Command {
       if (inspection.status !== "observed") process.exitCode = 1;
     });
 
+  program.command("scope")
+    .description("Inspect candidate test scope, catalog plan gaps and registered business checks without running tests")
+    .option("--root <path>", "project root", ".")
+    .option("--surface <surface>", "web, electron or mobile", "web")
+    .option("--level <level>", "quick, core or release", "core")
+    .option("--focus <text>", "literal substring in source paths or registration metadata")
+    .option("--limit <count>", "maximum details per section (1-50)", "20")
+    .action(async (options: RootOptions & { surface: string; level: string; focus?: string; limit: string }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+      const scope = await runner.inspectTestScope({ surface: options.surface as LocalAdapterName, level: options.level as TestLevel, focus: options.focus, limit: Number(options.limit) });
+      console.log(JSON.stringify(scope, null, 2));
+    });
+
   program.command("charters")
     .description("List curated tests configured in the external test workspace")
     .option("--root <path>", "project root", ".")

@@ -50,6 +50,8 @@ const DEFAULT_CONFIG: ProofkitConfig = {
 
 const DEFAULT_INTEGRATION = `// ProofKit capabilities and business oracles live in this test workspace.\n// Keep writes limited to test data and always return cleanup from setup.\nexport default {\n  name: "project-integration",\n  version: "1",\n  capabilities: [],\n  oracles: [],\n};\n`;
 
+export { reconcileRouteDeclarations, type RouteDeclaration, type UnresolvedRouteTarget } from "./route-map.js";
+
 export async function scanProject(projectRoot = process.cwd()): Promise<ProjectMap> {
   const root = resolve(projectRoot);
   const packageJson = await readJson<PackageJson>(join(root, "package.json"));

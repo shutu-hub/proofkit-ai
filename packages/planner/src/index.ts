@@ -1,5 +1,5 @@
 export * from "./core.js";
-export { selectCatalogCharter, selectCatalogSuite, type CatalogSelection, type SuiteSelection } from "./catalog.js";
+export { requiredCatalogSurfaces, supportsCatalogCharter, supportsCatalogSuite, selectCatalogCharter, selectCatalogSuite, type CatalogSelection, type SuiteSelection } from "./catalog.js";
 export {
   evaluatePlannerBenchmark,
   PlannerBenchmarkCaseSchema,

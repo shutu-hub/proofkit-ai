@@ -1,5 +1,6 @@
 import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, ProjectMapSchema, RouteCoverageTargetSchema, type Observation, type RouteCoverageTarget, type TestMission, type Verdict } from "@proofkit/contracts";
 import type { MissionToolResult } from "@proofkit/agent";
+import { reconcileRouteDeclarations } from "@proofkit/project";
 
 type RunKind = "primary" | "replay" | "negative";
 type RunFact = { runId: string; verdict: Verdict; evidenceCount: number; matchedRoutePaths: string[]; matchedApiTargets: Extract<RouteCoverageTarget, { kind: "api" }>[]; networkLogAvailable: boolean; sourceRunId?: string; negativeCaseId?: string; outcomeMatched?: boolean };
@@ -111,42 +112,13 @@ function summarizeRouteCoverage(mission: TestMission, results: SuiteSurfaceResul
   const parsed = ProjectMapSchema.safeParse(discovery?.data);
   if (!parsed.success || !mission.suite) return undefined;
   const inventory = parsed.data.inventory;
-  const routeBySource = new Map<string, typeof inventory.routeHints[number]>();
-  for (const route of inventory.routeHints) routeBySource.set(`${route.kind}\0${route.path}\0${route.method ?? ""}\0${route.source}`, route);
-  const routes = [...routeBySource.values()];
-  const sourcesByPath = new Map<string, Set<string>>();
-  for (const route of routes) {
-    const key = `${route.kind}\0${route.path}\0${route.method ?? ""}`;
-    const sources = sourcesByPath.get(key) ?? new Set<string>();
-    sources.add(route.source);
-    sourcesByPath.set(key, sources);
-  }
-  const mapped = new Map<string, Set<string>>();
-  const unresolved: RouteCoverageSummary["unresolvedTargets"] = [];
-  let declaredTargets = 0;
-  for (const { charterId, routeTargets } of mission.suite.charters) {
-    for (const target of routeTargets ?? []) {
-      declaredTargets++;
-      const matches = routes.filter((route) => route.kind === target.kind && route.path === target.path && (target.kind !== "api" || route.method === target.method) && (!target.source || route.source === target.source));
-      if (matches.length !== 1) {
-        unresolved.push({ charterId, ...target, reason: matches.length === 0 ? "absent" : "ambiguous" });
-        continue;
-      }
-      const route = matches[0]!;
-      const key = `${route.kind}\0${route.path}\0${route.method ?? ""}\0${route.source}`;
-      const charterIds = mapped.get(key) ?? new Set<string>();
-      charterIds.add(charterId);
-      mapped.set(key, charterIds);
-    }
-  }
+  const mapping = reconcileRouteDeclarations(inventory.routeHints, mission.suite.charters);
+  const { routes, declaredTargets, unresolvedTargets: unresolved } = mapping;
   const gaps: RouteCoverageSummary["gaps"] = [];
   let mappedCandidates = 0;
   let observedCandidates = 0;
-  for (const route of routes) {
-    const key = `${route.kind}\0${route.path}\0${route.method ?? ""}\0${route.source}`;
-    const charterIds = [...(mapped.get(key) ?? [])];
+  for (const { candidate: route, charterIds, runtimeSourceAmbiguous: ambiguousRuntimePath } of routes) {
     if (charterIds.length > 0) mappedCandidates++;
-    const ambiguousRuntimePath = (sourcesByPath.get(`${route.kind}\0${route.path}\0${route.method ?? ""}`)?.size ?? 0) > 1;
     const observed = !ambiguousRuntimePath && charterIds.some((charterId) =>
       mission.suite!.surfaces.every((surface) => {
         const result = results.find((item) => item.charterId === charterId && item.surface === surface);

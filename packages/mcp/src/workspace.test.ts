@@ -30,6 +30,53 @@ function payload(result: unknown) {
 }
 
 describe("MCP external workspace", () => {
+  it("inspects source-backed test scope through MCP without starting a surface or integration operation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-mcp-scope-source-"));
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "proofkit-mcp-scope-workspace-"));
+    let client: Client | undefined;
+    let server: McpServer | undefined;
+    const connectSurface = vi.spyOn(WebAdapter.prototype, "connect");
+    try {
+      await writeFile(join(root, "package.json"), '{"name":"scope-source","devDependencies":{"vite":"1"}}');
+      await mkdir(join(root, "src"));
+      const router = "const routes = [{ path: '/resumes' }, { path: '/login' }];\n";
+      await writeFile(join(root, "src", "router.ts"), router);
+      await mkdir(join(workspaceRoot, ".proofkit", "charters"), { recursive: true });
+      await writeFile(join(workspaceRoot, ".proofkit", "config.yaml"), JSON.stringify({
+        project: { root },
+        charters: [{ id: "resume-core", path: ".proofkit/charters/resume.yml", aliases: ["简历"], level: "core", surfaces: ["web"], routeTargets: [{ kind: "web", path: "/resumes" }] }],
+      }));
+      await writeFile(join(workspaceRoot, ".proofkit", "charters", "resume.yml"), JSON.stringify({
+        intent: "检查简历", level: "core", actions: [{ kind: "observe" }], assertions: [{ kind: "text-visible", text: "ready" }], oracles: ["fixture.terminal"], sideEffectPolicy: "deny",
+      }));
+      await writeFile(join(workspaceRoot, ".proofkit", "integration.mjs"), `
+        const unexpected = async () => { throw new Error('Scope inspection invoked an integration operation'); };
+        export default { name: 'scope-fixture', preflight: unexpected, setup: unexpected,
+          oracles: [{ name: 'fixture.terminal', check: unexpected }] };
+      `);
+      server = await createProofkitMcp({ root, workspaceRoot });
+      client = await connect(server);
+      const result = payload(await client.callTool({ name: "inspect_test_scope", arguments: {} }));
+      expect(result).toMatchObject({ testVerdict: "not-asserted", executionChecks: "not-run", selection: { level: "core", surface: "web", limit: 20 }, routes: { total: 2, mapped: 1, unmapped: 1 } });
+      expect(result.catalog.items[0]).toMatchObject({ id: "resume-core", check: { eligible: true, planReady: true } });
+      const focused = payload(await client.callTool({ name: "inspect_test_scope", arguments: { focus: "简历", limit: 1 } }));
+      expect(focused.routes).toMatchObject({ total: 2, matched: 1, omitted: 0 });
+      expect(focused.routes.items[0]).toMatchObject({ path: "/resumes", source: "src/router.ts", line: 1, status: "declared" });
+      const invalid = await client.callTool({ name: "inspect_test_scope", arguments: { limit: 51 } });
+      expect(invalid.isError).toBe(true);
+      expect(connectSurface).not.toHaveBeenCalled();
+      expect((await readdir(workspaceRoot)).sort()).toEqual([".proofkit"]);
+      expect((await readdir(join(workspaceRoot, ".proofkit"))).sort()).toEqual(["charters", "config.yaml", "integration.mjs"]);
+      expect((await readdir(root)).sort()).toEqual(["package.json", "src"]);
+      expect(await readFile(join(root, "src", "router.ts"), "utf8")).toBe(router);
+    } finally {
+      await client?.close();
+      await server?.close();
+      vi.restoreAllMocks();
+      await Promise.all([root, workspaceRoot].map((path) => rm(path, { recursive: true, force: true })));
+    }
+  });
+
   it("runs an agent-submitted core Charter without a catalog or source-project changes", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mcp-submitted-source-"));
     const workspaceRoot = await mkdtemp(join(tmpdir(), "proofkit-mcp-submitted-workspace-"));

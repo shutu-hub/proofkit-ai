@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,35 @@ afterEach(async () => {
 });
 
 describe("CLI workspace onboarding", () => {
+  it("returns bounded static scope with defaults and validates level, surface and limit inputs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-cli-scope-source-"));
+    const workspace = await mkdtemp(join(tmpdir(), "proofkit-cli-scope-workspace-"));
+    roots.push(root, workspace);
+    await writeFile(join(root, "package.json"), '{"name":"scope-source","devDependencies":{"vite":"1"}}');
+    await mkdir(join(root, "src"));
+    const router = "const routes = [{ path: '/resumes' }, { path: '/login' }];\n";
+    await writeFile(join(root, "src", "router.ts"), router);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const run = (...args: string[]) => createProgram().parseAsync(["node", "proofkit", "scope", "--root", root, "--workspace", workspace, ...args]);
+    await run();
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ testVerdict: "not-asserted", executionChecks: "not-run", selection: { level: "core", surface: "web" }, routes: { total: 2, mapped: 0, unmapped: 2 } });
+    log.mockClear();
+    await run("--level", "release", "--surface", "electron", "--limit", "1");
+    const limited = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(limited.selection.requiredSurfaces).toEqual(["web", "electron"]);
+    expect(limited.routes).toMatchObject({ matched: 2, omitted: 1 });
+    expect(limited.routes.items).toHaveLength(1);
+    log.mockClear();
+    await run("--focus", "RESUMES");
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).routes).toMatchObject({ total: 2, matched: 1, items: [{ path: "/resumes", source: "src/router.ts" }] });
+    for (const options of [["--level", "unknown"], ["--surface", "desktop"], ["--limit", "0"], ["--limit", "NaN"], ["--limit", "51"]]) {
+      await expect(run(...options)).rejects.toThrow();
+    }
+    expect(await readdir(workspace)).toEqual([]);
+    expect((await readdir(root)).sort()).toEqual(["package.json", "src"]);
+    expect(await readFile(join(root, "src", "router.ts"), "utf8")).toBe(router);
+  });
+
   it("initializes, plans, maps and reopens a Mission from the same external workspace", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-cli-source-"));
     const workspace = await mkdtemp(join(tmpdir(), "proofkit-cli-workspace-"));

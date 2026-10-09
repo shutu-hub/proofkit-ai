@@ -12,6 +12,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 
 - Maps workspace manifests and common Web, Electron, and backend entry points.
 - Produces a bounded path-level test map with source/test counts, framework signals, conventional entry points, static route hints and an explicit truncation flag.
+- Gives host agents a read-only test scope view: source locations, level/surface-compatible plans, plan gaps, registered business checks and bounded capability input hints. Static declarations never count as executed coverage.
 - Matches one-sentence requests to curated, workspace-owned Charters by explicit aliases; ambiguous matches require a Charter ID, and missing assertions or business Oracles stop automatic execution.
 - Converts intent into a saved YAML Test Charter that can be reviewed and edited.
 - Records plan quality, missing inputs and evidence gaps; a model's self-reported confidence cannot make a Mission pass.
@@ -64,6 +65,16 @@ The distribution test packs the project, installs only that tarball in a fresh t
 `--root` identifies the tested source. For a new project, ProofKit writes its test files to `~/.proofkit/workspaces/<project-name>-<path-hash>/.proofkit/`. Add `--workspace /path/to/test-workspace` to any command to select an explicit workspace. An existing source project's `.proofkit` keeps its legacy layout unless you supply `--workspace`.
 
 `proofkit init` also creates a starter integration module in that test workspace. Leave its arrays empty for UI-only checks, or add typed business capabilities and independent oracles when a workflow needs backend proof. Initialization does not add files to the source tree when an external workspace is selected.
+
+Inspect what is available before authoring a test:
+
+```bash
+proofkit scope --root /path/to/your/project --surface web --level core --limit 20
+# Optionally narrow by a literal source-path or registration substring:
+proofkit scope --root /path/to/your/project --focus resume
+```
+
+MCP clients use `inspect_test_scope` for the same view, then `inspect_surface` to observe the live page and `run_test` to execute a validated Charter. Scope inspection defaults to `core`; it returns `not-asserted`, full scanned counts, omitted counts and the inventory's truncation flag. `planReady` checks saved plan structure and registered operations, not login, test data or runtime readiness. Capability input hints omit defaults and user callbacks; runtime Zod validation remains authoritative. Workspace connector registration is trusted code loaded by the service; scope inspection invokes none of its execution hooks.
 
 Plan and review a test:
 
@@ -232,7 +243,7 @@ The repository is a pnpm workspace with explicit package boundaries:
 | `@proofkit/runtime` | Application process startup, health checks and runtime events |
 | `@proofkit/oracles` | Independent business checks and bounded read-only HTTP polling |
 | `@proofkit/evidence` | JSONL timeline, artifacts, redaction and static report data |
-| `@proofkit/local-runner` | Shared CLI/MCP/CI orchestration, status, replay and evidence lookup |
+| `@proofkit/local-runner` | Shared CLI/MCP/CI orchestration, test scope inspection, status, replay and evidence lookup |
 | `@proofkit/mcp` | Narrow MCP facade over the shared Local Runner |
 | `@proofkit/cli` | Local user interface and CI entry point |
 

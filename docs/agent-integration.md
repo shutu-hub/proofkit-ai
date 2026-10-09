@@ -8,6 +8,7 @@ Register one local MCP server for the project root. Clients with MCP support, in
 
 ```text
 discover_project
+inspect_test_scope
 inspect_surface
 list_test_charters
 list_test_suites
@@ -30,6 +31,10 @@ compare_missions
 ```
 
 The response contains `missionId`, the resolved level and the running status. The agent then polls the status until the mission reaches a terminal state and reads evidence once. For a review-first workflow, call `create_test_mission`, inspect the task graph, call `approve_test_plan`, and then call `start_mission`.
+
+For an unfamiliar project, first call `inspect_test_scope({ surface: "electron", level: "core" })`. It joins source-backed candidate entry points/routes, compatible saved Charter/Suite checks, registered business Oracles and capability input hints in one bounded response. `focus` optionally filters by a literal source-path, alias or registration substring; it does not understand a whole natural-language request. `limit` defaults to 20 and is capped at 50 details per section. Use total/matched/omitted counts and `inventory.truncated` to describe the actual inspected scope. Route `declared` status only means a catalog mapping exists; it can coexist with `planReady: false` and never proves execution.
+
+`planReady` validates saved plan structure and registered operation names using the normal catalog validators. It does not check credentials, endpoints, fixture readiness or business truth. The tool returns `not-asserted` and `not-run`, creates no Mission/Run and invokes no connector operation or surface connection. Loading the service still loads trusted connector registration code. Capability `inputShape` omits default values and user callbacks, marks incomplete descriptions as partial, and leaves runtime Zod validation authoritative. Follow with live `inspect_surface`, then reuse a ready catalog ID or submit a complete Charter to `run_test`; register a trustworthy business Oracle when the requested level requires one.
 
 Before drafting a new Charter, call `inspect_surface({ surface: "web" })` or `inspect_surface({ surface: "electron" })` against an already running local page. It records a read-only observation Run and returns bounded visible controls, including a selector only when it matched exactly one element at inspection time. The result says `testVerdict: "not-asserted"`; it is reconnaissance, not a pass. Control hints cover the main frame only, are capped at 60, omit input values, and can become stale after navigation. Web/Electron `click`, `fill` and `press` recheck selector uniqueness during the test Run and fail on ambiguity. The Run keeps snapshot, screenshot and event evidence in the external workspace. Use isolated test data because screenshots can contain everything visible on the page.
 
@@ -106,7 +111,7 @@ charters:
 
 The final evidence gate is checked per primary run and required replay, not across pooled runs. An Oracle must return at least one sanitized observation fact; ProofKit's own Oracle result file does not count as that fact. A negative case cannot make an unverified main path green.
 
-If a one-sentence request has no suitable Charter and the planner cannot supply an assertion or required Oracle, `run_test` returns `readiness.ready=false` and does not start the surface. The agent can inspect the project, use `list_test_charters` or `plan_test`, then call `run_test` again with a complete structured Charter. Readiness checks structural prerequisites; they do not prove the assertion is meaningful.
+If a one-sentence request has no suitable Charter and the planner cannot supply an assertion or required Oracle, `run_test` returns `readiness.ready=false` and does not start the surface. Its next-tool hints point to `inspect_test_scope`, `inspect_surface`, `plan_test` and `run_test`. The agent can inspect the gaps and call `run_test` again with a complete structured Charter. Readiness checks structural prerequisites; they do not prove the assertion is meaningful.
 
 ## What the agent receives
 

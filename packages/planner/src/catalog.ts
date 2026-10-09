@@ -10,21 +10,29 @@ export type SuiteSelection = {
   matchedAlias?: string;
 };
 
+export function requiredCatalogSurfaces(level: TestLevel, surface: "web" | "electron" | "mobile"): Array<"web" | "electron" | "mobile"> {
+  return level === "release" && surface !== "mobile" ? ["web", "electron"] : [surface];
+}
+
+export function supportsCatalogCharter(entry: CharterCatalogEntry, level: TestLevel, surface: "web" | "electron" | "mobile"): boolean {
+  return entry.level === level && requiredCatalogSurfaces(level, surface).every((required) => entry.surfaces.includes(required));
+}
+
+export function supportsCatalogSuite(entry: SuiteCatalogEntry, level: TestLevel, surface: "web" | "electron" | "mobile"): boolean {
+  return level === "release" && requiredCatalogSurfaces(level, surface).every((required) => entry.surfaces.includes(required));
+}
+
 export function selectCatalogSuite(
   entries: SuiteCatalogEntry[],
   request: { intent: string; level: TestLevel; surface: "web" | "electron" | "mobile"; suiteId?: string },
 ): SuiteSelection | undefined {
-  const requiredSurfaces: Array<"web" | "electron" | "mobile"> = request.surface === "mobile"
-    ? ["mobile"]
-    : ["web", "electron"];
   const byId = new Map<string, SuiteCatalogEntry>();
   for (const rawEntry of entries) {
     const entry = SuiteCatalogEntrySchema.parse(rawEntry);
     if (byId.has(entry.id)) throw new Error(`Duplicate test suite ID: ${entry.id}`);
     byId.set(entry.id, entry);
   }
-  const supportsRequest = (entry: SuiteCatalogEntry) => request.level === "release"
-    && requiredSurfaces.every((surface) => entry.surfaces.includes(surface));
+  const supportsRequest = (entry: SuiteCatalogEntry) => supportsCatalogSuite(entry, request.level, request.surface);
   if (request.suiteId) {
     const entry = byId.get(request.suiteId);
     if (!entry) throw new Error(`Unknown test suite ID: ${request.suiteId}`);
@@ -58,11 +66,7 @@ export function selectCatalogCharter(
   entries: CharterCatalogEntry[],
   request: { intent: string; level: TestLevel; surface: "web" | "electron" | "mobile"; charterId?: string },
 ): CatalogSelection | undefined {
-  const requiredSurfaces: Array<"web" | "electron" | "mobile"> = request.level === "release" && request.surface !== "mobile"
-    ? ["web", "electron"]
-    : [request.surface];
-  const supportsRequest = (entry: CharterCatalogEntry) => entry.level === request.level
-    && requiredSurfaces.every((surface) => entry.surfaces.includes(surface));
+  const supportsRequest = (entry: CharterCatalogEntry) => supportsCatalogCharter(entry, request.level, request.surface);
   const byId = new Map<string, CharterCatalogEntry>();
   for (const rawEntry of entries) {
     const entry = CharterCatalogEntrySchema.parse(rawEntry);
