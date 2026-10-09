@@ -303,9 +303,9 @@ async function handleRequest(request, response) {
   } else if (path.startsWith("/resume-collection/files/") && files.has(path.split("/").at(-1))) {
     send(files.get(path.split("/").at(-1)));
   } else if (path === "/jobs/505/candidates/902") {
-    send({ candidate_summary: { current_resume_file_id: mode === "stale-binding" ? "777" : currentFile.file_id, job_id: "505", stage: "screening" } });
+    send({ candidate_summary: { current_resume_file_id: mode === "stale-binding" ? "777" : currentFile.file_id, job_id: "505", candidate_id: "902", stage: "screening" } });
   } else if (path === "/assessments/jobs/505/candidates/902") {
-    send({ assessment_id: "903", current_resume_file_id: currentFile.file_id, job_id: "505", candidate_id: "902", status: "completed", task_status: "success" });
+    send({ assessment_id: "903", current_resume_file_id: currentFile.file_id, job_id: "505", candidate_id: "902", status: "success", task_status: "success" });
   } else if (path === "/workflow-executions") {
     send({ items: [{ run_id: url.searchParams.get("run_id"), id: "904", screening_stage: "workflow_completion", candidate: { id: "902" }, job: { id: "505" }, status: "completed", record_type: "workflow_completion", screening_result: "passed" }], pagination: { page: 1, page_size: 100, total: 1 } });
   } else {

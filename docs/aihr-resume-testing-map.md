@@ -64,6 +64,10 @@ resume_file_profiles.candidate_id
 
 `ResumePostProcessor` 在明确目标岗位时会绑定候选人与岗位，然后创建 `resume_screening` assessment。评估自身仍由 assessment worker 异步完成，因此上传成功、绑定成功和评估成功必须分开判定。
 
+`assessment_worker_service.go` 先保存成功的 evaluation，再完成用量记录并标记 task 成功；用量记录失败时仍会重试。因此需要评估完成的场景必须同时观察 `assessment.status=success` 与 `task_status=success`。`running/pending/processing/retry_wait` 或缺少状态保持 `inconclusive`；evaluation `failed` 或 task `failed/dead/cancelled` 才有明确失败事实。worker 成功也不能替代独立的计费幂等检查。
+
+岗位关系必须提供同一 `current_resume_file_id/job_id/candidate_id`；评估详情还必须提供 `assessment_id` 和对应的文件、岗位、候选人身份。缺失事实不能通过；等待 capability 与独立 Oracle 分别读取接口，按相同规则判定并保存关联事实。workflow/file 上的绿色摘要不替代 assessment detail。
+
 上传的 `target_job_ids` 使用 JSON 正整数数组（如 `[505]`），不能使用字符串数组。连接器保留字符串形式的 int64 ID，并直接序列化已验证的十进制整数，避免 JavaScript Number 丢失精度；未指定岗位时省略该可选字段。
 
 workflow 完成事实必须同时匹配 `run_id`、`candidate.id`、`job.id` 和 `screening_stage=workflow_completion`。连接器按响应中的 `pagination` 最多扫描 20 页，找到相关完成事实后停止；缺少相关事实或超过扫描上限均保持 `inconclusive`。该公开投影没有文件 ID、评估 ID 或幂等键，因此仅证明对应 run/候选人/岗位存在完成事实，不能据此证明精确文件、评估关联或计费幂等。精确文件关联由岗位与评估接口分别验证，计费仍需独立验证。
@@ -75,9 +79,13 @@ workflow 完成事实必须同时匹配 `run_id`、`candidate.id`、`job.id` 和
 1. 通过网关创建普通简历 collection run。
 2. 使用与桌面端一致的 multipart 合约上传脱敏 PDF。
 3. 轮询文件、候选人、岗位关系、评估和 workflow usage 公开事实。
-4. 独立 Oracle 再次读取这些事实，要求 `extract_status=done`、`parse_status=matched`、候选人存在、岗位关系指向当前文件，并按 Charter 决定是否必须 `assessment.task_status=success`。
+4. 独立 Oracle 再次读取这些事实，要求 `extract_status=done`、`parse_status=matched`、候选人存在、岗位与评估身份精确关联，并按 Charter 决定是否必须同时 `assessment.status=success` 与 `assessment.task_status=success`。
 
-`.proofkit/charters/aihr-online-resume.yml` 保留为在线简历兼容流程，覆盖 online intake、结构化处理、PDF 生成和后续业务状态。普通上传和在线简历两个参考 Charter 目前都没有真实 UI 断言，因此不能直接登记为 `core` 目录用例，也不能把连接器执行称为完整 Web/Electron 验收。
+`.proofkit/charters/aihr-online-resume.yml` 保留为在线阶段兼容流程，覆盖 online intake、结构化处理、PDF 生成和该文件的评估完成。它还核对 workflow、conversation、job、online file 和 candidate 的关联；`retryable_error` 或非空错误码本身不会提前判失败。`terminated` 必须有权威关系 `screen_reject`，筛选拒绝不等同于技术失败。
+
+在线证据的 `acceptanceScope=online-resume` 与 `terminal` 只表示声明阶段的验收范围和判定是否确定。`wait_online_screening` 不代表整个会话完成。附件文件已绑定或 workflow 已 `completed` 时，后续处理可能合法替换 current file；连接器记录 `attachmentResumeFileId/scopeSuperseded` 并立即返回 `inconclusive`，不据此确认旧文件缺陷。尚未实现附件全生命周期及历史在线评估验收；测试候选人/岗位应隔离，在线阶段验收期间暂停附件推进。workflow 尚未暴露附件身份时的并发替换仍需额外观察事实。
+
+普通上传和在线简历两个参考 Charter 目前都没有真实 UI 断言，因此不能直接登记为 `core` 目录用例，也不能把连接器执行称为完整 Web/Electron 验收。
 
 `.proofkit/charters/aihr-resume-ui-quick.yml` 是只读页面检查，要求关键控件可见且“页面配置加载失败”不可见。此前一次本地快速运行只检查控件，页面同时显示该错误却被判为 `passed`；新增负向断言后，这种运行会明确失败。该 Charter 不证明简历获取业务终态，且运行目标必须与所声明的源码工作区一致。
 

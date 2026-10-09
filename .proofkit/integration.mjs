@@ -317,6 +317,7 @@ function resumePipelineOutputSchema() {
     jobId: z.string().nullable(),
     relationCurrentResumeFileId: z.string().nullable(),
     relationJobId: z.string().nullable(),
+    relationCandidateId: z.string().nullable(),
     relationStage: z.string().nullable(),
     assessmentId: z.string().nullable(),
     assessmentCurrentResumeFileId: z.string().nullable(),
@@ -345,6 +346,7 @@ function resumePipelineEvidence(output) {
     jobId: output.jobId,
     relationCurrentResumeFileId: output.relationCurrentResumeFileId,
     relationJobId: output.relationJobId,
+    relationCandidateId: output.relationCandidateId,
     relationStage: output.relationStage,
     assessmentId: output.assessmentId,
     assessmentCurrentResumeFileId: output.assessmentCurrentResumeFileId,
@@ -526,6 +528,7 @@ async function observeResumeCollectionPipeline(target, signal) {
     jobId,
     relationCurrentResumeFileId: positiveString(relationSummary.current_resume_file_id),
     relationJobId: positiveString(relationSummary.job_id ?? relation.job_id),
+    relationCandidateId: positiveString(relationSummary.candidate_id),
     relationStage: nullable(relationSummary.stage),
     assessmentId: positiveString(assessment.assessment_id),
     assessmentCurrentResumeFileId: positiveString(assessment.current_resume_file_id),
@@ -548,15 +551,16 @@ function evaluateResumePipeline(observation, requirements) {
     if (!requirements.jobId) return null;
     if (observation.relationCurrentResumeFileId && observation.relationCurrentResumeFileId !== observation.fileId) return false;
     if (observation.relationJobId && observation.relationJobId !== requirements.jobId) return false;
-    if (!observation.relationCurrentResumeFileId || !observation.relationJobId) return null;
+    if (observation.relationCandidateId && observation.relationCandidateId !== observation.candidateId) return false;
+    if (!observation.relationCurrentResumeFileId || !observation.relationJobId || !observation.relationCandidateId) return null;
   }
   if (requirements.requireAssessmentSuccess !== false) {
     if (observation.assessmentCurrentResumeFileId && observation.assessmentCurrentResumeFileId !== observation.fileId) return false;
     if (observation.assessmentJobId && observation.assessmentJobId !== requirements.jobId) return false;
     if (observation.assessmentCandidateId && observation.assessmentCandidateId !== observation.candidateId) return false;
-    if (!observation.assessmentCurrentResumeFileId || !observation.assessmentJobId || !observation.assessmentCandidateId) return null;
+    if (!observation.assessmentId || !observation.assessmentCurrentResumeFileId || !observation.assessmentJobId || !observation.assessmentCandidateId) return null;
+    if (isAssessmentFailure(observation.assessmentStatus, observation.assessmentTaskStatus)) return false;
     if (!isAssessmentSuccess(observation.assessmentStatus, observation.assessmentTaskStatus)) {
-      if (isAssessmentFailure(observation.assessmentStatus, observation.assessmentTaskStatus)) return false;
       return null;
     }
   }
@@ -573,11 +577,13 @@ function isResumeFileTerminal(value) {
 }
 
 function isAssessmentSuccess(status, taskStatus) {
-  return ["success", "completed", "passed"].includes(String(taskStatus ?? "").toLowerCase()) || ["success", "completed", "passed"].includes(String(status ?? "").toLowerCase());
+  // AIHR persists the evaluation before its worker finishes usage/billing work.
+  // A successful evaluation with a retry_wait task is not a completed pipeline.
+  return status === "success" && taskStatus === "success";
 }
 
 function isAssessmentFailure(status, taskStatus) {
-  return ["failed", "error", "failure"].includes(String(taskStatus ?? "").toLowerCase()) || ["failed", "error", "failure"].includes(String(status ?? "").toLowerCase());
+  return status === "failed" || ["failed", "dead", "cancelled"].includes(taskStatus ?? "");
 }
 
 function emptyResumePipelineObservation(target) {
@@ -595,6 +601,7 @@ function emptyResumePipelineObservation(target) {
     jobId: target.jobId ?? null,
     relationCurrentResumeFileId: null,
     relationJobId: null,
+    relationCandidateId: null,
     relationStage: null,
     assessmentId: null,
     assessmentCurrentResumeFileId: null,
@@ -653,7 +660,7 @@ async function readFixture(workspaceRoot, fixturePath) {
 function waitOnlineResumePipelineCapability(state) {
   return {
     name: "aihr.waitOnlineResumePipeline",
-    description: "Poll the public workflow projection and downstream resume, candidate, and assessment facts until the online resume pipeline reaches a terminal observation.",
+    description: "Verify the online-resume stage using correlated workflow, file, relation and assessment facts; attachment progression needs its own acceptance scope.",
     sideEffect: "read",
     environments: environment,
     timeoutMs: 610_000,
@@ -670,14 +677,30 @@ function waitOnlineResumePipelineCapability(state) {
     outputSchema: z.object({
       passed: z.boolean().nullable(),
       terminal: z.boolean(),
+      acceptanceScope: z.literal("online-resume"),
+      scopeSuperseded: z.boolean(),
       workflowPhase: z.string(),
+      workflowId: z.string().nullable(),
+      workflowConversationId: z.string().nullable(),
+      workflowJobId: z.string().nullable(),
       resumeFileId: z.string().nullable(),
+      attachmentResumeFileId: z.string().nullable(),
+      fileId: z.string().nullable(),
       extractStatus: z.string().nullable(),
       parseStatus: z.string().nullable(),
       candidateId: z.string().nullable(),
+      conversationCandidateId: z.string().nullable(),
       relationStage: z.string().nullable(),
+      relationCurrentResumeFileId: z.string().nullable(),
+      relationJobId: z.string().nullable(),
+      relationCandidateId: z.string().nullable(),
+      assessmentId: z.string().nullable(),
+      assessmentCurrentResumeFileId: z.string().nullable(),
+      assessmentJobId: z.string().nullable(),
+      assessmentCandidateId: z.string().nullable(),
       assessmentStatus: z.string().nullable(),
       assessmentTaskStatus: z.string().nullable(),
+      assessmentErrorCode: z.string().nullable(),
       observationCount: z.number().int().nonnegative(),
       lastErrorCode: z.string().nullable(),
     }),
@@ -694,20 +717,7 @@ function waitOnlineResumePipelineCapability(state) {
       const observed = await pollOnlineResumePipeline(target, { signal, maxWaitMs: input.maxWaitMs, pollIntervalMs: input.pollIntervalMs, requireAssessmentSuccess: input.requireAssessmentSuccess });
       return observed;
     },
-    evidence: (output) => ({
-      passed: output.passed,
-      terminal: output.terminal,
-      workflowPhase: output.workflowPhase,
-      resumeFileId: output.resumeFileId,
-      extractStatus: output.extractStatus,
-      parseStatus: output.parseStatus,
-      candidateId: output.candidateId,
-      relationStage: output.relationStage,
-      assessmentStatus: output.assessmentStatus,
-      assessmentTaskStatus: output.assessmentTaskStatus,
-      observationCount: output.observationCount,
-      lastErrorCode: output.lastErrorCode,
-    }),
+    evidence: onlinePipelineEvidence,
   };
 }
 
@@ -808,11 +818,18 @@ function createOnlineResumePipelineOracle(state) {
       };
       const result = await observeOnlineResumePipeline(target, signal);
       const requireAssessmentSuccess = configuration.requireAssessmentSuccess !== false;
-      const passed = !result.terminal
-        ? null
-        : result.parseStatus === "matched" && result.extractStatus === "done" && Boolean(result.candidateId) && (!requireAssessmentSuccess || result.assessmentTaskStatus === "success");
-      const facts = { ...result, passed, requireAssessmentSuccess };
-      return { name: "aihr.onlineResumePipeline", passed, message: passed ? "AIHR online resume facts reached the requested terminal state." : `AIHR online resume pipeline is not valid: phase=${result.workflowPhase}, extract=${result.extractStatus ?? "unknown"}, parse=${result.parseStatus ?? "unknown"}, assessment_task=${result.assessmentTaskStatus ?? "unknown"}.`, evidence: [JSON.stringify(facts)], ...(passed === false ? { sourceLocations: ["services/resume-collection-service/internal/service/structured_online_resume.go", "services/resume-collection-service/internal/service/resume_post_processor.go"] } : {}), observedAt: new Date().toISOString() };
+      const passed = evaluateOnlineResumePipeline(result, { ...target, requireAssessmentSuccess });
+      const facts = { ...onlinePipelineEvidence({ ...result, passed, terminal: passed !== null, observationCount: 1 }), requireAssessmentSuccess };
+      return {
+        name: "aihr.onlineResumePipeline", passed,
+        message: passed === true ? "AIHR online resume, job binding and assessment facts agree and reached the requested terminal state."
+          : passed === false ? `AIHR online resume has a confirmed failure or identity mismatch: phase=${result.workflowPhase}, extract=${result.extractStatus ?? "unknown"}, parse=${result.parseStatus ?? "unknown"}, assessment_task=${result.assessmentTaskStatus ?? "unknown"}.`
+          : result.scopeSuperseded ? "AIHR workflow has progressed to an attachment scope; the current facts cannot prove the saved online-resume stage."
+          : "AIHR online resume evidence is incomplete, retrying or still pending; no product failure is confirmed.",
+        evidence: [JSON.stringify(facts)],
+        ...(passed === false ? { sourceLocations: ["services/resume-collection-service/internal/service/structured_online_resume.go", "services/resume-collection-service/internal/service/resume_post_processor.go"] } : {}),
+        observedAt: new Date().toISOString(),
+      };
     },
   };
 }
@@ -856,10 +873,10 @@ async function pollOnlineResumePipeline(target, options) {
   while (Date.now() <= deadline) {
     last = await observeOnlineResumePipeline(target, options.signal);
     observationCount += 1;
-    const terminal = isTerminalObservation(last);
-    const passed = terminal && last.extractStatus === "done" && last.parseStatus === "matched" && Boolean(last.candidateId) && (!options.requireAssessmentSuccess || last.assessmentTaskStatus === "success");
-    if (passed || last.workflowPhase === "terminated" || last.lastErrorCode) return { ...last, passed, terminal, observationCount };
-    await delay(options.pollIntervalMs, options.signal);
+    const passed = evaluateOnlineResumePipeline(last, { ...target, requireAssessmentSuccess: options.requireAssessmentSuccess });
+    if (passed !== null) return { ...last, passed, terminal: true, observationCount };
+    if (last.scopeSuperseded) return { ...last, passed: null, terminal: false, observationCount };
+    await delay(Math.min(options.pollIntervalMs, Math.max(0, deadline - Date.now())), options.signal);
   }
   const result = last ?? emptyObservation();
   return { ...result, passed: null, terminal: false, observationCount };
@@ -871,6 +888,7 @@ async function observeOnlineResumePipeline(target, signal) {
   const root = workflowResponse.data ?? {};
   const workflow = root.workflow ?? {};
   const fileId = positiveString(workflow.online_resume_file_id);
+  const attachmentResumeFileId = positiveString(workflow.attachment_resume_file_id);
   let file = {};
   if (fileId) {
     try {
@@ -895,25 +913,91 @@ async function observeOnlineResumePipeline(target, signal) {
     }
   }
   return {
-    terminal: isTerminalObservation({ resumeFileId: fileId, workflowPhase: String(workflow.phase ?? "unknown"), extractStatus: nullable(file.extract_status), parseStatus: nullable(file.parse_status), candidateId, assessmentTaskStatus: nullable(assessment.task_status), lastErrorCode: nullable(workflow.last_error_code) }),
+    terminal: false,
+    acceptanceScope: "online-resume",
+    scopeSuperseded: Boolean(attachmentResumeFileId) || workflow.phase === "completed",
     workflowPhase: String(workflow.phase ?? "unknown"),
+    workflowId: positiveString(workflow.id),
+    workflowConversationId: positiveString(workflow.conversation_id),
+    workflowJobId: positiveString(workflow.job_id),
     resumeFileId: fileId,
+    attachmentResumeFileId,
+    fileId: positiveString(file.file_id),
     extractStatus: nullable(file.extract_status),
     parseStatus: nullable(file.parse_status),
-    candidateId,
-    relationStage: nullable(root.relation_stage ?? candidate.candidate_summary?.stage),
-    assessmentStatus: nullable(root.assessment_status ?? file.assessment_status ?? candidate.candidate_summary?.assessment_status ?? assessment.status),
-    assessmentTaskStatus: nullable(root.assessment_task_status ?? assessment.task_status),
-    lastErrorCode: nullable(workflow.last_error_code ?? root.assessment_error_code),
+    candidateId: positiveString(file.candidate_id),
+    conversationCandidateId: positiveString(root.candidate_id),
+    relationStage: nullable(candidate.candidate_summary?.stage),
+    relationCurrentResumeFileId: positiveString(candidate.candidate_summary?.current_resume_file_id),
+    relationJobId: positiveString(candidate.candidate_summary?.job_id ?? candidate.job_id),
+    relationCandidateId: positiveString(candidate.candidate_summary?.candidate_id),
+    assessmentId: positiveString(assessment.assessment_id),
+    assessmentCurrentResumeFileId: positiveString(assessment.current_resume_file_id),
+    assessmentJobId: positiveString(assessment.job_id),
+    assessmentCandidateId: positiveString(assessment.candidate_id),
+    assessmentStatus: nullable(assessment.status),
+    assessmentTaskStatus: nullable(assessment.task_status),
+    assessmentErrorCode: nullable(assessment.error_code),
+    lastErrorCode: nullable(workflow.last_error_code),
   };
 }
 
-function isTerminalObservation(value) {
-  return Boolean(value.resumeFileId && ["done", "failed"].includes(value.extractStatus ?? "") && value.parseStatus && ["matched", "needs_manual_match", "needs_job_sync", "failed", "identity_conflict"].includes(value.parseStatus));
+function evaluateOnlineResumePipeline(observation, target) {
+  for (const [actual, expected] of [
+    [observation.workflowId, target.workflowId],
+    [observation.workflowConversationId, target.conversationId],
+    [observation.workflowJobId, target.jobId],
+    [observation.fileId, observation.resumeFileId],
+    [observation.candidateId, observation.conversationCandidateId],
+  ]) {
+    if (actual && expected && actual !== expected) return false;
+  }
+  if (!observation.workflowId || !observation.workflowConversationId || !observation.workflowJobId
+    || !observation.resumeFileId || !observation.fileId) return null;
+  // Attachment processing legally replaces current file/assessment facts. The
+  // public latest-state endpoints cannot retrospectively prove the online stage.
+  if (observation.scopeSuperseded) return null;
+  const passed = evaluateResumePipeline({ ...observation, fileId: observation.resumeFileId }, {
+    jobId: target.jobId, requireCandidateBinding: true, requireAssessmentSuccess: target.requireAssessmentSuccess !== false,
+  });
+  if (passed !== true) return passed;
+  if (!observation.conversationCandidateId) return null;
+  if (observation.workflowPhase === "terminated") {
+    if (!observation.relationStage) return null;
+    if (observation.relationStage !== "screen_reject") return false;
+  }
+  // retryable_error is a recoverable observation; a nonempty error code alone
+  // cannot prove a terminal failure. Screening rejection is also not a worker error.
+  if (!["wait_online_screening", "wait_attachment", "terminated"].includes(observation.workflowPhase)) return null;
+  return true;
 }
 
 function emptyObservation() {
-  return { terminal: false, workflowPhase: "unknown", resumeFileId: null, extractStatus: null, parseStatus: null, candidateId: null, relationStage: null, assessmentStatus: null, assessmentTaskStatus: null, lastErrorCode: null };
+  return {
+    terminal: false, acceptanceScope: "online-resume", scopeSuperseded: false,
+    workflowPhase: "unknown", workflowId: null, workflowConversationId: null, workflowJobId: null,
+    resumeFileId: null, attachmentResumeFileId: null, fileId: null, extractStatus: null, parseStatus: null, candidateId: null, conversationCandidateId: null,
+    relationStage: null, relationCurrentResumeFileId: null, relationJobId: null, relationCandidateId: null,
+    assessmentId: null, assessmentCurrentResumeFileId: null, assessmentJobId: null, assessmentCandidateId: null,
+    assessmentStatus: null, assessmentTaskStatus: null, assessmentErrorCode: null, lastErrorCode: null,
+  };
+}
+
+function onlinePipelineEvidence(output) {
+  return {
+    passed: output.passed, terminal: output.terminal, acceptanceScope: output.acceptanceScope,
+    scopeSuperseded: output.scopeSuperseded, workflowPhase: output.workflowPhase,
+    workflowId: output.workflowId, workflowConversationId: output.workflowConversationId, workflowJobId: output.workflowJobId,
+    resumeFileId: output.resumeFileId, attachmentResumeFileId: output.attachmentResumeFileId,
+    fileId: output.fileId, extractStatus: output.extractStatus, parseStatus: output.parseStatus,
+    candidateId: output.candidateId, conversationCandidateId: output.conversationCandidateId,
+    relationStage: output.relationStage, relationCurrentResumeFileId: output.relationCurrentResumeFileId,
+    relationJobId: output.relationJobId, relationCandidateId: output.relationCandidateId,
+    assessmentId: output.assessmentId, assessmentCurrentResumeFileId: output.assessmentCurrentResumeFileId,
+    assessmentJobId: output.assessmentJobId, assessmentCandidateId: output.assessmentCandidateId,
+    assessmentStatus: output.assessmentStatus, assessmentTaskStatus: output.assessmentTaskStatus,
+    assessmentErrorCode: output.assessmentErrorCode, lastErrorCode: output.lastErrorCode, observationCount: output.observationCount,
+  };
 }
 
 function assertTarget(target) {

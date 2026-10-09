@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebAdapter } from "@proofkit/adapters";
+import { analyzeRun } from "@proofkit/agent";
 import { TestCharterSchema, type TestCharter } from "@proofkit/contracts";
 import { loadCharter } from "@proofkit/planner";
 import { LocalRunnerService } from "./index.js";
@@ -78,13 +79,13 @@ describe("AIHR project integration", () => {
     expect(intakeOutput).toMatchObject({ taskId: "606", status: "pending", conversationId: "101", workflowId: "202", jobId: "505" });
 
     const success = await wait.execute({ sourceChannel: "boss", maxWaitMs: 1_000, pollIntervalMs: 250, requireAssessmentSuccess: true }, context);
-    expect(success).toMatchObject({ passed: true, terminal: true, workflowPhase: "completed", resumeFileId: "303", extractStatus: "done", parseStatus: "matched", candidateId: "404", assessmentTaskStatus: "success" });
+    expect(success).toMatchObject({ passed: true, terminal: true, workflowPhase: "wait_online_screening", resumeFileId: "303", extractStatus: "done", parseStatus: "matched", candidateId: "404", assessmentTaskStatus: "success" });
     const successOracle = await oracle.check({ runId: context.runId, charter: aihrCharter(), steps: [], assertions: [], signal: context.signal });
     expect(successOracle.passed).toBe(true);
 
     mode = "failed";
     const failed = await wait.execute({ conversationId: "101", workflowId: "202", jobId: "505", platformAccountId: "acct-fixture", sourceChannel: "boss", maxWaitMs: 1_000, pollIntervalMs: 250, requireAssessmentSuccess: true }, { runId: "aihr-failed-run", signal: context.signal });
-    expect(failed).toMatchObject({ passed: false, terminal: true, workflowPhase: "terminated", extractStatus: "failed", parseStatus: "failed", lastErrorCode: "EXTRACT_FAILED" });
+    expect(failed).toMatchObject({ passed: false, terminal: true, workflowPhase: "wait_online_screening", extractStatus: "failed", parseStatus: "pending", lastErrorCode: null });
     const failedOracle = await oracle.check({ runId: "aihr-failed-run", charter: aihrCharter(), steps: [], assertions: [], signal: context.signal });
     expect(failedOracle.passed).toBe(false);
   });
@@ -119,13 +120,121 @@ describe("AIHR project integration", () => {
     expect(JSON.stringify(evidence)).not.toContain("super-secret");
 
     const timedOut = await wait.execute({ sourceChannel: "boss", maxWaitMs: 1_000, pollIntervalMs: 250, requireAssessmentSuccess: true }, context);
-    expect(timedOut).toMatchObject({ passed: null, terminal: false, workflowPhase: "processing" });
+    expect(timedOut).toMatchObject({ passed: null, terminal: false, workflowPhase: "online_resume_processing" });
     expect(timedOut.observationCount).toBeGreaterThan(1);
 
     const controller = new AbortController();
     const cancelled = wait.execute({ conversationId: "101", workflowId: "202", jobId: "505", platformAccountId: "acct-fixture", sourceChannel: "boss", maxWaitMs: 60_000, pollIntervalMs: 10_000, requireAssessmentSuccess: true }, { runId: "aihr-cancel-run", signal: controller.signal });
     controller.abort(new Error("fixture cancelled"));
     await expect(cancelled).rejects.toThrow("fixture cancelled");
+  });
+
+  it.each([
+    ["assessment-processing", null], ["assessment-retry", null], ["assessment-missing", null],
+    ["relation-missing", null], ["workflow-retry", null], ["retry-before-file", null],
+    ["workflow-id-missing", null], ["workflow-conversation-missing", null], ["workflow-job-missing", null],
+    ["file-id-missing", null], ["conversation-candidate-missing", null], ["relation-candidate-missing", null],
+    ["assessment-id-missing", null], ["assessment-file-missing", null], ["assessment-status-missing", null],
+    ["assessment-task-missing", null], ["assessment-running", null],
+    ["attachment-replaced-current", null], ["attachment-bound-before-phase", null], ["completed-without-attachment", null],
+    ["terminated-reject", true], ["terminated-stage-missing", null], ["terminated-stage-conflict", false],
+    ["assessment-dead", false], ["assessment-cancelled", false], ["assessment-conflict", false],
+    ["assessment-failed", false], ["workflow-wrong-id", false], ["workflow-wrong-conversation", false],
+    ["relation-wrong-candidate", false],
+    ["relation-old-file", false], ["assessment-old-file", false], ["assessment-wrong-job", false],
+    ["assessment-wrong-candidate", false], ["workflow-wrong-job", false], ["file-wrong-id", false],
+    ["candidate-conflict", false],
+  ] as const)("uses independent correlated facts for online state %s", async (mode, expected) => {
+    const server = await startGatewayMock(() => mode);
+    servers.push(server);
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const wait = service.integration?.capabilities?.find((item) => item.name === "aihr.waitOnlineResumePipeline");
+    const oracle = service.integration?.oracles?.find((item) => item.name === "aihr.onlineResumePipeline");
+    if (!wait || !oracle) throw new Error("AIHR online pipeline contract is missing");
+    const context = { runId: `online-${mode}`, signal: new AbortController().signal };
+    const checked = await oracle.check({ ...context, charter: aihrCharter(), steps: [], assertions: [] });
+    expect(checked.passed).toBe(expected);
+    expect(JSON.parse(checked.evidence[0] ?? "{}")).toMatchObject({ passed: expected, terminal: expected !== null });
+    expect(checked.sourceLocations?.length ?? 0).toBe(expected === false ? 2 : 0);
+    const observed = await wait.execute({
+      conversationId: "101", workflowId: "202", jobId: "505", platformAccountId: "acct-fixture",
+      maxWaitMs: 1_000, pollIntervalMs: 250, requireAssessmentSuccess: true,
+    }, context);
+    expect(observed).toMatchObject({ passed: expected, terminal: expected !== null });
+    expect(wait.outputSchema.safeParse(observed).success).toBe(true);
+    expect(wait.evidence(observed)).toMatchObject({ passed: expected, terminal: expected !== null });
+  });
+
+  it("waits through retryable online errors and verifies the recovered file's assessment", async () => {
+    let observation = 0;
+    const server = await startGatewayMock(() => ++observation < 3 ? "workflow-retry" : "success");
+    servers.push(server);
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const wait = service.integration?.capabilities?.find((item) => item.name === "aihr.waitOnlineResumePipeline");
+    const oracle = service.integration?.oracles?.find((item) => item.name === "aihr.onlineResumePipeline");
+    if (!wait || !oracle) throw new Error("AIHR online pipeline contract is missing");
+    const context = { runId: "online-recovered", signal: new AbortController().signal };
+    const output = await wait.execute({
+      conversationId: "101", workflowId: "202", jobId: "505", platformAccountId: "acct-fixture",
+      maxWaitMs: 2_000, pollIntervalMs: 250, requireAssessmentSuccess: true,
+    }, context);
+    expect(output).toMatchObject({ passed: true, terminal: true, observationCount: 3, assessmentCurrentResumeFileId: "303", assessmentJobId: "505", assessmentCandidateId: "404" });
+    expect((await oracle.check({ ...context, charter: aihrCharter(), steps: [], assertions: [] })).passed).toBe(true);
+  });
+
+  it.each(["assessment-retry", "assessment-old-file", "attachment-replaced-current"] as const)("preserves online %s source evidence without changing the failure classification", async (mode) => {
+    servers.push(await startGatewayMock(() => mode));
+    process.env.AIHR_PROOFKIT_TEST_SCOPE = "proofkit:fixture";
+    vi.spyOn(WebAdapter.prototype, "connect").mockResolvedValue();
+    vi.spyOn(WebAdapter.prototype, "subscribeEvents").mockResolvedValue(() => {});
+    vi.spyOn(WebAdapter.prototype, "close").mockResolvedValue();
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const charter = TestCharterSchema.parse({ ...aihrCharter(), oracles: ["aihr.onlineResumePipeline"] });
+    const started = await service.start({ charter });
+    const summary = await service.wait(started.runId);
+    expect(summary.verdict).toBe(mode === "assessment-old-file" ? "failed" : "inconclusive");
+    const observed = summary.oracles[0];
+    expect(observed?.sourceEvidenceArtifacts).toEqual([`${summary.runId}/artifacts/oracle-1-source.json`]);
+    const evidencePath = observed?.sourceEvidenceArtifacts?.[0];
+    if (!evidencePath) throw new Error("online business source artifact is missing");
+    const source = JSON.parse(await readFile(join(service.evidenceDir, evidencePath), "utf8"));
+    expect(source.facts[0]).toMatchObject({
+      workflowId: "202", workflowConversationId: "101", workflowJobId: "505", resumeFileId: "303", fileId: "303",
+      candidateId: "404", conversationCandidateId: "404", relationCandidateId: "404",
+      assessmentCurrentResumeFileId: mode === "assessment-retry" ? "303" : "777",
+      assessmentTaskStatus: mode === "assessment-retry" ? "retry_wait" : "success",
+      passed: mode === "assessment-old-file" ? false : null,
+    });
+    if (mode === "attachment-replaced-current") {
+      expect(source.facts[0]).toMatchObject({ acceptanceScope: "online-resume", scopeSuperseded: true, attachmentResumeFileId: "777" });
+    }
+    const analysis = analyzeRun({ summary, evidence: [{
+      evidenceId: `${summary.runId}:${evidencePath}`, kind: "business", path: join(service.evidenceDir, evidencePath),
+      capturedAt: summary.endedAt ?? summary.startedAt,
+    }] });
+    expect(analysis.finding).toMatchObject(mode === "assessment-old-file"
+      ? { category: "product", status: "confirmed" } : { category: "test", status: "unverified" });
+    expect(analysis.diagnosis !== undefined).toBe(mode === "assessment-old-file");
+    expect(analysis.repairSuggestion !== undefined).toBe(mode === "assessment-old-file");
+  });
+
+  it.each([
+    ["assessment-retry", null], ["assessment-running", null], ["assessment-task-missing", null],
+    ["assessment-dead", false], ["assessment-cancelled", false], ["assessment-failed", false],
+  ] as const)("requires evaluation and task completion for ordinary upload state %s", async (mode, expected) => {
+    const gateway = await startCollectionGatewayMock({ fixtureSha256: "a".repeat(64), mode });
+    servers.push(gateway.server);
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const wait = service.integration?.capabilities?.find((item) => item.name === "aihr.waitResumeCollectionPipeline");
+    const oracle = service.integration?.oracles?.find((item) => item.name === "aihr.resumeCollectionPipeline");
+    if (!wait || !oracle) throw new Error("AIHR ordinary pipeline contract is missing");
+    const context = { runId: `ordinary-${mode}`, signal: new AbortController().signal };
+    const observed = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
+    expect(observed).toMatchObject({ passed: expected, outcome: expected === null ? "inconclusive" : "failed" });
+    expect(wait.outputSchema.safeParse(observed).success).toBe(true);
+    const checked = await oracle.check({ ...context, charter: resumeCollectionCharter(), steps: [], assertions: [] });
+    expect(checked.passed).toBe(expected);
+    expect(checked.sourceLocations?.length ?? 0).toBe(expected === false ? 1 : 0);
   });
 
   it("uploads an external test-workspace PDF as multipart and proves the ordinary collection pipeline", async () => {
@@ -495,7 +604,19 @@ function resumeCollectionCharter(): TestCharter {
   });
 }
 
-async function startGatewayMock(mode: () => "success" | "failed" | "processing"): Promise<ReturnType<typeof createServer>> {
+type OnlineMode = "success" | "failed" | "processing" | "assessment-processing" | "assessment-retry"
+  | "assessment-missing" | "relation-missing" | "workflow-retry" | "retry-before-file"
+  | "workflow-id-missing" | "workflow-conversation-missing" | "workflow-job-missing" | "workflow-wrong-id" | "workflow-wrong-conversation"
+  | "file-id-missing" | "conversation-candidate-missing" | "relation-candidate-missing" | "relation-wrong-candidate"
+  | "assessment-id-missing" | "assessment-file-missing" | "assessment-status-missing" | "assessment-task-missing" | "assessment-running" | "assessment-failed"
+  | "assessment-dead" | "assessment-cancelled" | "assessment-conflict" | "relation-old-file"
+  | "assessment-old-file" | "assessment-wrong-job" | "assessment-wrong-candidate" | "workflow-wrong-job"
+  | "file-wrong-id" | "candidate-conflict"
+  | "attachment-replaced-current" | "attachment-bound-before-phase" | "completed-without-attachment"
+  | "terminated-reject" | "terminated-stage-missing" | "terminated-stage-conflict";
+
+async function startGatewayMock(mode: () => OnlineMode): Promise<ReturnType<typeof createServer>> {
+  let current: OnlineMode = "processing";
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
     const path = url.pathname.replace(/^\/api\/v1/, "");
@@ -505,20 +626,51 @@ async function startGatewayMock(mode: () => "success" | "failed" | "processing")
       return send(response, { task_id: 606, status: "pending" });
     }
     if (request.method === "GET" && path === "/boss-conversations/101/workflows/202") {
-      const current = mode();
-      return send(response, { workflow: current === "success"
-        ? { phase: "completed", online_resume_file_id: 303 }
-        : current === "failed"
-          ? { phase: "terminated", online_resume_file_id: 303, last_error_code: "EXTRACT_FAILED" }
-          : { phase: "processing" } });
+      current = mode();
+      return send(response, {
+        workflow: {
+          id: current === "workflow-id-missing" ? undefined : current === "workflow-wrong-id" ? "999" : "202",
+          conversation_id: current === "workflow-conversation-missing" ? undefined : current === "workflow-wrong-conversation" ? "999" : "101",
+          job_id: current === "workflow-job-missing" ? undefined : current === "workflow-wrong-job" ? "999" : "505",
+          phase: current === "processing" ? "online_resume_processing"
+            : current === "workflow-retry" || current === "retry-before-file" ? "retryable_error"
+            : current === "attachment-replaced-current" || current === "completed-without-attachment" ? "completed"
+            : current.startsWith("terminated-") ? "terminated" : "wait_online_screening",
+          online_resume_file_id: current === "processing" || current === "retry-before-file" ? null : "303",
+          attachment_resume_file_id: current === "attachment-replaced-current" || current === "attachment-bound-before-phase" ? "777" : null,
+          last_error_code: current === "workflow-retry" || current === "retry-before-file" ? "online_resume_pipeline_failed" : null,
+        },
+        candidate_id: current === "conversation-candidate-missing" ? undefined : current === "candidate-conflict" ? "999" : "404",
+        // The summary can look green while authoritative assessment detail is pending or failed.
+        assessment_status: "success",
+      });
     }
     if (request.method === "GET" && path === "/resume-collection/files/303") {
-      return send(response, mode() === "failed"
-        ? { file_id: 303, extract_status: "failed", parse_status: "failed" }
-        : { file_id: 303, extract_status: "done", parse_status: "matched", candidate_id: 404, assessment_status: "success" });
+      return send(response, current === "failed"
+        ? { file_id: 303, extract_status: "failed", parse_status: "pending" }
+        : { file_id: current === "file-id-missing" ? undefined : current === "file-wrong-id" ? 777 : 303, extract_status: "done", parse_status: "matched", candidate_id: 404 });
     }
-    if (request.method === "GET" && path === "/jobs/505/candidates/404") return send(response, { candidate_summary: { stage: "screening" } });
-    if (request.method === "GET" && path === "/assessments/jobs/505/candidates/404") return send(response, { status: "completed", task_status: "success" });
+    if (request.method === "GET" && path === "/jobs/505/candidates/404") {
+      if (current === "relation-missing") return sendError(response, 404, "NOT_FOUND", "relation pending");
+      return send(response, { candidate_summary: {
+        job_id: 505, candidate_id: current === "relation-candidate-missing" ? undefined : current === "relation-wrong-candidate" ? 999 : 404,
+        current_resume_file_id: current === "relation-old-file" || current === "attachment-replaced-current" ? 777 : 303,
+        stage: current === "terminated-reject" ? "screen_reject" : current === "terminated-stage-missing" ? undefined : "screening",
+      } });
+    }
+    if (request.method === "GET" && path === "/assessments/jobs/505/candidates/404") {
+      if (current === "assessment-missing") return sendError(response, 404, "NOT_FOUND", "assessment pending");
+      return send(response, {
+        assessment_id: current === "assessment-id-missing" ? undefined : 606,
+        current_resume_file_id: current === "assessment-file-missing" ? undefined : current === "assessment-old-file" || current === "attachment-replaced-current" ? 777 : 303,
+        job_id: current === "assessment-wrong-job" ? 999 : 505, candidate_id: current === "assessment-wrong-candidate" ? 999 : 404,
+        status: current === "assessment-status-missing" ? undefined : current === "assessment-running" ? "running" : current === "assessment-failed" ? "failed" : "success",
+        task_status: current === "assessment-task-missing" ? undefined : current === "assessment-processing" ? "processing" : current === "assessment-retry" ? "retry_wait"
+          : current === "assessment-dead" ? "dead" : current === "assessment-cancelled" ? "cancelled"
+          : current === "assessment-conflict" ? "failed" : "success",
+        error_code: current === "assessment-dead" ? "TASK_LEASE_EXPIRED_EXHAUSTED" : null,
+      });
+    }
     response.statusCode = 404;
     return send(response, { code: "NOT_FOUND", message: "fixture route not found" });
   });
@@ -533,7 +685,8 @@ async function startGatewayMock(mode: () => "success" | "failed" | "processing")
   return server;
 }
 
-type CollectionMode = "success" | "relation-old-file" | "assessment-old-file" | "extract-failed" | "not-found";
+type CollectionMode = "success" | "relation-old-file" | "assessment-old-file" | "extract-failed" | "not-found"
+  | "assessment-retry" | "assessment-running" | "assessment-task-missing" | "assessment-dead" | "assessment-cancelled" | "assessment-failed";
 
 function completionFact() {
   return { run_id: "900", id: "904", screening_stage: "workflow_completion", candidate: { id: "902" }, job: { id: "505" }, status: "completed", record_type: "workflow_completion", screening_result: "passed" };
@@ -576,10 +729,15 @@ async function startCollectionGatewayMock(options: { fixtureSha256: string; mode
         : { file_id: 901, run_id: 900, file_sha256: options.fixtureSha256, extract_status: "done", parse_status: "matched", candidate_id: 902 });
     }
     if (request.method === "GET" && path === "/jobs/505/candidates/902") {
-      return send(response, { candidate_summary: { current_resume_file_id: mode === "relation-old-file" ? 777 : 901, job_id: 505, stage: "screening" } });
+      return send(response, { candidate_summary: { current_resume_file_id: mode === "relation-old-file" ? 777 : 901, job_id: 505, candidate_id: 902, stage: "screening" } });
     }
     if (request.method === "GET" && path === "/assessments/jobs/505/candidates/902") {
-      return send(response, { assessment_id: 903, current_resume_file_id: mode === "assessment-old-file" ? 778 : 901, job_id: 505, candidate_id: 902, status: "completed", task_status: "success" });
+      return send(response, {
+        assessment_id: 903, current_resume_file_id: mode === "assessment-old-file" ? 778 : 901, job_id: 505, candidate_id: 902,
+        status: mode === "assessment-failed" ? "failed" : mode === "assessment-running" ? "running" : "success",
+        task_status: mode === "assessment-task-missing" ? undefined : mode === "assessment-retry" ? "retry_wait"
+          : mode === "assessment-dead" ? "dead" : mode === "assessment-cancelled" ? "cancelled" : "success",
+      });
     }
     if (request.method === "GET" && path === "/workflow-executions") {
       const page = Number(url.searchParams.get("page"));

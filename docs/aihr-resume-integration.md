@@ -52,6 +52,22 @@ The minimum acceptance set is:
 
 If any one of these facts cannot be observed, the result is `inconclusive` or `blocked`, never an inferred pass.
 
+### Assessment and identity gates
+
+The current AIHR domain defines evaluation states `running/success/failed` and task states `pending/processing/retry_wait/success/failed/dead/cancelled`. When assessment completion is required, both `assessment.status=success` and `assessment.task_status=success` must be observed. `assessment_worker_service.go` persists the successful evaluation before completing usage recording and marking its task successful; accepting either state alone would report success while required worker work is retrying. A failed evaluation or a `failed/dead/cancelled` task is a failed observation. Pending, retrying or missing states remain inconclusive.
+
+The connector reads assessment detail rather than trusting green workflow/file summary fields. Job relation facts must identify the same file, job and candidate; required assessment facts must also include an assessment ID and the same file/job/candidate. Missing identities cannot pass. The wait Capability and independent Oracle share the acceptance rules but perform separate reads; their evidence retains the identity and status facts used for each conclusion in `oracle-N-source.json`.
+
+### Online-stage acceptance scope
+
+`aihr.onlineResumePipeline` verifies the online-resume stage, not the entire conversation and attachment lifecycle. It additionally correlates the workflow ID, conversation, job, workflow online-file ID, returned file ID and conversation/file candidate IDs. A `retryable_error` phase or a nonempty workflow error code alone does not prove terminal failure. Valid online-stage phases are `wait_online_screening`, `wait_attachment`, and `terminated`; termination requires the authoritative relation stage `screen_reject` and successful technical processing.
+
+Evidence declares `acceptanceScope: online-resume`. Its `terminal` flag means this acceptance has a true/false conclusion; it does not mean the conversation is complete. In particular, `wait_online_screening` can satisfy a declared assessment-completion check while later conversation actions remain open.
+
+AIHR legally replaces current relation and assessment file facts during attachment processing. An observed `attachment_resume_file_id` or `completed` phase therefore sets `scopeSuperseded: true` and returns inconclusive without waiting for the online file to become current again. It does not confirm an obsolete-file defect or supply a product repair suggestion. Missing attachment identity in a completed workflow also cannot establish the online stage retrospectively. A separate attachment/lifecycle Charter with historical or phase-specific evidence is still required.
+
+Use an isolated candidate/job and pause attachment advancement during online acceptance. A concurrent upload before the workflow exposes an attachment identity cannot yet be distinguished from an incorrect current-file binding by these latest-state endpoints. Billing idempotency and full lifecycle coverage remain separate acceptance obligations.
+
 ## Adapter split
 
 The Web/Electron adapter owns platform interaction: navigation, session selection, opening an online resume, downloading or generating the artifact, upload initiation and visible progress. The AIHR integration owns business observation and test data cleanup. The Runner joins both streams through one `runId` and one evidence timeline.

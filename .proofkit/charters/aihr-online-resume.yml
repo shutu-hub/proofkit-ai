@@ -5,6 +5,7 @@ preconditions:
   - AIHR gateway is running in an isolated test environment
   - AIHR_PROOFKIT_ACCESS_TOKEN and actor headers point to a test workspace
   - Charter metadata.aihr identifies an existing test conversation and workflow
+  - The test candidate and job are isolated from concurrent uploads; attachment progression is paused during online-stage acceptance
 actions:
   - kind: capability
     name: aihr.createOnlineResumeIntake
