@@ -7,6 +7,8 @@ export type McpServerOptions = {
   root?: string;
   workspaceRoot?: string;
   evidenceDir?: string;
+  /** Explicit operator opt-in for trusted, test-environment write capabilities. */
+  allowCapabilityWrites?: boolean;
 };
 
 export async function createProofkitMcp(options: McpServerOptions = {}): Promise<McpServer> {
@@ -15,6 +17,7 @@ export async function createProofkitMcp(options: McpServerOptions = {}): Promise
     workspaceRoot: options.workspaceRoot ?? process.env.PROOFKIT_WORKSPACE_ROOT,
     evidenceDir: options.evidenceDir ?? process.env.PROOFKIT_EVIDENCE_DIR,
     restrictWebOrigins: true,
+    allowCapabilityWrites: options.allowCapabilityWrites ?? (process.env.PROOFKIT_ALLOW_CAPABILITY_WRITES === "1"),
   });
   const server = new McpServer({ name: "proofkit", version: "0.1.0" });
   registerTools(server, runner);

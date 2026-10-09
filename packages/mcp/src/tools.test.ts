@@ -18,6 +18,7 @@ describe("ProofKit MCP tools", () => {
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       "discover_project",
+      "list_test_charters",
       "create_test_mission",
       "run_test",
       "approve_test_plan",
@@ -70,6 +71,7 @@ describe("ProofKit MCP tools", () => {
         required: true,
         declared: 1,
       },
+      readiness: { ready: true, missing: [] },
       polling: {
         statusTool: "get_mission_status",
         evidenceTool: "get_mission_evidence",
@@ -82,6 +84,28 @@ describe("ProofKit MCP tools", () => {
       expect.objectContaining({ taskId: "execute-charter", status: "running" }),
     ]);
 
+    await client.close();
+    await server.close();
+  });
+
+  it("holds an incomplete core request before surface execution", async () => {
+    const mission = fixtureMission("awaiting-approval");
+    mission.charter = { ...mission.charter!, assertions: [], oracles: [] };
+    const runner = {
+      config: { surfaces: {} },
+      createMission: vi.fn(async () => mission),
+      startMission: vi.fn(),
+    } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+
+    const response = await client.callTool({ name: "run_test", arguments: { intent: "测试简历获取" } });
+    const result = JSON.parse(textContent(response));
+    expect(result).toMatchObject({
+      running: false,
+      readiness: { ready: false, missing: ["至少一个明确的表面断言", "至少一个独立业务 Oracle"] },
+      next: ["list_test_charters", "plan_test"],
+    });
+    expect(runner.startMission).not.toHaveBeenCalled();
     await client.close();
     await server.close();
   });

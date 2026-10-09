@@ -256,6 +256,8 @@ describe("ExecutionRunner", () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-cancel-"));
     const controller = new AbortController();
     let cleaned = false;
+    let signalCapabilityStart!: () => void;
+    const capabilityStarted = new Promise<void>((resolve) => { signalCapabilityStart = resolve; });
     const promise = new ExecutionRunner(new FakeAdapter(), {
       evidenceDir: root,
       signal: controller.signal,
@@ -268,6 +270,7 @@ describe("ExecutionRunner", () => {
         inputSchema: z.object({}),
         outputSchema: z.object({ ok: z.boolean() }),
         execute: async (_input, context) => {
+          signalCapabilityStart();
           await new Promise<void>((resolve, reject) => {
             context.signal.addEventListener("abort", () => reject(context.signal.reason), { once: true });
             setTimeout(resolve, 500);
@@ -287,7 +290,8 @@ describe("ExecutionRunner", () => {
       sideEffectPolicy: "deny",
       metadata: {},
     }, "cancel-run");
-    setTimeout(() => controller.abort(new CancelledError("user stop")), 10);
+    await capabilityStarted;
+    controller.abort(new CancelledError("user stop"));
     const summary = await promise;
     expect(summary.verdict).toBe("cancelled");
     expect(summary.findings.some((finding) => finding.includes("user stop"))).toBe(true);

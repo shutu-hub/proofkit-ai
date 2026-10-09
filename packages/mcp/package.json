@@ -4,7 +4,9 @@
   "type": "module",
   "main": "dist/server.js",
   "types": "dist/server.d.ts",
-  "bin": { "proofkit-mcp": "dist/server.js" },
+  "bin": {
+    "proofkit-mcp": "dist/server.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -16,5 +18,8 @@
     "@proofkit/contracts": "workspace:*",
     "@proofkit/local-runner": "workspace:*",
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@proofkit/adapters": "workspace:*"
   }
 }

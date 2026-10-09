@@ -51,13 +51,14 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 
 - Create a fixed Web/Electron benchmark with known workflows and seeded defects.
 - Use the bounded project test map to measure candidate entry-point and route coverage; partial scans must remain visible through the `truncated` flag.
+- Register known business Charters by explicit aliases so one-sentence Agent requests reuse verified workflows; stop automatic execution when a required assertion or Oracle is missing.
 - Measure plan validity, workflow coverage, assertion quality, false passes and model cost.
 - Add a review gate for write actions and report planner uncertainty.
 - Keep all model output constrained to Charter and typed Capability schemas.
 - Measure generated Charter and Mission quality, and preserve the resolved level in every result. The kernel already changes the task graph, surface matrix, replay obligations, explicit negative-case tasks and evidence gate for `quick`, `core` and `release`.
 - Run the same evaluator against deterministic and OpenAI-compatible providers. The evaluator checks level selection, required and forbidden action kinds, required Oracles, assertions and explicitly required negative cases without starting a browser, process or capability.
 
-**Current evidence:** `pnpm benchmark:planner` runs three fixed quick/core/release planning cases through `deterministic-v1`; all three currently pass with a 1.0 pass rate and average score. The same command accepts `PROOFKIT_PLANNER_PROVIDER=openai-compatible`, `PROOFKIT_PLANNER_BASE_URL` and `PROOFKIT_PLANNER_MODEL` for a real model. The benchmark measures Charter structure only; it does not prove AIHR business execution.
+**Current evidence:** `pnpm benchmark:planner` runs three fixed quick/core/release planning cases through `deterministic-v1`; all three currently pass with a 1.0 pass rate and average score. The same command accepts `PROOFKIT_PLANNER_PROVIDER=openai-compatible`, `PROOFKIT_PLANNER_BASE_URL` and `PROOFKIT_PLANNER_MODEL` for a real model. A workspace-owned Charter catalog and MCP readiness gate now reuse configured business scenarios without guessing assertions. The benchmark measures Charter structure only; it does not prove AIHR business execution.
 
 **Gate:** publish benchmark results for every enabled planner and refuse a green verdict when the generated plan has no independent business proof. Missing level-specific evidence, a required release surface, or a required replay is `inconclusive`, with the first missing boundary recorded.
 
@@ -73,7 +74,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Execute an explicit duplicate-upload negative case and require the connector Oracle to prove the same scoped `client_item_key` reuses the same file identity and digest.
 - Run the same Charter through Web and Electron, replay both runs, and compare terminal business facts.
 
-**Current evidence:** the isolated Web/Electron smoke proves upload binding, terminal extraction, candidate identity, job relation, assessment state and workflow usage, detects the seeded stale relation with linked evidence, and runs a duplicate-upload negative case whose Oracle proves duplicate reuse. A real isolated AIHR workspace, billing assertions and worker retry checks remain required before this phase is complete.
+**Current evidence:** the isolated Web/Electron smoke proves upload binding, terminal extraction, candidate identity, job relation, assessment state and workflow usage, detects the seeded stale relation with linked evidence, and runs a duplicate-upload negative case whose Oracle proves duplicate reuse. The ordinary-upload reference Charter still needs a real surface assertion before catalog registration. A real isolated AIHR workspace, billing assertions and worker retry checks remain required before this phase is complete.
 
 **Gate:** seeded defects in upload, extraction, identity, relation and billing are found with linked evidence; retries do not create duplicate billable facts.
 

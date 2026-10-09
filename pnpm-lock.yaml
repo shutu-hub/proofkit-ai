@@ -122,6 +122,10 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      '@proofkit/adapters':
+        specifier: workspace:*
+        version: link:../adapters
 
   packages/oracles:
     dependencies:

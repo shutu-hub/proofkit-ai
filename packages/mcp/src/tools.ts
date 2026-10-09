@@ -13,10 +13,18 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "list_test_charters",
+    "List curated, workspace-owned tests that can be selected by natural language or charterId.",
+    {},
+    async () => result({ charters: runner.listCharters() }),
+  );
+
+  server.tool(
     "create_test_mission",
     "Create a reviewable AI test mission from a natural-language intent. The mission plans work without modifying the tested project.",
     {
       intent: z.string().min(1),
+      charterId: z.string().min(1).optional(),
       surface: z.enum(["web", "electron", "mobile"]).default("web"),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
@@ -25,7 +33,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
     },
-    async ({ intent, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
+    async ({ intent, charterId, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, charterId, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
   );
 
   server.tool(
@@ -33,6 +41,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "Run a natural-language ProofKit test mission at the requested intensity. Poll get_mission_status and read get_mission_evidence for the final auditable result.",
     {
       intent: z.string().min(1),
+      charterId: z.string().min(1).optional(),
       level: z.enum(["quick", "core", "release"]).optional(),
       surface: z.enum(["web", "electron", "mobile"]).default("web"),
       url: z.string().url().optional(),
@@ -42,12 +51,13 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
       autoApprove: z.boolean().default(true),
     },
-    async ({ intent, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
-      const mission = await runner.createMission({ intent, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
-      const started = autoApprove
+    async ({ intent, charterId, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
+      const mission = await runner.createMission({ intent, charterId, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
+      const readiness = missionReadiness(mission);
+      const started = autoApprove && readiness.ready
         ? await runner.startMission(mission.missionId, { approve: true })
         : { mission, running: false };
-      return result(missionStartResponse(started));
+      return result(missionStartResponse(started, readiness));
     },
   );
 
@@ -189,11 +199,22 @@ function result(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
 }
 
-function missionStartResponse(started: { mission: TestMission; running: boolean }) {
+function missionReadiness(mission: TestMission): { ready: boolean; missing: string[] } {
+  const missing: string[] = [];
+  if (!mission.charter?.assertions.length) missing.push("至少一个明确的表面断言");
+  if (mission.plan.executionProfile.requireBusinessOracle && !mission.charter?.oracles?.length) {
+    missing.push("至少一个独立业务 Oracle");
+  }
+  return { ready: missing.length === 0, missing };
+}
+
+function missionStartResponse(started: { mission: TestMission; running: boolean }, readiness = missionReadiness(started.mission)) {
   const mission = started.mission;
   const profile = mission.plan.executionProfile;
   const terminal = ["completed", "failed", "blocked", "cancelled"];
-  const next = mission.status === "awaiting-approval"
+  const next = !readiness.ready && mission.status === "awaiting-approval"
+    ? ["list_test_charters", "plan_test"]
+    : mission.status === "awaiting-approval"
     ? ["approve_test_plan"]
     : started.running || mission.status === "running"
       ? ["get_mission_status", "get_mission_evidence"]
@@ -210,6 +231,8 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
     level: mission.level,
     levelSelection: mission.levelSelection,
     executionProfile: profile,
+    readiness,
+    ...(typeof mission.charter?.metadata.catalogId === "string" ? { catalogId: mission.charter.metadata.catalogId } : {}),
     taskSummary: mission.plan.graph.tasks.map((task) => ({
       taskId: task.taskId,
       title: task.title,

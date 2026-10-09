@@ -58,6 +58,14 @@ export function createProgram(): Command {
       console.log(output);
     });
 
+  program.command("charters")
+    .description("List curated tests configured in the external test workspace")
+    .option("--root <path>", "project root", ".")
+    .action(async ({ root, workspace }: RootOptions) => {
+      const config = await loadConfig(resolve(root), { workspaceRoot: workspace });
+      console.log(JSON.stringify({ charters: config.charters }, null, 2));
+    });
+
   program.command("plan <intent>")
     .description("Turn a business intent into a reviewable Test Charter")
     .option("--root <path>", "project root", ".")
@@ -150,17 +158,19 @@ export function createProgram(): Command {
     .description("Create a reviewable mission plan from a natural-language intent")
     .option("--root <path>", "project root", ".")
     .option("--surface <surface>", "web, electron or mobile", "web")
+    .option("--charter-id <id>", "select a curated test by catalog ID")
     .option("--url <url>", "entry URL")
     .option("--expect <text>", "visible text assertion", collect, [])
     .option("--oracle <name>", "configured business oracle", collect, [])
     .option("--level <level>", "quick, core or release")
-    .option("--mode <mode>", "deterministic, guided or explore", "guided")
+    .option("--mode <mode>", "deterministic, guided or explore")
     .option("--side-effects <policy>", "deny, confirm or allow")
     .action(async (intent: string, options: MissionCreateCommandOptions) => {
       const root = resolve(options.root);
       const runner = await LocalRunnerService.create({ root, workspaceRoot: options.workspace });
       const created = await runner.createMission({
         intent,
+        charterId: options.charterId,
         surface: options.surface as "web" | "electron",
         url: options.url,
         expect: options.expect,
@@ -184,8 +194,9 @@ export function createProgram(): Command {
     .description("Run an approved mission and wait for its final verdict")
     .option("--root <path>", "project root", ".")
     .option("--approve", "approve the plan before starting")
-    .action(async (missionId: string, options: RootOptions & { approve?: boolean }) => {
-      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+    .option("--allow-capability-writes", "allow approved test-environment write capabilities")
+    .action(async (missionId: string, options: RootOptions & { approve?: boolean; allowCapabilityWrites?: boolean }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace, allowCapabilityWrites: options.allowCapabilityWrites });
       await runner.startMission(missionId, { approve: options.approve });
       const completed = await runner.waitMission(missionId);
       const evidence = await runner.missionEvidence(completed.missionId);
@@ -212,8 +223,9 @@ export function createProgram(): Command {
   mission.command("replay <missionId>")
     .description("Replay a mission charter and wait for its final verdict")
     .option("--root <path>", "project root", ".")
-    .action(async (missionId: string, options: RootOptions) => {
-      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+    .option("--allow-capability-writes", "allow approved test-environment write capabilities")
+    .action(async (missionId: string, options: RootOptions & { allowCapabilityWrites?: boolean }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace, allowCapabilityWrites: options.allowCapabilityWrites });
       const started = await runner.replayMission(missionId);
       const completed = await runner.waitMission(started.mission.missionId);
       console.log(JSON.stringify({ missionId: completed.missionId, status: completed.status, verdict: completed.verdict }, null, 2));
@@ -284,7 +296,7 @@ type PlanCommandOptions = RootOptions & {
   url?: string;
   expect: string[];
   oracle: string[];
-  mode: string;
+  mode?: string;
   sideEffects?: string;
   out?: string;
   level?: string;
@@ -292,6 +304,7 @@ type PlanCommandOptions = RootOptions & {
 
 type MissionCreateCommandOptions = PlanCommandOptions & {
   surface: string;
+  charterId?: string;
 };
 
 type RunCommandOptions = PlanCommandOptions & {

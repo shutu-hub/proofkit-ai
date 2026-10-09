@@ -35,6 +35,44 @@ async function fixture() {
 const charter = () => TestCharterSchema.parse({ intent: "verify fixture", level: "quick", actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" });
 
 describe("external test workspace", () => {
+  it("selects a curated Charter from natural language without changing the source project", async () => {
+    const { root, workspaceRoot } = await fixture();
+    const catalogCharter = TestCharterSchema.parse({
+      intent: "验证简历获取核心链路",
+      level: "core",
+      actions: [{ kind: "observe" }],
+      assertions: [{ kind: "text-visible", text: "ready" }],
+      oracles: ["resume-status"],
+      sideEffectPolicy: "deny",
+    });
+    await mkdir(join(workspaceRoot, ".proofkit", "charters"));
+    const charterPath = join(workspaceRoot, ".proofkit", "charters", "resume.yml");
+    await writeFile(charterPath, JSON.stringify(catalogCharter));
+    await writeFile(join(workspaceRoot, ".proofkit", "config.yaml"), JSON.stringify({
+      project: { root },
+      charters: [{ id: "resume-core", path: ".proofkit/charters/resume.yml", aliases: ["简历获取"], level: "core", surfaces: ["web", "electron"] }],
+      oracles: [{ name: "resume-status", url: "http://127.0.0.1:8080/status", statusPointer: "/data/status", successValues: ["complete"] }],
+    }));
+    const service = await LocalRunnerService.create({ root, workspaceRoot });
+    expect(service.listCharters()).toHaveLength(1);
+    const mission = await service.createMission({ intent: "测试简历获取核心链路", surface: "electron" });
+    expect(mission.charter).toMatchObject({ intent: catalogCharter.intent, metadata: { catalogId: "resume-core", matchedAlias: "简历获取" } });
+    expect(mission.policy.sideEffectPolicy).toBe("deny");
+    expect(mission.plan.executionProfile.surfaceMatrix).toEqual(["electron"]);
+    expect(await readdir(root)).toEqual(["package.json"]);
+    await expect(service.createMission({ intent: "其它内容", surface: "web", charterId: "resume-core", url: "http://127.0.0.1" }))
+      .rejects.toThrow("cannot be combined");
+    await writeFile(charterPath, JSON.stringify({ ...catalogCharter, assertions: [] }));
+    await expect(service.createMission({ intent: "简历获取", surface: "web" })).rejects.toThrow("needs a surface assertion");
+    await writeFile(charterPath, JSON.stringify({ ...catalogCharter, oracles: ["missing"] }));
+    await expect(service.createMission({ intent: "简历获取", surface: "web" })).rejects.toThrow("unregistered Oracle");
+    await writeFile(charterPath, JSON.stringify({ ...catalogCharter, level: "quick" }));
+    await expect(service.createMission({ intent: "简历获取", surface: "web" })).rejects.toThrow("declares core");
+    await writeFile(charterPath, JSON.stringify({ ...catalogCharter, actions: [{ kind: "goto", url: "https://example.com" }] }));
+    const restricted = await LocalRunnerService.create({ root, workspaceRoot, restrictWebOrigins: true });
+    await expect(restricted.createMission({ intent: "简历获取", surface: "web" })).rejects.toThrow("outside the configured origin");
+  });
+
   it("runs an external Charter and connector, then reads and replays a Mission after restart", async () => {
     const { root, workspaceRoot } = await fixture();
     await mkdir(join(workspaceRoot, ".proofkit", "fixtures"));

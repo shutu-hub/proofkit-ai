@@ -12,6 +12,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 
 - Maps workspace manifests and common Web, Electron, and backend entry points.
 - Produces a bounded path-level test map with source/test counts, framework signals, conventional entry points, static route hints and an explicit truncation flag.
+- Matches one-sentence requests to curated, workspace-owned Charters by explicit aliases; ambiguous matches require a Charter ID, and missing assertions or business Oracles stop automatic execution.
 - Converts intent into a saved YAML Test Charter that can be reviewed and edited.
 - Executes Web and Electron actions through Playwright, including CDP attachment.
 - Executes mobile actions through a W3C WebDriver/Appium-compatible server when a mobile surface is configured.
@@ -126,6 +127,8 @@ PROOFKIT_ROOT=/path/to/your/project PROOFKIT_WORKSPACE_ROOT=/path/to/test-worksp
 ```
 
 The shortest agent workflow is `run_test({ intent, level, surface })`, followed by `get_mission_status` and `get_mission_evidence`. The supported levels are `quick` (fast observable path), `core` (the default, with an independent business Oracle), and `release` (pre-release regression scope). If no level is supplied, ProofKit selects `core` and records that decision in the Mission. See [docs/agent-integration.md](docs/agent-integration.md) for Codex, Claude Code and DeepSeek Harness usage.
+
+For known business flows, add `charters` entries to the external workspace config with an ID, path, natural-language aliases, level and surfaces, then keep the validated YAML Charter in that workspace. `proofkit charters` or MCP `list_test_charters` lists them. An MCP server can run trusted write capabilities only when its operator sets `PROOFKIT_ALLOW_CAPABILITY_WRITES=1` and the workspace, Charter and capability all permit the isolated test operation; a project integration can add a preflight gate.
 
 Planner quality can be checked without starting a browser or the tested project:
 

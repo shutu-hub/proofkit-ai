@@ -5,7 +5,7 @@ import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
 import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, TestCharterSchema, type EvidenceRef, type NegativeCase, type ProofkitConfig, type ProjectMap, type RunMode, type RunSummary, type SideEffectPolicy, type TestCharter, type TestLevel, type TestMission, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
-import { getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
+import { getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { initProject, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
 import { CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
@@ -50,6 +50,7 @@ export type LocalRunStatus = {
 
 export type MissionCreateOptions = {
   intent: string;
+  charterId?: string;
   surface?: "web" | "electron" | "mobile" | "api";
   adapter?: LocalAdapterName;
   charter?: TestCharter;
@@ -155,22 +156,51 @@ export class LocalRunnerService {
     return scanProject(this.root);
   }
 
+  listCharters(): ProofkitConfig["charters"] {
+    return this.config.charters;
+  }
+
   async createMission(input: MissionCreateOptions): Promise<TestMission> {
     const surface = input.surface ?? input.adapter ?? "web";
     if (surface === "api") throw new Error(`Mission surface is not enabled by the local runner: ${surface}`);
-    const levelSelection = resolveTestLevel(input.intent, input.level ?? input.charter?.level);
-    const charter = input.charter ?? await this.plan(input.intent, {
-      url: input.url,
-      expect: input.expect,
-      oracleNames: input.oracleNames,
-      mode: input.mode,
-      sideEffectPolicy: input.sideEffectPolicy,
-      level: input.level,
-    });
+    if (input.charter && input.charterId) throw new Error("Supply either a Charter or charterId, not both");
+    const catalogLevel = input.charterId ? this.config.charters.find((entry) => entry.id === input.charterId)?.level : undefined;
+    const levelSelection = resolveTestLevel(input.intent, input.level ?? input.charter?.level ?? catalogLevel);
+    const hasAdHocOptions = Boolean(input.url || input.expect?.length || input.oracleNames?.length || input.mode || input.sideEffectPolicy);
+    if (input.charterId && hasAdHocOptions) throw new Error("charterId cannot be combined with ad-hoc planning options");
+    const selected = input.charter ? undefined : !hasAdHocOptions || input.charterId
+      ? selectCatalogCharter(this.config.charters, { intent: input.intent, level: levelSelection.resolved, surface, charterId: input.charterId })
+      : undefined;
+    let charter: TestCharter;
+    if (input.charter) {
+      charter = input.charter;
+    } else if (selected) {
+      const saved = await loadCharter(resolveWithinWorkspace(this.workspaceRoot, selected.entry.path));
+      if (saved.level !== selected.entry.level) {
+        throw new Error(`Test catalog entry ${selected.entry.id} declares ${selected.entry.level}, but its Charter is ${saved.level}`);
+      }
+      charter = TestCharterSchema.parse({
+        ...saved,
+        metadata: { ...saved.metadata, catalogId: selected.entry.id, ...(selected.matchedAlias ? { matchedAlias: selected.matchedAlias } : {}) },
+      });
+    } else {
+      charter = await this.plan(input.intent, {
+        url: input.url,
+        expect: input.expect,
+        oracleNames: input.oracleNames,
+        mode: input.mode,
+        sideEffectPolicy: input.sideEffectPolicy,
+        level: input.level,
+      });
+    }
     if (charter.level !== levelSelection.resolved) {
       throw new Error(`Charter level ${charter.level} does not match requested level ${levelSelection.resolved}`);
     }
     const normalizedCharter = TestCharterSchema.parse({ ...charter, levelSelection: charter.levelSelection ?? levelSelection });
+    if (selected) this.validateCatalogCharter(selected.entry.id, normalizedCharter, surface);
+    if (input.policy?.sideEffectPolicy && input.policy.sideEffectPolicy !== normalizedCharter.sideEffectPolicy) {
+      throw new Error("Mission policy side effects must match the selected Charter");
+    }
     await this.ensureWorkspace();
     return this.missionAgent.create({
       intent: input.intent,
@@ -178,8 +208,42 @@ export class LocalRunnerService {
       workspaceRoot: this.workspaceRoot,
       surface,
       charter: normalizedCharter,
-      policy: { ...input.policy, level: levelSelection.resolved },
+      policy: { ...input.policy, level: levelSelection.resolved, sideEffectPolicy: normalizedCharter.sideEffectPolicy },
     });
+  }
+
+  private validateCatalogCharter(id: string, charter: TestCharter, surface: LocalAdapterName): void {
+    if (charter.assertions.length === 0) throw new Error(`Test catalog entry ${id} needs a surface assertion before it can run`);
+    if (getTestLevelProfile(charter.level).evidencePolicy.requireBusinessOracle && !charter.oracles?.length) {
+      throw new Error(`Test catalog entry ${id} needs an independent business Oracle for ${charter.level}`);
+    }
+    const availableOracles = new Set([...this.oracles.map((oracle) => oracle.name), ...this.config.oracles.map((oracle) => oracle.name)]);
+    for (const oracle of [...(charter.oracles ?? []), ...(charter.negativeCases ?? []).flatMap((item) => item.oracles)]) {
+      if (!availableOracles.has(oracle)) throw new Error(`Test catalog entry ${id} references an unregistered Oracle: ${oracle}`);
+      const configured = this.config.oracles.find((item) => item.name === oracle);
+      if (this.restrictWebOrigins && configured && !isLoopback(new URL(configured.url).hostname)) {
+        throw new Error(`Test catalog entry ${id} requires a loopback Oracle in MCP mode: ${oracle}`);
+      }
+    }
+    const availableCapabilities = new Map(this.capabilities.map((capability) => [capability.name, capability]));
+    const scenarios = [{ actions: charter.actions, sideEffectPolicy: charter.sideEffectPolicy }, ...(charter.negativeCases ?? [])];
+    for (const scenario of scenarios) {
+      for (const action of scenario.actions) {
+        if (action.kind !== "capability") continue;
+        const capability = availableCapabilities.get(action.name);
+        if (!capability) throw new Error(`Test catalog entry ${id} references an unregistered capability: ${action.name}`);
+        if (capability.sideEffect === "write" && scenario.sideEffectPolicy !== "allow") {
+          throw new Error(`Test catalog entry ${id} must allow write capability ${action.name} in its scenario`);
+        }
+      }
+    }
+    if (this.restrictWebOrigins && scenarios.some((scenario) => scenario.sideEffectPolicy === "allow") && this.config.policies.sideEffects !== "allow") {
+      throw new Error(`Test catalog entry ${id} requires policies.sideEffects=allow in the test workspace`);
+    }
+    this.validateWebOrigins(charter, { adapter: surface });
+    for (const negativeCase of charter.negativeCases ?? []) {
+      this.validateWebOrigins({ ...charter, actions: negativeCase.actions }, { adapter: surface });
+    }
   }
 
   async approveMission(missionId: string): Promise<TestMission> {

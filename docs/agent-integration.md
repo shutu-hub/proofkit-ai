@@ -8,6 +8,7 @@ Register one local MCP server for the project root. Clients with MCP support, in
 
 ```text
 discover_project
+list_test_charters
 run_test
 get_mission_status
 get_mission_evidence
@@ -26,6 +27,21 @@ replay_mission
 ```
 
 The response contains `missionId`, the resolved level and the running status. The agent then polls the status until the mission reaches a terminal state and reads evidence once. For a review-first workflow, call `create_test_mission`, inspect the task graph, call `approve_test_plan`, and then call `start_mission`.
+
+For repeatable business workflows, register a curated Charter in the external workspace's `.proofkit/config.yaml`:
+
+```yaml
+charters:
+  - id: resume-core
+    path: .proofkit/charters/resume-core.yml
+    aliases: [简历获取, 简历上传]
+    level: core
+    surfaces: [web, electron]
+```
+
+The Charter must declare a real surface assertion and, for `core` or `release`, a registered independent business Oracle. An agent can say “测试简历获取核心链路”; ProofKit selects the matching alias at the requested level and surface, records `catalogId`, and executes the saved Charter. A more specific alias may supersede its own generic substring; matches for distinct workflows require an explicit `charterId`. An explicit ID supplies its catalog level when `level` is omitted. A `release` Charter must support both Web and Electron when either is selected. Ad-hoc `url`, `expect`, Oracle, mode or side-effect options bypass automatic catalog matching. `list_test_charters` shows the available IDs and aliases. The source project remains untouched.
+
+If a one-sentence request has no suitable Charter and the planner cannot supply an assertion or required Oracle, `run_test` returns `readiness.ready=false` and does not start the surface. The agent should use `list_test_charters` or `plan_test` and fill the missing test contract. Readiness checks structural prerequisites; they do not prove the assertion is meaningful.
 
 ## What the agent receives
 
@@ -52,6 +68,8 @@ Optional `<workspaceRoot>/.proofkit/integration.mjs` adds typed capabilities, bu
 For example, register `node /path/to/proofkit-ai/packages/mcp/dist/server.js` with the environment variables `PROOFKIT_ROOT=/path/to/source` and `PROOFKIT_WORKSPACE_ROOT=/path/to/test-workspace`. Once the local surface and business checks are configured, the agent calls `run_test` and receives a Mission ID instead of repeatedly supplying CDP instructions.
 
 The integration should expose opaque IDs and sanitized facts. It should not expose arbitrary shell, SQL, filesystem or credential operations. Write capabilities require an explicit test environment, a Charter side-effect policy of `allow`, and the runner-level write opt-in.
+
+For MCP, the operator sets `PROOFKIT_ALLOW_CAPABILITY_WRITES=1` when launching the server. The workspace must also set `policies.sideEffects: allow`, and the selected Charter and capability must each allow the write. The agent cannot turn on this process-level switch through a tool argument. CLI uses `proofkit mission run <mission-id> --approve --allow-capability-writes`. Use this only with a dedicated test environment and the integration's preflight checks.
 
 ## Choosing a level
 

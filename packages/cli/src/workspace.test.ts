@@ -37,6 +37,16 @@ describe("CLI workspace onboarding", () => {
     log.mockClear();
     await run("mission", "status", mission.missionId);
     expect(JSON.parse(String(log.mock.calls[0]?.[0])).mission.status).toBe("approved");
+    await writeFile(join(workspace, ".proofkit", "config.yaml"), JSON.stringify({
+      project: { root },
+      charters: [{ id: "ready-quick", path: "charters/ready.yml", aliases: ["ready"], level: "quick", surfaces: ["web"] }],
+    }));
+    log.mockClear();
+    await run("charters");
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).charters).toEqual([expect.objectContaining({ id: "ready-quick" })]);
+    log.mockClear();
+    await run("mission", "create", "unrelated words", "--charter-id", "ready-quick");
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ level: "quick", charter: { metadata: { catalogId: "ready-quick" } } });
     await expect(run("plan", "ready", "--out", "../outside.yml")).rejects.toThrow("within the ProofKit workspace");
     expect(await readdir(root)).toEqual(["package.json"]);
   });

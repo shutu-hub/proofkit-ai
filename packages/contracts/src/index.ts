@@ -205,6 +205,16 @@ export const ProjectMapSchema = z.object({
 });
 export type ProjectMap = z.infer<typeof ProjectMapSchema>;
 
+/** A curated test case in the external workspace, selected by explicit aliases. */
+export const CharterCatalogEntrySchema = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9._-]+$/),
+  path: z.string().min(1),
+  aliases: z.array(z.string().trim().min(2)).min(1),
+  level: TestLevelSchema,
+  surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1),
+});
+export type CharterCatalogEntry = z.infer<typeof CharterCatalogEntrySchema>;
+
 export const ProofkitConfigSchema = z.object({
   project: z.object({
     root: z.string().default("."),
@@ -249,6 +259,7 @@ export const ProofkitConfigSchema = z.object({
   integration: z.object({
     path: z.string().min(1).optional(),
   }).default({}),
+  charters: z.array(CharterCatalogEntrySchema).default([]),
   run: z.object({
     timeoutMs: z.number().int().positive().max(3_600_000).default(300_000),
   }).default({}),
