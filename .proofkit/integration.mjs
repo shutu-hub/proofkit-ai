@@ -81,14 +81,30 @@ async function aihrPreflight({ charter, environment }) {
   if (!["test", "local"].includes(environment)) errors.push(`AIHR write tests require test or local environment, received ${environment}`);
 
   const scope = env("AIHR_PROOFKIT_TEST_SCOPE");
+  const scopeValid = validTestScope(scope);
   const clientItemKey = env("AIHR_PROOFKIT_CLIENT_ITEM_KEY");
-  if (!scope || !/^proofkit:[A-Za-z0-9._-]+$/.test(scope)) errors.push("AIHR_PROOFKIT_TEST_SCOPE must match proofkit:<scope>");
+  if (!scopeValid) errors.push("AIHR_PROOFKIT_TEST_SCOPE must match proofkit:<scope>");
   if (writeActions.length > 0) {
     if (!clientItemKey) errors.push("AIHR_PROOFKIT_CLIENT_ITEM_KEY is required for write capabilities");
-    if (scope && clientItemKey && !clientItemKey.startsWith(`${scope}:`)) errors.push("AIHR_PROOFKIT_CLIENT_ITEM_KEY must be namespaced by AIHR_PROOFKIT_TEST_SCOPE");
+    if (scopeValid && clientItemKey && !scopedClientItemKey(clientItemKey, scope)) errors.push("AIHR_PROOFKIT_CLIENT_ITEM_KEY must be namespaced by AIHR_PROOFKIT_TEST_SCOPE with a nonempty suffix");
     for (const name of ["AIHR_PROOFKIT_ENTERPRISE_ID", "AIHR_PROOFKIT_WORKSPACE_ID", "AIHR_PROOFKIT_USER_ID"]) {
       if (!env(name)) errors.push(`${name} is required for write capabilities`);
     }
+  }
+  const uploadKeyChecks = [];
+  for (const [index, action] of charter.actions.entries()) {
+    if (action.kind !== "capability" || action.name !== "aihr.uploadResumeFile") continue;
+    let resolvedKey;
+    try {
+      resolvedKey = resolveEnv(action.input?.clientItemKey);
+    } catch (error) {
+      uploadKeyChecks.push(false);
+      errors.push(`aihr.uploadResumeFile action ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    const valid = scopeValid && scopedClientItemKey(resolvedKey, scope);
+    uploadKeyChecks.push(valid);
+    if (scopeValid && !valid) errors.push(`aihr.uploadResumeFile action ${index + 1} clientItemKey must be namespaced by AIHR_PROOFKIT_TEST_SCOPE with a nonempty suffix`);
   }
   if (actionNames.includes("aihr.uploadResumeFile") && !env("AIHR_PROOFKIT_FIXTURE_PATH")) {
     errors.push("AIHR_PROOFKIT_FIXTURE_PATH is required for resume uploads");
@@ -104,7 +120,7 @@ async function aihrPreflight({ charter, environment }) {
       integrationRequired: usesAihrBusinessContract,
       writeActionCount: writeActions.length,
       testScopeConfigured: Boolean(scope),
-      clientItemKeyNamespaced: Boolean(scope && clientItemKey?.startsWith(`${scope}:`)),
+      clientItemKeyNamespaced: Boolean(scopeValid && uploadKeyChecks.length > 0 && uploadKeyChecks.every(Boolean)),
     },
   };
 }
@@ -192,6 +208,11 @@ function createResumeFileUploadCapability(state, workspaceRoot) {
     }),
     async execute(input, { runId, signal }) {
       input = resolveEnv(input);
+      const scope = env("AIHR_PROOFKIT_TEST_SCOPE");
+      if (!validTestScope(scope)) throw new Error("AIHR_PROOFKIT_TEST_SCOPE must match proofkit:<scope>");
+      if (!scopedClientItemKey(input.clientItemKey, scope)) {
+        throw new Error("aihr.uploadResumeFile clientItemKey must be namespaced by AIHR_PROOFKIT_TEST_SCOPE with a nonempty suffix");
+      }
       const fixture = await readFixture(workspaceRoot, input.fixturePath);
       const form = new FormData();
       form.append("file", new Blob([fixture.bytes], { type: fixture.contentType }), input.originalFilename ?? fixture.filename);
@@ -943,6 +964,18 @@ function resolveEnv(value) {
   if (Array.isArray(value)) return value.map(resolveEnv);
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveEnv(item)]));
   return value;
+}
+
+function validTestScope(scope) {
+  return typeof scope === "string" && /^proofkit:[A-Za-z0-9._-]+$/.test(scope);
+}
+
+function scopedClientItemKey(key, scope) {
+  return validTestScope(scope)
+    && typeof key === "string"
+    && key.length <= 255
+    && key.startsWith(`${scope}:`)
+    && key.slice(scope.length + 1).trim().length > 0;
 }
 
 function env(name) {

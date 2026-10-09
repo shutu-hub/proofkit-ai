@@ -64,6 +64,7 @@ Object.assign(process.env, {
   AIHR_PROOFKIT_JOB_ID: "505",
   AIHR_PROOFKIT_TEST_SCOPE: "proofkit:local-smoke",
   AIHR_PROOFKIT_CLIENT_ITEM_KEY: "proofkit:local-smoke:fixture-item",
+  AIHR_PROOFKIT_NEGATIVE_CLIENT_ITEM_KEY: "proofkit:local-smoke:idempotency:negative",
 });
 
 let electronChild;

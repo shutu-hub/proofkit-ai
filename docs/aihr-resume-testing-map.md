@@ -118,6 +118,7 @@ $env:AIHR_PROOFKIT_SOURCE_CHANNEL = "boss"
 $env:AIHR_PROOFKIT_FIXTURE_PATH = "fixtures/proofkit-resume.pdf"  # 相对于外部测试工作区根目录
 $env:AIHR_PROOFKIT_TEST_SCOPE = "proofkit:resume-upload"
 $env:AIHR_PROOFKIT_CLIENT_ITEM_KEY = "proofkit:resume-upload:case-001"
+$env:AIHR_PROOFKIT_NEGATIVE_CLIENT_ITEM_KEY = "proofkit:resume-upload:duplicate-001"  # 仅重复上传 Charter 需要；两次上传使用同一个键
 $env:AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT = "false"  # only set true for an explicitly isolated remote test environment
 ```
 
@@ -155,7 +156,7 @@ pnpm test
 
 脱敏 PDF 放在 `$testWorkspace\fixtures\proofkit-resume.pdf`；连接器把 `AIHR_PROOFKIT_FIXTURE_PATH` 解析到外部测试工作区，避免在 AIHR 源码中加入测试文件。当前普通上传 Charter 只定义网关 capability 和业务 Oracle，`assertions: []`。它可以作为连接器合约参考，却不能证明页面点击或 Electron 简历抓取成功。待真实页面路径与稳定断言核实后，应在外部工作区补充对应的 UI 动作/断言、登记 `core` Charter，再通过 MCP `run_test` 或 CLI Mission 执行。
 
-任何真实上传都会写入隔离测试环境。执行前需要把外部工作区的 `policies.sideEffects` 设置为 `allow`，Charter 继续声明 `sideEffectPolicy: allow`，并在 CLI 运行时显式传入 `--allow-capability-writes`；MCP 则由服务启动者设置 `PROOFKIT_ALLOW_CAPABILITY_WRITES=1`。连接器的 preflight 还会检查测试 scope、幂等键、租户和端点。只有 UI 断言和独立业务 Oracle 都有证据并通过，才可认定核心链路通过；Run 结果保存在 `$testWorkspace\.proofkit\runs\<runId>\`。
+任何真实上传都会写入隔离测试环境。执行前需要把外部工作区的 `policies.sideEffects` 设置为 `allow`，Charter 继续声明 `sideEffectPolicy: allow`，并在 CLI 运行时显式传入 `--allow-capability-writes`；MCP 则由服务启动者设置 `PROOFKIT_ALLOW_CAPABILITY_WRITES=1`。连接器的 preflight 会解析当前 Charter 每个上传动作的实际幂等键并检查其属于 `AIHR_PROOFKIT_TEST_SCOPE`；上传 capability 在请求前再次校验，缺少变量或跨 scope 的键不会写入网关。只有 UI 断言和独立业务 Oracle 都有证据并通过，才可认定核心链路通过；Run 结果保存在 `$testWorkspace\.proofkit\runs\<runId>\`。
 
 ## 下一阶段
 

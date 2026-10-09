@@ -5,7 +5,7 @@ sideEffectPolicy: allow
 preconditions:
   - AIHR gateway and asynchronous workers are running in an isolated test environment
   - AIHR_PROOFKIT_TEST_SCOPE and AIHR_PROOFKIT_CLIENT_ITEM_KEY identify this test scope
-  - the duplicate case uses a stable, namespaced client item key
+  - AIHR_PROOFKIT_NEGATIVE_CLIENT_ITEM_KEY is a stable key inside the same test scope for both duplicate uploads
 actions:
   - kind: capability
     name: aihr.createResumeCollectionRun
@@ -68,7 +68,7 @@ negativeCases:
           originalFilename: proofkit-idempotency.pdf
           targetJobIds:
             - "$env:AIHR_PROOFKIT_JOB_ID"
-          clientItemKey: proofkit:local-smoke:idempotency:negative
+          clientItemKey: "$env:AIHR_PROOFKIT_NEGATIVE_CLIENT_ITEM_KEY"
           resumeRole: online
           bossAccountId: "$env:AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID"
           candidateUid: "$env:AIHR_PROOFKIT_CANDIDATE_UID"
@@ -81,7 +81,7 @@ negativeCases:
           originalFilename: proofkit-idempotency.pdf
           targetJobIds:
             - "$env:AIHR_PROOFKIT_JOB_ID"
-          clientItemKey: proofkit:local-smoke:idempotency:negative
+          clientItemKey: "$env:AIHR_PROOFKIT_NEGATIVE_CLIENT_ITEM_KEY"
           resumeRole: online
           bossAccountId: "$env:AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID"
           candidateUid: "$env:AIHR_PROOFKIT_CANDIDATE_UID"

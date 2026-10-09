@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -25,6 +25,7 @@ const envKeys = [
   "AIHR_PROOFKIT_FIXTURE_PATH",
   "AIHR_PROOFKIT_JOB_ID",
   "AIHR_PROOFKIT_CLIENT_ITEM_KEY",
+  "AIHR_PROOFKIT_NEGATIVE_CLIENT_ITEM_KEY",
   "AIHR_PROOFKIT_TEST_SCOPE",
   "AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT",
 ];
@@ -153,7 +154,7 @@ describe("AIHR project integration", () => {
       fixturePath: ".proofkit/fixtures/resume.pdf",
       sourceChannel: "boss",
       targetJobIds: ["505"],
-      clientItemKey: "proofkit-item-1",
+      clientItemKey: "proofkit:fixture:item-1",
       resumeRole: "attachment",
       originalFilename: "candidate.pdf",
     }, context);
@@ -165,7 +166,7 @@ describe("AIHR project integration", () => {
     expect(gateway.uploadBody).not.toContain("source_text");
     const sourceFixture = join(root, "source-resume.pdf");
     await writeFile(sourceFixture, fixtureBytes);
-    await expect(upload.execute({ fixturePath: sourceFixture, sourceChannel: "boss", clientItemKey: "outside-workspace" }, context))
+    await expect(upload.execute({ fixturePath: sourceFixture, sourceChannel: "boss", clientItemKey: "proofkit:fixture:outside-workspace" }, context))
       .rejects.toThrow("fixturePath must stay within the test workspace");
 
     const observed = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
@@ -200,7 +201,7 @@ describe("AIHR project integration", () => {
     const service = await LocalRunnerService.create({ root });
     const upload = service.integration?.capabilities?.find((item) => item.name === "aihr.uploadResumeFile");
     if (!upload) throw new Error("AIHR upload capability is missing");
-    const input = { fixturePath: ".proofkit/fixtures/resume.pdf", sourceChannel: "boss", clientItemKey: "exact-id", resumeRole: "attachment", manualOverride: false };
+    const input = { fixturePath: ".proofkit/fixtures/resume.pdf", sourceChannel: "boss", clientItemKey: "proofkit:fixture:exact-id", resumeRole: "attachment", manualOverride: false };
     const context = { runId: "exact-id-run", signal: new AbortController().signal };
     await upload.execute({ ...input, targetJobIds: ["9223372036854775807"] }, context);
     expect(gateway.uploadBody).toMatch(/name="target_job_ids"\r\n\r\n\[9223372036854775807\]\r\n/);
@@ -338,6 +339,75 @@ describe("AIHR project integration", () => {
     expect(result.passed).toBe(false);
     expect(result.message).toContain("remote AIHR endpoints");
     expect(result.message).toContain("AIHR_PROOFKIT_TEST_SCOPE");
+  });
+
+  it("blocks the actual upload key outside the test scope before connecting or writing", async () => {
+    const gateway = await startCollectionGatewayMock({ fixtureSha256: "a".repeat(64) });
+    servers.push(gateway.server);
+    const root = await createIntegrationProject(Buffer.from("%PDF-1.4 fixture\n"));
+    process.env.AIHR_PROOFKIT_CLIENT_ITEM_KEY = "proofkit:fixture:valid-decoy";
+    process.env.AIHR_PROOFKIT_FIXTURE_PATH = ".proofkit/fixtures/resume.pdf";
+    const connect = vi.spyOn(WebAdapter.prototype, "connect").mockResolvedValue();
+    const service = await LocalRunnerService.create({ root, allowCapabilityWrites: true });
+    const charter = TestCharterSchema.parse({
+      intent: "reject an upload outside the test scope",
+      level: "core",
+      mode: "deterministic",
+      actions: [{ kind: "capability", name: "aihr.uploadResumeFile", input: {
+        fixturePath: ".proofkit/fixtures/resume.pdf",
+        clientItemKey: "proofkit:other:item",
+      } }],
+      assertions: [],
+      sideEffectPolicy: "allow",
+      metadata: {},
+    });
+    const started = await service.start({ charter });
+    const summary = await service.wait(started.runId);
+    expect(summary.verdict).toBe("blocked");
+    expect(summary.findings.join(" ")).toContain("clientItemKey must be namespaced");
+    expect(connect).not.toHaveBeenCalled();
+    expect(gateway.requestPaths).toEqual([]);
+    const preflightPath = summary.artifacts.find((path) => path.endsWith("/preflight.json"));
+    expect(preflightPath).toBeDefined();
+    expect(JSON.parse(await readFile(join(service.evidenceDir, preflightPath!), "utf8"))).toMatchObject({
+      passed: false,
+      evidence: { clientItemKeyNamespaced: false },
+    });
+
+    const upload = service.integration?.capabilities?.find((item) => item.name === "aihr.uploadResumeFile");
+    if (!upload) throw new Error("AIHR upload capability is missing");
+    await expect(upload.execute({ fixturePath: ".proofkit/fixtures/resume.pdf", clientItemKey: "proofkit:other:item" }, {
+      runId: "direct-upload", signal: new AbortController().signal,
+    })).rejects.toThrow("clientItemKey must be namespaced");
+    await expect(upload.execute({ fixturePath: ".proofkit/fixtures/resume.pdf", clientItemKey: "proofkit:fixture:" }, {
+      runId: "direct-upload", signal: new AbortController().signal,
+    })).rejects.toThrow("nonempty suffix");
+    expect(gateway.requestPaths).toEqual([]);
+  });
+
+  it("blocks a duplicate-upload scenario when its scoped key is missing", async () => {
+    const gateway = await startCollectionGatewayMock({ fixtureSha256: "a".repeat(64) });
+    servers.push(gateway.server);
+    const root = await createIntegrationProject();
+    const service = await LocalRunnerService.create({ root });
+    const preflight = service.integration?.preflight;
+    if (!preflight) throw new Error("AIHR integration preflight is missing");
+    process.env.AIHR_PROOFKIT_CLIENT_ITEM_KEY = "proofkit:fixture:primary";
+    process.env.AIHR_PROOFKIT_FIXTURE_PATH = ".proofkit/fixtures/resume.pdf";
+    delete process.env.AIHR_PROOFKIT_NEGATIVE_CLIENT_ITEM_KEY;
+    const source = resolve(dirname(fileURLToPath(import.meta.url)), "../../../.proofkit/charters/aihr-resume-upload-idempotency.yml");
+    const saved = await loadCharter(source);
+    const negativeCase = saved.negativeCases?.[0];
+    if (!negativeCase) throw new Error("AIHR duplicate-upload case is missing");
+    const result = await preflight({
+      runId: "negative-preflight",
+      environment: "test",
+      charter: TestCharterSchema.parse({ ...saved, actions: negativeCase.actions, assertions: negativeCase.assertions, oracles: negativeCase.oracles }),
+      signal: new AbortController().signal,
+    });
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("AIHR_PROOFKIT_NEGATIVE_CLIENT_ITEM_KEY");
+    expect(gateway.requestPaths).toEqual([]);
   });
 
   it("allows a quick UI-only charter without AIHR business scope", async () => {
@@ -525,6 +595,7 @@ async function startCollectionGatewayMock(options: { fixtureSha256: string; mode
   process.env.AIHR_PROOFKIT_ENTERPRISE_ID = "enterprise-fixture";
   process.env.AIHR_PROOFKIT_WORKSPACE_ID = "workspace-fixture";
   process.env.AIHR_PROOFKIT_USER_ID = "user-fixture";
+  process.env.AIHR_PROOFKIT_TEST_SCOPE = "proofkit:fixture";
   return {
     server,
     setMode: (nextMode) => { mode = nextMode; },
