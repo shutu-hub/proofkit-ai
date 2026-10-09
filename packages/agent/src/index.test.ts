@@ -83,8 +83,31 @@ describe("MissionAgent", () => {
     expect(result.findings).toEqual(expect.arrayContaining([
       expect.objectContaining({ title: "Mission timed out", category: "environment" }),
     ]));
+    expect(result.firstFailure).toMatchObject({ kind: "environment", message: expect.stringContaining("total timeout") });
     expect(result.toolCalls[0]?.status).toBe("cancelled");
     expect(result.agentSteps[0]?.status).toBe("cancelled");
+  });
+
+  it("bounds cleanup waiting and reports resources that may remain active", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-cleanup-timeout-"));
+    const controller = new AbortController();
+    const tools = new InMemoryMissionToolRegistry([{
+      name: "project.discover", description: "unresponsive tool", sideEffect: "none", environments: ["test"],
+      timeoutMs: 1_000, cancellationGraceMs: 10, inputSchema: z.object({}),
+      execute: () => {
+        controller.abort(new Error("User cancelled"));
+        return new Promise(() => {});
+      },
+    }]);
+    const agent = new MissionAgent({ store: new JsonMissionStore(root), tools });
+    const created = await agent.create({ intent: "cancel unresponsive tool", projectRoot: root, surface: "web", policy: { requireApproval: false } });
+    const result = await agent.run(created.missionId, { signal: controller.signal });
+
+    expect(result.status).toBe("cancelled");
+    expect(result.toolCalls[0]?.status).toBe("cancelled");
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "Tool cleanup did not finish", category: "environment", message: expect.stringContaining("resources may still be active") }),
+    ]));
   });
 
   it("blocks an unregistered or disallowed tool with a finding", async () => {

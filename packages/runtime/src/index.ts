@@ -3,6 +3,7 @@ import { request } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { once } from "node:events";
 import { resolve as resolveFs } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { ProofkitConfig } from "@proofkit/contracts";
 
 export type RuntimeEvent = {
@@ -29,10 +30,11 @@ export class ProjectRuntime {
     return Boolean(this.child && !this.child.killed);
   }
 
-  async start(): Promise<void> {
+  async start(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const command = this.options.config.project.start;
     if (!command) {
-      await this.waitForHealth();
+      await this.waitForHealth(signal);
       return;
     }
     if (this.running) throw new Error("Project runtime is already running");
@@ -49,7 +51,7 @@ export class ProjectRuntime {
     this.child.stdout?.on("data", (chunk: Buffer) => this.options.onEvent?.({ type: "process.stdout", payload: { text: chunk.toString("utf8").slice(-8_000) } }));
     this.child.stderr?.on("data", (chunk: Buffer) => this.options.onEvent?.({ type: "process.stderr", payload: { text: chunk.toString("utf8").slice(-8_000) } }));
     this.child.on("exit", (code, signal) => this.options.onEvent?.({ type: "process.exited", payload: { code, signal, expected: this.stopped } }));
-    await this.waitForHealth();
+    await this.waitForHealth(signal);
   }
 
   async stop(): Promise<void> {
@@ -78,30 +80,33 @@ export class ProjectRuntime {
       : this.options.root;
   }
 
-  private async waitForHealth(): Promise<void> {
+  private async waitForHealth(signal?: AbortSignal): Promise<void> {
     const checks = this.options.config.project.health;
     if (checks.length === 0) return;
     const deadline = Date.now() + this.options.config.project.startupTimeoutMs;
     const normalized = checks.map((item) => typeof item === "string" ? { url: item, expectedStatus: 200 } : item);
     while (Date.now() < deadline) {
-      const results = await Promise.all(normalized.map((check) => probe(check.url, check.expectedStatus)));
+      signal?.throwIfAborted();
+      const results = await Promise.all(normalized.map((check) => probe(check.url, check.expectedStatus, signal)));
+      signal?.throwIfAborted();
       if (results.every(Boolean)) {
         this.options.onEvent?.({ type: "health.ready", payload: { checks: normalized.map((check) => check.url) } });
         return;
       }
-      await delay(250);
+      try { await delay(250, undefined, { signal }); }
+      catch (error) { signal?.throwIfAborted(); throw error; }
     }
     this.options.onEvent?.({ type: "health.timeout", payload: { checks: normalized.map((check) => check.url), timeoutMs: this.options.config.project.startupTimeoutMs } });
     throw new Error(`Project health checks did not pass within ${this.options.config.project.startupTimeoutMs}ms`);
   }
 }
 
-async function probe(url: string, expectedStatus: number): Promise<boolean> {
+async function probe(url: string, expectedStatus: number, signal?: AbortSignal): Promise<boolean> {
   try {
     const parsed = new URL(url);
     const requestImpl = parsed.protocol === "https:" ? httpsRequest : request;
     return await new Promise<boolean>((resolve) => {
-      const req = requestImpl(parsed, { method: "GET", timeout: 2_000 }, (response) => {
+      const req = requestImpl(parsed, { method: "GET", timeout: 2_000, signal }, (response) => {
         response.resume();
         response.on("end", () => resolve(response.statusCode === expectedStatus));
       });
@@ -116,8 +121,4 @@ async function probe(url: string, expectedStatus: number): Promise<boolean> {
 
 function resolvePath(root: string, path: string): string {
   return resolveFs(root, path);
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

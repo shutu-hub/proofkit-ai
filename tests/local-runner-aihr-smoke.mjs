@@ -138,7 +138,48 @@ try {
   const idempotencySummary = await service.wait(idempotencyNegative.data.runId);
   assert.equal(idempotencySummary.oracles[0]?.name, "aihr.resumeUploadIdempotency");
   assert.equal(idempotencySummary.oracles[0]?.passed, true);
-  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, idempotencyMission: idempotencyMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "core-mission", "stale-binding-detection", "idempotency-negative-case", "selected-oracle-only"] }, null, 2));
+
+  let observerStarted;
+  const observing = new Promise((resolveObserver) => { observerStarted = resolveObserver; });
+  let observerSignal;
+  let cleaned = false;
+  const cancellationService = await LocalRunnerService.create({
+    root, workspaceRoot, config: service.config,
+    integration: {
+      name: "cancellation-smoke",
+      setup: async () => async () => { cleaned = true; },
+      oracles: [{ name: "pending-terminal", async check({ runId, signal }) {
+        observerSignal = signal;
+        observerStarted(runId);
+        await new Promise((_, reject) => {
+          const abort = () => reject(signal.reason);
+          if (signal.aborted) abort();
+          else signal.addEventListener("abort", abort, { once: true });
+        });
+        throw new Error("Observer should have been cancelled");
+      } }],
+    },
+  });
+  const cancellationCharter = TestCharterSchema.parse({
+    intent: "Cancel a pending business observation after real surface execution", level: "core",
+    actions: [{ kind: "goto", url: baseUrl }, { kind: "click", selector: "#check" }, { kind: "waitForText", text: "Resume ready" }],
+    assertions: [{ kind: "text-visible", text: "Resume ready" }], oracles: ["pending-terminal"], sideEffectPolicy: "allow",
+  });
+  const cancellationMission = await cancellationService.createMission({ intent: cancellationCharter.intent, surface, charter: cancellationCharter });
+  await cancellationService.startMission(cancellationMission.missionId, { approve: true });
+  const pendingRunId = await observing;
+  const cancelled = await cancellationService.cancelMission(cancellationMission.missionId);
+  assert.equal(observerSignal.aborted, true);
+  assert.equal(cleaned, true, "Cancellation returned before integration cleanup");
+  assert.equal(cancelled.running, false);
+  assert.equal(cancelled.mission.verdict, "cancelled");
+  assert.equal((await cancellationService.wait(pendingRunId)).verdict, "cancelled");
+  assert.equal((await cancellationService.status(pendingRunId)).status, "completed");
+  assert.ok(cancelled.mission.agentSteps.some((step) => step.status === "cancelled" && step.evidence.some((item) => item.kind === "report")));
+  const cancelledReport = cancelled.mission.evidence.find((item) => item.kind === "report");
+  assert.match(await readFile(cancelledReport.path, "utf8"), /cancelled/);
+  assert.deepEqual(await readdir(root), ["package.json"]);
+  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, idempotencyMission: idempotencyMission.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "core-mission", "stale-binding-detection", "idempotency-negative-case", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
 } finally {
   if (electronChild && electronChild.exitCode === null) {
     const exited = new Promise((resolveExit) => electronChild.once("exit", resolveExit));

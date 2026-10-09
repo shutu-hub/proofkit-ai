@@ -33,6 +33,127 @@ class SlowAdapter extends FakeAdapter {
 }
 
 describe("ExecutionRunner", () => {
+  it("retains a setup cleanup handle that arrives after cancellation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-late-setup-"));
+    const controller = new AbortController();
+    let setupStarted!: () => void;
+    let finishSetup!: () => void;
+    const started = new Promise<void>((resolve) => { setupStarted = resolve; });
+    const finish = new Promise<void>((resolve) => { finishSetup = resolve; });
+    let connected = false;
+    let cleaned = false;
+    let settled = false;
+    const adapter = new FakeAdapter();
+    adapter.connect = async () => { connected = true; };
+    const running = new ExecutionRunner(adapter, { evidenceDir: root, signal: controller.signal, setup: async () => {
+      setupStarted();
+      await finish;
+      return async () => { cleaned = true; };
+    } }).run({ intent: "cancel setup", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [], sideEffectPolicy: "deny", metadata: {} }, "late-setup").then((result) => { settled = true; return result; });
+    await started;
+    controller.abort(new CancelledError("stop setup"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+    finishSetup();
+    const summary = await running;
+    expect(summary.verdict).toBe("cancelled");
+    expect(cleaned).toBe(true);
+    expect(connected).toBe(false);
+  });
+
+  it("waits for an in-flight connection before closing its acquired resources", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-late-connect-"));
+    const controller = new AbortController();
+    let connectionStarted!: () => void;
+    let finishConnection!: () => void;
+    const started = new Promise<void>((resolve) => { connectionStarted = resolve; });
+    const finish = new Promise<void>((resolve) => { finishConnection = resolve; });
+    let acquired = false;
+    let subscribed = false;
+    const adapter = new FakeAdapter();
+    adapter.connect = async () => { connectionStarted(); await finish; acquired = true; };
+    adapter.subscribeEvents = async () => { subscribed = true; return () => {}; };
+    adapter.close = async () => { acquired = false; };
+    const running = new ExecutionRunner(adapter, { evidenceDir: root, signal: controller.signal }).run({ intent: "cancel connect", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [], sideEffectPolicy: "deny", metadata: {} }, "late-connect");
+    await started;
+    controller.abort(new CancelledError("stop connect"));
+    finishConnection();
+    const summary = await running;
+    expect(summary.verdict).toBe("cancelled");
+    expect(acquired).toBe(false);
+    expect(subscribed).toBe(false);
+  });
+
+  it("releases an event subscription that arrives after cancellation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-late-subscription-"));
+    const controller = new AbortController();
+    let subscriptionStarted!: () => void;
+    let finishSubscription!: () => void;
+    const started = new Promise<void>((resolve) => { subscriptionStarted = resolve; });
+    const finish = new Promise<void>((resolve) => { finishSubscription = resolve; });
+    let released = false;
+    let acted = false;
+    const adapter = new FakeAdapter();
+    adapter.subscribeEvents = async () => {
+      subscriptionStarted();
+      await finish;
+      return () => { released = true; };
+    };
+    adapter.act = async (action) => { acted = true; return FakeAdapter.prototype.act.call(adapter, action); };
+    const running = new ExecutionRunner(adapter, { evidenceDir: root, signal: controller.signal }).run({
+      intent: "cancel subscription", level: "core", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "observe" }], assertions: [], sideEffectPolicy: "deny", metadata: {},
+    }, "late-subscription");
+    await started;
+    controller.abort(new CancelledError("stop subscription"));
+    finishSubscription();
+    const summary = await running;
+    expect(summary.verdict).toBe("cancelled");
+    expect(released).toBe(true);
+    expect(acted).toBe(false);
+  });
+
+  it("keeps cancellation as the verdict when setup rejects after the abort", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-aborted-setup-"));
+    const controller = new AbortController();
+    let setupStarted!: () => void;
+    let finishSetup!: () => void;
+    const started = new Promise<void>((resolve) => { setupStarted = resolve; });
+    const finish = new Promise<void>((resolve) => { finishSetup = resolve; });
+    const summaryPromise = new ExecutionRunner(new FakeAdapter(), {
+      evidenceDir: root, signal: controller.signal,
+      setup: async () => { setupStarted(); await finish; throw new Error("setup observed abort"); },
+    }).run({ intent: "abort setup", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [], sideEffectPolicy: "deny", metadata: {} }, "aborted-setup");
+    await started;
+    controller.abort(new CancelledError("stop setup"));
+    finishSetup();
+    const summary = await summaryPromise;
+    expect(summary.verdict).toBe("cancelled");
+    expect(summary.findings).toContain("stop setup");
+  });
+
+  it("reports an unsettled acquisition and releases its handle when it eventually arrives", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-expired-setup-"));
+    const controller = new AbortController();
+    let setupStarted!: () => void;
+    let finishSetup!: () => void;
+    const started = new Promise<void>((resolve) => { setupStarted = resolve; });
+    const finish = new Promise<void>((resolve) => { finishSetup = resolve; });
+    let lateCleanup!: () => void;
+    const cleaned = new Promise<void>((resolve) => { lateCleanup = resolve; });
+    const summaryPromise = new ExecutionRunner(new FakeAdapter(), {
+      evidenceDir: root, signal: controller.signal,
+      setup: async () => { setupStarted(); await finish; return () => { lateCleanup(); }; },
+    }).run({ intent: "expire setup grace", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [], sideEffectPolicy: "deny", metadata: {} }, "expired-setup");
+    await started;
+    controller.abort(new CancelledError("stop setup"));
+    const summary = await summaryPromise;
+    expect(summary.verdict).toBe("cancelled");
+    expect(summary.findings.some((finding) => finding.includes("resources may still be active"))).toBe(true);
+    finishSetup();
+    await cleaned;
+  }, 10_000);
+
   it("records steps and passes an independent assertion", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-runner-"));
     const charter = {

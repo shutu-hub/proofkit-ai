@@ -30,6 +30,13 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Enforce a separate Mission deadline across reconnaissance, surface runs,
   recovery and final verification, with a persisted timeout Finding.
 - Expose cancellation through the CLI and MCP.
+- Propagate Mission cancellation and deadlines to primary, replay and negative
+  Runs, retain cancelled Run evidence, and wait up to 10 seconds for cleanup.
+  Record an explicit environment Finding when a tool does not settle.
+- Abort local startup health requests and polling when the Run signal stops.
+- Wait up to five seconds for in-flight setup, adapter connection or event
+  subscription to return a cleanup handle; mark an expired wait as a possible
+  active-resource risk and attempt to release any handle that arrives later.
 - Treat adapter, process and integration cleanup failures as non-green results.
 - Keep Agent tool failures as suspected test findings until an independent product oracle confirms a defect.
 - Run an integration preflight before project setup, adapter connection or write capabilities. A failed preflight is `blocked` with a sanitized `preflight.json` artifact.

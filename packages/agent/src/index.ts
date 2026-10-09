@@ -55,6 +55,8 @@ export type MissionTool<Input = unknown> = {
   sideEffect: "none" | "read" | "write";
   environments: Array<MissionPolicy["environment"]>;
   timeoutMs: number;
+  /** Time allowed for an aborted tool to close resources and return evidence. */
+  cancellationGraceMs?: number;
   inputSchema: z.ZodType<Input>;
   outputSchema?: z.ZodType;
   execute(input: Input, context: MissionToolContext): Promise<MissionToolResult>;
@@ -344,6 +346,7 @@ export class MissionAgent {
             timedOut ? "Mission timed out" : "Mission cancelled",
             toError(error).message,
           )],
+          ...(timedOut && !mission.firstFailure ? { firstFailure: timeoutBoundary(toError(error).message) } : {}),
         });
       }
       const cause = toError(error);
@@ -468,9 +471,14 @@ export class MissionAgent {
     const toolController = new AbortController();
     const detach = relayAbort(signal, toolController);
     const timeout = setTimeout(() => toolController.abort(new Error(`Mission tool ${tool.name} timed out`)), tool.timeoutMs);
+    let cancelledResult: MissionToolResult | undefined;
     try {
       const input = tool.inputSchema.parse(task.input);
-      const result = await raceAbort(tool.execute(input, { mission: startedMission, task: runningTask, signal: toolController.signal }), toolController.signal);
+      const result = await raceAbort(tool.execute(input, { mission: startedMission, task: runningTask, signal: toolController.signal }), toolController.signal, tool.cancellationGraceMs);
+      if (toolController.signal.aborted) {
+        cancelledResult = result;
+        throwIfAborted(toolController.signal);
+      }
       const output = tool.outputSchema ? tool.outputSchema.parse(result.output) : result.output;
       const finishedAt = new Date().toISOString();
       const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status: "succeeded", startedAt, endedAt: finishedAt, durationMs: Date.now() - Date.parse(startedAt), evidence: result.evidence ?? [] });
@@ -515,18 +523,23 @@ export class MissionAgent {
       const cancelled = toolController.signal.aborted && signal.aborted;
       const status = cancelled ? "cancelled" : "failed";
       const timedOut = cancelled && isMissionTimeout(signal.reason);
-      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: cause.message });
+      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: cause.message, evidence: cancelledResult?.evidence ?? [] });
       const agentStep = completeAgentStep(startedMission.agentSteps, agentStepId, {
         status: status === "cancelled" ? "cancelled" : "failed",
         endedAt: new Date().toISOString(),
         durationMs: Date.now() - Date.parse(startedAt),
         error: cause.message,
+        output: cancelledResult?.output,
+        observationIds: (cancelledResult?.observations ?? []).map((item) => item.observationId),
+        evidence: cancelledResult?.evidence ?? [],
       });
       const failedTask = updateTask(startedMission, { ...runningTask, status: status === "cancelled" ? "blocked" : "failed", error: cause.message }, { currentTaskId: task.taskId });
       return this.save({
         ...failedTask,
         agentSteps: replaceAgentStep(startedMission.agentSteps, agentStep),
         toolCalls: replaceToolCall(startedMission.toolCalls, call),
+        observations: [...startedMission.observations, ...(cancelledResult?.observations ?? []).map((item) => ObservationSchema.parse(item))],
+        evidence: [...startedMission.evidence, ...(cancelledResult?.evidence ?? [])],
         findings: [...startedMission.findings, finding(
           timedOut ? "mission-timeout" : `task-${task.taskId}`,
           timedOut ? "medium" : status === "cancelled" ? "info" : "medium",
@@ -534,7 +547,10 @@ export class MissionAgent {
           timedOut ? "Mission timed out" : `Task ${task.taskId} did not complete`,
           cause.message,
           status === "cancelled" ? "confirmed" : "suspected",
-        )],
+        ), ...(cancelledResult?.findings ?? []).map((item) => FindingSchema.parse(item)), ...(cause instanceof ToolCleanupTimeoutError ? [finding(
+          `cleanup-${task.taskId}`, "high", "environment", "Tool cleanup did not finish", cause.message,
+        )] : [])],
+        ...(timedOut && !startedMission.firstFailure ? { firstFailure: timeoutBoundary(cause.message) } : {}),
         status: status === "cancelled" ? "cancelled" : "failed",
         verdict: status === "cancelled" ? "cancelled" : "failed",
       });
@@ -671,6 +687,15 @@ function isMissionTimeout(reason: unknown): reason is MissionTimeoutError {
   return reason instanceof MissionTimeoutError || (reason instanceof Error && reason.name === "MissionTimeoutError");
 }
 
+function timeoutBoundary(message: string): FailureBoundary {
+  return FailureBoundarySchema.parse({
+    kind: "environment",
+    message,
+    evidence: [],
+    observedAt: new Date().toISOString(),
+  });
+}
+
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Mission cancelled");
 }
@@ -683,15 +708,28 @@ function relayAbort(source: AbortSignal | undefined, target: AbortController): (
   return () => source.removeEventListener("abort", onAbort);
 }
 
-async function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  throwIfAborted(signal);
+class ToolCleanupTimeoutError extends Error {
+  constructor(graceMs: number) {
+    super(`Aborted tool did not settle within its ${graceMs}ms cleanup grace period; resources may still be active.`);
+    this.name = "ToolCleanupTimeoutError";
+  }
+}
+
+async function raceAbort<T>(promise: Promise<T>, signal: AbortSignal, graceMs?: number): Promise<T> {
   let onAbort: (() => void) | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([promise, new Promise<T>((_, reject) => {
-      onAbort = () => reject(signal.reason instanceof Error ? signal.reason : new Error("Mission tool cancelled"));
-      signal.addEventListener("abort", onAbort, { once: true });
-    })]);
+    return await new Promise<T>((resolve, reject) => {
+      promise.then(resolve, reject);
+      onAbort = () => {
+        if (graceMs !== undefined) timer = setTimeout(() => reject(new ToolCleanupTimeoutError(graceMs)), graceMs);
+        else reject(signal.reason instanceof Error ? signal.reason : new Error("Mission tool cancelled"));
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    });
   } finally {
+    if (timer) clearTimeout(timer);
     if (onAbort) signal.removeEventListener("abort", onAbort);
   }
 }

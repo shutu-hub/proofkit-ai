@@ -114,6 +114,25 @@ timed out` keeps the reason reviewable. The lower-level `run.timeoutMs`
 remains the deadline for one surface Run; both deadlines are retained so a
 slow business workflow cannot keep an AI client waiting indefinitely.
 
+Mission cancellation and deadlines propagate through primary, replay and
+negative-case tools to the Local Runner's Run signal. Business observers and
+capabilities receive that signal; local startup health probes also abort.
+Surface tools allow a bounded 10-second cancellation grace period for adapter
+and integration cleanup and final Run evidence. When the tool settles, the
+cancelled Mission retains its Run observation, report and ToolCall/AgentStep
+evidence links. If it does not settle within that period, the Mission records
+`Tool cleanup did not finish` and explicitly reports that resources may still
+be active. The grace period is additional to the execution deadline and is
+not a guarantee that uncooperative trusted integration code has stopped.
+
+The Run kernel also waits up to five seconds for setup, adapter connection or
+event subscription that was already in progress when cancellation arrived.
+If acquisition settles within that window, normal cleanup completes before the
+Run report is finalized. If it does not, the cancelled Run records that
+resources may still be active; a cleanup handle returned later triggers a
+best-effort asynchronous release. The report does not claim that late cleanup
+has finished.
+
 Every task is persisted as `running` before its tool starts and receives a `started` ToolCall with an attempt number. If the local process is restarted, the Agent Loop closes stale started receipts and resumes only side-effect-free or read-only tasks whose `maxAttempts` has not been reached. A task that may write data, has exhausted its attempts, or no longer has a registered tool is marked `blocked` and requires review; ProofKit never blindly replays an interrupted write.
 
 `surface.run-charter` and `surface.replay-charter` call `LocalRunnerService.start()`, `wait()` and `replay()`, which in turn reuse the existing `ExecutionRunner`; the Agent does not create a second browser or Electron engine. Primary and replay observations include the surface and source run ID, so the verifier can distinguish a real cross-surface matrix from duplicate evidence. This keeps natural-language use and deterministic CLI/CI use on one lifecycle and one evidence format.
@@ -239,7 +258,7 @@ We use these as compatible components or design references. We do not copy their
 1. **Current:** Web/Electron adapters, project runtime, read-only HTTP oracle, evidence hashes, shared Local Runner, bounded MCP facade, validated Planner Provider interface, project integration loading, run deadline and cancellation, the persisted Mission Agent loop, the release Web/Electron primary-plus-replay task matrix, and explicit negative/recovery case execution with evidence gates.
 2. **Next:** measure generated Charters and Missions against real projects, implement scoped test data, and add worker/file/candidate/billing observers. Negative and recovery cases still require explicit Charter declarations; ProofKit does not infer destructive actions from generic categories.
 3. **Later:** retry/idempotency classification, isolated browser profiles, first-failure diagnosis and evidence-backed repair suggestions.
-4. **After the Web/Electron slice is stable:** Maestro/Appium adapters for mobile, and Keploy-style traffic fixtures for deterministic backend replay.
+4. **After the Web/Electron slice is stable:** verify the existing Appium-compatible mobile adapter on a real emulator, evaluate Maestro as an additional mobile engine, and add Keploy-style traffic fixtures for deterministic backend replay.
 
 Mobile and hosted device orchestration stay outside the first install. They can implement the same Surface Adapter and Evidence contracts without changing Test Charter or verdict semantics.
 

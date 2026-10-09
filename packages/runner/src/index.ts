@@ -199,16 +199,20 @@ export class ExecutionRunner {
         if (!result.passed) throw new BlockedError(`Integration preflight failed: ${result.message}`);
       }
       if (this.setup) {
-        cleanupSetup = await withAbort(this.setup({
+        throwIfAborted(signal);
+        cleanupSetup = await withResourceAbort(this.setup({
           runId,
           signal,
           emit: (event) => this.emit({ ...event, runId }),
-        }), signal, "Project setup") ?? (() => {});
+        }), signal, "Project setup", async (cleanup) => { await cleanup?.(); }) ?? (() => {});
+        throwIfAborted(signal);
       }
-      await withAbort(this.adapter.connect(), signal, "Adapter connect");
-      unsubscribe = await withAbort(this.adapter.subscribeEvents((event) => {
+      await withResourceAbort(this.adapter.connect(), signal, "Adapter connect", () => this.adapter.close());
+      throwIfAborted(signal);
+      unsubscribe = await withResourceAbort(this.adapter.subscribeEvents((event) => {
         pendingEvents.push(this.emit({ runId, timestamp: new Date().toISOString(), type: "adapter.event", payload: { adapter: this.adapter.name, eventType: event.type, ...event.payload } }));
-      }), signal, "Adapter event subscription");
+      }), signal, "Adapter event subscription", async (release) => { await release(); });
+      throwIfAborted(signal);
       for (const [index, action] of charter.actions.entries()) {
         throwIfAborted(signal);
         const stepId = `step-${String(index + 1).padStart(3, "0")}`;
@@ -384,6 +388,39 @@ async function withAbort<T>(promise: Promise<T>, signal: AbortSignal, label: str
     if (signal.aborted) throw abortReason(signal);
     throw new Error(`${label} failed: ${toError(error).message}`);
   } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+// Resource acquisition can finish after cancellation. Wait briefly for its
+// cleanup handle; if it arrives later, release it without claiming cleanup.
+async function withResourceAbort<T>(promise: Promise<T>, signal: AbortSignal, label: string, releaseLate: (value: T) => Promise<void>): Promise<T> {
+  const graceMs = 5_000;
+  let graceExpired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const owned = promise.then(async (value) => {
+    if (graceExpired) await releaseLate(value);
+    return value;
+  });
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      owned.then(resolve, reject);
+      onAbort = () => {
+        timer = setTimeout(() => {
+          graceExpired = true;
+          reject(new CancelledError(`${abortReason(signal).message}; ${label} did not settle within its ${graceMs}ms cleanup grace period; resources may still be active.`));
+        }, graceMs);
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    });
+  } catch (error) {
+    if (graceExpired) throw error;
+    if (signal.aborted) throw abortReason(signal);
+    throw new Error(`${label} failed: ${toError(error).message}`);
+  } finally {
+    if (timer) clearTimeout(timer);
     if (onAbort) signal.removeEventListener("abort", onAbort);
   }
 }

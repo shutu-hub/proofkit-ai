@@ -16,7 +16,10 @@ export { loadProjectIntegration } from "./integration.js";
 
 export type LocalAdapterName = "web" | "electron" | "mobile";
 
+const SURFACE_CANCELLATION_GRACE_MS = 10_000;
+
 export type LocalRunInput = {
+  signal?: AbortSignal;
   intent?: string;
   charter?: TestCharter;
   charterPath?: string;
@@ -396,7 +399,7 @@ export class LocalRunnerService {
       const charter = input.charter ?? context.mission.charter;
       if (!charter) throw new Error("Mission has no Test Charter to execute");
       const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
-      const started = await this.start({ charter, adapter });
+      const started = await this.start({ charter, adapter, signal: context.signal });
       const summary = await this.wait(started.runId);
       return collectSurfaceRun(summary, context, adapter, "primary");
     };
@@ -417,7 +420,7 @@ export class LocalRunnerService {
           findings: [FindingSchema.parse({ findingId: `replay-source-${adapter}`, severity: "high", category: "test", status: "confirmed", title: "回放缺少主运行证据", message, createdAt: observedAt })],
         };
       }
-      const started = await this.replay(sourceRunId, { adapter });
+      const started = await this.replay(sourceRunId, { adapter, signal: context.signal });
       const summary = await this.wait(started.runId);
       return collectSurfaceRun(summary, context, adapter, "replay", sourceRunId);
     };
@@ -436,7 +439,7 @@ export class LocalRunnerService {
         metadata: { ...baseCharter.metadata, negativeCaseId: negativeCase.caseId },
       });
       const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
-      const started = await this.start({ charter, adapter });
+      const started = await this.start({ charter, adapter, signal: context.signal });
       const summary = await this.wait(started.runId);
       return collectSurfaceRun(summary, context, adapter, "negative", undefined, negativeCase.caseId, negativeCase.expectedVerdict ?? "passed");
     };
@@ -494,9 +497,9 @@ export class LocalRunnerService {
     return [
       { name: "project.discover", description: "Inspect the local project without modifying it.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
       { name: "surface.inspect", description: "Inspect the configured Web, Electron or mobile surface.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
-      { name: "surface.run-charter", description: "Run a validated charter through the existing deterministic runner and collect evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ charter: TestCharterSchema.optional(), adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runCharter },
-      { name: "surface.replay-charter", description: "Replay the preceding surface run using the saved charter and preserve a second evidence trail.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: replayCharter },
-      { name: "surface.run-negative-charter", description: "Run an explicitly declared negative or recovery Charter and collect independent evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, inputSchema: z.object({ negativeCase: NegativeCaseSchema, adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runNegativeCharter },
+      { name: "surface.run-charter", description: "Run a validated charter through the existing deterministic runner and collect evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ charter: TestCharterSchema.optional(), adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runCharter },
+      { name: "surface.replay-charter", description: "Replay the preceding surface run using the saved charter and preserve a second evidence trail.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: replayCharter },
+      { name: "surface.run-negative-charter", description: "Run an explicitly declared negative or recovery Charter and collect independent evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ negativeCase: NegativeCaseSchema, adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runNegativeCharter },
       { name: "mission.verify", description: "Verify the terminal verdict and evidence completeness of the preceding run.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: verify },
     ];
   }
@@ -562,14 +565,23 @@ export class LocalRunnerService {
     await this.ensureWorkspace();
     const runId = createRunId();
     const controller = new AbortController();
+    const onAbort = () => {
+      const reason = input.signal?.reason;
+      controller.abort(new CancelledError(reason instanceof Error ? reason.message : "Run cancelled by caller"));
+    };
+    if (input.signal?.aborted) onAbort();
+    else input.signal?.addEventListener("abort", onAbort, { once: true });
+    const detachSignal = () => input.signal?.removeEventListener("abort", onAbort);
     const record: LocalRunRecord = { runId, status: "running", controller, promise: Promise.resolve(undefined as never) };
     this.records.set(runId, record);
     const promise = this.execute(runId, input, controller.signal);
     record.promise = promise;
     void promise.then((summary) => {
+      detachSignal();
       record.status = "completed";
       record.summary = summary;
     }).catch((error: unknown) => {
+      detachSignal();
       record.status = "failed";
       record.error = toError(error).message;
     });
@@ -663,14 +675,14 @@ export class LocalRunnerService {
     const oracles = input.oracleUrl
       ? [httpOracle({ name: input.oracleName ?? "http-check", url: input.oracleUrl })]
       : [];
-    const setup: IntegrationSetup | undefined = input.start !== false && this.config.project.start ? async ({ emit }) => {
+    const setup: IntegrationSetup | undefined = input.start !== false && this.config.project.start ? async ({ emit, signal: setupSignal }) => {
       const runtime = new ProjectRuntime({
         root: this.root,
         config: this.config,
         onEvent: (event) => void emit({ timestamp: new Date().toISOString(), type: "adapter.event", payload: { source: "project-runtime", ...event } }),
       });
       try {
-        await runtime.start();
+        await runtime.start(setupSignal);
       } catch (error) {
         await runtime.stop();
         throw error;
