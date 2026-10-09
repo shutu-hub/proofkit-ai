@@ -28,7 +28,7 @@ function summary(overrides: Partial<RunSummary> = {}): RunSummary {
 describe("analyzeRun", () => {
   it("confirms a business failure only when the oracle links evidence", () => {
     const result = analyzeRun({
-      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "resume failed", evidence: ["run-fixture/oracle.json"], observedAt: capturedAt }] }),
+      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "resume failed", evidence: [JSON.stringify({ status: "failed" }), "run-fixture/oracle.json"], sourceEvidenceCount: 1, observedAt: capturedAt }] }),
       evidence: [evidence("run-fixture/oracle.json", "business")],
     });
 
@@ -45,7 +45,8 @@ describe("analyzeRun", () => {
           name: "resume-terminal",
           passed: false,
           message: "stale binding",
-          evidence: ["run-fixture/oracle.json"],
+          evidence: [JSON.stringify({ relation: "stale" }), "run-fixture/oracle.json"],
+          sourceEvidenceCount: 1,
           sourceLocations: ["services/resume-collection-service/internal/service/resume_post_processor.go"],
           observedAt: capturedAt,
         }],
@@ -70,9 +71,18 @@ describe("analyzeRun", () => {
     expect(result.diagnosis).toBeUndefined();
   });
 
+  it("keeps an oracle failure unverified when only its own report exists", () => {
+    const result = analyzeRun({
+      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "resume failed", evidence: ["run-fixture/artifacts/oracle-1.json"], sourceEvidenceCount: 0 }] }),
+      evidence: [evidence("run-fixture/artifacts/oracle-1.json", "business")],
+    });
+    expect(result.finding?.status).toBe("unverified");
+    expect(result.diagnosis).toBeUndefined();
+  });
+
   it("links Windows evidence to the exact run-relative Oracle path", () => {
     const result = analyzeRun({
-      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "stale binding", evidence: ["run-fixture/artifacts/oracle-1.json"] }] }),
+      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "stale binding", evidence: ["run-fixture/artifacts/oracle-1.json"], sourceEvidenceCount: 1 }] }),
       evidence: [evidence("D:\\tests\\runs\\run-fixture\\artifacts\\oracle-1.json", "business")],
     });
     expect(result.finding?.status).toBe("confirmed");
@@ -81,7 +91,7 @@ describe("analyzeRun", () => {
 
   it.each(["oracle-1.json", "artifacts/oracle-1.json", "other-run/artifacts/oracle-1.json", "run-fixture/../other-run/artifacts/oracle-1.json"])("rejects unscoped or unrelated Oracle evidence: %s", (path) => {
     const result = analyzeRun({
-      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "failed", evidence: [path] }] }),
+      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "failed", evidence: [path], sourceEvidenceCount: 1 }] }),
       evidence: [evidence("/tests/runs/run-fixture/artifacts/oracle-1.json", "business")],
     });
     expect(result.finding?.status).toBe("unverified");
@@ -90,7 +100,7 @@ describe("analyzeRun", () => {
 
   it("keeps ambiguous Oracle artifact matches unverified", () => {
     const result = analyzeRun({
-      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "failed", evidence: ["run-fixture/artifacts/oracle-1.json"] }] }),
+      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "failed", evidence: ["run-fixture/artifacts/oracle-1.json"], sourceEvidenceCount: 1 }] }),
       evidence: [evidence("/one/run-fixture/artifacts/oracle-1.json", "business"), evidence("/two/run-fixture/artifacts/oracle-1.json", "business")],
     });
     expect(result.finding?.status).toBe("unverified");

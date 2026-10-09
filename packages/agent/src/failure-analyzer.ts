@@ -39,7 +39,9 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
 
   const failedOracle = summary.oracles.find((oracle) => oracle.passed === false);
   if (failedOracle) {
-    const oracleEvidence = evidenceForPaths(evidence, failedOracle.evidence, summary.runId);
+    const oracleEvidence = failedOracle.sourceEvidenceCount
+      ? evidenceForPaths(evidence, failedOracle.evidence, summary.runId)
+      : [];
     const boundary = FailureBoundarySchema.parse({
       kind: "business-oracle",
       oracleName: failedOracle.name,

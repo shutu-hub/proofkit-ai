@@ -192,7 +192,19 @@ describe("ExecutionRunner", () => {
     expect(summary.verdict).toBe("passed");
     expect(summary.steps[0]?.artifacts[0]).toBe("capability-run/artifacts/step-001-capability.json");
     expect(summary.oracles[0]?.evidence).toContain("capability-run/artifacts/oracle-1.json");
+    expect(summary.oracles[0]?.sourceEvidenceCount).toBe(0);
     expect(await readFile(join(root, "capability-run", "report.html"), "utf8")).toContain("oracle-1.json");
+  });
+
+  it("does not accept a business oracle result with a different registered name", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-oracle-name-"));
+    const summary = await new ExecutionRunner(new FakeAdapter(), {
+      evidenceDir: root,
+      oracles: [{ name: "resume-terminal", check: async () => ({ name: "unrelated", passed: true, message: "complete", evidence: [JSON.stringify({ status: "complete" })] }) }],
+    }).run({ intent: "check resume", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [], oracles: ["resume-terminal"], sideEffectPolicy: "deny", metadata: {} }, "mismatched-oracle-run");
+    expect(summary.verdict).toBe("failed");
+    expect(summary.oracles).toHaveLength(0);
+    expect(summary.findings.some((finding) => finding.includes("returned a result for unrelated"))).toBe(true);
   });
 
   it("blocks an unregistered capability before execution", async () => {

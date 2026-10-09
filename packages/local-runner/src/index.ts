@@ -411,7 +411,7 @@ export class LocalRunnerService {
           passedAssertions: summary.assertions.filter((item) => item.passed).length,
           oracles: summary.oracles.length,
           passedOracles: summary.oracles.filter((item) => item.passed === true).length,
-          businessEvidence: summary.oracles.reduce((count, oracle) => count + oracle.evidence.length, 0),
+          businessEvidence: summary.oracles.reduce((count, oracle) => count + (oracle.sourceEvidenceCount ?? 0), 0),
         },
         evidence,
         observedAt: new Date().toISOString(),
@@ -515,10 +515,23 @@ export class LocalRunnerService {
       const expectedSurfaces = executionProfile.surfaceMatrix;
       const missing: string[] = [];
       for (const surface of expectedSurfaces) {
-        const primary = runs.some((item) => item.data.surface === surface && (item.data.runKind === "primary" || item.data.runKind === undefined));
-        if (!primary) missing.push(`${surface} 主运行`);
-        if (executionProfile.requireReplay && !runs.some((item) => item.data.surface === surface && item.data.runKind === "replay")) {
-          missing.push(`${surface} 回放运行`);
+        for (const runKind of executionProfile.requireReplay ? ["primary", "replay"] as const : ["primary"] as const) {
+          const label = runKind === "primary" ? "主运行" : "回放运行";
+          const matchingRuns = runs.filter((item) => item.data.surface === surface
+            && (item.data.runKind === runKind || (runKind === "primary" && item.data.runKind === undefined)));
+          if (matchingRuns.length === 0) {
+            missing.push(`${surface} ${label}`);
+            continue;
+          }
+          for (const run of matchingRuns) {
+            if (numberValue(run.data.passedAssertions) < 1) missing.push(`${surface} ${label}至少一个可观察断言`);
+            if (executionProfile.requireBusinessOracle && numberValue(run.data.passedOracles) < 1) {
+              missing.push(`${surface} ${label}至少一个独立业务 Oracle`);
+            }
+            if (executionProfile.requireBusinessOracle && numberValue(run.data.businessEvidence) < 1) {
+              missing.push(`${surface} ${label}至少一份业务事实证据`);
+            }
+          }
         }
         if (executionProfile.requireNegativeCases) {
           for (const caseId of executionProfile.declaredNegativeCases) {
@@ -528,17 +541,13 @@ export class LocalRunnerService {
           }
         }
       }
-      const assertionCount = runs.reduce((total, item) => total + numberValue(item.data.assertions), 0);
-      const oracleCount = runs.reduce((total, item) => total + numberValue(item.data.oracles), 0);
       const expectedRunCount = expectedSurfaces.length * (1 + (executionProfile.requireReplay ? 1 : 0) + (executionProfile.requireNegativeCases ? executionProfile.declaredNegativeCases.length : 0));
       const expectedRuns = runs.filter((item) => expectedSurfaces.includes(item.data.surface as typeof expectedSurfaces[number])
         && (item.data.runKind === "primary" || item.data.runKind === "replay" || item.data.runKind === "negative" || item.data.runKind === undefined));
       if (expectedRuns.length < expectedRunCount) missing.push(`至少 ${expectedRunCount} 次表面运行`);
-      if (assertionCount < 1) missing.push("至少一个可观察断言");
       if (context.mission.policy.requireEvidence && context.mission.evidence.length === 0) {
         return { output: { verified: false, reason: "No evidence was captured" }, verdict: "failed", findings: [FindingSchema.parse({ findingId: "missing-evidence", severity: "high", category: "test", status: "confirmed", title: "Mission has no evidence", message: "The configured evidence requirement was not met.", createdAt: new Date().toISOString() })] };
       }
-      if (executionProfile.requireBusinessOracle && oracleCount < 1) missing.push("至少一个独立业务 Oracle");
       if (executionProfile.minimumEvidence > 0 && context.mission.evidence.length < executionProfile.minimumEvidence) {
         missing.push(`至少 ${executionProfile.minimumEvidence} 份可追溯证据`);
       }
@@ -570,9 +579,11 @@ export class LocalRunnerService {
 
   private runEvidence(summary: RunSummary): EvidenceRef[] {
     const paths = new Set([`${summary.runId}/run.json`, `${summary.runId}/report.html`, ...summary.artifacts]);
+    const oracleArtifacts = new Map(summary.oracles.map((oracle) => [oracle.evidence.at(-1), oracle.sourceEvidenceCount ?? 0]));
     return [...paths].map((path) => EvidenceRefSchema.parse({
       evidenceId: `${summary.runId}:${path}`,
-      kind: path.endsWith(".png") ? "screenshot" : path.endsWith("report.html") ? "report" : path.includes("oracle") ? "business" : "snapshot",
+      kind: path.endsWith(".png") ? "screenshot" : path.endsWith("report.html") || (oracleArtifacts.has(path) && !oracleArtifacts.get(path))
+        ? "report" : oracleArtifacts.has(path) ? "business" : "snapshot",
       path: resolve(this.evidenceDir, path),
       description: `Evidence captured by run ${summary.runId}`,
       capturedAt: summary.endedAt ?? summary.startedAt,

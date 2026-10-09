@@ -30,7 +30,7 @@ describe("LocalRunnerService", () => {
       charter,
       steps: [],
       assertions: [{ assertion: { kind: "text-visible", text: "ready" }, passed: true, message: "ready is visible", evidence: ["fixture-run/after.json"] }],
-      oracles: [{ name: "fixture-terminal", passed: true, message: "fixture is complete", evidence: ["fixture-run/oracle-1.json"], observedAt: new Date().toISOString() }],
+      oracles: [{ name: "fixture-terminal", passed: true, message: "fixture is complete", evidence: [JSON.stringify({ status: "complete" }), "fixture-run/oracle-1.json"], sourceEvidenceCount: 1, observedAt: new Date().toISOString() }],
       artifacts: ["fixture-run/after.json", "fixture-run/oracle-1.json"],
       findings: [],
     };
@@ -105,6 +105,87 @@ describe("LocalRunnerService", () => {
     expect(completed.findings.some((finding) => finding.message.includes("独立业务 Oracle"))).toBe(true);
   });
 
+  it("does not let a negative case supply the primary run's missing business oracle", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-primary-oracle-gate-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
+    const visible = { kind: "text-visible" as const, text: "Ready" };
+    const charter: TestCharter = {
+      intent: "verify resume intake",
+      level: "core",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [{ kind: "observe" }],
+      assertions: [visible],
+      oracles: [],
+      sideEffectPolicy: "deny",
+      metadata: {},
+      negativeCases: [{
+        caseId: "duplicate",
+        title: "重复上传",
+        actions: [{ kind: "observe" }],
+        assertions: [],
+        oracles: ["duplicate-rejected"],
+        sideEffectPolicy: "deny",
+        metadata: {},
+      }],
+    };
+    const summaries = new Map<string, RunSummary>();
+    service.start = async (input) => {
+      const negative = input.charter?.metadata.negativeCaseId === "duplicate";
+      const runId = negative ? "negative-proofs" : "primary-no-oracle";
+      const now = new Date().toISOString();
+      const summary: RunSummary = {
+        runId, startedAt: now, endedAt: now, status: "completed", verdict: "passed", charter: input.charter ?? charter,
+        steps: [],
+        assertions: negative ? [] : [{ assertion: visible, passed: true, message: "Ready", evidence: [`${runId}/after.json`] }],
+        oracles: negative ? [{ name: "duplicate-rejected", passed: true, message: "duplicate rejected", evidence: [`${runId}/oracle.json`] }] : [],
+        artifacts: negative ? [`${runId}/oracle.json`] : [`${runId}/after.json`],
+        findings: [],
+      };
+      summaries.set(runId, summary);
+      return { runId, status: "completed", verdict: summary.verdict, summary };
+    };
+    service.wait = async (runId) => summaries.get(runId)!;
+
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    await service.startMission(created.missionId, { approve: true });
+    const completed = await service.waitMission(created.missionId);
+
+    expect(completed.status).toBe("completed");
+    expect(completed.verdict).toBe("inconclusive");
+    expect(completed.firstFailure?.kind).toBe("evidence");
+    expect(completed.findings.some((finding) => finding.message.includes("web 主运行") && finding.message.includes("独立业务 Oracle"))).toBe(true);
+  });
+
+  it("does not treat an oracle's own report as independent business evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-oracle-facts-gate-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
+    const assertion = { kind: "text-visible" as const, text: "Ready" };
+    const charter: TestCharter = {
+      intent: "verify resume terminal state", level: "core", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "observe" }], assertions: [assertion], oracles: ["resume-terminal"], sideEffectPolicy: "deny", metadata: {},
+    };
+    const now = new Date().toISOString();
+    const summary: RunSummary = {
+      runId: "oracle-no-facts", startedAt: now, endedAt: now, status: "completed", verdict: "passed", charter, steps: [],
+      assertions: [{ assertion, passed: true, message: "Ready", evidence: ["oracle-no-facts/after.json"] }],
+      oracles: [{ name: "resume-terminal", passed: true, message: "complete", evidence: ["oracle-no-facts/artifacts/oracle-1.json"], sourceEvidenceCount: 0 }],
+      artifacts: ["oracle-no-facts/after.json", "oracle-no-facts/artifacts/oracle-1.json"], findings: [],
+    };
+    service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
+    service.wait = async () => summary;
+
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    await service.startMission(created.missionId, { approve: true });
+    const completed = await service.waitMission(created.missionId);
+
+    expect(completed.verdict).toBe("inconclusive");
+    expect(completed.findings.some((finding) => finding.message.includes("业务事实证据"))).toBe(true);
+    expect(completed.evidence.some((item) => item.kind === "business")).toBe(false);
+  });
+
   it("does not report a mission as passed without an observable assertion", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-assertion-gate-"));
     roots.push(root);
@@ -176,7 +257,7 @@ describe("LocalRunnerService", () => {
         charter,
         steps: [],
         assertions: [{ assertion: charter.assertions[0]!, passed: true, message: `${adapter} ready`, evidence: [`release-run-${sequence}/after.json`] }],
-        oracles: [{ name: "fixture-terminal", passed: true, message: `${adapter} terminal`, evidence: [`release-run-${sequence}/oracle.json`], observedAt: new Date().toISOString() }],
+        oracles: [{ name: "fixture-terminal", passed: true, message: `${adapter} terminal`, evidence: [JSON.stringify({ status: "complete" }), `release-run-${sequence}/oracle.json`], sourceEvidenceCount: 1, observedAt: new Date().toISOString() }],
         artifacts: [`release-run-${sequence}/after.json`, `release-run-${sequence}/oracle.json`, `release-run-${sequence}/trace.json`],
         findings: [],
       };
@@ -211,6 +292,65 @@ describe("LocalRunnerService", () => {
     expect(completed.observations.filter((item) => item.kind === "surface.run" && item.data.runKind === "primary").map((item) => item.data.surface).sort()).toEqual(["electron", "web"]);
     expect(completed.observations.filter((item) => item.kind === "surface.run" && item.data.runKind === "replay").map((item) => item.data.surface).sort()).toEqual(["electron", "web"]);
     expect(completed.evidence.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("requires business proof in every release replay, not just in the aggregate", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-release-per-run-gate-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
+    const charter: TestCharter = {
+      intent: "release resume workflow",
+      level: "release",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [{ kind: "observe" }],
+      assertions: [{ kind: "text-visible", text: "Ready" }],
+      oracles: ["resume-terminal"],
+      sideEffectPolicy: "deny",
+      metadata: {},
+    };
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    const missionPath = join(root, ".proofkit", "missions", `${created.missionId}.json`);
+    const persisted = JSON.parse(await readFile(missionPath, "utf8")) as TestMission;
+    persisted.status = "approved";
+    persisted.plan.graph.tasks = persisted.plan.graph.tasks.map((task) => ({
+      ...task,
+      status: task.taskId === "verify-result" ? "pending" : "passed",
+      attempts: task.taskId === "verify-result" ? 0 : 1,
+    }));
+    const now = new Date().toISOString();
+    persisted.observations = (["web", "electron"] as const).flatMap((surface) => (["primary", "replay"] as const).map((runKind) => ({
+      observationId: `${surface}-${runKind}`,
+      source: "surface" as const,
+      kind: "surface.run",
+      data: {
+        runId: `${surface}-${runKind}`,
+        surface,
+        runKind,
+        verdict: "passed",
+        assertions: 1,
+        passedAssertions: 1,
+        oracles: surface === "electron" && runKind === "replay" ? 0 : 1,
+        passedOracles: surface === "electron" && runKind === "replay" ? 0 : 1,
+        businessEvidence: surface === "electron" && runKind === "replay" ? 0 : 1,
+      },
+      evidence: [],
+      observedAt: now,
+    })));
+    persisted.evidence = persisted.observations.map((observation) => ({
+      evidenceId: `${observation.observationId}:run`,
+      kind: "report" as const,
+      path: `${observation.observationId}/report.html`,
+      capturedAt: now,
+    }));
+    persisted.verdict = undefined;
+    await writeFile(missionPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+
+    await service.startMission(created.missionId);
+    const completed = await service.waitMission(created.missionId);
+
+    expect(completed.verdict).toBe("inconclusive");
+    expect(completed.findings.some((finding) => finding.message.includes("electron 回放运行") && finding.message.includes("独立业务 Oracle"))).toBe(true);
   });
 
   it("executes an explicitly declared negative charter with independent inputs and evidence", async () => {
@@ -265,6 +405,7 @@ describe("LocalRunnerService", () => {
           passed: true,
           message: "oracle passed",
           evidence: [`${runId}/oracle.json`],
+          sourceEvidenceCount: 1,
           observedAt: now,
         })),
         artifacts: [`${runId}/after.json`, `${runId}/oracle.json`],
@@ -404,7 +545,7 @@ describe("LocalRunnerService", () => {
         charter: input.charter,
         steps: [],
         assertions: negative ? [] : input.charter.assertions.map((assertion) => ({ assertion, passed: true, message: "passed", evidence: [`${runId}/after.json`] })),
-        oracles: negative ? [] : [{ name: "resume-terminal", passed: true, message: "passed", evidence: [`${runId}/oracle.json`], observedAt: now }],
+        oracles: negative ? [] : [{ name: "resume-terminal", passed: true, message: "passed", evidence: [JSON.stringify({ status: "complete" }), `${runId}/oracle.json`], sourceEvidenceCount: 1, observedAt: now }],
         artifacts: [`${runId}/after.json`, `${runId}/oracle.json`],
         findings: negative ? ["expected authorization rejection"] : [],
       };

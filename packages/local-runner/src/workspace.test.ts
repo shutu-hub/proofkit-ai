@@ -85,7 +85,7 @@ describe("external test workspace", () => {
           capabilities: [{ name: 'fixture.read', description: 'read fixture', sideEffect: 'read', environments: ['test'], timeoutMs: 1000,
             inputSchema: z.object({}), outputSchema: z.object({ status: z.string() }),
             execute: async () => ({ status: await readFile(join(root, '.proofkit/fixtures/value.txt'), 'utf8') }), evidence: (value) => value }],
-          oracles: [{ name: 'fixture.terminal', check: async ({ steps }) => ({ name: 'fixture.terminal', passed: steps[0].capabilityOutput.status === 'complete', message: 'terminal', evidence: [] }) }] };
+          oracles: [{ name: 'fixture.terminal', check: async ({ steps }) => ({ name: 'fixture.terminal', passed: steps[0].capabilityOutput.status === 'complete', message: 'terminal', evidence: [JSON.stringify({ status: steps[0].capabilityOutput.status })] }) }] };
       }
     `);
     const core = TestCharterSchema.parse({ ...charter(), level: "core", actions: [{ kind: "capability", name: "fixture.read", input: {} }], oracles: ["fixture.terminal"] });
@@ -96,6 +96,7 @@ describe("external test workspace", () => {
     const started = await service.start({ charterPath: "charter.json" });
     const summary = await service.wait(started.runId);
     expect(summary).toMatchObject({ verdict: "passed", projectRoot: root, workspaceRoot });
+    expect(summary.oracles[0]?.sourceEvidenceCount).toBe(1);
     const mission = await service.createMission({ intent: core.intent, charter: core });
     await service.startMission(mission.missionId, { approve: true });
     expect((await service.waitMission(mission.missionId)).verdict).toBe("passed");

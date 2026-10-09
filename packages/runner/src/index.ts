@@ -1,4 +1,5 @@
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
+import { OracleResultSchema } from "@proofkit/contracts";
 import { z } from "zod";
 
 // Project integrations receive this schema runtime through the loader. This
@@ -264,12 +265,14 @@ export class ExecutionRunner {
         }
         for (const oracle of this.oracles) {
           throwIfAborted(signal);
-          const result = await withAbort(oracle.check({ runId, charter, steps: summary.steps, assertions: summary.assertions, signal }), signal, `Oracle ${oracle.name}`);
-          const artifact = await this.store.writeJson(runId, `oracle-${summary.oracles.length + 1}`, result);
-          result.evidence.push(artifact);
+          const result = OracleResultSchema.parse(await withAbort(oracle.check({ runId, charter, steps: summary.steps, assertions: summary.assertions, signal }), signal, `Oracle ${oracle.name}`));
+          if (result.name !== oracle.name) throw new Error(`Oracle ${oracle.name} returned a result for ${result.name}`);
+          const sourceEvidenceCount = result.evidence.filter((item) => item.trim().length > 0).length;
+          const artifact = await this.store.writeJson(runId, `oracle-${summary.oracles.length + 1}`, { ...result, sourceEvidenceCount });
+          const recordedResult: OracleResult = { ...result, sourceEvidenceCount, evidence: [...result.evidence, artifact] };
           summary.artifacts.push(artifact);
-          summary.oracles.push(result);
-          await this.emit({ runId, timestamp: new Date().toISOString(), type: "oracle.completed", payload: result });
+          summary.oracles.push(recordedResult);
+          await this.emit({ runId, timestamp: new Date().toISOString(), type: "oracle.completed", payload: recordedResult });
         }
       }
     } catch (error) {

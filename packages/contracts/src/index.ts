@@ -111,6 +111,8 @@ export const OracleResultSchema = z.object({
   passed: z.boolean().nullable(),
   message: z.string(),
   evidence: z.array(z.string()).default([]),
+  /** Evidence supplied by the Oracle before ProofKit adds its own result artifact. */
+  sourceEvidenceCount: z.number().int().nonnegative().optional(),
   /** Optional repository hints supplied by a trusted project integration. */
   sourceLocations: z.array(z.string().min(1)).optional(),
   observedAt: z.string().optional(),

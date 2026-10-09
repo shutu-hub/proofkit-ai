@@ -51,7 +51,7 @@ describe("MCP external workspace", () => {
         assertions: [{ kind: "text-visible", text: "ready" }], oracles: ["fixture.written"], sideEffectPolicy: "allow",
       }));
       await writeFile(join(workspaceRoot, ".proofkit", "integration.mjs"), `
-        import { writeFile } from 'node:fs/promises';
+        import { readFile, writeFile } from 'node:fs/promises';
         import { join } from 'node:path';
         export function createIntegration({ workspaceRoot, z }) {
           return { name: 'write-fixture', preflight: async () => ({ passed: true, message: 'isolated test scope' }),
@@ -59,8 +59,10 @@ describe("MCP external workspace", () => {
               inputSchema: z.object({}), outputSchema: z.object({ ok: z.boolean() }),
               execute: async () => { await writeFile(join(workspaceRoot, 'executed.txt'), 'yes'); return { ok: true }; },
               evidence: (output) => ({ ok: output.ok }) }],
-            oracles: [{ name: 'fixture.written', check: async ({ steps }) => ({ name: 'fixture.written',
-              passed: steps.some((step) => step.capabilityOutput?.ok === true), message: 'marker written', evidence: [] }) }] };
+            oracles: [{ name: 'fixture.written', check: async () => {
+              const marker = await readFile(join(workspaceRoot, 'executed.txt'), 'utf8');
+              return { name: 'fixture.written', passed: marker === 'yes', message: 'marker written', evidence: [JSON.stringify({ marker })] };
+            } }] };
         }
       `);
 
