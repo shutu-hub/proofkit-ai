@@ -51,6 +51,7 @@ describe("evaluatePlannerBenchmark", () => {
     const report = await evaluatePlannerBenchmark(provider, [baseCase()]);
 
     expect(report).toMatchObject({ planner: "fixture", total: 1, passed: 1, passRate: 1, averageScore: 1 });
+    expect(report.failureCounts).toEqual({ level: 0, requiredActions: 0, forbiddenActions: 0, requiredOracles: 0, assertions: 0, negativeCases: 0, providerErrors: 0 });
     expect(provider.plan).toHaveBeenCalledTimes(1);
   });
 
@@ -85,6 +86,7 @@ describe("evaluatePlannerBenchmark", () => {
       expect.stringContaining("missing required Oracle"),
       "no assertion was generated",
     ]));
+    expect(report.failureCounts).toMatchObject({ requiredActions: 1, forbiddenActions: 1, requiredOracles: 1, assertions: 1 });
   });
 
   it("returns a zero score when provider output is invalid", async () => {
@@ -96,10 +98,10 @@ describe("evaluatePlannerBenchmark", () => {
     }, [baseCase()]);
 
     expect(report.results[0]).toMatchObject({ valid: false, score: 0, error: "provider unavailable" });
+    expect(report.failureCounts.providerErrors).toBe(1);
   });
 
   it("does not execute a capability action while evaluating a plan", async () => {
-    const capability = vi.fn();
     const report = await evaluatePlannerBenchmark({
       name: "capability-fixture",
       async plan() {
@@ -115,7 +117,6 @@ describe("evaluatePlannerBenchmark", () => {
     }, [baseCase({ expect: { ...baseCase().expect, requiredActionKinds: ["capability"] } })]);
 
     expect(report.results[0]?.valid).toBe(true);
-    expect(capability).not.toHaveBeenCalled();
   });
 
   it("uses zero aggregates for an empty benchmark", async () => {
@@ -127,5 +128,6 @@ describe("evaluatePlannerBenchmark", () => {
     }, []);
 
     expect(report).toMatchObject({ total: 0, passed: 0, passRate: 0, averageScore: 0, results: [] });
+    expect(report.failureCounts).toEqual({ level: 0, requiredActions: 0, forbiddenActions: 0, requiredOracles: 0, assertions: 0, negativeCases: 0, providerErrors: 0 });
   });
 });

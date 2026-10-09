@@ -1,4 +1,4 @@
-import { DeterministicPlannerProvider } from "../packages/planner/dist/index.js";
+import { DeterministicPlannerProvider, OpenAICompatiblePlannerProvider } from "../packages/planner/dist/index.js";
 import { evaluatePlannerBenchmark } from "../packages/planner/dist/benchmark.js";
 
 const projectMap = {
@@ -66,14 +66,31 @@ const cases = [
   },
 ];
 
-const report = await evaluatePlannerBenchmark(new DeterministicPlannerProvider(), cases);
+const provider = createProvider();
+const report = await evaluatePlannerBenchmark(provider, cases);
 const output = {
   planner: report.planner,
   total: report.total,
   passed: report.passed,
   passRate: report.passRate,
   averageScore: report.averageScore,
+  failureCounts: report.failureCounts,
   cases: report.results.map(({ caseId, valid, score, checks, failures }) => ({ caseId, valid, score, checks, failures })),
 };
 console.log(JSON.stringify(output, null, 2));
 if (report.passed !== report.total) process.exitCode = 1;
+
+function createProvider() {
+  const providerName = process.env.PROOFKIT_PLANNER_PROVIDER ?? (process.env.PROOFKIT_PLANNER_BASE_URL ? "openai-compatible" : "deterministic");
+  if (providerName === "deterministic") return new DeterministicPlannerProvider();
+  if (providerName !== "openai-compatible") throw new Error(`Unsupported PROOFKIT_PLANNER_PROVIDER: ${providerName}`);
+  const baseUrl = process.env.PROOFKIT_PLANNER_BASE_URL;
+  const model = process.env.PROOFKIT_PLANNER_MODEL;
+  if (!baseUrl || !model) throw new Error("OpenAI-compatible benchmark requires PROOFKIT_PLANNER_BASE_URL and PROOFKIT_PLANNER_MODEL");
+  return new OpenAICompatiblePlannerProvider({
+    baseUrl,
+    model,
+    apiKey: process.env.PROOFKIT_PLANNER_API_KEY,
+    timeoutMs: Number(process.env.PROOFKIT_PLANNER_TIMEOUT_MS ?? 30_000),
+  });
+}

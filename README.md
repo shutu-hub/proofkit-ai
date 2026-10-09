@@ -114,6 +114,18 @@ pnpm benchmark:planner
 
 The benchmark reports level selection, action safety, assertion and Oracle presence for fixed quick/core/release cases. It is a planning-structure check; a passing benchmark does not replace a real business run.
 
+To evaluate an OpenAI-compatible or local model with the same cases, set the endpoint and model before running it:
+
+```bash
+PROOFKIT_PLANNER_PROVIDER=openai-compatible \
+PROOFKIT_PLANNER_BASE_URL=https://api.example.com/v1 \
+PROOFKIT_PLANNER_MODEL=your-model \
+PROOFKIT_PLANNER_API_KEY=... \
+pnpm benchmark:planner
+```
+
+The key is read only from the process environment and is not included in the report.
+
 Project-specific capabilities can live outside the tested source under `<workspaceRoot>/.proofkit/integration.mjs`. The module is trusted local code and may export a `name`, typed `capabilities`, business `oracles`, and a setup function that returns cleanup:
 
 ```js

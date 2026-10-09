@@ -45,6 +45,15 @@ export type PlannerBenchmarkReport = {
   passed: number;
   passRate: number;
   averageScore: number;
+  failureCounts: {
+    level: number;
+    requiredActions: number;
+    forbiddenActions: number;
+    requiredOracles: number;
+    assertions: number;
+    negativeCases: number;
+    providerErrors: number;
+  };
   results: PlannerBenchmarkResult[];
 };
 
@@ -104,12 +113,22 @@ export async function evaluatePlannerBenchmark(provider: PlannerProvider, cases:
   }
   const passed = results.filter((result) => result.valid).length;
   const averageScore = results.length === 0 ? 0 : results.reduce((total, result) => total + result.score, 0) / results.length;
+  const failureCounts = {
+    level: results.filter((result) => !result.checks.level).length,
+    requiredActions: results.filter((result) => !result.checks.requiredActions).length,
+    forbiddenActions: results.filter((result) => !result.checks.forbiddenActions).length,
+    requiredOracles: results.filter((result) => !result.checks.requiredOracles).length,
+    assertions: results.filter((result) => !result.checks.assertions).length,
+    negativeCases: results.filter((result) => !result.checks.negativeCases).length,
+    providerErrors: results.filter((result) => result.error !== undefined).length,
+  };
   return {
     planner: provider.name,
     total: results.length,
     passed,
     passRate: results.length === 0 ? 0 : passed / results.length,
     averageScore,
+    failureCounts,
     results,
   };
 }
