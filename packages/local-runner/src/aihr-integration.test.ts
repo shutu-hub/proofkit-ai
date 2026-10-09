@@ -25,6 +25,8 @@ const envKeys = [
   "AIHR_PROOFKIT_FIXTURE_PATH",
   "AIHR_PROOFKIT_JOB_ID",
   "AIHR_PROOFKIT_CLIENT_ITEM_KEY",
+  "AIHR_PROOFKIT_TEST_SCOPE",
+  "AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT",
 ];
 const savedEnv = new Map<string, string | undefined>();
 
@@ -245,9 +247,13 @@ describe("AIHR project integration", () => {
       AIHR_PROOFKIT_CANDIDATE_UID: "candidate-fixture",
       AIHR_PROOFKIT_CONVERSATION_ID: "101",
       AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID: "account-fixture",
+      AIHR_PROOFKIT_ENTERPRISE_ID: "1",
+      AIHR_PROOFKIT_WORKSPACE_ID: "2",
+      AIHR_PROOFKIT_USER_ID: "3",
       AIHR_PROOFKIT_FIXTURE_PATH: ".proofkit/fixtures/resume.pdf",
       AIHR_PROOFKIT_JOB_ID: "505",
-      AIHR_PROOFKIT_CLIENT_ITEM_KEY: "proofkit-default-charter",
+      AIHR_PROOFKIT_CLIENT_ITEM_KEY: "proofkit:fixture:default-charter",
+      AIHR_PROOFKIT_TEST_SCOPE: "proofkit:fixture",
     });
     vi.spyOn(WebAdapter.prototype, "connect").mockResolvedValue();
     vi.spyOn(WebAdapter.prototype, "subscribeEvents").mockResolvedValue(() => {});
@@ -299,6 +305,31 @@ describe("AIHR project integration", () => {
     gateway.setMode("not-found");
     const pending = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
     expect(pending).toMatchObject({ passed: null, outcome: "inconclusive", terminal: false });
+  });
+
+  it("blocks an unscoped remote write endpoint before any gateway request", async () => {
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const preflight = service.integration?.preflight;
+    if (!preflight) throw new Error("AIHR integration preflight is missing");
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "https://example.invalid/api/v1";
+    delete process.env.AIHR_PROOFKIT_TEST_SCOPE;
+    const result = await preflight({
+      runId: "preflight-run",
+      environment: "test",
+      charter: TestCharterSchema.parse({
+        intent: "verify isolated upload",
+        level: "core",
+        mode: "deterministic",
+        actions: [{ kind: "capability", name: "aihr.uploadResumeFile", input: {} }],
+        assertions: [],
+        sideEffectPolicy: "allow",
+        metadata: {},
+      }),
+      signal: new AbortController().signal,
+    });
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("remote AIHR endpoints");
+    expect(result.message).toContain("AIHR_PROOFKIT_TEST_SCOPE");
   });
 });
 

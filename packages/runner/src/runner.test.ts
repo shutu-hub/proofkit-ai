@@ -81,6 +81,22 @@ describe("ExecutionRunner", () => {
     expect(summary.steps[0]?.error).toContain("not registered");
   });
 
+  it("runs integration preflight before connecting the adapter and preserves its evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-preflight-"));
+    let connected = false;
+    const adapter = new FakeAdapter();
+    adapter.connect = async () => { connected = true; };
+    const summary = await new ExecutionRunner(adapter, {
+      evidenceDir: root,
+      integration: { name: "fixture", version: "1" },
+      preflight: async () => ({ passed: false, message: "test environment is not isolated", evidence: { environment: "test", isolated: false } }),
+    }).run({ intent: "preflight", level: "core", mode: "deterministic", preconditions: [], actions: [{ kind: "observe" }], assertions: [], sideEffectPolicy: "deny", metadata: {} }, "preflight-run");
+    expect(summary.verdict).toBe("blocked");
+    expect(connected).toBe(false);
+    expect(summary.artifacts).toContain("preflight-run/artifacts/preflight.json");
+    expect(await readFile(join(root, "preflight-run", "artifacts", "preflight.json"), "utf8")).toContain("not isolated");
+  });
+
   it("requires a runner-level opt-in for write capabilities", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-capability-"));
     let called = false;

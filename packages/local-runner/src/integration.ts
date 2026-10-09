@@ -55,6 +55,9 @@ function validateIntegration(value: unknown, path: string): ProjectIntegration {
   if (integration.oracles !== undefined && !Array.isArray(integration.oracles)) {
     throw new Error(`Integration ${path} oracles must be an array`);
   }
+  if (integration.preflight !== undefined && typeof integration.preflight !== "function") {
+    throw new Error(`Integration ${path} preflight must be a function`);
+  }
   if (integration.setup !== undefined && typeof integration.setup !== "function") {
     throw new Error(`Integration ${path} setup must be a function`);
   }

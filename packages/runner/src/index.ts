@@ -51,11 +51,27 @@ export type IntegrationSetup = (context: {
   emit: (event: Omit<RunEvent, "runId">) => Promise<void>;
 }) => Promise<(() => void | Promise<void>) | undefined>;
 
+export type IntegrationPreflightResult = {
+  passed: boolean;
+  message: string;
+  evidence?: Record<string, string | number | boolean | null>;
+};
+
+export type IntegrationPreflight = (context: {
+  runId: string;
+  charter: TestCharter;
+  environment: "test" | "staging" | "local";
+  projectRoot?: string;
+  workspaceRoot?: string;
+  signal: AbortSignal;
+}) => Promise<IntegrationPreflightResult>;
+
 export type ProjectIntegration = {
   name: string;
   version?: string;
   capabilities?: CapabilityDefinition<any, any>[];
   oracles?: BusinessOracle[];
+  preflight?: IntegrationPreflight;
   setup?: IntegrationSetup;
 };
 
@@ -95,6 +111,7 @@ export type ExecutionOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
   integration?: { name: string; version?: string };
+  preflight?: IntegrationPreflight;
   setup?: IntegrationSetup;
 };
 
@@ -109,6 +126,7 @@ export class ExecutionRunner {
   private readonly signal?: AbortSignal;
   private readonly timeoutMs?: number;
   private readonly integration?: { name: string; version?: string };
+  private readonly preflight?: IntegrationPreflight;
   private readonly projectRoot?: string;
   private readonly workspaceRoot?: string;
 
@@ -125,6 +143,7 @@ export class ExecutionRunner {
     this.signal = options.signal;
     this.timeoutMs = options.timeoutMs;
     this.integration = options.integration;
+    this.preflight = options.preflight;
     this.projectRoot = options.projectRoot;
     this.workspaceRoot = options.workspaceRoot;
   }
@@ -159,6 +178,26 @@ export class ExecutionRunner {
     const pendingEvents: Promise<void>[] = [];
     try {
       throwIfAborted(signal);
+      if (this.preflight) {
+        let result: IntegrationPreflightResult;
+        try {
+          result = preflightResult(await withAbort(this.preflight({
+            runId,
+            charter,
+            environment: this.environment,
+            projectRoot: this.projectRoot,
+            workspaceRoot: this.workspaceRoot,
+            signal,
+          }), signal, "Integration preflight"));
+        } catch (error) {
+          if (signal.aborted) throw abortReason(signal);
+          throw new BlockedError(`Integration preflight error: ${toError(error).message}`);
+        }
+        const artifact = await this.store.writeJson(runId, "preflight", result);
+        summary.artifacts.push(artifact);
+        await this.emit({ runId, timestamp: new Date().toISOString(), type: "artifact.created", payload: { path: artifact, kind: "preflight", passed: result.passed } });
+        if (!result.passed) throw new BlockedError(`Integration preflight failed: ${result.message}`);
+      }
       if (this.setup) {
         cleanupSetup = await withAbort(this.setup({
           runId,
@@ -298,6 +337,14 @@ export class ExecutionRunner {
       detachSignal();
     }
   }
+}
+
+function preflightResult(value: IntegrationPreflightResult): IntegrationPreflightResult {
+  return z.object({
+    passed: z.boolean(),
+    message: z.string().min(1),
+    evidence: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
+  }).parse(value);
 }
 
 function toError(error: unknown): Error {

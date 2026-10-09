@@ -683,6 +683,7 @@ export class LocalRunnerService {
       capabilities: this.capabilities,
       environment: this.config.policies.environment,
       allowCapabilityWrites: this.allowCapabilityWrites,
+      preflight: this.integration?.preflight,
       signal,
       timeoutMs: this.config.run.timeoutMs,
       integration: this.integration ? { name: this.integration.name, version: this.integration.version } : undefined,

@@ -16,6 +16,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Starts local project processes with health checks and captures runtime events in the same run timeline.
 - Observes read-only business HTTP endpoints through a redacted oracle instead of treating a UI click as proof of success.
 - Accepts programmatically registered, schema-validated project capabilities; only an explicit evidence projection is persisted.
+- Runs an optional integration preflight before setup, browser connection or capability execution; a failed environment or test-scope check is blocked with a `preflight.json` artifact.
 - Keeps configuration, connectors, Missions and run evidence in an external test workspace for new projects, with compatibility for existing project-local layouts.
 - Loads an optional workspace-owned `.proofkit/integration.mjs` module for typed capabilities, business oracles, test setup and cleanup.
 - Enforces a total run deadline and supports cancellation from the CLI or MCP while preserving the evidence directory.

@@ -57,7 +57,8 @@ Object.assign(process.env, {
   AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID: "fixture-account",
   AIHR_PROOFKIT_FIXTURE_PATH: ".proofkit/fixtures/resume.pdf",
   AIHR_PROOFKIT_JOB_ID: "505",
-  AIHR_PROOFKIT_CLIENT_ITEM_KEY: "fixture-item",
+  AIHR_PROOFKIT_TEST_SCOPE: "proofkit:local-smoke",
+  AIHR_PROOFKIT_CLIENT_ITEM_KEY: "proofkit:local-smoke:fixture-item",
 });
 
 let electronChild;
@@ -90,6 +91,7 @@ try {
   assert.equal(defaultSummary.verdict, "passed", JSON.stringify(defaultSummary.findings));
   assert.equal(defaultSummary.oracles.length, 1);
   assert.equal(defaultSummary.steps[1].capabilityOutput.fileSha256, fixtureSha256);
+  assert.ok(defaultSummary.artifacts.some((artifact) => artifact.endsWith("/preflight.json")), "AIHR preflight evidence is missing");
 
   // Add a real surface path to the business Charter to exercise the core gate.
   const charter = TestCharterSchema.parse({
@@ -124,7 +126,7 @@ try {
   assert.equal(defaultSummary.projectRoot, root);
   assert.equal(defaultSummary.workspaceRoot, workspaceRoot);
   assert.deepEqual(await readdir(root), ["package.json"]);
-  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "multipart-run-binding", "surface-click", "core-mission", "stale-binding-detection", "selected-oracle-only"] }, null, 2));
+  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "core-mission", "stale-binding-detection", "selected-oracle-only"] }, null, 2));
 } finally {
   if (electronChild && electronChild.exitCode === null) {
     const exited = new Promise((resolveExit) => electronChild.once("exit", resolveExit));

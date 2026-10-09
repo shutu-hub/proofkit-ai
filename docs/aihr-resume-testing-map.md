@@ -115,7 +115,9 @@ $env:AIHR_PROOFKIT_PLATFORM_ACCOUNT_ID = "<test-platform-account>"
 $env:AIHR_PROOFKIT_SOURCE_TEXT = "<脱敏测试简历正文>"
 $env:AIHR_PROOFKIT_SOURCE_CHANNEL = "boss"
 $env:AIHR_PROOFKIT_FIXTURE_PATH = "fixtures/proofkit-resume.pdf"
+$env:AIHR_PROOFKIT_TEST_SCOPE = "proofkit:resume-upload"
 $env:AIHR_PROOFKIT_CLIENT_ITEM_KEY = "proofkit:resume-upload:case-001"
+$env:AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT = "false"  # only set true for an explicitly isolated remote test environment
 ```
 
 运行 Charter 时必须显式允许写操作；默认配置仍是 `confirm`。

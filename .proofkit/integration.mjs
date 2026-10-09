@@ -33,9 +33,62 @@ export function createIntegration({ z: injectedZ, root }) {
       readBillingUsageCapability(),
     ],
     oracles: [createResumeCollectionPipelineOracle(state), createOnlineResumePipelineOracle(state)],
+    preflight: aihrPreflight,
     setup: async ({ runId }) => {
       state.set(runId, { createdAt: new Date().toISOString() });
       return () => state.delete(runId);
+    },
+  };
+}
+
+async function aihrPreflight({ charter, environment }) {
+  const actionNames = charter.actions
+    .filter((action) => action.kind === "capability")
+    .map((action) => action.name);
+  const writeActions = actionNames.filter((name) => [
+    "aihr.createResumeCollectionRun",
+    "aihr.uploadResumeFile",
+    "aihr.createOnlineResumeIntake",
+  ].includes(name));
+  const baseUrl = env("AIHR_PROOFKIT_API_BASE_URL") ?? "http://127.0.0.1:8080/api/v1";
+  const errors = [];
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+    if (!/^https?:$/.test(parsed.protocol)) errors.push("AIHR API base URL must use HTTP or HTTPS");
+  } catch {
+    errors.push("AIHR_PROOFKIT_API_BASE_URL is not a valid URL");
+  }
+  const loopback = parsed ? ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname) : false;
+  if (!loopback && env("AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT") !== "true") {
+    errors.push("remote AIHR endpoints require AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT=true");
+  }
+  if (!["test", "local"].includes(environment)) errors.push(`AIHR write tests require test or local environment, received ${environment}`);
+
+  const scope = env("AIHR_PROOFKIT_TEST_SCOPE");
+  const clientItemKey = env("AIHR_PROOFKIT_CLIENT_ITEM_KEY");
+  if (!scope || !/^proofkit:[A-Za-z0-9._-]+$/.test(scope)) errors.push("AIHR_PROOFKIT_TEST_SCOPE must match proofkit:<scope>");
+  if (writeActions.length > 0) {
+    if (!clientItemKey) errors.push("AIHR_PROOFKIT_CLIENT_ITEM_KEY is required for write capabilities");
+    if (scope && clientItemKey && !clientItemKey.startsWith(`${scope}:`)) errors.push("AIHR_PROOFKIT_CLIENT_ITEM_KEY must be namespaced by AIHR_PROOFKIT_TEST_SCOPE");
+    for (const name of ["AIHR_PROOFKIT_ENTERPRISE_ID", "AIHR_PROOFKIT_WORKSPACE_ID", "AIHR_PROOFKIT_USER_ID"]) {
+      if (!env(name)) errors.push(`${name} is required for write capabilities`);
+    }
+  }
+  if (actionNames.includes("aihr.uploadResumeFile") && !env("AIHR_PROOFKIT_FIXTURE_PATH")) {
+    errors.push("AIHR_PROOFKIT_FIXTURE_PATH is required for resume uploads");
+  }
+  return {
+    passed: errors.length === 0,
+    message: errors.length === 0 ? "AIHR test scope and endpoint preflight passed." : errors.join("; "),
+    evidence: {
+      environment,
+      apiHost: parsed?.hostname ?? "invalid",
+      loopbackEndpoint: loopback,
+      remoteEndpointOverride: env("AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT") === "true",
+      writeActionCount: writeActions.length,
+      testScopeConfigured: Boolean(scope),
+      clientItemKeyNamespaced: Boolean(scope && clientItemKey?.startsWith(`${scope}:`)),
     },
   };
 }
