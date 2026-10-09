@@ -4,10 +4,10 @@ import { resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
+import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningQuality, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
-import { captureSourceState, initProject, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
+import { captureSourceState, initProject, inspectTargetBinding, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
 import { CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
@@ -392,6 +392,7 @@ export class LocalRunnerService {
     firstFailure?: TestMission["firstFailure"];
     diagnosis?: TestMission["diagnosis"];
     repairSuggestions: TestMission["repairSuggestions"];
+    targetBindings: Array<{ runId: string; surface: string; binding: TargetBinding }>;
     sourceState?: SourceState;
     finalSourceState?: SourceState;
     comparison?: MissionComparison;
@@ -438,6 +439,11 @@ export class LocalRunnerService {
       firstFailure: mission.firstFailure,
       diagnosis: mission.diagnosis,
       repairSuggestions: mission.repairSuggestions,
+      targetBindings: mission.observations.flatMap((observation) => {
+        if (observation.kind !== "surface.run" || typeof observation.data.runId !== "string" || typeof observation.data.surface !== "string") return [];
+        const binding = TargetBindingSchema.safeParse(observation.data.targetBinding);
+        return binding.success ? [{ runId: observation.data.runId, surface: observation.data.surface, binding: binding.data }] : [];
+      }),
       ...(sourceState.success ? { sourceState: sourceState.data } : {}),
       ...(finalSourceState.success ? { finalSourceState: finalSourceState.data } : {}),
       ...(comparison ? { comparison } : {}),
@@ -539,6 +545,7 @@ export class LocalRunnerService {
             ...(finding.statusCode !== undefined ? { statusCode: finding.statusCode } : {}),
             ...(finding.consoleLevel ? { consoleLevel: finding.consoleLevel } : {}),
           })),
+          targetBinding: summary.targetBinding,
           businessEvidence: summary.oracles.reduce((count, oracle) => count + ((oracle.sourceEvidenceArtifacts ?? []).some((path) =>
             evidence.some((item) => item.kind === "business" && item.evidenceId === `${summary.runId}:${path}`))
             ? oracle.sourceEvidenceCount ?? 0 : 0), 0),
@@ -756,7 +763,7 @@ export class LocalRunnerService {
     return [...paths].map((path) => EvidenceRefSchema.parse({
       evidenceId: `${summary.runId}:${path}`,
       kind: path.endsWith("events.jsonl") ? "network" : path.endsWith(".png") ? "screenshot" : path.endsWith("report.html") || oracleReports.has(path)
-        ? "report" : path.endsWith("runtime-findings.json") ? "runtime" : oracleSourceArtifacts.has(path) ? "business" : "snapshot",
+        ? "report" : path.endsWith("runtime-findings.json") ? "runtime" : path.includes("/artifacts/target-binding") ? "process" : oracleSourceArtifacts.has(path) ? "business" : "snapshot",
       path: resolve(this.evidenceDir, path),
       description: `Evidence captured by run ${summary.runId}`,
       capturedAt: summary.endedAt ?? summary.startedAt,
@@ -976,6 +983,10 @@ export class LocalRunnerService {
       return () => runtime.stop();
     } : undefined;
     const integrationSetup = this.integration?.setup;
+    const surface = input.adapter ?? "web";
+    const targetUrl = charter.actions.find((action) => action.kind === "goto")?.url
+      ?? input.url
+      ?? (surface === "electron" ? this.config.surfaces.electron?.targetUrlPrefix : this.config.surfaces.web?.baseUrl);
     return new ExecutionRunner(adapter, {
       projectRoot: this.root,
       workspaceRoot: this.workspaceRoot,
@@ -988,6 +999,11 @@ export class LocalRunnerService {
       signal,
       timeoutMs: this.config.run.timeoutMs,
       runtimeQuality: this.config.policies.runtime,
+      ...(surface === "web" || surface === "electron" ? {
+        targetBinding: (bindingSignal: AbortSignal) => inspectTargetBinding(this.root, targetUrl, bindingSignal),
+        targetBindingPolicy: this.config.policies.targetBinding,
+        targetBindingRecheckAfterSetup: Boolean(input.start !== false && this.config.project.start),
+      } : {}),
       integration: this.integration ? { name: this.integration.name, version: this.integration.version } : undefined,
       setup: setup || integrationSetup ? async (context) => {
         const cleanups: Array<() => void | Promise<void>> = [];

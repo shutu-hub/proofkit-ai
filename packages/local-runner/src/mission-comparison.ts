@@ -15,6 +15,7 @@ import {
   type TestMission,
 } from "@proofkit/contracts";
 import { sha256 } from "@proofkit/evidence";
+import { sameProjectPath } from "@proofkit/project";
 
 type Surface = "web" | "electron" | "mobile";
 type RunKind = "primary" | "replay" | "negative";
@@ -77,6 +78,7 @@ export async function compareMissionRecords(
       baselineEvidence: before ? compactEvidence(before.observation.evidence) : [],
       candidateEvidence: after ? compactEvidence(after.observation.evidence) : [],
     });
+    if (before && after) compareTargetBinding(before.summary, after.summary, slot, gaps);
   }
   const structuralIssue = gaps.length > 0;
 
@@ -174,6 +176,26 @@ export async function compareMissionRecords(
     omittedDefects: Math.max(0, defects.length - 25),
     comparedAt: new Date().toISOString(),
   });
+}
+
+function compareTargetBinding(baseline: RunSummary, candidate: RunSummary, slot: Slot, gaps: string[]): void {
+  const before = baseline.targetBinding;
+  const after = candidate.targetBinding;
+  if (!before && !after) return; // Historical Runs did not record this association.
+  if (!before || !after) {
+    gaps.push(`${slotLabel(slot)} has target association evidence on only one side of the replay.`);
+    return;
+  }
+  if (before.status === "different-project" || after.status === "different-project") {
+    gaps.push(`${slotLabel(slot)} includes a target process from a different Git checkout.`);
+  }
+  if (before.targetOrigin !== after.targetOrigin) {
+    gaps.push(`${slotLabel(slot)} used a different target origin in the replay.`);
+  }
+  if (before.observedProjectRoot && after.observedProjectRoot
+    && !sameProjectPath(before.observedProjectRoot, after.observedProjectRoot)) {
+    gaps.push(`${slotLabel(slot)} listener process paths belong to different Git checkouts.`);
+  }
 }
 
 function terminal(mission: TestMission): boolean {

@@ -42,6 +42,81 @@ class SlowAdapter extends FakeAdapter {
 }
 
 describe("ExecutionRunner", () => {
+  it("blocks a different source checkout before connecting and retains process evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-target-mismatch-"));
+    const adapter = new FakeAdapter();
+    let connected = false;
+    let setupEntered = false;
+    let preflightEntered = false;
+    adapter.connect = async () => { connected = true; };
+    const summary = await new ExecutionRunner(adapter, {
+      evidenceDir: root,
+      preflight: async () => { preflightEntered = true; return { passed: true, message: "ready" }; },
+      setup: async () => { setupEntered = true; return undefined; },
+      targetBinding: async () => ({
+        status: "different-project", method: "windows-listener-process", expectedProjectRoot: "D:/code/AIHR",
+        observedProjectRoot: "D:/tmp/aihr-hotfix", targetOrigin: "http://localhost:5174", processId: 12,
+        reason: "The target port belongs to another checkout.", observedAt: new Date().toISOString(),
+      }),
+    }).run({ intent: "check source target", level: "quick", mode: "deterministic", preconditions: [], actions: [],
+      assertions: [{ kind: "text-visible", text: "Ready" }], sideEffectPolicy: "deny", metadata: {},
+    }, "target-mismatch-run");
+
+    expect(connected).toBe(false);
+    expect(setupEntered).toBe(false);
+    expect(preflightEntered).toBe(false);
+    expect(summary.verdict).toBe("blocked");
+    expect(summary.targetBinding?.status).toBe("different-project");
+    expect(summary.artifacts).toContain("target-mismatch-run/artifacts/target-binding.json");
+    expect(await readFile(join(root, "target-mismatch-run", "events.jsonl"), "utf8")).toContain("target.binding");
+  });
+
+  it("rechecks after managed startup before connecting to a changed target", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-target-change-"));
+    const adapter = new FakeAdapter();
+    let connected = false;
+    let checks = 0;
+    adapter.connect = async () => { connected = true; };
+    const summary = await new ExecutionRunner(adapter, {
+      evidenceDir: root,
+      setup: async () => undefined,
+      targetBindingRecheckAfterSetup: true,
+      targetBinding: async () => ({
+        status: ++checks === 1 ? "unverified" : "different-project",
+        method: "windows-listener-process", expectedProjectRoot: "D:/code/AIHR",
+        observedProjectRoot: checks === 1 ? undefined : "D:/tmp/aihr-hotfix",
+        targetOrigin: "http://localhost:5174", reason: "Listener changed during startup.",
+        observedAt: new Date().toISOString(),
+      }),
+    }).run({ intent: "check managed startup", level: "quick", mode: "deterministic", preconditions: [], actions: [],
+      assertions: [{ kind: "text-visible", text: "Ready" }], sideEffectPolicy: "deny", metadata: {},
+    }, "target-change-run");
+
+    expect(checks).toBe(2);
+    expect(connected).toBe(false);
+    expect(summary.verdict).toBe("blocked");
+    expect(summary.artifacts).toContain("target-change-run/artifacts/target-binding-after-setup.json");
+  });
+
+  it("can record a different checkout without blocking an explicitly scoped diagnostic run", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-target-record-"));
+    const summary = await new ExecutionRunner(new FakeAdapter(), {
+      evidenceDir: root,
+      targetBindingPolicy: "record",
+      targetBinding: async () => ({
+        status: "different-project", method: "windows-listener-process", expectedProjectRoot: "D:/code/AIHR",
+        observedProjectRoot: "D:/tmp/aihr-hotfix", targetOrigin: "http://localhost:5174", processId: 12,
+        reason: "The target port belongs to another checkout.", observedAt: new Date().toISOString(),
+      }),
+    }).run({ intent: "diagnose another checkout", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "deny", metadata: {},
+    }, "target-record-run");
+
+    expect(summary.verdict).toBe("passed");
+    expect(summary.targetBinding?.status).toBe("different-project");
+  });
+
   it("blocks a surface failure when a configured authentication console signal invalidates the test environment", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-auth-blocker-"));
     const adapter = new EventAdapter([{ type: "console", payload: {

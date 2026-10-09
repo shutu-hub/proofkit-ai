@@ -1,5 +1,5 @@
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { OracleResultSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, type RuntimeFinding } from "@proofkit/contracts";
+import { OracleResultSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, TargetBindingSchema, type RuntimeFinding } from "@proofkit/contracts";
 import { z } from "zod";
 
 // Project integrations receive this schema runtime through the loader. This
@@ -16,6 +16,7 @@ import type {
   RuntimeQualityPolicy,
   RunSummary,
   SurfaceSnapshot,
+  TargetBinding,
   TestCharter,
 } from "@proofkit/contracts";
 
@@ -117,6 +118,9 @@ export type ExecutionOptions = {
   integration?: { name: string; version?: string };
   preflight?: IntegrationPreflight;
   setup?: IntegrationSetup;
+  targetBinding?: (signal: AbortSignal) => Promise<TargetBinding>;
+  targetBindingPolicy?: "record" | "block-different";
+  targetBindingRecheckAfterSetup?: boolean;
   /** Classify adapter runtime signals without conflating them with business truth. */
   runtimeQuality?: z.input<typeof RuntimeQualityPolicySchema>;
 };
@@ -129,6 +133,9 @@ export class ExecutionRunner {
   private readonly environment: "test" | "staging" | "local";
   private readonly allowCapabilityWrites: boolean;
   private readonly setup?: ExecutionOptions["setup"];
+  private readonly targetBinding?: ExecutionOptions["targetBinding"];
+  private readonly targetBindingPolicy: NonNullable<ExecutionOptions["targetBindingPolicy"]>;
+  private readonly targetBindingRecheckAfterSetup: boolean;
   private readonly signal?: AbortSignal;
   private readonly timeoutMs?: number;
   private readonly integration?: { name: string; version?: string };
@@ -150,6 +157,9 @@ export class ExecutionRunner {
     this.environment = options.environment ?? "test";
     this.allowCapabilityWrites = options.allowCapabilityWrites ?? false;
     this.setup = options.setup;
+    this.targetBinding = options.targetBinding;
+    this.targetBindingPolicy = options.targetBindingPolicy ?? "block-different";
+    this.targetBindingRecheckAfterSetup = options.targetBindingRecheckAfterSetup ?? false;
     this.signal = options.signal;
     this.timeoutMs = options.timeoutMs;
     this.integration = options.integration;
@@ -192,8 +202,24 @@ export class ExecutionRunner {
     let unsubscribe: () => void | Promise<void> = () => {};
     let cleanupSetup: () => void | Promise<void> = () => {};
     const pendingEvents: Promise<void>[] = [];
+    const inspectAndRecordTarget = async (phase: "before-setup" | "after-setup") => {
+      if (!this.targetBinding) return;
+      const binding = TargetBindingSchema.parse(await withAbort(this.targetBinding(signal), signal, "Target binding inspection"));
+      summary.targetBinding = binding;
+      const artifact = await this.store.writeJson(runId, phase === "before-setup" ? "target-binding" : "target-binding-after-setup", binding);
+      summary.artifacts.push(artifact);
+      await this.emit({ runId, timestamp: binding.observedAt, type: "target.binding", payload: {
+        phase, status: binding.status, method: binding.method, targetOrigin: binding.targetOrigin,
+        expectedProjectRoot: binding.expectedProjectRoot, observedProjectRoot: binding.observedProjectRoot,
+        evidence: artifact,
+      } });
+      if (binding.status === "different-project" && this.targetBindingPolicy === "block-different") {
+        throw new BlockedError(`Target process belongs to another Git checkout: ${binding.observedProjectRoot}`);
+      }
+    };
     try {
       throwIfAborted(signal);
+      await inspectAndRecordTarget("before-setup");
       if (this.preflight) {
         let result: IntegrationPreflightResult;
         try {
@@ -223,6 +249,7 @@ export class ExecutionRunner {
         }), signal, "Project setup", async (cleanup) => { await cleanup?.(); }) ?? (() => {});
         throwIfAborted(signal);
       }
+      if (this.targetBindingRecheckAfterSetup) await inspectAndRecordTarget("after-setup");
       await withResourceAbort(this.adapter.connect(), signal, "Adapter connect", () => this.adapter.close());
       throwIfAborted(signal);
       unsubscribe = await withResourceAbort(this.adapter.subscribeEvents((event) => {

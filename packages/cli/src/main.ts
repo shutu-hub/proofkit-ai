@@ -157,7 +157,12 @@ export function createProgram(): Command {
       } finally {
         process.off("SIGINT", onSigint);
       }
-      console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, report: resolve(runner.evidenceDir, summary.runId, "report.html") }, null, 2));
+      console.log(JSON.stringify({
+        runId: summary.runId,
+        verdict: summary.verdict,
+        targetBinding: summary.targetBinding?.status,
+        report: resolve(runner.evidenceDir, summary.runId, "report.html"),
+      }, null, 2));
       if (summary.verdict !== "passed") process.exitCode = 1;
     });
 

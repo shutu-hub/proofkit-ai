@@ -56,6 +56,8 @@ The implementation uses Node.js 22+, TypeScript, a pnpm workspace, Zod contracts
 
 Initialization writes to the test workspace. If an existing source project already contains `.proofkit`, the resolver retains that legacy layout unless an explicit workspace is supplied. Config, Mission and Run reads validate the project/workspace binding. Connector and Charter paths are constrained to the workspace, including resolved symlinks. This is an ownership boundary, not a sandbox for trusted connector JavaScript or application startup commands.
 
+For a loopback Web or Electron HTTP target on Windows, the local runner also inspects the listening process before preflight, setup or surface connection, then checks again after a configured project startup. It derives a Git checkout from the process's executable or script path without saving its command line. A different checkout is `blocked` by default (`policies.targetBinding: block-different`); `record` retains the mismatch for a deliberately cross-checkout diagnostic. A matching process path is recorded as an association, not proof of which bytes the server delivered. Missing ports, ambiguous process paths, non-Git roots, remote URLs and unsupported platforms remain `unverified` and are visible in Run and Mission evidence. Each check is a point-in-time observation; release-grade source attestation and continuous process-change detection remain future work.
+
 ## Why these boundaries
 
 - **CLI + Local Runner:** works without an Agent platform, cloud account, project code changes, or always-on service. CI can invoke the same deterministic command.
@@ -195,7 +197,7 @@ The mission protocol keeps five related records with separate responsibilities:
 
 ### Local Runner and MCP
 
-`@proofkit/local-runner` is the only application-level entry point for starting a run. It resolves a charter, selects a Web, Electron or mobile adapter, optionally starts the project, loads the workspace's `.proofkit/integration.mjs` module, accepts registered business oracles/capabilities, and stores the result under the configured evidence directory. A run is addressable by its `runId`, so an interactive client can start, cancel and poll status without holding an open browser tool call.
+`@proofkit/local-runner` is the only application-level entry point for starting a run. It resolves a charter, selects a Web, Electron or mobile adapter, optionally starts the project, loads the workspace's `.proofkit/integration.mjs` module, accepts registered business oracles/capabilities, inspects the configured local target's process association when possible, and stores the result under the configured evidence directory. A run is addressable by its `runId`, so an interactive client can start, cancel and poll status without holding an open browser tool call.
 
 The integration module is trusted local code, loaded only from inside the selected test workspace. It exports a name, optional typed capabilities, business oracles, an optional preflight function and a setup function that returns cleanup. Preflight runs after the run record is created but before project setup, browser connection or any capability. It returns a schema-validated pass/fail result and sanitized scalar evidence; a failed preflight produces a `blocked` verdict and a `preflight.json` artifact. The Local Runner composes integration cleanup with project process cleanup and adapter close. Cleanup failures prevent a green verdict.
 

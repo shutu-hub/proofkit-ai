@@ -104,7 +104,40 @@ describe("Mission repair comparison", () => {
     expect(result).toMatchObject({ status: "inconclusive", candidateSourceStability: "changed-during-run" });
     expect(result.gaps).toContain("Candidate source changed while the Mission was executing.");
   });
+
+  it("does not verify a repair across a changed or differently owned target", async () => {
+    const fixture = await createFixture();
+    const expected = fixture.root;
+    const other = join(fixture.root, "other-checkout");
+    await setTargetBinding(fixture.evidenceDir, "before-primary", expected, "http://localhost:5174");
+    await setTargetBinding(fixture.evidenceDir, "after-primary", other, "http://localhost:5174", "different-project");
+    const different = await fixture.compare();
+    expect(different.status).toBe("inconclusive");
+    expect(different.gaps.some((gap) => gap.includes("different Git checkout"))).toBe(true);
+
+    await setTargetBinding(fixture.evidenceDir, "after-primary", expected, "http://localhost:5174");
+    expect((await fixture.compare()).status).toBe("verified-in-scope");
+    await setTargetBinding(fixture.evidenceDir, "after-primary", expected, "http://localhost:5175");
+    expect((await fixture.compare()).gaps.some((gap) => gap.includes("different target origin"))).toBe(true);
+
+    const beforePath = join(fixture.evidenceDir, "before-primary", "run.json");
+    const before = RunSummarySchema.parse(JSON.parse(await readFile(beforePath, "utf8")));
+    delete before.targetBinding;
+    await writeFile(beforePath, JSON.stringify(before));
+    expect((await fixture.compare()).gaps.some((gap) => gap.includes("only one side"))).toBe(true);
+  });
 });
+
+async function setTargetBinding(evidenceDir: string, runId: string, observedProjectRoot: string, targetOrigin: string, status: "matching-process-path" | "different-project" = "matching-process-path") {
+  const path = join(evidenceDir, runId, "run.json");
+  const summary = RunSummarySchema.parse(JSON.parse(await readFile(path, "utf8")));
+  summary.targetBinding = {
+    status, method: "windows-listener-process", expectedProjectRoot: evidenceDir,
+    observedProjectRoot, targetOrigin, processId: 12,
+    reason: "Listener process path observed.", observedAt: new Date().toISOString(),
+  };
+  await writeFile(path, JSON.stringify(summary));
+}
 
 async function createFixture(options: { candidateVerdict?: Verdict; negativeCase?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), "proofkit-compare-"));

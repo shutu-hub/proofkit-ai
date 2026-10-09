@@ -176,6 +176,19 @@ export const StepResultSchema = z.object({
 });
 export type StepResult = z.infer<typeof StepResultSchema>;
 
+/** A process-path association is useful evidence, but does not attest served bytes. */
+export const TargetBindingSchema = z.object({
+  status: z.enum(["matching-process-path", "different-project", "unverified"]),
+  method: z.enum(["windows-listener-process", "unavailable"]),
+  expectedProjectRoot: z.string().min(1),
+  targetOrigin: z.string().url().optional(),
+  observedProjectRoot: z.string().min(1).optional(),
+  processId: z.number().int().positive().optional(),
+  reason: z.string().min(1),
+  observedAt: z.string(),
+});
+export type TargetBinding = z.infer<typeof TargetBindingSchema>;
+
 export const RunSummarySchema = z.object({
   runId: z.string(),
   projectRoot: z.string().min(1).optional(),
@@ -192,6 +205,7 @@ export const RunSummarySchema = z.object({
   // Optional on read so older run.json files remain valid. New runs always write both fields.
   runtimeHealth: z.enum(["passed", "failed", "ignored"]).optional(),
   runtimeFindings: z.array(RuntimeFindingSchema).optional(),
+  targetBinding: TargetBindingSchema.optional(),
   artifacts: z.array(z.string()).default([]),
   findings: z.array(z.string()).default([]),
 });
@@ -218,7 +232,7 @@ export type RuntimeQualityPolicy = z.infer<typeof RuntimeQualityPolicySchema>;
 export const RunEventSchema = z.object({
   runId: z.string(),
   timestamp: z.string(),
-  type: z.enum(["run.started", "run.completed", "step.started", "step.completed", "assertion.completed", "oracle.completed", "adapter.event", "artifact.created", "finding.created"]),
+  type: z.enum(["run.started", "run.completed", "step.started", "step.completed", "assertion.completed", "oracle.completed", "adapter.event", "artifact.created", "finding.created", "target.binding"]),
   stepId: z.string().optional(),
   payload: z.record(z.string(), z.unknown()),
 });
@@ -417,6 +431,8 @@ export const ProofkitConfigSchema = z.object({
     sideEffects: SideEffectPolicySchema.default("confirm"),
     saveSensitivePayloads: z.boolean().default(false),
     runtime: RuntimeQualityPolicySchema.default({}),
+    /** Block only an evidenced different Git checkout; keep unknown targets explicit. */
+    targetBinding: z.enum(["record", "block-different"]).default("block-different"),
   }).default({}),
 });
 export type ProofkitConfig = z.infer<typeof ProofkitConfigSchema>;

@@ -41,6 +41,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Keep Agent tool failures as suspected test findings until an independent product oracle confirms a defect.
 - Classify selected browser runtime signals with evidence links and explicit `record`, `fail` or `ignore` policy; reject invalid URL filters instead of silently widening the monitored scope.
 - Select a unique CDP application page for Web/Electron attachment; reject ambiguous windows instead of running a Charter in an arbitrary renderer.
+- Inspect Windows loopback listeners before Web/Electron actions and block an evidenced different Git checkout by default. Retain matching or unverified process-path status in Run/Mission evidence without claiming served-byte attestation.
 - Run an integration preflight before project setup, adapter connection or write capabilities. A failed preflight is `blocked` with a sanitized `preflight.json` artifact.
 - Persist task attempts and recover interrupted read-only tasks; block interrupted side-effecting tasks for review instead of replaying them blindly.
 - Never let a rejected Mission promise leave a durable mission in an unexplained running state.
@@ -100,6 +101,8 @@ The default AIHR development request is `core`. The ordinary PDF upload Charter 
 **Current evidence:** direct Mission replay provenance and a read-only `MissionComparison` now pair saved Run scope and independent business source artifacts. AIHR loopback Web/Electron smokes and a two-workflow release suite inject a business defect, restore the fixture, replay through MCP, and receive `verified-in-scope`; missing facts, changed scope and incomplete negative/replay slots are inconclusive. This demonstrates test-scope repair verification against fixtures, not causal proof of a source edit or live AIHR remediation. Source-location diagnosis and validated repair proposals still need broader seeded-defect and real-workspace evidence.
 
 Mission discovery and final verification now record bounded Git source fingerprints. A comparison shows whether the source changed between runs and refuses repair verification when the candidate source changed during its own run. The current AIHR checkout is capturable without copying its diff or file contents into evidence. Live AIHR execution remains pending until an isolated gateway, CDP session, test credentials and fixture are available.
+
+The Windows loopback target check now records a listener's Git checkout before surface actions and blocks a different checkout by default. Repair comparison becomes inconclusive when only one side has target association evidence, target origins differ, or either listener is associated with another checkout. This still does not attest served bytes or detect a listener replacement between checks.
 
 **Gate:** seeded defects have a correct failure boundary and a repair suggestion that is rejected when evidence is insufficient.
 

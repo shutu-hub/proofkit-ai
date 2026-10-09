@@ -72,6 +72,7 @@ describe("ProjectRuntime", () => {
           environment: "test",
           sideEffects: "confirm",
           saveSensitivePayloads: false,
+          targetBinding: "block-different",
           runtime: {
             mode: "record",
             pageErrors: true,

@@ -102,7 +102,10 @@ describe("external test workspace", () => {
     expect((await service.waitMission(mission.missionId)).verdict).toBe("passed");
     const restarted = await LocalRunnerService.create({ root, workspaceRoot });
     expect((await restarted.status(started.runId)).verdict).toBe("passed");
-    expect((await restarted.missionEvidence(mission.missionId))).toMatchObject({ projectRoot: root, workspaceRoot, verdict: "passed" });
+    expect((await restarted.missionEvidence(mission.missionId))).toMatchObject({
+      projectRoot: root, workspaceRoot, verdict: "passed",
+      targetBindings: [{ surface: "web", binding: { status: "unverified" } }],
+    });
     expect((await restarted.evidenceFor(started.runId, "report")).content).toContain("Business oracles");
     const replay = await restarted.replayMission(mission.missionId);
     expect((await restarted.waitMission(replay.mission.missionId)).verdict).toBe("passed");

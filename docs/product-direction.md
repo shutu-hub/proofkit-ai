@@ -9,6 +9,7 @@ ProofKit is a local, evidence-driven acceptance runner for Web, Electron and App
 | Working | Limit |
 | --- | --- |
 | Project scan, external test workspace with source binding, Web/Electron Playwright/CDP and W3C WebDriver mobile execution | Project map is structural; it does not infer product invariants; mobile device provisioning and device logs are not managed by the local runner |
+| Windows loopback listener process association is recorded before Web/Electron actions; a different Git checkout blocks by default | Process paths do not attest served bytes, and unsupported or ambiguous targets remain explicitly unverified |
 | CLI, shared Local Runner, run-level and mission-level MCP interface | Model planning is opt-in and requires an OpenAI-compatible endpoint |
 | YAML Charter, validated actions/assertions, Mission task graphs, release Web/Electron replay, and explicit negative/recovery cases | Generated plans still need measured quality and user review for consequential flows; ProofKit executes only cases explicitly declared by the Charter |
 | Reviewed route-to-Charter mapping with Web URL and method/origin-scoped API response evidence | Static hints and 2xx responses are candidate-route evidence, not proof of complete workflow or whole-project coverage; entry-point execution remains unmeasured |

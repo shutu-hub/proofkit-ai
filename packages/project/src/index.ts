@@ -10,6 +10,7 @@ import { resolveProjectContext, sameProjectPath, type ProjectContext, type Proje
 
 export { defaultWorkspaceRoot, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
 export { captureSourceState } from "./source-state.js";
+export { inspectTargetBinding } from "./target-binding.js";
 
 type PackageJson = {
   name?: string;
@@ -43,6 +44,7 @@ const DEFAULT_CONFIG: ProofkitConfig = {
       ignoreUrlPatterns: [],
       blockConsolePatterns: [],
     },
+    targetBinding: "block-different",
   },
 };
 
