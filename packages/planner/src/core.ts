@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
-import { RunModeSchema, ProjectMapSchema, SideEffectPolicySchema, TestCharterSchema, TestLevelSchema, type Assertion, type ProjectMap, type RunMode, type SideEffectPolicy, type TestCharter, type TestLevel } from "@proofkit/contracts";
+import { normalizePlanningQuality, PlanningQualitySchema, RunModeSchema, ProjectMapSchema, SideEffectPolicySchema, TestCharterSchema, TestLevelSchema, type Assertion, type PlanningQuality, type ProjectMap, type RunMode, type SideEffectPolicy, type TestCharter, type TestLevel } from "@proofkit/contracts";
 import { z } from "zod";
 import { resolveTestLevel } from "./test-levels.js";
 
@@ -15,10 +15,14 @@ export const PlannerConstraintsSchema = z.object({
   allowedActionKinds: z.array(z.string().min(1)).optional(),
   allowedOracleNames: z.array(z.string().min(1)).optional(),
   requireAssertions: z.boolean().optional(),
+  requireBusinessOracle: z.boolean().optional(),
 }).strict();
 
 export type PlannerConstraints = z.infer<typeof PlannerConstraintsSchema>;
-export type PlanOptions = Pick<PlannerConstraints, "url" | "expect" | "mode" | "sideEffectPolicy" | "oracleNames" | "level">;
+export type PlanOptions = Pick<PlannerConstraints, "url" | "expect" | "mode" | "sideEffectPolicy" | "oracleNames" | "level"> & {
+  requireAssertions?: boolean;
+  requireBusinessOracle?: boolean;
+};
 
 export type PlannerInput = {
   intent: string;
@@ -31,6 +35,50 @@ export interface PlannerProvider {
   plan(input: PlannerInput): Promise<unknown>;
 }
 
+export type PlanningAssessmentInput = {
+  projectMap?: ProjectMap;
+  constraints?: PlannerConstraints;
+  source?: PlanningQuality["source"];
+};
+
+/** Recompute quality from the validated Charter instead of trusting model confidence. */
+export function assessPlanningQuality(charter: TestCharter, input: PlanningAssessmentInput = {}): PlanningQuality {
+  const constraints = input.constraints ?? {};
+  const declared = normalizePlanningQuality(charter.planning);
+  const source = input.source ?? declared.source;
+  const assumptions = [...declared.assumptions];
+  // Only checks against the validated Charter and Project Map can gate the
+  // final verdict; provider-authored gap claims are not authoritative.
+  const missingInputs: string[] = [];
+  const evidenceGaps: string[] = [];
+  const add = (items: string[], value: string) => { if (!items.includes(value)) items.push(value); };
+
+  if (constraints.requireAssertions && charter.assertions.length === 0) {
+    add(missingInputs, "至少一个可观察的表面断言");
+    add(evidenceGaps, "surface-assertion");
+  }
+  if (constraints.requireBusinessOracle && (charter.oracles?.length ?? 0) === 0) {
+    add(missingInputs, "独立业务 Oracle");
+    add(evidenceGaps, "business-oracle");
+  }
+  if (charter.level === "release" && (charter.negativeCases?.length ?? 0) === 0) {
+    add(missingInputs, "显式负向或恢复场景");
+    add(evidenceGaps, "negative-case");
+  }
+  if (charter.actions.some((action) => action.kind === "goto") && !constraints.url) add(missingInputs, "经批准的目标 Web origin");
+  if (input.projectMap?.inventory.truncated) {
+    add(missingInputs, "完整项目地图（当前扫描被截断）");
+    add(evidenceGaps, "project-map-truncated");
+  }
+  if (input.projectMap && input.projectMap.inventory.entryPoints.length === 0) add(assumptions, "未从源码扫描中识别到约定的应用入口");
+
+  // A model is not intrinsically more reliable than the same validated plan
+  // produced deterministically. The source is recorded for audit, not scoring.
+  const baseline = input.projectMap ? 0.75 : 0.6;
+  const confidence = Math.max(0, Math.min(1, baseline - missingInputs.length * 0.12 - evidenceGaps.length * 0.08));
+  return PlanningQualitySchema.parse({ source, confidence, assumptions, missingInputs, evidenceGaps });
+}
+
 export class IntentPlanner {
   plan(intent: string, options: PlanOptions = {}): TestCharter {
     const levelSelection = resolveTestLevel(intent, options.level);
@@ -40,7 +88,7 @@ export class IntentPlanner {
     if (url) actions.push({ kind: "goto", url });
     actions.push({ kind: "observe" });
 
-    return TestCharterSchema.parse({
+    const charter = TestCharterSchema.parse({
       intent,
       level: levelSelection.resolved,
       levelSelection,
@@ -51,6 +99,17 @@ export class IntentPlanner {
       oracles: options.oracleNames,
       sideEffectPolicy: options.sideEffectPolicy ?? "confirm",
       metadata: { planner: "deterministic-v1", url: url ?? null, testLevel: levelSelection.resolved },
+    });
+    return TestCharterSchema.parse({
+      ...charter,
+      planning: assessPlanningQuality(charter, {
+        constraints: {
+          ...options,
+          requireAssertions: options.requireAssertions ?? true,
+          requireBusinessOracle: options.requireBusinessOracle ?? levelSelection.resolved !== "quick",
+        },
+        source: "deterministic",
+      }),
     });
   }
 
@@ -107,7 +166,7 @@ export class OpenAICompatiblePlannerProvider implements PlannerProvider {
           messages: [
             {
               role: "system",
-              content: "You generate only a ProofKit Test Charter JSON object. Preserve the user's intent, the exact sideEffectPolicy constraint, and explicitly requested oracleNames. Use only allowedActionKinds and allowedOracleNames. Never generate shell commands, SQL, arbitrary JavaScript, or credentials. Include an assertion when the constraints require it.",
+              content: "You generate only a ProofKit Test Charter JSON object. Preserve the user's intent, the exact sideEffectPolicy constraint, and explicitly requested oracleNames. Use only allowedActionKinds and allowedOracleNames. Never generate shell commands, SQL, arbitrary JavaScript, or credentials. Include an assertion when the constraints require it. You may include planning assumptions, missingInputs and evidenceGaps, but they are advisory and ProofKit recomputes them.",
             },
             {
               role: "user",
@@ -147,10 +206,12 @@ export class StructuredPlanner {
       throw new Error("Planner output references an unregistered oracle");
     }
     const levelSelection = resolveTestLevel(input.intent, input.constraints.level);
+    const source: PlanningQuality["source"] = this.provider.name === "deterministic-v1" ? "deterministic" : "model";
     return TestCharterSchema.parse({
       ...charter,
       level: levelSelection.resolved,
       levelSelection,
+      planning: assessPlanningQuality({ ...charter, level: levelSelection.resolved }, { projectMap: input.projectMap, constraints: input.constraints, source }),
       metadata: { ...charter.metadata, planner: this.provider.name, testLevel: levelSelection.resolved },
     });
   }

@@ -1,5 +1,5 @@
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { OracleResultSchema } from "@proofkit/contracts";
+import { OracleResultSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, type RuntimeFinding } from "@proofkit/contracts";
 import { z } from "zod";
 
 // Project integrations receive this schema runtime through the loader. This
@@ -13,6 +13,7 @@ import type {
   AssertionResult,
   OracleResult,
   RunEvent,
+  RuntimeQualityPolicy,
   RunSummary,
   SurfaceSnapshot,
   TestCharter,
@@ -114,6 +115,8 @@ export type ExecutionOptions = {
   integration?: { name: string; version?: string };
   preflight?: IntegrationPreflight;
   setup?: IntegrationSetup;
+  /** Classify adapter runtime signals without conflating them with business truth. */
+  runtimeQuality?: RuntimeQualityPolicy;
 };
 
 export class ExecutionRunner {
@@ -130,6 +133,9 @@ export class ExecutionRunner {
   private readonly preflight?: IntegrationPreflight;
   private readonly projectRoot?: string;
   private readonly workspaceRoot?: string;
+  private readonly runtimeQuality: RuntimeQualityPolicy;
+  private readonly runtimeAllowPatterns: RegExp[];
+  private readonly runtimeIgnorePatterns: RegExp[];
 
   constructor(adapter: SurfaceAdapter, options: ExecutionOptions = {}) {
     this.adapter = adapter;
@@ -147,6 +153,9 @@ export class ExecutionRunner {
     this.preflight = options.preflight;
     this.projectRoot = options.projectRoot;
     this.workspaceRoot = options.workspaceRoot;
+    this.runtimeQuality = RuntimeQualityPolicySchema.parse(options.runtimeQuality ?? {});
+    this.runtimeAllowPatterns = compilePatterns(this.runtimeQuality.allowUrlPatterns, "allowUrlPatterns");
+    this.runtimeIgnorePatterns = compilePatterns(this.runtimeQuality.ignoreUrlPatterns, "ignoreUrlPatterns");
   }
 
   async run(charter: TestCharter, runId = createRunId()): Promise<RunSummary> {
@@ -161,6 +170,8 @@ export class ExecutionRunner {
       steps: [],
       assertions: [],
       oracles: [],
+      runtimeHealth: "passed",
+      runtimeFindings: [],
       artifacts: [],
       findings: [],
     };
@@ -211,7 +222,7 @@ export class ExecutionRunner {
       await withResourceAbort(this.adapter.connect(), signal, "Adapter connect", () => this.adapter.close());
       throwIfAborted(signal);
       unsubscribe = await withResourceAbort(this.adapter.subscribeEvents((event) => {
-        pendingEvents.push(this.emit({ runId, timestamp: new Date().toISOString(), type: "adapter.event", payload: { adapter: this.adapter.name, eventType: event.type, ...event.payload } }));
+        pendingEvents.push(this.recordAdapterEvent(runId, event, summary));
       }), signal, "Adapter event subscription", async (release) => { await release(); });
       throwIfAborted(signal);
       for (const [index, action] of charter.actions.entries()) {
@@ -291,18 +302,30 @@ export class ExecutionRunner {
       try { await unsubscribe(); } catch (error) { executionError ??= toError(error); summary.findings.push(`unsubscribe failed: ${toError(error).message}`); }
       try { await this.adapter.close(); } catch (error) { executionError ??= toError(error); summary.findings.push(`adapter close failed: ${toError(error).message}`); }
       await Promise.all(pendingEvents);
+      if ((summary.runtimeFindings ?? []).length > 0) {
+        const artifact = await this.store.writeJson(runId, "runtime-findings", summary.runtimeFindings ?? []);
+        summary.artifacts.push(artifact);
+      }
       try { await cleanupSetup(); } catch (error) { executionError ??= toError(error); summary.findings.push(`runtime cleanup failed: ${toError(error).message}`); }
       if (timeout) clearTimeout(timeout);
       detachSignal();
     }
 
-    summary.verdict = executionError
+    const baseVerdict = executionError
       ? executionError instanceof BlockedError ? "blocked" : executionError instanceof CancelledError || executionError instanceof RunTimeoutError ? "cancelled" : "failed"
       : charter.assertions.length === 0 && this.oracles.length === 0
         ? "inconclusive"
         : summary.assertions.some((result) => !result.passed) || summary.oracles.some((result) => result.passed === false)
           ? "failed"
           : summary.oracles.some((result) => result.passed === null) ? "inconclusive" : "passed";
+    summary.runtimeHealth = this.runtimeQuality.mode === "ignore"
+      ? "ignored"
+      : (summary.runtimeFindings ?? []).length > 0 ? "failed" : "passed";
+    summary.verdict = this.runtimeQuality.mode === "fail"
+      && (summary.runtimeFindings ?? []).length > 0
+      && (baseVerdict === "passed" || baseVerdict === "inconclusive")
+      ? "failed"
+      : baseVerdict;
     if (summary.verdict === "inconclusive") summary.findings.push(
       charter.assertions.length === 0 && this.oracles.length === 0
         ? "No executable assertion or business oracle was declared."
@@ -318,6 +341,68 @@ export class ExecutionRunner {
 
   private async emit(event: RunEvent): Promise<void> {
     await this.store.appendEvent(event);
+  }
+
+  private async recordAdapterEvent(runId: string, event: AdapterEvent, summary: RunSummary): Promise<void> {
+    const timestamp = new Date().toISOString();
+    const safeEvent = { ...event, payload: sanitizeAdapterEventPayload(event.payload) };
+    const payload = { adapter: this.adapter.name, eventType: safeEvent.type, ...safeEvent.payload };
+    await this.emit({ runId, timestamp, type: "adapter.event", payload });
+    const finding = this.runtimeFinding(runId, safeEvent, timestamp);
+    if (!finding) return;
+    (summary.runtimeFindings ??= []).push(finding);
+    await this.emit({ runId, timestamp, type: "finding.created", payload: { finding } });
+  }
+
+  private runtimeFinding(runId: string, event: AdapterEvent, observedAt: string): RuntimeFinding | undefined {
+    if (this.runtimeQuality.mode === "ignore") return undefined;
+    const payload = event.payload;
+    const url = typeof payload.url === "string" && payload.url.length > 0 ? payload.url : undefined;
+    if (!matchesRuntimeUrl(url, this.runtimeAllowPatterns, this.runtimeIgnorePatterns)) return undefined;
+
+    let severity: RuntimeFinding["severity"];
+    let message: string;
+    let statusCode: number | undefined;
+    let consoleLevel: string | undefined;
+    if (event.type === "console") {
+      consoleLevel = typeof payload.level === "string" ? payload.level.toLowerCase() : "log";
+      if (!matchesConsoleLevel(consoleLevel, this.runtimeQuality.consoleLevels)) return undefined;
+      severity = consoleLevel === "error" || consoleLevel === "assert" ? "high" : consoleLevel === "warn" || consoleLevel === "warning" ? "medium" : "low";
+      message = typeof payload.text === "string" && payload.text.length > 0 ? payload.text : "Browser console reported a runtime message.";
+    } else if (event.type === "pageerror") {
+      if (!this.runtimeQuality.pageErrors) return undefined;
+      severity = "high";
+      message = typeof payload.message === "string" && payload.message.length > 0 ? payload.message : "Page reported a runtime error.";
+    } else if (event.type === "response") {
+      if (!this.runtimeQuality.failedResponses.enabled) return undefined;
+      statusCode = typeof payload.status === "number" ? payload.status : undefined;
+      if (statusCode === undefined || statusCode < 400 || statusCode >= 600) return undefined;
+      if (statusCode < 500 && !this.runtimeQuality.failedResponses.include4xx) return undefined;
+      severity = statusCode >= 500 ? "high" : "medium";
+      message = `HTTP response failed with status ${statusCode}${url ? `: ${url}` : ""}`;
+    } else if (event.type === "requestfailed") {
+      if (!this.runtimeQuality.requestFailures) return undefined;
+      const errorText = typeof payload.errorText === "string" ? payload.errorText : "request failed";
+      severity = "medium";
+      message = url ? `Request failed for ${url}: ${errorText}` : `Request failed: ${errorText}`;
+    } else {
+      return undefined;
+    }
+    return RuntimeFindingSchema.parse({
+      findingId: `runtime-${runId}-${summarySafeId(event.type)}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: event.type,
+      category: "environment",
+      status: "suspected",
+      severity,
+      message,
+      eventType: event.type,
+      ...(url ? { url } : {}),
+      ...(statusCode !== undefined ? { statusCode } : {}),
+      ...(consoleLevel ? { consoleLevel } : {}),
+      affectsVerdict: this.runtimeQuality.mode === "fail",
+      evidence: [`${runId}/events.jsonl`],
+      observedAt,
+    });
   }
 
   private async executeCapability(action: Extract<Action, { kind: "capability" }>, charter: TestCharter, runId: string, parentSignal: AbortSignal): Promise<{ output: unknown; receipt: ActionReceipt }> {
@@ -353,6 +438,47 @@ export class ExecutionRunner {
       detachSignal();
     }
   }
+}
+
+function compilePatterns(patterns: string[], label: string): RegExp[] {
+  return patterns.map((pattern, index) => {
+    try { return new RegExp(pattern); }
+    catch { throw new Error(`Invalid runtime ${label}[${index}] regular expression`); }
+  });
+}
+
+function sanitizeAdapterEventPayload(payload: AdapterEvent["payload"]): AdapterEvent["payload"] {
+  if (typeof payload.url !== "string") return payload;
+  try {
+    const url = new URL(payload.url);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return { ...payload, url: url.toString() };
+  } catch {
+    return { ...payload, url: payload.url.split(/[?#]/, 1)[0] };
+  }
+}
+
+function matchesRuntimeUrl(url: string | undefined, allow: RegExp[], ignore: RegExp[]): boolean {
+  if (!url) return allow.length === 0;
+  if (allow.length > 0) return allow.some((pattern) => pattern.test(url));
+  return !ignore.some((pattern) => pattern.test(url));
+}
+
+function matchesConsoleLevel(level: string, configured: string[]): boolean {
+  const normalized = level.toLowerCase();
+  return configured.some((item) => {
+    const expected = item.toLowerCase();
+    return expected === normalized
+      || (expected === "warn" && normalized === "warning")
+      || (expected === "warning" && normalized === "warn");
+  });
+}
+
+function summarySafeId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 32) || "event";
 }
 
 function preflightResult(value: IntegrationPreflightResult): IntegrationPreflightResult {

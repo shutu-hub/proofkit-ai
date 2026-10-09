@@ -109,6 +109,36 @@ describe("LocalRunnerService", () => {
     expect(completed.findings.some((finding) => finding.message.includes("独立业务 Oracle"))).toBe(true);
   });
 
+  it("keeps a surface and business pass inconclusive when planning evidence is incomplete", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-planning-gate-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
+    const assertion = { kind: "text-visible" as const, text: "ready" };
+    const charter: TestCharter = {
+      intent: "verify fixture", level: "core", mode: "deterministic", preconditions: [], actions: [],
+      assertions: [assertion], oracles: ["fixture-terminal"], sideEffectPolicy: "deny", metadata: {},
+      planning: { source: "deterministic", confidence: 0.25, assumptions: [], missingInputs: ["完整项目地图"], evidenceGaps: ["project-map-truncated"] },
+    };
+    const now = new Date().toISOString();
+    const summary: RunSummary = {
+      runId: "planning-gate-run", startedAt: now, endedAt: now, status: "completed", verdict: "passed", charter,
+      steps: [], assertions: [{ assertion, passed: true, message: "ready", evidence: ["planning-gate-run/after.json"] }],
+      oracles: [{ name: "fixture-terminal", passed: true, message: "complete", evidence: ["planning-gate-run/source.json"], sourceEvidenceCount: 1, sourceEvidenceArtifacts: ["planning-gate-run/source.json"], observedAt: now }],
+      artifacts: ["planning-gate-run/after.json", "planning-gate-run/source.json"], findings: [],
+    };
+    service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
+    service.wait = async () => summary;
+
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    await service.startMission(created.missionId, { approve: true });
+    const completed = await service.waitMission(created.missionId);
+
+    expect(completed.verdict).toBe("inconclusive");
+    expect(completed.firstFailure?.kind).toBe("evidence");
+    expect(completed.findings.some((finding) => finding.message.includes("project-map-truncated"))).toBe(true);
+    expect((await service.missionEvidence(created.missionId)).planning?.evidenceGaps).toEqual(["project-map-truncated"]);
+  });
+
   it("does not let a negative case supply the primary run's missing business oracle", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-primary-oracle-gate-"));
     roots.push(root);
@@ -765,7 +795,20 @@ describe("LocalRunnerService", () => {
         suites: [],
         run: { timeoutMs: 300_000 },
         oracles: [],
-        policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false },
+        policies: {
+          environment: "test",
+          sideEffects: "confirm",
+          saveSensitivePayloads: false,
+          runtime: {
+            mode: "record",
+            pageErrors: true,
+            requestFailures: false,
+            consoleLevels: ["error"],
+            failedResponses: { enabled: true, include4xx: false },
+            allowUrlPatterns: [],
+            ignoreUrlPatterns: [],
+          },
+        },
       },
     });
     const started = await service.start({ intent: "observe" });

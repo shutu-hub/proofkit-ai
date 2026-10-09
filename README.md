@@ -14,6 +14,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Produces a bounded path-level test map with source/test counts, framework signals, conventional entry points, static route hints and an explicit truncation flag.
 - Matches one-sentence requests to curated, workspace-owned Charters by explicit aliases; ambiguous matches require a Charter ID, and missing assertions or business Oracles stop automatic execution.
 - Converts intent into a saved YAML Test Charter that can be reviewed and edited.
+- Records plan quality, missing inputs and evidence gaps; a model's self-reported confidence cannot make a Mission pass.
 - Executes Web and Electron actions through Playwright, including CDP attachment.
 - Executes mobile actions through a W3C WebDriver/Appium-compatible server when a mobile surface is configured.
 - Starts local project processes with health checks and captures runtime events in the same run timeline.
@@ -29,6 +30,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 - Waits up to 5 seconds for an in-flight setup, adapter connection or event subscription to return a cleanup handle after cancellation. If that wait expires, the report states that resources may still be active; a handle returned later triggers a best-effort asynchronous release.
 - Polls asynchronous HTTP business state to a bounded terminal verdict; a timeout remains inconclusive.
 - Records action receipts, before/after snapshots, network and console events, screenshots, and a JSONL timeline.
+- Classifies configured page errors, console errors and failed responses as linked runtime findings; `record` reports them without changing a passing business verdict, while `fail` makes them a run failure.
 - Reports `passed`, `failed`, `blocked`, `cancelled`, or `inconclusive`; missing evidence never becomes a pass.
 - Links a replay Mission to its source and compares the same saved scope, Run matrix, and independent business facts. A repair is only `verified-in-scope` when the original evidenced defect is absent from a complete passing replay.
 - Records bounded Git source fingerprints before and after a Mission; comparison reports source changes and treats a mid-run change as inconclusive.
@@ -208,7 +210,7 @@ The repository is a pnpm workspace with explicit package boundaries:
 | `@proofkit/planner` | Deterministic intent scaffolding and YAML charter validation |
 | `@proofkit/agent` | Mission task graphs, recoverable task scheduling, evidence gates and failure analysis |
 | `@proofkit/runner` | Execution lifecycle, step receipts, assertions and verdicts |
-| `@proofkit/adapters` | Playwright Web and Electron CDP surfaces |
+| `@proofkit/adapters` | Playwright Web, Electron CDP and W3C WebDriver mobile surfaces |
 | `@proofkit/runtime` | Application process startup, health checks and runtime events |
 | `@proofkit/oracles` | Independent business checks and bounded read-only HTTP polling |
 | `@proofkit/evidence` | JSONL timeline, artifacts, redaction and static report data |

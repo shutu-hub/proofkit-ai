@@ -1,4 +1,4 @@
-import type { Browser, BrowserContext, Page, Response } from "playwright-core";
+import type { Browser, BrowserContext, Page, Request, Response } from "playwright-core";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceSnapshot } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceAdapter } from "@proofkit/runner";
 
@@ -147,16 +147,23 @@ export class WebAdapter implements SurfaceAdapter {
 
   async subscribeEvents(listener: (event: AdapterEvent) => void): Promise<() => void> {
     const page = this.page();
-    const onRequest = (request: { method(): string; url(): string }) => listener({ type: "request", payload: { method: request.method(), url: request.url() } });
+    const onRequest = (request: Request) => listener({ type: "request", payload: { method: request.method(), url: request.url() } });
     const onResponse = (response: Response) => listener({ type: "response", payload: { method: response.request().method(), status: response.status(), url: response.url() } });
-    const onConsole = (message: { type(): string; text(): string }) => listener({ type: "console", payload: { level: message.type(), text: message.text() } });
-    const onPageError = (error: Error) => listener({ type: "pageerror", payload: { message: error.message } });
+    const onRequestFailed = (request: Request) => listener({ type: "requestfailed", payload: {
+      method: request.method(),
+      url: request.url(),
+      errorText: request.failure()?.errorText,
+    } });
+    const onConsole = (message: { type(): string; text(): string }) => listener({ type: "console", payload: { level: message.type(), text: message.text(), url: page.url() } });
+    const onPageError = (error: Error) => listener({ type: "pageerror", payload: { message: error.message, url: page.url() } });
     page.on("request", onRequest);
+    page.on("requestfailed", onRequestFailed);
     page.on("response", onResponse);
     page.on("console", onConsole);
     page.on("pageerror", onPageError);
     return () => {
       page.off("request", onRequest);
+      page.off("requestfailed", onRequestFailed);
       page.off("response", onResponse);
       page.off("console", onConsole);
       page.off("pageerror", onPageError);

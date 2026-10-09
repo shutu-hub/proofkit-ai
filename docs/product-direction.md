@@ -4,7 +4,7 @@
 
 ProofKit is a local, evidence-driven acceptance runner for Web, Electron and Appium-compatible mobile surfaces. A user gives a product goal; ProofKit maps the project, drafts a reviewable Charter, executes real interactions, observes business state, and returns a compact verdict with linked evidence. The differentiator is a verified business outcome across UI, process and backend boundaries. A click receipt or screenshot alone is not success.
 
-## Current implementation (2026-10-09)
+## Current implementation (2026-10-10)
 
 | Working | Limit |
 | --- | --- |
@@ -13,10 +13,12 @@ ProofKit is a local, evidence-driven acceptance runner for Web, Electron and App
 | YAML Charter, validated actions/assertions, Mission task graphs, release Web/Electron replay, and explicit negative/recovery cases | Generated plans still need measured quality and user review for consequential flows; ProofKit executes only cases explicitly declared by the Charter |
 | Reviewed route-to-Charter mapping with Web URL and method/origin-scoped API response evidence | Static hints and 2xx responses are candidate-route evidence, not proof of complete workflow or whole-project coverage; entry-point execution remains unmeasured |
 | Process health, browser events, named HTTP oracles, bounded polling | Web and Electron smokes exercise an isolated AIHR gateway fixture, including one-sentence MCP catalog selection and a seeded stale job binding; a live AIHR test workspace is still pending |
+| Configurable runtime finding classification links page, console and HTTP failures to run evidence | Default record mode reports suspected signals without overriding business proof; a project must opt into fail mode and tune URL filters for its environment |
 | Workspace-owned integration module with typed capabilities, oracles and cleanup | The module is trusted local JavaScript; package distribution and version compatibility remain future work |
 | Integration preflight runs before setup or surface connection and stores a sanitized gate artifact | Each project must define its own isolation checks; ProofKit cannot prove tenant or data isolation without connector evidence |
 | JSONL, artifact hashes, JSON/HTML report, five-state verdict, evidence-linked findings and recoverable Mission attempts | Diagnosis and repair suggestions identify the evidenced business boundary; trusted project Oracles can now provide source-location hints, while automatic source-level inference remains future work |
 | Planner benchmark evaluator and fixed quick/core/release runner are available for measuring plan structure without executing a product environment | Benchmark cases currently use the deterministic provider; real model quality, false-pass rate and cost are not yet measured |
+| Generated Charters and Mission plans carry planning quality, including assumptions, missing inputs and checked evidence gaps; MCP surfaces these before automatic execution | Confidence is a heuristic, not a measured model accuracy score; older curated Charters remain readable without this metadata |
 
 ## User entry path
 
@@ -31,6 +33,8 @@ Do not require a hosted account, browser extension, general database credentials
 `CLI / MCP / CI -> Local Runner -> Charter + Project Map -> Surface Adapter + Project Runtime + Domain Capabilities -> Events + Evidence -> Independent Oracles -> Verdict + concise report`
 
 The contracts package owns the Charter, Mission, run, event and verdict schemas. Surface adapters own browser/Electron mechanics and future mobile drivers. Capabilities own project-specific operations. Oracles own assertions about business truth, including bounded polling for asynchronous work. Evidence owns redaction, hashes and links. The Execution Runner joins streams by `runId` and owns each run's verdict; Mission verification aggregates those verdicts and enforces test-level evidence and matrix obligations.
+
+Planning quality is a separate gate before runtime evidence. ProofKit recomputes structural gaps from the validated Charter and bounded Project Map; model confidence cannot establish a pass. A new plan with a missing required Oracle, missing surface assertion, missing release negative case or truncated map cannot automatically start through MCP, and an explicitly executed Mission with a saved planning gap ends `inconclusive`.
 
 ## Next three increments
 

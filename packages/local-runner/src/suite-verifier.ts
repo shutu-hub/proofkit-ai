@@ -190,15 +190,19 @@ export function verifySuiteMission(mission: TestMission): MissionToolResult {
   if (!scope) throw new Error("Mission has no suite to verify");
   const failed = scope.results.some((item) => item.verdict === "failed");
   const blocked = scope.results.some((item) => item.verdict === "blocked");
-  const incomplete = scope.results.some((item) => item.verdict === "inconclusive");
+  const planningGaps = mission.plan.planning?.evidenceGaps ?? [];
+  const incomplete = scope.results.some((item) => item.verdict === "inconclusive") || planningGaps.length > 0;
   const verdict: Verdict = failed ? "failed" : blocked ? "blocked" : incomplete ? "inconclusive" : "passed";
   const missing = scope.results.filter((item) => item.missing.length > 0);
-  const message = missing.map((item) => `${item.charterId}/${item.surface}: ${item.missing.join(", ")}`).join("; ");
+  const message = [
+    ...missing.map((item) => `${item.charterId}/${item.surface}: ${item.missing.join(", ")}`),
+    ...(planningGaps.length > 0 ? [`Planning evidence gaps: ${planningGaps.join(", ")}`] : []),
+  ].join("; ");
   const observedAt = new Date().toISOString();
   return {
-    output: { ...scope, verified: verdict === "passed", verdict },
+    output: { ...scope, planningGaps, verified: verdict === "passed", verdict },
     verdict,
-    ...(missing.length > 0 ? {
+    ...(message ? {
       firstFailure: FailureBoundarySchema.parse({ kind: "evidence", message, evidence: mission.evidence.slice(0, 4), observedAt }),
       findings: [FindingSchema.parse({
         findingId: `suite-evidence-${mission.missionId}`,

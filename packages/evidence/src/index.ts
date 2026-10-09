@@ -105,10 +105,11 @@ export class EvidenceStore {
   async writeReport(summary: RunSummary): Promise<string> {
     const path = join(this.runDir(summary.runId), "report.html");
     const verdict = summary.verdict ?? "inconclusive";
-    const links = (items: string[]) => items.filter((item) => item.startsWith(`${summary.runId}/artifacts/`)).map((item) => `<a href="${escapeHtml(item.slice(summary.runId.length + 1))}">${escapeHtml(item.split("/").at(-1) ?? "evidence")}</a>`).join(" ");
+    const links = (items: string[]) => items.filter((item) => item.startsWith(`${summary.runId}/artifacts/`) || item === `${summary.runId}/events.jsonl` || item === `${summary.runId}/run.json`).map((item) => `<a href="${escapeHtml(item.slice(summary.runId.length + 1))}">${escapeHtml(item.split("/").at(-1) ?? "evidence")}</a>`).join(" ");
     const rows = summary.steps.map((step) => `<tr><td>${escapeHtml(step.stepId)}</td><td>${escapeHtml(step.action.kind)}</td><td>${escapeHtml(step.status)}</td><td>${links(step.artifacts)}</td><td>${escapeHtml(step.error ?? "")}</td></tr>`).join("");
     const assertions = summary.assertions.map((item) => `<li class="${item.passed ? "pass" : "fail"}">${escapeHtml(item.message)}</li>`).join("");
     const oracles = summary.oracles.map((item) => `<li class="${item.passed === true ? "pass" : item.passed === false ? "fail" : "meta"}">${escapeHtml(item.name)}: ${escapeHtml(item.message)} ${links(item.evidence)}</li>`).join("");
+    const runtimeFindings = (summary.runtimeFindings ?? []).map((finding) => `<tr><td>${escapeHtml(finding.kind)}</td><td>${escapeHtml(finding.severity)}</td><td>${escapeHtml(finding.status)}</td><td>${escapeHtml(finding.message)}</td><td>${escapeHtml(finding.url ?? "")}${finding.statusCode === undefined ? "" : ` (${finding.statusCode})`}${finding.consoleLevel ? ` [${escapeHtml(finding.consoleLevel)}]` : ""}</td><td>${links(finding.evidence)}</td></tr>`).join("");
     const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>ProofKit ${escapeHtml(summary.runId)}</title>
 <style>body{font:14px system-ui,sans-serif;max-width:1100px;margin:40px auto;color:#172033}h1{margin-bottom:4px}.meta{color:#637083}.verdict{display:inline-block;padding:6px 10px;border-radius:5px;background:#edf1f7;font-weight:700}.pass{color:#087443}.fail{color:#b42318}table{border-collapse:collapse;width:100%;margin-top:20px}td,th{border-bottom:1px solid #dce2ea;padding:9px;text-align:left}</style></head>
@@ -116,6 +117,7 @@ export class EvidenceStore {
 <h2>Steps</h2><table><thead><tr><th>Step</th><th>Action</th><th>Status</th><th>Evidence</th><th>Error</th></tr></thead><tbody>${rows}</tbody></table>
 <h2>Assertions</h2><ul>${assertions || "<li>No surface assertions declared.</li>"}</ul>
 <h2>Business oracles</h2><ul>${oracles || "<li>None registered.</li>"}</ul>
+<h2>Runtime health</h2><p class="${(summary.runtimeHealth ?? "passed") === "passed" ? "pass" : (summary.runtimeHealth ?? "passed") === "failed" ? "fail" : "meta"}">${escapeHtml(summary.runtimeHealth ?? "passed")} (${(summary.runtimeFindings ?? []).length} finding(s))</p><table><thead><tr><th>Type</th><th>Severity</th><th>Status</th><th>Message</th><th>URL</th><th>Evidence</th></tr></thead><tbody>${runtimeFindings || "<tr><td colspan=\"6\">No runtime findings.</td></tr>"}</tbody></table>
 <h2>Findings</h2><ul>${summary.findings.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>None</li>"}</ul></body></html>`;
     await writeFile(path, html, "utf8");
     return path;

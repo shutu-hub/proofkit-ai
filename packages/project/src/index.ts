@@ -29,7 +29,20 @@ const DEFAULT_CONFIG: ProofkitConfig = {
   suites: [],
   run: { timeoutMs: 300_000 },
   oracles: [],
-  policies: { environment: "test", sideEffects: "confirm", saveSensitivePayloads: false },
+  policies: {
+    environment: "test",
+    sideEffects: "confirm",
+    saveSensitivePayloads: false,
+    runtime: {
+      mode: "record",
+      pageErrors: true,
+      requestFailures: false,
+      consoleLevels: ["error"],
+      failedResponses: { enabled: true, include4xx: false },
+      allowUrlPatterns: [],
+      ignoreUrlPatterns: [],
+    },
+  },
 };
 
 const DEFAULT_INTEGRATION = `// ProofKit capabilities and business oracles live in this test workspace.\n// Keep writes limited to test data and always return cleanup from setup.\nexport default {\n  name: "project-integration",\n  version: "1",\n  capabilities: [],\n  oracles: [],\n};\n`;

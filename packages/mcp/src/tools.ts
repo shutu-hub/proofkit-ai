@@ -225,6 +225,7 @@ function missionReadiness(mission: TestMission): { ready: boolean; missing: stri
       missing.push(`${prefix}至少一个独立业务 Oracle`);
     }
   }
+  for (const gap of mission.plan.planning?.evidenceGaps ?? []) missing.push(`规划证据缺口：${gap}`);
   return { ready: missing.length === 0, missing };
 }
 
@@ -251,6 +252,7 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
     verdict: mission.verdict,
     level: mission.level,
     levelSelection: mission.levelSelection,
+    planning: mission.plan.planning,
     executionProfile: profile,
     readiness,
     ...(typeof mission.charter?.metadata.catalogId === "string" ? { catalogId: mission.charter.metadata.catalogId } : {}),

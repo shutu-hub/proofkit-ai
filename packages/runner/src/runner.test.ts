@@ -25,6 +25,15 @@ class FakeAdapter implements SurfaceAdapter {
   async close(): Promise<void> {}
 }
 
+class EventAdapter extends FakeAdapter {
+  constructor(private readonly events: AdapterEvent[]) { super(); }
+
+  override async subscribeEvents(listener: (event: AdapterEvent) => void): Promise<() => void> {
+    for (const event of this.events) listener(event);
+    return () => {};
+  }
+}
+
 class SlowAdapter extends FakeAdapter {
   override async act(action: Action): Promise<ActionReceipt> {
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -170,6 +179,151 @@ describe("ExecutionRunner", () => {
     expect(summary.verdict).toBe("passed");
     expect(summary.steps).toHaveLength(2);
     expect(await readFile(join(root, "run-test", "events.jsonl"), "utf8")).toContain("run.completed");
+  });
+
+  it("records runtime signals without changing a passing business run", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-runtime-record-"));
+    const summary = await new ExecutionRunner(new EventAdapter([
+      { type: "console", payload: { level: "error", text: "renderer failed", url: "http://fixture/app" } },
+      { type: "pageerror", payload: { message: "uncaught error", url: "http://fixture/app" } },
+      { type: "response", payload: { method: "GET", status: 500, url: "http://fixture/api/resume" } },
+    ]), {
+      evidenceDir: root,
+      runtimeQuality: {
+        mode: "record",
+        pageErrors: true,
+        requestFailures: false,
+        consoleLevels: ["error"],
+        failedResponses: { enabled: true, include4xx: false },
+        allowUrlPatterns: [],
+        ignoreUrlPatterns: [],
+      },
+    }).run({
+      intent: "runtime diagnostics",
+      level: "core",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }],
+      assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "deny",
+      metadata: {},
+    }, "runtime-record");
+
+    expect(summary.verdict).toBe("passed");
+    expect(summary.runtimeHealth).toBe("failed");
+    expect(summary.runtimeFindings).toHaveLength(3);
+    expect(summary.artifacts).toContain("runtime-record/artifacts/runtime-findings.json");
+    const events = await readFile(join(root, "runtime-record", "events.jsonl"), "utf8");
+    expect(events).toContain('"type":"adapter.event"');
+    expect(events).toContain('"type":"finding.created"');
+    expect(await readFile(join(root, "runtime-record", "report.html"), "utf8")).toContain("Runtime health");
+  });
+
+  it("rejects invalid runtime URL filters before a run starts", () => {
+    expect(() => new ExecutionRunner(new FakeAdapter(), {
+      runtimeQuality: {
+        mode: "fail", pageErrors: true, requestFailures: false, consoleLevels: ["error"],
+        failedResponses: { enabled: true, include4xx: false }, allowUrlPatterns: ["["], ignoreUrlPatterns: [],
+      },
+    })).toThrow("Invalid runtime allowUrlPatterns[0] regular expression");
+  });
+
+  it("classifies only matching URLs when a runtime allow list is configured", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-runtime-allow-"));
+    const summary = await new ExecutionRunner(new EventAdapter([
+      { type: "pageerror", payload: { message: "unknown page" } },
+      { type: "pageerror", payload: { message: "other page", url: "http://other/app" } },
+      { type: "pageerror", payload: { message: "target page", url: "http://fixture/app" } },
+    ]), {
+      evidenceDir: root,
+      runtimeQuality: {
+        mode: "record", pageErrors: true, requestFailures: false, consoleLevels: ["error"],
+        failedResponses: { enabled: true, include4xx: false }, allowUrlPatterns: ["^http://fixture/"], ignoreUrlPatterns: [],
+      },
+    }).run({
+      intent: "runtime allow list", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "deny", metadata: {},
+    }, "runtime-allow");
+    expect(summary.verdict).toBe("passed");
+    expect(summary.runtimeFindings?.map((item) => item.message)).toEqual(["target page"]);
+  });
+
+  it("removes URL credentials and query data from adapter event evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-runtime-url-"));
+    const summary = await new ExecutionRunner(new EventAdapter([
+      { type: "response", payload: { method: "GET", status: 500, url: "http://user:password@fixture/api/resume?token=private#candidate" } },
+    ]), { evidenceDir: root }).run({
+      intent: "runtime URL redaction", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "deny", metadata: {},
+    }, "runtime-url");
+    const events = await readFile(join(root, "runtime-url", "events.jsonl"), "utf8");
+    expect(summary.runtimeFindings?.[0]?.url).toBe("http://fixture/api/resume");
+    expect(events).toContain("http://fixture/api/resume");
+    expect(events).not.toMatch(/password|private|candidate/);
+  });
+
+  it("can fail a run on configured runtime signals", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-runtime-fail-"));
+    const summary = await new ExecutionRunner(new EventAdapter([
+      { type: "response", payload: { method: "GET", status: 500, url: "http://fixture/api/resume" } },
+    ]), {
+      evidenceDir: root,
+      runtimeQuality: {
+        mode: "fail",
+        pageErrors: true,
+        requestFailures: false,
+        consoleLevels: ["error"],
+        failedResponses: { enabled: true, include4xx: false },
+        allowUrlPatterns: [],
+        ignoreUrlPatterns: [],
+      },
+    }).run({
+      intent: "runtime failure",
+      level: "core",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }],
+      assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "deny",
+      metadata: {},
+    }, "runtime-fail");
+
+    expect(summary.verdict).toBe("failed");
+    expect(summary.runtimeFindings?.[0]?.affectsVerdict).toBe(true);
+  });
+
+  it("keeps raw adapter events while ignoring runtime classification", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-runtime-ignore-"));
+    const summary = await new ExecutionRunner(new EventAdapter([
+      { type: "console", payload: { level: "error", text: "ignored", url: "http://fixture/app" } },
+    ]), {
+      evidenceDir: root,
+      runtimeQuality: {
+        mode: "ignore",
+        pageErrors: true,
+        requestFailures: false,
+        consoleLevels: ["error"],
+        failedResponses: { enabled: true, include4xx: false },
+        allowUrlPatterns: [],
+        ignoreUrlPatterns: [],
+      },
+    }).run({
+      intent: "ignore runtime",
+      level: "core",
+      mode: "deterministic",
+      preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }],
+      assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "deny",
+      metadata: {},
+    }, "runtime-ignore");
+
+    expect(summary.verdict).toBe("passed");
+    expect(summary.runtimeHealth).toBe("ignored");
+    expect(summary.runtimeFindings).toEqual([]);
+    expect(await readFile(join(root, "runtime-ignore", "events.jsonl"), "utf8")).toContain('"eventType":"console"');
   });
 
   it("executes a registered read capability and records its evidence", async () => {

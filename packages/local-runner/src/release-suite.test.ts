@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -79,6 +79,28 @@ describe("explicit release suites", () => {
       .toMatchObject({ verdict: "inconclusive", missing: ["replay independent business fact"] });
     expect(scope?.results.filter((item) => item.charterId === "login").every((item) => item.verdict === "passed")).toBe(true);
     expect(completed.firstFailure?.kind).toBe("evidence");
+  });
+
+  it("does not pass a release suite with a saved planning evidence gap", async () => {
+    const service = await createSuiteService();
+    const charterPath = join(service.workspaceRoot, ".proofkit", "charters", "resume.yml");
+    const charter = TestCharterSchema.parse(JSON.parse(await readFile(charterPath, "utf8")));
+    await writeFile(charterPath, JSON.stringify({
+      ...charter,
+      planning: { source: "catalog", confidence: 0.45, assumptions: [], missingInputs: ["完整项目地图"], evidenceGaps: ["project-map-truncated"] },
+    }));
+    stubRuns(service);
+    const mission = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    expect(mission.plan.planning?.evidenceGaps).toEqual(["project-map-truncated"]);
+
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    const evidence = await service.missionEvidence(mission.missionId);
+    expect(completed.verdict).toBe("inconclusive");
+    expect(completed.firstFailure).toMatchObject({ kind: "evidence", message: expect.stringContaining("project-map-truncated") });
+    expect(completed.findings.some((item) => item.category === "test" && item.message.includes("project-map-truncated"))).toBe(true);
+    expect(evidence.suiteScope?.results.every((item) => item.verdict === "passed")).toBe(true);
+    expect(evidence.planning?.evidenceGaps).toEqual(["project-map-truncated"]);
   });
 
   it("counts a mapped route as observed only after passing primary and replay visits on both surfaces", async () => {

@@ -448,6 +448,24 @@ describe("MissionAgent", () => {
       : ["execute-charter"]);
   });
 
+  it("preserves model planning provenance and labels curated Charters as catalog plans", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-planning-source-"));
+    const planner = new DeterministicMissionPlanner();
+    const input = {
+      intent: "verify a core workflow", projectRoot: root, surface: "web" as const,
+      policy: { level: "core" as const, environment: "test" as const, sideEffectPolicy: "deny" as const, requireApproval: true, requireEvidence: true, maxSteps: 100, timeoutMs: 30_000 },
+      charter: {
+        intent: "verify a core workflow", level: "core" as const, mode: "guided" as const,
+        preconditions: [], actions: [{ kind: "observe" as const }], assertions: [{ kind: "text-visible" as const, text: "ready" }],
+        oracles: ["workflow-terminal"], sideEffectPolicy: "deny" as const, metadata: {},
+        planning: { source: "model" as const, confidence: 0.55, assumptions: [], missingInputs: [], evidenceGaps: [] },
+      },
+    };
+    expect((await planner.plan(input)).planning).toMatchObject({ source: "model", confidence: 0.55 });
+    expect((await planner.plan({ ...input, charter: { ...input.charter, metadata: { catalogId: "core-workflow" } } })).planning)
+      .toMatchObject({ source: "catalog", confidence: 0.55 });
+  });
+
   it("turns explicitly declared negative cases into auditable tasks", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-negative-plan-"));
     const planner = new DeterministicMissionPlanner();

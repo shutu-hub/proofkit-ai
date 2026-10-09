@@ -34,8 +34,9 @@ export type FailureAnalyzerInput = {
 export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
   const { summary } = input;
   const evidence = uniqueEvidence(input.evidence);
+  const runtimeFindings = summary.runtimeFindings ?? [];
 
-  if (summary.verdict === "passed") return {};
+  if (summary.verdict === "passed" && runtimeFindings.length === 0) return {};
 
   const failedOracle = summary.oracles.find((oracle) => oracle.passed === false);
   if (failedOracle) {
@@ -153,6 +154,34 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
         message: boundary.message,
         evidence: boundary.evidence,
         createdAt: boundary.observedAt,
+      }),
+    };
+  }
+
+  if (runtimeFindings.length > 0) {
+    const runtimeEvidence = uniqueEvidence(runtimeFindings.flatMap((finding) =>
+      evidenceForPaths(evidence, finding.evidence, summary.runId)));
+    const messages = runtimeFindings.slice(0, 5).map((finding) => finding.message);
+    const omitted = runtimeFindings.length - messages.length;
+    const message = `Runtime signals were observed${messages.length > 0 ? `: ${messages.join("; ")}` : "."}${omitted > 0 ? ` (${omitted} more finding(s) omitted).` : ""}`;
+    const observedAt = runtimeFindings.at(-1)?.observedAt ?? summary.endedAt ?? summary.startedAt;
+    const boundary = FailureBoundarySchema.parse({
+      kind: "environment",
+      message,
+      evidence: runtimeEvidence,
+      observedAt,
+    });
+    return {
+      ...(summary.verdict === "passed" ? {} : { boundary }),
+      finding: FindingSchema.parse({
+        findingId: `finding-${summary.runId}-runtime`,
+        severity: runtimeFindings.some((item) => item.severity === "critical" || item.severity === "high") ? "high" : "medium",
+        category: "environment",
+        status: "suspected",
+        title: "Runtime health signal observed",
+        message,
+        evidence: runtimeEvidence,
+        createdAt: observedAt,
       }),
     };
   }

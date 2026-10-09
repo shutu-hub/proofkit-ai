@@ -141,6 +141,28 @@ describe("ProofKit MCP tools", () => {
     await server.close();
   });
 
+  it("surfaces a planning evidence gap before automatic execution", async () => {
+    const mission = fixtureMission("awaiting-approval");
+    mission.plan.planning = { source: "model", confidence: 0.5, assumptions: [], missingInputs: ["完整项目地图"], evidenceGaps: ["project-map-truncated"] };
+    const runner = {
+      config: { surfaces: {} },
+      createMission: vi.fn(async () => mission),
+      startMission: vi.fn(),
+    } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+
+    const response = await client.callTool({ name: "run_test", arguments: { intent: "测试简历获取" } });
+    const payload = JSON.parse(textContent(response));
+    expect(payload).toMatchObject({
+      running: false,
+      planning: { evidenceGaps: ["project-map-truncated"] },
+      readiness: { ready: false, missing: ["规划证据缺口：project-map-truncated"] },
+    });
+    expect(runner.startMission).not.toHaveBeenCalled();
+    await client.close();
+    await server.close();
+  });
+
   it("exposes terminal mission state together with bounded evidence metadata", async () => {
     const mission = fixtureMission("completed");
     const runner = {

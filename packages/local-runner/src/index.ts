@@ -6,7 +6,7 @@ import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
 import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
-import { getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
+import { assessPlanningQuality, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
 import { CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
@@ -373,6 +373,7 @@ export class LocalRunnerService {
     verdict?: TestMission["verdict"];
     level: TestMission["level"];
     levelSelection?: TestMission["levelSelection"];
+    planning?: TestMission["plan"]["planning"];
     executionProfile: TestMission["plan"]["executionProfile"];
     suiteScope?: SuiteScopeSummary;
     taskSummary: Array<{
@@ -418,6 +419,7 @@ export class LocalRunnerService {
       verdict: mission.verdict,
       level: mission.level,
       levelSelection: mission.levelSelection,
+      planning: mission.plan.planning,
       executionProfile: mission.plan.executionProfile,
       suiteScope: summarizeSuiteScope(mission),
       taskSummary: mission.plan.graph.tasks.map((task) => ({
@@ -526,6 +528,17 @@ export class LocalRunnerService {
           passedAssertions: summary.assertions.filter((item) => item.passed).length,
           oracles: summary.oracles.length,
           passedOracles: summary.oracles.filter((item) => item.passed === true).length,
+          runtimeHealth: summary.runtimeHealth ?? "passed",
+          runtimeFindingCount: (summary.runtimeFindings ?? []).length,
+          runtimeFindings: (summary.runtimeFindings ?? []).slice(0, 20).map((finding) => ({
+            kind: finding.kind,
+            severity: finding.severity,
+            status: finding.status,
+            message: finding.message,
+            ...(finding.url ? { url: finding.url } : {}),
+            ...(finding.statusCode !== undefined ? { statusCode: finding.statusCode } : {}),
+            ...(finding.consoleLevel ? { consoleLevel: finding.consoleLevel } : {}),
+          })),
           businessEvidence: summary.oracles.reduce((count, oracle) => count + ((oracle.sourceEvidenceArtifacts ?? []).some((path) =>
             evidence.some((item) => item.kind === "business" && item.evidenceId === `${summary.runId}:${path}`))
             ? oracle.sourceEvidenceCount ?? 0 : 0), 0),
@@ -686,6 +699,10 @@ export class LocalRunnerService {
       const expectedRuns = runs.filter((item) => expectedSurfaces.includes(item.data.surface as typeof expectedSurfaces[number])
         && (item.data.runKind === "primary" || item.data.runKind === "replay" || item.data.runKind === "negative" || item.data.runKind === undefined));
       if (expectedRuns.length < expectedRunCount) missing.push(`至少 ${expectedRunCount} 次表面运行`);
+      const planningGaps = context.mission.plan.planning?.evidenceGaps ?? [];
+      if (planningGaps.length > 0) {
+        missing.push(`规划阶段存在证据缺口：${planningGaps.join("、")}`);
+      }
       if (context.mission.policy.requireEvidence && context.mission.evidence.length === 0) {
         return { output: { verified: false, reason: "No evidence was captured" }, verdict: "failed", findings: [FindingSchema.parse({ findingId: "missing-evidence", severity: "high", category: "test", status: "confirmed", title: "Mission has no evidence", message: "The configured evidence requirement was not met.", createdAt: new Date().toISOString() })] };
       }
@@ -738,7 +755,7 @@ export class LocalRunnerService {
     return [...paths].map((path) => EvidenceRefSchema.parse({
       evidenceId: `${summary.runId}:${path}`,
       kind: path.endsWith("events.jsonl") ? "network" : path.endsWith(".png") ? "screenshot" : path.endsWith("report.html") || oracleReports.has(path)
-        ? "report" : oracleSourceArtifacts.has(path) ? "business" : "snapshot",
+        ? "report" : path.endsWith("runtime-findings.json") ? "runtime" : oracleSourceArtifacts.has(path) ? "business" : "snapshot",
       path: resolve(this.evidenceDir, path),
       description: `Evidence captured by run ${summary.runId}`,
       capturedAt: summary.endedAt ?? summary.startedAt,
@@ -789,6 +806,7 @@ export class LocalRunnerService {
       oracleNames: options.oracleNames,
       level: levelSelection.resolved,
       requireAssertions: levelProfile.evidencePolicy.requireAssertions,
+      requireBusinessOracle: levelProfile.evidencePolicy.requireBusinessOracle,
       allowedActionKinds: policy === "allow"
         ? ["goto", "click", "fill", "press", "waitForText", "screenshot", "observe"]
         : ["goto", "waitForText", "screenshot", "observe"],
@@ -798,9 +816,17 @@ export class LocalRunnerService {
       ])],
     };
     const provider = this.plannerProvider ?? this.createPlannerProvider();
-    const charter = provider
-      ? await new StructuredPlanner(provider).plan({ intent, projectMap: await this.discover(), constraints })
-      : new IntentPlanner().plan(intent, constraints);
+    const projectMap = await this.discover();
+    let charter: TestCharter;
+    if (provider) {
+      charter = await new StructuredPlanner(provider).plan({ intent, projectMap, constraints });
+    } else {
+      const draft = new IntentPlanner().plan(intent, constraints);
+      charter = TestCharterSchema.parse({
+        ...draft,
+        planning: assessPlanningQuality(draft, { projectMap, constraints, source: "deterministic" }),
+      });
+    }
     if (charter.sideEffectPolicy !== constraints.sideEffectPolicy) throw new Error("Planner changed the side-effect policy");
     if (charter.oracles?.some((name) => !constraints.allowedOracleNames.includes(name))) throw new Error("Planner referenced an unregistered oracle");
     if (options.oracleNames && (charter.oracles?.length !== options.oracleNames.length || options.oracleNames.some((name) => !charter.oracles?.includes(name)))) {
@@ -960,6 +986,7 @@ export class LocalRunnerService {
       preflight: this.integration?.preflight,
       signal,
       timeoutMs: this.config.run.timeoutMs,
+      runtimeQuality: this.config.policies.runtime,
       integration: this.integration ? { name: this.integration.name, version: this.integration.version } : undefined,
       setup: setup || integrationSetup ? async (context) => {
         const cleanups: Array<() => void | Promise<void>> = [];

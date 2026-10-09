@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DeterministicPlannerProvider, IntentPlanner, OpenAICompatiblePlannerProvider, StructuredPlanner, resolveTestLevel } from "./index.js";
+import { DeterministicPlannerProvider, IntentPlanner, OpenAICompatiblePlannerProvider, StructuredPlanner, assessPlanningQuality, resolveTestLevel } from "./index.js";
 
 const projectMap = {
   root: ".", scripts: {}, workspaces: [], packages: [],
@@ -15,6 +15,46 @@ describe("IntentPlanner", () => {
     expect(charter.assertions).toEqual([{ kind: "text-visible", text: "Example" }]);
     expect(charter.metadata.planner).toBe("deterministic-v1");
     expect(charter.level).toBe("core");
+  });
+
+  it("records missing core proof and release negative cases as planning gaps", () => {
+    const core = new IntentPlanner().plan("检查简历获取", { level: "core" });
+    expect(core.planning?.evidenceGaps).toEqual(["surface-assertion", "business-oracle"]);
+    const release = new IntentPlanner().plan("上线前完整回归", { level: "release" });
+    expect(release.planning?.evidenceGaps).toEqual(["surface-assertion", "business-oracle", "negative-case"]);
+  });
+
+  it("keeps legacy Charters readable without planning metadata", () => {
+    const charter = new IntentPlanner().fromYaml("intent: verify an existing flow\nactions: []\nassertions: []\n");
+    expect(charter.planning).toBeUndefined();
+    expect(assessPlanningQuality(charter, { constraints: { requireAssertions: true, requireBusinessOracle: true } }).evidenceGaps)
+      .toEqual(["surface-assertion", "business-oracle"]);
+  });
+
+  it("marks a truncated Project Map without trusting provider gap claims", async () => {
+    const planner = new StructuredPlanner({
+      name: "openai-compatible",
+      async plan() {
+        return {
+          intent: "verify resume acquisition", level: "core", actions: [{ kind: "observe" }],
+          assertions: [{ kind: "text-visible", text: "ready" }], oracles: ["resume-terminal"],
+          planning: { source: "model", confidence: 1, evidenceGaps: ["invented-gap"] },
+        };
+      },
+    });
+    const charter = await planner.plan({
+      intent: "verify resume acquisition",
+      projectMap: { ...projectMap, inventory: { ...projectMap.inventory, truncated: true } },
+      constraints: { requireAssertions: true, requireBusinessOracle: true, allowedOracleNames: ["resume-terminal"] },
+    });
+    expect(charter.planning).toMatchObject({ source: "model", evidenceGaps: ["project-map-truncated"] });
+    expect(charter.planning?.confidence).toBeLessThan(1);
+    expect(charter.planning?.confidence).toBe(assessPlanningQuality(charter, {
+      projectMap: { ...projectMap, inventory: { ...projectMap.inventory, truncated: true } },
+      constraints: { requireAssertions: true, requireBusinessOracle: true },
+      source: "deterministic",
+    }).confidence);
+    expect(charter.planning?.evidenceGaps).not.toContain("invented-gap");
   });
 
   it("resolves explicit and natural-language test levels without upgrading the request", () => {

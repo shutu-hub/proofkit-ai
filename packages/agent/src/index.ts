@@ -11,6 +11,7 @@ import {
   MissionExecutionProfileSchema,
   MissionPolicySchema,
   ObservationSchema,
+  PlanningQualitySchema,
   RepairSuggestionSchema,
   TaskNodeSchema,
   TestMissionSchema,
@@ -22,6 +23,7 @@ import {
   type MissionPlan,
   type MissionExecutionProfile,
   type MissionPolicy,
+  type PlanningQuality,
   type MissionStatus,
   type Observation,
   type RepairSuggestion,
@@ -96,6 +98,25 @@ function executionProfile(level: MissionPolicy["level"], surface: TestMission["s
     requireNegativeCases: false,
     minimumEvidence: level === "quick" ? 1 : level === "core" ? 2 : 3,
   });
+}
+
+function planningQuality(input: MissionPlanInput, source?: PlanningQuality["source"]): PlanningQuality {
+  if (input.charter) {
+    const resolvedSource = source ?? (typeof input.charter.metadata.catalogId === "string"
+      ? "catalog" : input.charter.planning?.source ?? "deterministic");
+    return PlanningQualitySchema.parse({ ...(input.charter.planning ?? {}), source: resolvedSource });
+  }
+  if (input.suite) {
+    const qualities = input.suite.charters.map((item) => PlanningQualitySchema.parse(item.charter.planning ?? {}));
+    return PlanningQualitySchema.parse({
+      source: source ?? "catalog",
+      confidence: qualities.length === 0 ? 0 : Math.min(...qualities.map((item) => item.confidence)),
+      assumptions: [...new Set(qualities.flatMap((item) => item.assumptions))],
+      missingInputs: [...new Set(qualities.flatMap((item) => item.missingInputs))],
+      evidenceGaps: [...new Set(qualities.flatMap((item) => item.evidenceGaps))],
+    });
+  }
+  return PlanningQualitySchema.parse({ source: source ?? "deterministic", confidence: 0, missingInputs: ["validated Test Charter"] });
 }
 
 export class DeterministicMissionPlanner implements MissionPlanner {
@@ -182,6 +203,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       generatedBy: "deterministic-mission-planner-v1",
       graph: { tasks, terminalTaskIds: ["verify-result"] },
       successCriteria: ["所有任务完成", "业务结果有独立证据", "未发现已确认的高严重度缺陷"],
+      planning: planningQuality(input),
       level: input.policy.level,
       executionProfile: profile,
       assumptions: [
@@ -265,6 +287,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       generatedBy: "deterministic-suite-planner-v1",
       graph: { tasks, terminalTaskIds: ["verify-result"] },
       successCriteria: ["逐流程主运行和回放完成", "每个流程及表面有独立业务事实", "明确报告未通过和未覆盖范围"],
+      planning: planningQuality(input, "catalog"),
       level: "release",
       executionProfile: profile,
       assumptions: [`suite=${suite.suiteId}`, `environment=${input.policy.environment}`, `surfaces=${suite.surfaces.join(",")}`],

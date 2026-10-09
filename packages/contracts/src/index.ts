@@ -59,10 +59,28 @@ export const NegativeCaseSchema = z.object({
 });
 export type NegativeCase = z.infer<typeof NegativeCaseSchema>;
 
+/**
+ * Structured planning metadata. These fields describe what the planner knows
+ * and what it still needs; they are deliberately separate from execution
+ * evidence so a confident-sounding model response cannot masquerade as proof.
+ */
+export const PlanningQualitySchema = z.object({
+  source: z.enum(["catalog", "deterministic", "model"]).default("deterministic"),
+  confidence: z.number().min(0).max(1).default(0),
+  assumptions: z.array(z.string().min(1)).default([]),
+  missingInputs: z.array(z.string().min(1)).default([]),
+  evidenceGaps: z.array(z.string().min(1)).default([]),
+});
+export type PlanningQuality = z.infer<typeof PlanningQualitySchema>;
+export function normalizePlanningQuality(value?: PlanningQuality): PlanningQuality {
+  return PlanningQualitySchema.parse(value ?? {});
+}
+
 export const TestCharterSchema = z.object({
   intent: z.string().min(1),
   level: TestLevelSchema.default("core"),
   levelSelection: TestLevelSelectionSchema.optional(),
+  planning: PlanningQualitySchema.optional(),
   mode: RunModeSchema.default("guided"),
   preconditions: z.array(z.string()).default([]),
   actions: z.array(ActionSchema).default([]),
@@ -74,6 +92,7 @@ export const TestCharterSchema = z.object({
   sideEffectPolicy: SideEffectPolicySchema.default("confirm"),
   metadata: z.record(z.string(), z.unknown()).default({}),
 });
+/** Existing workspace Charters may omit planning metadata. New plans populate it explicitly. */
 export type TestCharter = z.infer<typeof TestCharterSchema>;
 
 export const SurfaceSnapshotSchema = z.object({
@@ -121,6 +140,23 @@ export const OracleResultSchema = z.object({
 });
 export type OracleResult = z.infer<typeof OracleResultSchema>;
 
+export const RuntimeFindingSchema = z.object({
+  findingId: z.string().min(1),
+  kind: z.enum(["console", "pageerror", "response", "requestfailed"]),
+  category: z.enum(["product", "environment", "test", "unknown"]),
+  status: z.enum(["confirmed", "suspected", "unverified"]),
+  severity: z.enum(["info", "low", "medium", "high", "critical"]),
+  message: z.string().min(1),
+  eventType: z.string().min(1),
+  url: z.string().optional(),
+  statusCode: z.number().int().min(100).max(599).optional(),
+  consoleLevel: z.string().optional(),
+  affectsVerdict: z.boolean().default(false),
+  evidence: z.array(z.string()).default([]),
+  observedAt: z.string(),
+});
+export type RuntimeFinding = z.infer<typeof RuntimeFindingSchema>;
+
 export const StepResultSchema = z.object({
   stepId: z.string(),
   action: ActionSchema,
@@ -146,10 +182,30 @@ export const RunSummarySchema = z.object({
   steps: z.array(StepResultSchema).default([]),
   assertions: z.array(AssertionResultSchema).default([]),
   oracles: z.array(OracleResultSchema).default([]),
+  /** Runtime signals are kept separate from surface assertions and business facts. */
+  // Optional on read so older run.json files remain valid. New runs always write both fields.
+  runtimeHealth: z.enum(["passed", "failed", "ignored"]).optional(),
+  runtimeFindings: z.array(RuntimeFindingSchema).optional(),
   artifacts: z.array(z.string()).default([]),
   findings: z.array(z.string()).default([]),
 });
 export type RunSummary = z.infer<typeof RunSummarySchema>;
+
+export const RuntimeQualityPolicySchema = z.object({
+  /** ignore keeps raw adapter events but does not classify runtime findings. */
+  mode: z.enum(["ignore", "record", "fail"]).default("record"),
+  pageErrors: z.boolean().default(true),
+  requestFailures: z.boolean().default(false),
+  consoleLevels: z.array(z.enum(["debug", "error", "info", "log", "warning", "warn", "assert", "trace"])).default(["error"]),
+  failedResponses: z.object({
+    enabled: z.boolean().default(true),
+    include4xx: z.boolean().default(false),
+  }).default({}),
+  /** Regular expressions matched against event URLs. An allow list takes precedence over collection. */
+  allowUrlPatterns: z.array(z.string().min(1)).default([]),
+  ignoreUrlPatterns: z.array(z.string().min(1)).default([]),
+});
+export type RuntimeQualityPolicy = z.infer<typeof RuntimeQualityPolicySchema>;
 
 export const RunEventSchema = z.object({
   runId: z.string(),
@@ -352,6 +408,7 @@ export const ProofkitConfigSchema = z.object({
     environment: z.enum(["test", "staging", "local"]).default("test"),
     sideEffects: SideEffectPolicySchema.default("confirm"),
     saveSensitivePayloads: z.boolean().default(false),
+    runtime: RuntimeQualityPolicySchema.default({}),
   }).default({}),
 });
 export type ProofkitConfig = z.infer<typeof ProofkitConfigSchema>;
@@ -406,7 +463,7 @@ export type MissionPolicy = z.infer<typeof MissionPolicySchema>;
 
 export const EvidenceRefSchema = z.object({
   evidenceId: z.string().min(1),
-  kind: z.enum(["screenshot", "snapshot", "network", "console", "process", "api", "business", "log", "report", "other"]),
+  kind: z.enum(["screenshot", "snapshot", "network", "console", "process", "api", "business", "runtime", "log", "report", "other"]),
   path: z.string().min(1),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   description: z.string().min(1).optional(),
@@ -609,6 +666,7 @@ export const MissionPlanSchema = z.object({
   graph: TaskGraphSchema,
   successCriteria: z.array(z.string().min(1)).default([]),
   assumptions: z.array(z.string().min(1)).default([]),
+  planning: PlanningQualitySchema.optional(),
   level: TestLevelSchema.default("core"),
   executionProfile: MissionExecutionProfileSchema.default({
     surfaceMatrix: ["web"],
@@ -621,6 +679,7 @@ export const MissionPlanSchema = z.object({
   }),
   createdAt: z.string(),
 });
+/** Existing persisted plans may omit planning metadata. New plans populate it explicitly. */
 export type MissionPlan = z.infer<typeof MissionPlanSchema>;
 
 export const TestMissionSchema = z.object({

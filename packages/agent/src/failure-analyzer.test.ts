@@ -19,6 +19,8 @@ function summary(overrides: Partial<RunSummary> = {}): RunSummary {
     steps: [],
     assertions: [],
     oracles: [],
+    runtimeHealth: "passed",
+    runtimeFindings: [],
     artifacts: [],
     findings: [],
     ...overrides,
@@ -140,6 +142,23 @@ describe("analyzeRun", () => {
 
   it("returns no failure analysis for a passed run", () => {
     expect(analyzeRun({ summary: summary({ verdict: "passed" }), evidence: [] })).toEqual({});
+  });
+
+  it("keeps a recorded runtime warning visible without inventing a first failure for a passed run", () => {
+    const result = analyzeRun({
+      summary: summary({
+        verdict: "passed",
+        runtimeHealth: "failed",
+        runtimeFindings: [{
+          findingId: "runtime-warning", kind: "pageerror", category: "environment", status: "suspected",
+          severity: "high", message: "background page error", eventType: "pageerror",
+          affectsVerdict: false, evidence: ["run-fixture/events.jsonl"], observedAt: capturedAt,
+        }],
+      }),
+      evidence: [evidence("run-fixture/events.jsonl", "network")],
+    });
+    expect(result.boundary).toBeUndefined();
+    expect(result.finding).toMatchObject({ status: "suspected", category: "environment", evidence: [expect.any(Object)] });
   });
 
   it("confirms an assertion failure when the assertion points to evidence", () => {
