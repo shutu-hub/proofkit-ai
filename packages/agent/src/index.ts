@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { MissionOwnership, type MissionExecutionLease } from "./mission-ownership.js";
 import {
   FindingSchema,
   AgentStepSchema,
@@ -299,13 +300,30 @@ export class DeterministicMissionPlanner implements MissionPlanner {
 export interface MissionStore {
   save(mission: TestMission): Promise<void>;
   load(missionId: string): Promise<TestMission>;
+  acquireExecution(missionId: string, onCancel?: (reason: string) => void): Promise<MissionExecutionLease | undefined>;
+  isExecutionActive(missionId: string): Promise<boolean>;
+  cancelExecution(missionId: string, reason: string): Promise<boolean>;
 }
 
 export class JsonMissionStore implements MissionStore {
   readonly rootDir: string;
+  private readonly ownership: MissionOwnership;
 
   constructor(rootDir: string) {
     this.rootDir = resolve(rootDir);
+    this.ownership = new MissionOwnership(this.rootDir);
+  }
+
+  acquireExecution(missionId: string, onCancel?: (reason: string) => void): Promise<MissionExecutionLease | undefined> {
+    return this.ownership.acquire(safeMissionId(missionId), onCancel);
+  }
+
+  isExecutionActive(missionId: string): Promise<boolean> {
+    return this.ownership.isActive(safeMissionId(missionId));
+  }
+
+  cancelExecution(missionId: string, reason: string): Promise<boolean> {
+    return this.ownership.cancel(safeMissionId(missionId), reason);
   }
 
   async save(mission: TestMission): Promise<void> {
@@ -378,6 +396,13 @@ export type MissionRunOptions = {
   approve?: boolean;
 };
 
+export class MissionAlreadyRunningError extends Error {
+  constructor(missionId: string) {
+    super(`Mission ${missionId} is already executing in another runner`);
+    this.name = "MissionAlreadyRunningError";
+  }
+}
+
 export class MissionAgent {
   private readonly store: MissionStore;
   private readonly tools: MissionToolRegistry;
@@ -427,16 +452,51 @@ export class MissionAgent {
   }
 
   async approve(missionId: string): Promise<TestMission> {
-    const mission = await this.load(missionId);
-    if (mission.status !== "awaiting-approval" && mission.status !== "planned") {
-      throw new Error(`Mission cannot be approved from status ${mission.status}`);
+    const safeId = validateMissionId(missionId);
+    const lease = await this.store.acquireExecution(safeId);
+    if (!lease) throw new MissionAlreadyRunningError(safeId);
+    try {
+      const mission = await this.load(safeId);
+      if (mission.status !== "awaiting-approval" && mission.status !== "planned") {
+        throw new Error(`Mission cannot be approved from status ${mission.status}`);
+      }
+      return this.save({ ...mission, status: "approved" });
+    } finally {
+      await lease.release();
     }
-    return this.save({ ...mission, status: "approved" });
   }
 
   async run(missionId: string, options: MissionRunOptions = {}): Promise<TestMission> {
+    const safeId = validateMissionId(missionId);
+    const remoteController = new AbortController();
+    const lease = await this.store.acquireExecution(safeId, (reason) => remoteController.abort(new Error(reason)));
+    if (!lease) throw new MissionAlreadyRunningError(safeId);
+    try {
+      return await this.runOwned(safeId, options, remoteController.signal);
+    } finally {
+      await lease.release();
+    }
+  }
+
+  async isRunning(missionId: string): Promise<boolean> {
+    return this.store.isExecutionActive(validateMissionId(missionId));
+  }
+
+  async cancel(missionId: string, reason: string): Promise<boolean> {
+    return this.store.cancelExecution(validateMissionId(missionId), reason);
+  }
+
+  async waitUntilIdle(missionId: string): Promise<TestMission> {
+    const safeId = validateMissionId(missionId);
+    while (await this.store.isExecutionActive(safeId)) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return this.load(safeId);
+  }
+
+  private async runOwned(missionId: string, options: MissionRunOptions, remoteSignal: AbortSignal): Promise<TestMission> {
     let mission = await this.load(missionId);
-    if (mission.status === "awaiting-approval" && options.approve) mission = await this.approve(missionId);
+    if (mission.status === "awaiting-approval" && options.approve) mission = await this.save({ ...mission, status: "approved" });
     if (mission.status !== "approved" && mission.status !== "paused" && mission.status !== "running") {
       throw new Error(`Mission cannot run from status ${mission.status}`);
     }
@@ -446,6 +506,7 @@ export class MissionAgent {
     if (mission.status === "blocked" || mission.status === "cancelled" || mission.status === "failed") return mission;
     const controller = new AbortController();
     const detach = relayAbort(options.signal, controller);
+    const detachRemote = relayAbort(remoteSignal, controller);
     const timeout = setTimeout(() => {
       controller.abort(new MissionTimeoutError(mission.policy.timeoutMs));
     }, mission.policy.timeoutMs);
@@ -507,6 +568,7 @@ export class MissionAgent {
     } finally {
       clearTimeout(timeout);
       detach();
+      detachRemote();
     }
   }
 

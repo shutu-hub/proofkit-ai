@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, type MissionTool, type MissionToolResult } from "@proofkit/agent";
+import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
 import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestSuite, type Verdict } from "@proofkit/contracts";
@@ -328,10 +328,10 @@ export class LocalRunnerService {
     const existing = this.missionRecords.get(current.missionId);
     if (existing) {
       const mission = await this.missionAgent.load(current.missionId);
-      return { mission, running: mission.status === "running" };
+      return { mission, running: await this.missionAgent.isRunning(current.missionId) };
     }
     const controller = new AbortController();
-    const promise = this.missionAgent.run(current.missionId, { approve: options.approve, signal: controller.signal });
+    const promise = this.runOrJoinMission(current.missionId, options, controller.signal);
     this.missionRecords.set(current.missionId, { controller, promise });
     // Attach both fulfillment and rejection handlers so a rejected mission does
     // not create an unhandled Promise rejection while the record is cleaned up.
@@ -340,27 +340,44 @@ export class LocalRunnerService {
       () => this.missionRecords.delete(current.missionId),
     );
     const mission = await this.missionAgent.load(current.missionId);
-    return { mission, running: mission.status === "running" && this.missionRecords.has(current.missionId) };
+    return { mission, running: await this.missionAgent.isRunning(current.missionId) };
+  }
+
+  private async runOrJoinMission(missionId: string, options: { approve?: boolean }, signal: AbortSignal): Promise<TestMission> {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      try {
+        return await this.missionAgent.run(missionId, { approve: options.approve, signal });
+      } catch (error) {
+        if (!(error instanceof MissionAlreadyRunningError)) throw error;
+        const settled = await this.missionAgent.waitUntilIdle(missionId);
+        if (signal.aborted || ["completed", "failed", "blocked", "cancelled"].includes(settled.status)) return settled;
+        // A previous owner can exit after approval or midway through a task.
+        // Retry under a fresh OS lease; the Agent's recovery policy decides
+        // whether any interrupted task is safe to repeat.
+      }
+    }
+    throw new Error(`Mission ${missionId} changed execution owner too many times`);
   }
 
   async waitMission(missionId: string): Promise<TestMission> {
     const safeMissionId = validateMissionId(missionId);
     const record = this.missionRecords.get(safeMissionId);
     if (record) return record.promise;
-    return this.missionAgent.load(safeMissionId);
+    return this.missionAgent.waitUntilIdle(safeMissionId);
   }
 
   async missionStatus(missionId: string): Promise<MissionStatus> {
     const mission = await this.missionAgent.load(validateMissionId(missionId));
-    return { mission, running: this.missionRecords.has(mission.missionId) || mission.status === "running" };
+    return { mission, running: await this.missionAgent.isRunning(mission.missionId) };
   }
 
   async cancelMission(missionId: string, reason = "Mission cancelled by user"): Promise<MissionStatus> {
     const safeMissionId = validateMissionId(missionId);
     const record = this.missionRecords.get(safeMissionId);
-    if (!record) return this.missionStatus(safeMissionId);
-    record.controller.abort(new CancelledError(reason));
-    return { mission: await record.promise, running: false };
+    if (record) record.controller.abort(new CancelledError(reason));
+    const accepted = await this.missionAgent.cancel(safeMissionId, reason);
+    if (!record && !accepted) return this.missionStatus(safeMissionId);
+    return { mission: await this.waitMission(safeMissionId), running: false };
   }
 
   async missionEvidence(missionId: string): Promise<{
@@ -416,7 +433,7 @@ export class LocalRunnerService {
       projectRoot: this.root,
       workspaceRoot: this.workspaceRoot,
       status: mission.status,
-      running: this.missionRecords.has(mission.missionId) || mission.status === "running",
+      running: await this.missionAgent.isRunning(mission.missionId),
       verdict: mission.verdict,
       level: mission.level,
       levelSelection: mission.levelSelection,
