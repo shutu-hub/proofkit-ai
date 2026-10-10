@@ -1,4 +1,4 @@
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -247,6 +247,7 @@ describe("MissionAgent", () => {
 
   it("persists one suspected finding when a tool throws", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mission-"));
+    const privateErrorText = "candidate-email=private@example.invalid token=secret-credential";
     const tools = new InMemoryMissionToolRegistry([
       {
         name: "project.discover",
@@ -256,7 +257,7 @@ describe("MissionAgent", () => {
         timeoutMs: 1000,
         inputSchema: z.object({}),
         execute: async () => {
-          throw new Error("fixture surface is unavailable");
+          throw new Error(`fixture surface is unavailable: ${privateErrorText}`);
         },
       },
     ]);
@@ -268,12 +269,15 @@ describe("MissionAgent", () => {
     expect(result.verdict).toBe("failed");
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0]?.status).toBe("failed");
-    expect(result.toolCalls[0]?.error).toContain("fixture surface is unavailable");
+    expect(result.toolCalls[0]?.error).toContain("failed without a verified result");
     expect(result.agentSteps[0]).toMatchObject({ status: "failed", endedAt: expect.any(String) });
     expect(result.currentTaskId).toBeUndefined();
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.status).toBe("suspected");
-    expect(result.findings[0]?.message).toContain("fixture surface is unavailable");
+    expect(result.findings[0]?.message).toContain("failed without a verified result");
+    expect(result.firstFailure).toMatchObject({ kind: "environment", stepId: "reconnaissance", evidence: [] });
+    expect(JSON.stringify(result)).not.toContain(privateErrorText);
+    expect(await readFile(join(root, `${created.missionId}.json`), "utf8")).not.toContain(privateErrorText);
   });
 
   it("settles a thrown suite tool call without starting another workflow", async () => {

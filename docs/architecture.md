@@ -338,6 +338,13 @@ also closes all three audit records and stops the Mission, including a suite:
 the tool may have failed before its resource cleanup completed. A suite
 continues independent workflows after an explicit failed Run result whose
 normal lifecycle has completed, not after an unhandled tool exception.
+The Agent does not persist an arbitrary exception message from a registered
+tool in those records, the first-failure boundary or the Mission Finding.
+Instead it records the tool identity and a bounded test-infrastructure reason;
+connector authors inspect their trusted local diagnostics for the underlying
+exception. This protects Mission reports from accidental response-body or
+credential text in an exception, but does not sanitize literal Charter inputs
+or connector-authored evidence projections.
 
 Mission cancellation and deadlines propagate through primary, replay and
 negative-case tools to the Local Runner's Run signal. Business observers and

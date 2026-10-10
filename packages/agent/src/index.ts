@@ -559,6 +559,7 @@ export class MissionAgent {
     } catch (error) {
       if (controller.signal.aborted) {
         const timedOut = isMissionTimeout(controller.signal.reason);
+        const reason = timedOut ? controller.signal.reason.message : "Mission cancelled before execution completed.";
         return this.save({
           ...mission,
           status: "cancelled",
@@ -568,18 +569,17 @@ export class MissionAgent {
             timedOut ? "medium" : "info",
             "environment",
             timedOut ? "Mission timed out" : "Mission cancelled",
-            toError(error).message,
+            reason,
           )],
-          ...(timedOut && !mission.firstFailure ? { firstFailure: timeoutBoundary(toError(error).message) } : {}),
+          ...(timedOut && !mission.firstFailure ? { firstFailure: timeoutBoundary(reason) } : {}),
         });
       }
-      const cause = toError(error);
       const current = await this.load(mission.missionId).catch(() => mission);
       return this.save({
         ...current,
         status: "failed",
         verdict: "failed",
-        findings: [...current.findings, finding("mission-system-failure", "high", "test", "Mission execution failed", cause.message, "suspected")],
+        findings: [...current.findings, finding("mission-system-failure", "high", "test", "Mission execution failed", "Mission execution stopped before a complete tool receipt was saved. Inspect trusted local diagnostics.", "suspected")],
       });
     } finally {
       clearTimeout(timeout);
@@ -754,17 +754,23 @@ export class MissionAgent {
       const toolTimedOut = !cancelled && isMissionToolTimeout(toolController.signal.reason);
       const status = cancelled ? "cancelled" : toolTimedOut ? "blocked" : "failed";
       const missionTimedOut = cancelled && isMissionTimeout(signal.reason);
-      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, charterId: task.charterId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: cause.message, evidence: cancelledResult?.evidence ?? [] });
+      const cleanupUnsettled = cause instanceof ToolCleanupTimeoutError;
+      const safeError = missionTimedOut ? signal.reason.message
+        : cancelled ? `Mission tool ${tool.name} was cancelled before completion.`
+          : toolTimedOut ? `Mission tool ${tool.name} timed out.`
+            : `Mission tool ${tool.name} failed without a verified result; inspect trusted local diagnostics.`;
+      const detail = cleanupUnsettled ? `${safeError} Tool cleanup did not finish; resources may still be active.` : safeError;
+      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, charterId: task.charterId, tool: tool.name, attempt: runningTask.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: detail, evidence: cancelledResult?.evidence ?? [] });
       const agentStep = completeAgentStep(startedMission.agentSteps, agentStepId, {
         status,
         endedAt: new Date().toISOString(),
         durationMs: Date.now() - Date.parse(startedAt),
-        error: cause.message,
+        error: detail,
         output: cancelledResult?.output,
         observationIds: (cancelledResult?.observations ?? []).map((item) => item.observationId),
         evidence: cancelledResult?.evidence ?? [],
       });
-      const failedTask = updateTask(startedMission, { ...runningTask, status: status === "failed" ? "failed" : "blocked", error: cause.message }, { currentTaskId: undefined });
+      const failedTask = updateTask(startedMission, { ...runningTask, status: status === "failed" ? "failed" : "blocked", error: detail }, { currentTaskId: undefined });
       return this.save({
         ...failedTask,
         agentSteps: replaceAgentStep(startedMission.agentSteps, agentStep),
@@ -776,12 +782,14 @@ export class MissionAgent {
           missionTimedOut ? "medium" : toolTimedOut ? "high" : status === "cancelled" ? "info" : "medium",
           status === "cancelled" || toolTimedOut ? "environment" : "test",
           missionTimedOut ? "Mission timed out" : toolTimedOut ? `Mission tool timed out: ${tool.name}` : `Task ${task.taskId} did not complete`,
-          cause.message,
+          detail,
           status === "cancelled" || toolTimedOut ? "confirmed" : "suspected",
-        ), ...(cancelledResult?.findings ?? []).map((item) => FindingSchema.parse(item)), ...(cause instanceof ToolCleanupTimeoutError ? [finding(
-          `cleanup-${task.taskId}`, "high", "environment", "Tool cleanup did not finish", cause.message,
+        ), ...(cancelledResult?.findings ?? []).map((item) => FindingSchema.parse(item)), ...(cleanupUnsettled ? [finding(
+          `cleanup-${task.taskId}`, "high", "environment", "Tool cleanup did not finish", detail,
         )] : [])],
-        ...((missionTimedOut || toolTimedOut) && !startedMission.firstFailure ? { firstFailure: timeoutBoundary(cause.message) } : {}),
+        ...((status !== "cancelled" || missionTimedOut) && !startedMission.firstFailure ? { firstFailure: FailureBoundarySchema.parse({
+          kind: "environment", stepId: task.taskId, message: detail, evidence: [], observedAt: new Date().toISOString(),
+        }) } : {}),
         status,
         verdict: status === "cancelled" ? "cancelled" : toolTimedOut ? "blocked" : "failed",
       });
