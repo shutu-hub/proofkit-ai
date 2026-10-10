@@ -214,7 +214,8 @@ export class WebAdapter implements SurfaceAdapter {
         break;
       }
       case "waitForText":
-        await page.getByText(action.text, { exact: false }).first().waitFor({ state: "visible", timeout: action.timeoutMs ?? 10_000 });
+        await page.getByText(action.text, { exact: false }).filter({ visible: true }).first()
+          .waitFor({ state: "visible", timeout: action.timeoutMs ?? 10_000 });
         break;
       case "screenshot":
       case "observe":

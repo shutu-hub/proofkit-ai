@@ -21,7 +21,7 @@ const web = createServer((request, response) => {
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   const path = new URL(request.url, "http://127.0.0.1").pathname;
   if (["/delayed", "/diagnostics", "/auth-blocked", "/never"].includes(path)) {
-    response.end(`<!doctype html><title>Delayed inspection fixture</title><div id="app"></div><script>
+    response.end(`<!doctype html><title>Delayed inspection fixture</title><p style="display:none">Delayed controls ready</p><div id="app"></div><script>
       ${path === "/diagnostics" ? "setTimeout(()=>{for(let i=0;i<15;i++)console.error('runtime diagnostic '+i+' qa@example.com');},450);" : ""}
       ${path === "/auth-blocked" ? "setTimeout(()=>console.error('AuthRequiredError: test session expired'),450);" : ""}
       ${path === "/never" ? "" : "setTimeout(()=>{document.querySelector('#app').innerHTML='<h1>Delayed controls ready</h1><button id=ready>Continue</button>';},1200);"}
@@ -87,6 +87,7 @@ try {
   const delayed = JSON.parse(delayedResponse.content.find((item) => item.type === "text").text);
   assert.equal(delayed.status, "observed");
   assert.equal(delayed.readiness.status, "observed");
+  assert.ok(delayed.snapshot.text.includes("Delayed controls ready"), "A later visible match must satisfy readiness despite an earlier hidden match");
   assert.equal(delayed.snapshot.controls.find((item) => item.name === "Continue")?.selector, "#ready");
   const delayedRun = JSON.parse(await readFile(join(workspaceRoot, ".proofkit/runs", delayed.inspectionId, "run.json"), "utf8"));
   assert.deepEqual(delayedRun.charter.actions.map((action) => action.kind), ["waitForText", "observe"]);
