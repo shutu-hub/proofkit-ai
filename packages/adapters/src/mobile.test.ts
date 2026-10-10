@@ -151,6 +151,32 @@ describe("MobileAdapter", () => {
     expect((await adapter.assert({ kind: "text-not-visible", text: `He said "don't"` })).passed).toBe(true);
     expect(expression).toContain(`concat("He said ", '"', "don't", '"', "")`);
   });
+
+  it("summarizes mobile labels without persisting editable or secure source values", async () => {
+    globalThis.fetch = vi.fn(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/source")) return response({ value: `<hierarchy>
+        <node text="Submit" content-desc="Send" displayed="true"/>
+        <android.widget.EditText text="typed-secret"/>
+        <node text="secure-secret" password="true"/>
+        <node text="hidden-secret" displayed="false"/>
+        <node label="alice@example.com"/>
+        <node text="12345678901"/>
+      </hierarchy>` });
+      if (path.endsWith("/url")) return response({ value: "https://user:pass@example.com/app?token=secret#private" });
+      if (path.endsWith("/title")) return response({ value: "Mobile" });
+      throw new Error(`unexpected request ${path}`);
+    }) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    await adapter.connect();
+    const snapshot = await adapter.snapshot();
+    expect(snapshot.url).toBe("https://example.com/app");
+    expect(snapshot.text).toContain("Submit");
+    expect(snapshot.text).toContain("Send");
+    expect(snapshot.text).toContain("[REDACTED_EMAIL]");
+    expect(snapshot.text).not.toMatch(/typed-secret|secure-secret|hidden-secret|alice@example.com/);
+    expect(snapshot.text).not.toContain("token=secret");
+  });
 });
 
 function response(body: unknown): Response {

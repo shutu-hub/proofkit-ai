@@ -859,6 +859,7 @@ export const ProofkitConfigSchema = z.object({
     }).optional(),
     mobile: z.object({
       serverUrl: z.string().url().default("http://127.0.0.1:4723"),
+      readyWhen: SurfaceReadinessSchema.optional(),
       platformName: z.string().min(1).optional(),
       deviceName: z.string().min(1).optional(),
       automationName: z.string().min(1).optional(),

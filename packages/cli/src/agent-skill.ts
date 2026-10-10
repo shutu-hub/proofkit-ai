@@ -1,7 +1,7 @@
 /** Portable Agent Skills content; the host supplies reasoning, MCP supplies execution. */
 export const PROOFKIT_TEST_SKILL = `---
 name: proofkit-test
-description: Test Web or Electron product workflows with ProofKit MCP, independent business checks and saved evidence. Use for feature acceptance, core-module testing, release regression and verification after a fix.
+description: Test Web, Electron or mobile product workflows with ProofKit MCP, independent business checks and saved evidence. Use for feature acceptance, core-module testing, release regression and verification after a fix.
 ---
 
 # ProofKit testing
@@ -122,8 +122,11 @@ For an authorized fix, use replay_mission on the original Mission with the
 same scope and fixture bytes, then compare_missions after the replay finishes.
 Report verified-in-scope only when the comparison says so. A different scenario
 or passing page cannot certify the original defect or the entire project.
-Mobile has a driver adapter but no real-device acceptance yet; inspect_surface,
-file selection and response capture currently support Web/Electron only.
+Mobile inspect_surface returns a bounded driver-label snapshot and evidence with
+testVerdict not-asserted; it does not provide validated selector hints or a
+device-backed acceptance claim. File selection and response capture currently
+support Web/Electron only. Mobile business testing still needs a real-device
+acceptance run before claiming device coverage.
 `;
 
 export const PROOFKIT_CHARTER_AUTHORING = `# Author a ProofKit Charter

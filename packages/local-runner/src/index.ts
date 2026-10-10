@@ -65,12 +65,12 @@ export type LocalRunStatus = {
   report?: string;
 };
 
-export type SurfaceInspectionInput = Pick<LocalRunInput, "adapter" | "url" | "cdp" | "devtoolsPortFile" | "headful" | "signal"> & {
+export type SurfaceInspectionInput = Pick<LocalRunInput, "adapter" | "url" | "cdp" | "devtoolsPortFile" | "mobileServer" | "headful" | "signal"> & {
   readyWhen?: { text: string; timeoutMs?: number };
 };
 export type SurfaceInspection = {
   inspectionId: string;
-  surface: "web" | "electron";
+  surface: "web" | "electron" | "mobile";
   status: "observed" | "failed" | "blocked" | "cancelled";
   /** Inspection records what was visible; it does not assert product success. */
   testVerdict: "not-asserted";
@@ -257,7 +257,6 @@ export class LocalRunnerService {
 
   async inspectSurface(input: SurfaceInspectionInput = {}): Promise<SurfaceInspection> {
     const surface = input.adapter ?? "web";
-    if (surface === "mobile") throw new Error("Surface inspection currently supports Web and Electron; mobile inspection needs device-backed semantics");
     if (surface === "web" && !(input.url || input.cdp || this.config.surfaces.web?.baseUrl || this.config.surfaces.web?.cdpUrl)) {
       throw new Error("Web inspection needs a configured baseUrl, CDP endpoint, or explicit URL");
     }
@@ -802,8 +801,8 @@ export class LocalRunnerService {
       return { output: project, observations: [observation, revisionObservation] };
     };
     const inspect = async (_input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
-      if (context.mission.surface === "api" || context.mission.surface === "mobile") {
-        throw new Error("Surface inspection currently supports Web and Electron");
+      if (context.mission.surface === "api") {
+        throw new Error("Surface inspection is unavailable for API-only Missions");
       }
       const result = await this.inspectSurface({ adapter: context.mission.surface, signal: context.signal });
       const observation = ObservationSchema.parse({

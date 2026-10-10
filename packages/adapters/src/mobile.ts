@@ -1,6 +1,7 @@
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceSnapshot } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceActionContext, SurfaceAdapter } from "@proofkit/runner";
 import { BlockedError, InconclusiveError } from "@proofkit/runner";
+import { sanitizeSurfaceText, sanitizeSurfaceUrl } from "./surface-sanitize.js";
 
 export type MobileAdapterOptions = {
   /** Appium or another W3C WebDriver compatible server URL. */
@@ -58,10 +59,10 @@ export class MobileAdapter implements SurfaceAdapter {
     ]);
     return {
       capturedAt: new Date().toISOString(),
-      ...(typeof url === "string" ? { url } : {}),
-      ...(typeof title === "string" ? { title } : {}),
-      text: typeof source === "string" ? source.slice(0, 20_000) : undefined,
-      metadata: { adapter: this.name, protocol: "W3C WebDriver" },
+      ...(typeof url === "string" ? { url: sanitizeSurfaceUrl(url) } : {}),
+      ...(typeof title === "string" ? { title: sanitizeSurfaceText(title, 200) } : {}),
+      text: typeof source === "string" ? summarizeMobileSource(source) : undefined,
+      metadata: { adapter: this.name, protocol: "W3C WebDriver", sourceTextScope: "non-editable-xml-labels" },
     };
   }
 
@@ -107,8 +108,8 @@ export class MobileAdapter implements SurfaceAdapter {
       startedAt,
       endedAt: new Date().toISOString(),
       durationMs: Date.now() - started,
-      ...(before ? { urlBefore: before } : {}),
-      ...(after ? { urlAfter: after } : {}),
+      ...(before ? { urlBefore: sanitizeSurfaceUrl(before) } : {}),
+      ...(after ? { urlAfter: sanitizeSurfaceUrl(after) } : {}),
       metadata: { adapter: this.name },
     };
   }
@@ -266,6 +267,41 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
     const onAbort = () => { clearTimeout(timer); signal.removeEventListener("abort", onAbort); reject(signal.reason); };
     if (signal.aborted) onAbort();
     else signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Extract labels from a bounded XML prefix; never retain raw attributes or editable values. */
+function summarizeMobileSource(source: string): string {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const tag of source.slice(0, 256_000).matchAll(/<([A-Za-z][A-Za-z0-9_.:-]{0,100})\b([^<>]{0,4096})>/g)) {
+    const name = tag[1] ?? "";
+    if (/(?:EditText|TextField|TextArea|Secure|Password|Input)/i.test(name)) continue;
+    const attributes = new Map<string, string>();
+    for (const attribute of (tag[2] ?? "").matchAll(/([A-Za-z_:][A-Za-z0-9_.:-]*)\s*=\s*(["'])(.*?)\2/g)) {
+      attributes.set((attribute[1] ?? "").toLowerCase(), attribute[3] ?? "");
+    }
+    if (["password", "secure"].some((key) => /^(true|1)$/i.test(attributes.get(key) ?? ""))) continue;
+    if (/^(false|0)$/i.test(attributes.get("displayed") ?? "")) continue;
+    for (const key of ["text", "label", "name", "content-desc"]) {
+      const raw = attributes.get(key);
+      if (!raw) continue;
+      const label = sanitizeSurfaceText(decodeXmlAttribute(raw), 200).trim();
+      if (!label || seen.has(label)) continue;
+      seen.add(label);
+      labels.push(label);
+      if (labels.length >= 60) return labels.join("\n").slice(0, 20_000);
+    }
+  }
+  return labels.join("\n").slice(0, 20_000);
+}
+
+function decodeXmlAttribute(value: string): string {
+  return value.replace(/&(?:amp|lt|gt|quot|apos|#\d{1,7}|#x[0-9a-fA-F]{1,6});/g, (entity) => {
+    const named: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'" };
+    if (named[entity]) return named[entity];
+    const code = entity.startsWith("&#x") ? Number.parseInt(entity.slice(3, -1), 16) : Number.parseInt(entity.slice(2, -1), 10);
+    return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
   });
 }
 

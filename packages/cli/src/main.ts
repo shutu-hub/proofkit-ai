@@ -109,22 +109,24 @@ export function createProgram(): Command {
     });
 
   program.command("inspect")
-    .description("Observe the current Web or Electron surface and list bounded selector hints")
+    .description("Observe the current Web, Electron or mobile surface without asserting product success")
     .option("--root <path>", "project root", ".")
-    .option("--adapter <adapter>", "web or electron", "web")
+    .option("--adapter <adapter>", "web, electron or mobile", "web")
     .option("--url <url>", "Web entry URL")
     .option("--cdp <url>", "local CDP endpoint")
     .option("--devtools-port-file <path>", "Electron DevToolsActivePort path")
+    .option("--mobile-server <url>", "mobile WebDriver server URL")
     .option("--headful", "launch a visible Web browser")
     .option("--ready-text <text>", "wait for visible text before observing (overrides configured readyWhen)")
     .option("--ready-timeout-ms <milliseconds>", "readiness timeout (100-15000, default 5000)")
-    .action(async (options: RootOptions & { adapter: string; url?: string; cdp?: string; devtoolsPortFile?: string; headful?: boolean; readyText?: string; readyTimeoutMs?: string }) => {
-      if (options.adapter !== "web" && options.adapter !== "electron") throw new Error("Inspection adapter must be web or electron");
-      if (options.adapter === "electron" && options.url) throw new Error("Electron inspection uses CDP page selection, not --url");
+    .action(async (options: RootOptions & { adapter: string; url?: string; cdp?: string; devtoolsPortFile?: string; mobileServer?: string; headful?: boolean; readyText?: string; readyTimeoutMs?: string }) => {
+      if (options.adapter !== "web" && options.adapter !== "electron" && options.adapter !== "mobile") throw new Error("Inspection adapter must be web, electron or mobile");
+      if (options.adapter !== "web" && options.url) throw new Error("Only Web inspection accepts --url");
+      if (options.adapter !== "mobile" && options.mobileServer) throw new Error("--mobile-server requires --adapter mobile");
       if (options.readyTimeoutMs !== undefined && options.readyText === undefined) throw new Error("--ready-timeout-ms requires --ready-text");
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       const inspection = await runner.inspectSurface({ adapter: options.adapter, url: options.url, cdp: options.cdp,
-        devtoolsPortFile: options.devtoolsPortFile, headful: options.headful,
+        devtoolsPortFile: options.devtoolsPortFile, mobileServer: options.mobileServer, headful: options.headful,
         readyWhen: options.readyText === undefined ? undefined : { text: options.readyText, timeoutMs: options.readyTimeoutMs === undefined ? undefined : Number(options.readyTimeoutMs) } });
       console.log(JSON.stringify(inspection, null, 2));
       if (inspection.status !== "observed") process.exitCode = 1;

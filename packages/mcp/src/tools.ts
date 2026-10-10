@@ -35,10 +35,10 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "inspect_surface",
-    "Observe the configured Web or Electron page after an optional visible-text prerequisite. Return bounded controls, runtime diagnostics and evidence. This is reconnaissance, not a product pass verdict.",
-    { surface: z.enum(["web", "electron"]).default("web"), url: z.string().url().optional(), readyWhen: SurfaceReadinessSchema.optional() },
+    "Observe the configured Web, Electron or mobile surface after an optional visible-text prerequisite. Web/Electron return bounded controls; mobile returns a bounded driver snapshot. This is reconnaissance, not a product pass verdict.",
+    { surface: z.enum(["web", "electron", "mobile"]).default("web"), url: z.string().url().optional(), readyWhen: SurfaceReadinessSchema.optional() },
     async ({ surface, url, readyWhen }, extra) => {
-      if (surface === "electron" && url) throw new Error("Electron inspection uses the configured CDP page selector; url is only for Web");
+      if (surface !== "web" && url) throw new Error("Only Web inspection accepts a URL override; Electron uses CDP and mobile uses its configured WebDriver server");
       return result(await runner.inspectSurface({ adapter: surface, url: surfaceUrl(url, runner), readyWhen, signal: extra.signal }));
     },
   );

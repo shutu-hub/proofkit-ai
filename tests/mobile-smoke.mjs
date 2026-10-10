@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -53,7 +54,8 @@ try {
   await writeFile(join(workspaceRoot, ".proofkit", "charters", "mobile-submit.yml"), new IntentPlanner().toYaml(charter));
   await writeFile(join(workspaceRoot, ".proofkit", "config.yaml"), JSON.stringify({
     project: { root: source }, surfaces: { mobile: { serverUrl, platformName: "Android",
-      automationName: "UiAutomator2", deviceName: "proofkit-fixture" } },
+      automationName: "UiAutomator2", deviceName: "proofkit-fixture",
+      readyWhen: { text: "Submit", timeoutMs: 1000 } } },
     policies: { environment: "test", sideEffects: "allow" },
     charters: [{ id: "mobile-submit", path: ".proofkit/charters/mobile-submit.yml",
       aliases: ["测试移动端提交"], level: "core", surfaces: ["mobile"] }],
@@ -63,6 +65,22 @@ try {
   client = new Client({ name: "proofkit-mobile-smoke", version: "1" });
   await Promise.all([mcp.connect(serverTransport), client.connect(clientTransport)]);
 
+  const inspection = payload(await client.callTool({ name: "inspect_surface",
+    arguments: { surface: "mobile" } }));
+  assert.equal(inspection.surface, "mobile");
+  assert.equal(inspection.status, "observed");
+  assert.equal(inspection.testVerdict, "not-asserted");
+  assert.equal(inspection.readiness.status, "observed");
+  assert.match(inspection.snapshot.text, /Submit/);
+  assert.ok(inspection.evidence.some((item) => item.kind === "screenshot"));
+  assert.equal(requests.filter((item) => item.endsWith("/click")).length, 0);
+  const cliInspection = await inspectThroughCli(serverUrl);
+  assert.equal(cliInspection.surface, "mobile");
+  assert.equal(cliInspection.status, "observed");
+  assert.equal(cliInspection.testVerdict, "not-asserted");
+  assert.equal(cliInspection.readiness.status, "observed");
+  assert.equal(requests.filter((item) => item.endsWith("/click")).length, 0);
+
   const success = await runMission("passed");
   mode = "business-defect";
   const defect = await runMission("failed");
@@ -71,10 +89,10 @@ try {
   assert.ok(requests.some((item) => item.endsWith("/elements")));
   assert.ok(requests.some((item) => item.endsWith("/displayed")));
   assert.equal(requests.filter((item) => item.endsWith("/click")).length, 2);
-  assert.equal(requests.filter((item) => item.startsWith("DELETE /session/")).length, 2);
+  assert.equal(requests.filter((item) => item.startsWith("DELETE /session/")).length, 4);
   assert.equal(await readFile(join(source, "package.json"), "utf8"), sourceBytes);
   console.log(JSON.stringify({ successMission: success.missionId, defectMission: defect.missionId,
-    verified: ["native-mcp-mobile-core", "w3c-http-session", "displayed-text", "independent-business-oracle",
+    verified: ["native-mcp-mobile-inspection", "cli-mobile-inspection", "native-mcp-mobile-core", "w3c-http-session", "displayed-text", "independent-business-oracle",
       "evidence-linked-defect", "session-cleanup", "external-workspace", "source-unchanged"] }, null, 2));
 } finally {
   await client?.close();
@@ -113,6 +131,23 @@ async function runMission(expectedVerdict) {
   assert.equal(run.oracles[0].passed, expectedVerdict === "passed");
   assert.equal(run.steps[1].action.kind, "click");
   return evidence;
+}
+
+async function inspectThroughCli(serverUrl) {
+  return await new Promise((resolveInspection, rejectInspection) => {
+    const child = spawn(process.execPath, [join(process.cwd(), "bundle", "main.js"), "inspect",
+      "--root", source, "--workspace", workspaceRoot, "--adapter", "mobile",
+      "--mobile-server", serverUrl, "--ready-text", "Submit"], { windowsHide: true });
+    let output = "";
+    let errors = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { errors += chunk; });
+    child.on("error", rejectInspection);
+    child.on("close", (code) => {
+      if (code !== 0) rejectInspection(new Error(`Mobile CLI inspection failed: ${errors}`));
+      else try { resolveInspection(JSON.parse(output)); } catch (error) { rejectInspection(error); }
+    });
+  });
 }
 
 async function handle(request, response) {
@@ -165,9 +200,13 @@ async function handle(request, response) {
   }
   if (route === "elements" && request.method === "POST") {
     const body = JSON.parse(await bodyText(request));
-    const found = body.using === "xpath" && body.value.includes("Submitted") && session.clicked;
+    if (body.using === "xpath" && body.value.includes('"Submit"')) {
+      return send([{ "element-6066-11e4-a52e-4f735466cecf": "submit-button" }]);
+    }
+    const found = body.using === "xpath" && body.value.includes('"Submitted"') && session.clicked;
     return send(found ? [{ "element-6066-11e4-a52e-4f735466cecf": "submitted-label" }] : []);
   }
+  if (route === "element/submit-button/displayed") return send(true);
   if (route === "element/submitted-label/displayed") return send(session.clicked);
   if (route === "element/submit-button/click" && request.method === "POST") {
     session.clicked = true;

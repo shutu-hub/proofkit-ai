@@ -11,7 +11,7 @@ flowchart TD
   L --> P[项目扫描与 Charter 校验]
   P --> A[Mission：可恢复任务图]
   A --> R[Execution Runner：执行生命周期]
-  R --> S[Web / Electron 适配器]
+  R --> S[Web / Electron / Mobile 适配器]
   R --> O[业务 Oracle 与连接器]
   R --> T[应用进程与运行信号]
   S --> E[证据存储]
@@ -48,7 +48,7 @@ Runner 在执行页面步骤前原子保存资源登记日志。若进程退出�
 
 同一外部测试工作区的 Run 另有本机进程级独占租约。预检通过后、项目 setup 和页面连接前获取；已被另一个 Run 占用时，本次 Run 留下 `blocked` 证据而不连接页面。显式 CDP 地址及 WebDriver 服务器还有跨工作区的本机目标租约。Electron 的 `DevToolsActivePort` 先按文件路径协调；已有端口文件在 setup 前加锁其 CDP 端口，启动阶段新建或改写的端口文件在 setup 后再次解析并加锁，适配器固定连接最终已加锁的端点。不同端口文件指向同一端口也会阻断并发连接。租约覆盖正常清理以及仍在进行的迟到 setup/连接清理；进程退出由操作系统释放。不同工作区共享业务账号或后端、以及跨主机共享资源，仍需外部隔离或协调。
 
-页面检查可在 Web/Electron 配置一次 `readyWhen: { text: "登录", timeoutMs: 5000 }`，也可通过 MCP/CLI 覆盖。它复用 Runner 的 `waitForText → observe` 步骤，在已有总截止时间内等待主页面的可见文字，再保存控件、截图和事件。返回 `readiness` 区分未要求、已观察和未验证；缺少条件不会返回成功快照，也不证明产品有缺陷。结果同时返回最多十条已有运行异常及省略数量，完整异常保留在 Run 证据中。观察到文字只证明这一时刻的条件，页面仍可能有运行异常；产品结论始终是 `not-asserted`。配置了可信连接器时，检查仍使用其 preflight/setup/cleanup 生命周期，隔离责任由连接器承担。
+页面检查可在 Web/Electron/Mobile 配置一次 `readyWhen: { text: "登录", timeoutMs: 5000 }`，也可通过 MCP/CLI 覆盖。它复用 Runner 的 `waitForText → observe` 步骤，在已有总截止时间内等待可见文字，再保存快照、截图和事件；Web/Electron 另提供控件线索。移动端快照只提取有界、脱敏的非编辑 XML 标签，不承诺已验证的选择器。返回 `readiness` 区分未要求、已观察和未验证；缺少条件不会返回成功快照，也不证明产品有缺陷。结果同时返回最多十条已有运行异常及省略数量，完整异常保留在 Run 证据中。观察到文字只证明这一时刻的条件，页面仍可能有运行异常；产品结论始终是 `not-asserted`。配置了可信连接器时，检查仍使用其 preflight/setup/cleanup 生命周期，隔离责任由连接器承担。
 
 环境检查与页面检查都不产生产品通过结论。CLI `proofkit environment` 与 MCP 共用 Local Runner，在一个总截止时间内检查配置、HTTP/CDP 状态、最多八个后端健康端点及本地进程源码关联，保存带 SHA-256 的 JSON 快照；不启动应用、浏览器或调用连接器操作。HTTP 检查收到响应头即可结束，不跟随重定向，不保存响应正文、响应头、查询参数或原始网络错误；端点路径仍可见。结果明确列出未检查的登录、样本、连接器隔离门禁、业务终态与项目覆盖，不能把“端点可达”当作“功能已验收”。服务创建仍会加载可信连接器的注册代码。
 
@@ -105,7 +105,7 @@ Mission 采集 Run 证据时，业务事实、断言快照等 artifact 必须同
 
 ## 当前边界与下一阶段
 
-Web/Electron 已有真实隔离样例验证，包含跨端回放、注入缺陷、业务来源证据和结果比较。AIHR 普通上传、在线采集和手动录入均有连接器参考；手动录入用本次响应的身份和文件摘要核对五个业务 reader，缺失身份、重试或合法版本改绑保持证据不足。真实部署的简历业务验收仍待完成。移动端已有 W3C/Appium 适配器；MCP → Mission → Runner → HTTP 假 WebDriver → 独立业务 Oracle 的核心链路已验证成功和后台缺陷两种结果。文字断言查询元素的 `/displayed` 状态，驱动无法验证时返回证据不足。模拟器、真实设备和真实移动业务仍待验收。
+Web/Electron 已有真实隔离样例验证，包含跨端回放、注入缺陷、业务来源证据和结果比较。AIHR 普通上传、在线采集和手动录入均有连接器参考；手动录入用本次响应的身份和文件摘要核对五个业务 reader，缺失身份、重试或合法版本改绑保持证据不足。真实部署的简历业务验收仍待完成。移动端已有 W3C/Appium 适配器；MCP/CLI 页面侦察及 MCP → Mission → Runner → HTTP 假 WebDriver → 独立业务 Oracle 的核心链路已验证成功和后台缺陷两种结果。文字断言查询元素的 `/displayed` 状态，驱动无法验证时返回证据不足。模拟器、真实设备和真实移动业务仍待验收。
 
 Mission 紧凑结果页汇总结论、验收范围、场景与各端执行、首个失败、证据和修复回放比较。MCP `get_mission_evidence` 返回 `summary`、报告路径及当前 `evidenceIntegrity`：`intact`、`degraded`、`partial` 或 `no-evidence`，并列出已检查引用和可继续支持的可见产品问题数。它只覆盖有界展示结果；独立的 `acceptanceEvidenceIntegrity` 审计整个 Mission 保存的证据引用，最多检查 2048 条。结果页因展示上限为 `partial` 时，只要完整证据审计为 `intact`，仍可保留通过结论；完整审计损坏、缺失或超限则把历史通过降为 `inconclusive`。已保存的失败若声称确认产品缺陷，却缺少明确分类的业务证明或其引用证据已经失效，当前结论也降为 `inconclusive`；证据完好的普通测试失败仍为 `failed`。CLI `mission report` 生成同一静态快照；`summary.json`、MCP 和报告页面共用当前审计后的 `testVerdict`，同时保留历史 `verdict`。报告保留缺失运行、覆盖缺口及负向测试的预期结果，证据缺失、越界或摘要不符时显示不可用。完整证据审计不等于全项目覆盖证明；修复比较需要重新运行才能给出当前证明。
 

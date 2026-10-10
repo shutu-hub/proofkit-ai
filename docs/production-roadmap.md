@@ -292,7 +292,7 @@ Mission evidence now includes a bounded result projection and a static HTML/JSON
 - Keep Maestro or device-cloud provisioning as separate adapters so the local Runner does not own device lifecycle.
 - Keploy-style traffic fixtures for deterministic asynchronous backend setup.
 
-**Current evidence:** `@proofkit/adapters` has a tested W3C WebDriver mobile adapter, and the contracts, Local Runner, CLI and MCP accept `mobile` as a surface. `pnpm test:smoke:mobile` exercises native MCP, a core Mission, real HTTP requests to a fake WebDriver, displayed-text assertions, independent business acceptance, defect evidence and session cleanup. It does not exercise an emulator or device. An emulator-backed business run remains required.
+**Current evidence:** `@proofkit/adapters` has a tested W3C WebDriver mobile adapter, and the contracts, Local Runner, CLI and MCP accept `mobile` as a surface. `inspect_surface` now reuses the ordinary Run lifecycle for mobile reconnaissance; its bounded label snapshot and screenshot are explicitly `not-asserted`, with no validated selector hints. `pnpm test:smoke:mobile` exercises native MCP inspection, a core Mission, real HTTP requests to a fake WebDriver, displayed-text assertions, independent business acceptance, defect evidence and session cleanup. It does not exercise an emulator or device. An emulator-backed business run remains required.
 
 **Gate:** one business Charter runs on Web, Electron and a real mobile adapter with surface-specific actions but the same business Oracle contract.
 

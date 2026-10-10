@@ -106,6 +106,7 @@ describe("ProofKit MCP tools", () => {
       for (const readyWhen of [{ text: " " }, { text: "ready", timeoutMs: 15001 }, { text: "ready", timeoutMs: 99 }]) {
         expect((await client.callTool({ name: "inspect_surface", arguments: { readyWhen } })).isError).toBe(true);
       }
+      expect((await client.callTool({ name: "inspect_surface", arguments: { surface: "mobile", url: "http://127.0.0.1:4723" } })).isError).toBe(true);
       expect(runner.inspectSurface).not.toHaveBeenCalled();
       const controller = new AbortController();
       const request = client.callTool({ name: "inspect_surface", arguments: { readyWhen: { text: "ready" } } }, undefined, { signal: controller.signal });
