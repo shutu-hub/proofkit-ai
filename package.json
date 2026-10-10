@@ -27,6 +27,10 @@
     "test:smoke:recovery": "pnpm build && node tests/resource-recovery-smoke.mjs",
     "test:distribution": "node tests/distribution-smoke.mjs",
     "benchmark:planner": "pnpm build && node tests/planner-benchmark.mjs",
+    "benchmark:host": "pnpm build && node tests/host-evaluation.mjs",
+    "benchmark:host:baseline": "pnpm build && node tests/host-evaluation-baseline.mjs",
+    "test:host-verifier": "node --test tests/host-evaluation-verifier.test.mjs tests/host-evaluation-runtime.test.mjs",
+    "test:host-evaluator": "pnpm build && node --test tests/host-evaluation-cli.test.mjs",
     "dev": "pnpm --filter @proofkit/cli dev"
   },
   "dependencies": {

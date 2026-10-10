@@ -80,6 +80,8 @@ Runner 在执行页面步骤前原子保存资源登记日志。若进程退出�
 
 `proofkit agent setup --harness codex|claude-code|generic` 生成便于宿主接入的配置与 `proofkit-test` Skill。配置采用当前安装的绝对 Node/MCP 路径，服务器名绑定源项目与外部工作区；可用 `--install-skill` 安装个人 Skill。Codex 默认 `~/.agents/skills`，Claude Code 默认 `~/.claude/skills`，generic 安装需显式指定宿主的 Skill 目录。接入产物使用内容摘要目录，重复生成复用，已有自定义 Skill 不覆盖。此命令不加载连接器、不启动应用、不修改宿主 MCP 设置，返回未检查连接及 `not-asserted`；用户或宿主仍需注册配置并调用 `inspect_test_scope` 核对绑定。Skill 固化测试流程，实际模型执行质量仍需评测。
 
+宿主链路新增六个合成案例基线：通过生成的原生 MCP 启动配置连接真实 Chrome，检查核心测试通过、业务关联错误、任务未完成、全项目覆盖缺口、快速测试与无目录 Charter，并校验保存的 Mission、Run、报告及证据摘要。该基线使用脚本调用，不代表模型遵循 Skill。首次真实 Codex 评测遇到提供商余额不足与 MCP 调用取消，尚不能判断自然语言激活或误报率；评测器现会把环境阻断与产品测试结果分开并停止后续案例。
+
 ## 当前边界与下一阶段
 
 Web/Electron 已有真实隔离样例验证，包含跨端回放、注入缺陷、业务来源证据和结果比较。AIHR 普通上传、在线采集和手动录入均有连接器参考；手动录入用本次响应的身份和文件摘要核对五个业务 reader，缺失身份、重试或合法版本改绑保持证据不足。真实部署的简历业务验收仍待完成。移动端已有 W3C/Appium 适配器，真实设备尚未验收。

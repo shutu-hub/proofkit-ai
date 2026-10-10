@@ -57,6 +57,38 @@ Skill requires reviewing and moving the old Skill before reinstalling.
 The path checks are cooperative local protections, not an adversarial
 filesystem sandbox or crash-durability guarantee.
 
+## Host effectiveness check
+
+The source checkout includes two distinct evaluations after `pnpm build`:
+
+```bash
+node tests/host-evaluation-baseline.mjs
+node tests/host-evaluation.mjs --run --cases core-pass,core-defect,core-pending,project-gap,quick-pass,author-core
+```
+
+The first uses the generated native MCP launcher and real Chrome, but scripted
+tool calls. It verifies saved Missions, Runs, report links and SHA-256 evidence
+for success, a wrong business relation, an unfinished worker, a whole-project
+coverage gap, a quick page check and a submitted Charter without a catalog
+entry. Its `scripted-mcp-baseline` result **does not measure an AI host**.
+
+The second starts the installed Codex CLI with its existing provider and
+credentials. It activates `$proofkit-test`, records the host's actual MCP calls
+and structured answer, then checks both against saved Mission/Run state. Add
+`--implicit-skill` to measure ordinary natural-language activation separately.
+It uses only synthetic loopback facts; it does not contact AIHR or authorize
+business writes. Model usage may incur provider charges. A provider access
+failure or cancelled host MCP call is reported as `infrastructure-blocked`,
+and remaining cases are left unrun. Neither is scored as a model or product
+failure. Reports and event traces are retained under the printed temporary
+evaluation root. Model adherence and false-pass rates require an unblocked
+real-host run; the scripted baseline cannot establish them.
+
+ProofKit marks source/scope/catalog/status reads with MCP read-only hints.
+Actions that generate workspace evidence or execute a Mission do not receive
+that hint. The host's own tool approval remains authoritative; the annotations
+are scheduling hints, not permissions.
+
 `--allow-capability-writes` emits the existing process-level operator opt-in.
 It does not change workspace side-effect policy, provide credentials or prove
 test-environment isolation. Existing execution gates still apply.

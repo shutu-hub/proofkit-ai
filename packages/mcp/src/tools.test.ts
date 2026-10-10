@@ -46,6 +46,12 @@ describe("ProofKit MCP tools", () => {
     expect(runTest?.inputSchema).toMatchObject({ properties: { level: { enum: ["quick", "core", "release"] } } });
     const scope = listed.tools.find((tool) => tool.name === "inspect_test_scope");
     expect(scope?.inputSchema).toMatchObject({ properties: { level: { default: "core" }, limit: { maximum: 50 } } });
+    for (const name of ["discover_project", "inspect_test_scope", "list_test_charters", "list_test_suites", "get_mission_status"]) {
+      expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).toBe(true);
+    }
+    for (const name of ["inspect_test_environment", "inspect_surface", "create_test_mission", "run_test", "get_mission_evidence"]) {
+      expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).not.toBe(true);
+    }
 
     await client.close();
     await server.close();

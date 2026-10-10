@@ -4,11 +4,16 @@ import type { TestMission } from "@proofkit/contracts";
 import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 
+// MCP annotations are host scheduling hints, not authorization. Only operations
+// that read existing source/config/Mission state receive a read-only hint.
+const READ_ONLY_TOOL = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+
 export function registerTools(server: McpServer, runner: LocalRunnerService): void {
   server.tool(
     "discover_project",
     "Scan the configured local project and report its Web, Electron, backend, scripts, and workspace packages.",
     {},
+    READ_ONLY_TOOL,
     async () => result(await runner.discover()),
   );
 
@@ -16,6 +21,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "inspect_test_scope",
     "Read candidate source entry points, route declarations, level/surface-compatible plan checks, and registered business capabilities/Oracles. Optional focus is a literal substring. This does not run tests or prove coverage.",
     TestScopeInputSchema.shape,
+    READ_ONLY_TOOL,
     async (input) => result(await runner.inspectTestScope(input)),
   );
 
@@ -40,6 +46,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "list_test_charters",
     "List curated, workspace-owned tests that can be selected by natural language or charterId.",
     {},
+    READ_ONLY_TOOL,
     async () => result({ charters: runner.listCharters() }),
   );
 
@@ -47,6 +54,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "list_test_suites",
     "List explicitly scoped release suites and the Charters each one includes.",
     {},
+    READ_ONLY_TOOL,
     async () => result({ suites: runner.listSuites() }),
   );
 
@@ -116,6 +124,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "get_mission_status",
     "Read mission status, task graph, verdict, findings, and evidence references.",
     { missionId: z.string().min(1) },
+    READ_ONLY_TOOL,
     async ({ missionId }) => result(await runner.missionStatus(missionId)),
   );
 

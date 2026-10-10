@@ -213,6 +213,15 @@ pnpm benchmark:planner
 
 The benchmark reports level selection, action safety, assertion and Oracle presence for fixed quick/core/release cases. It is a planning-structure check; a passing benchmark does not replace a real business run.
 
+For host integration, `pnpm benchmark:host:baseline` exercises six synthetic
+cases through the generated native MCP launcher and real Chrome. It verifies
+saved Mission/Run results and evidence, but uses scripted calls. After that,
+`node tests/host-evaluation.mjs --run --cases core-pass,core-defect` evaluates
+actual Codex Skill/MCP behavior using the configured provider; add
+`--implicit-skill` to test discovery without an explicit Skill mention. The
+host evaluator stops on provider access or MCP cancellation and reports those
+cases as infrastructure-blocked. See [host effectiveness check](docs/agent-integration.md#host-effectiveness-check).
+
 To evaluate an OpenAI-compatible or local model with the same cases, set the endpoint and model before running it:
 
 ```bash
