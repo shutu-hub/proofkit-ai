@@ -71,12 +71,14 @@ describe("Mission report", () => {
     const input = result(workspace);
     input.intent = '<script>alert("bad")</script> & Resume';
     input.runs[0]!.title = 'Resume <img src="https://invalid.example/" onerror="bad">';
+    input.runs[0]!.targetContinuity = "changed";
     input.runs.push({ title: "Rejected input", surface: "web", runKind: "negative", runId: "run-negative", verdict: "failed", expectedVerdict: "failed", outcomeMatched: true, evidence: [], omittedEvidence: 0 });
     const before = JSON.stringify(input);
     const report = await new MissionReportStore(workspace).writeReport(input);
     const markup = await readFile(report, "utf8");
     expect(markup).toContain("Acceptance inconclusive");
     expect(markup).toContain("Expected outcome matched");
+    expect(markup).toContain("Target continuity: changed");
     expect(markup).toContain("Raw: failed · Expected: failed");
     expect(markup).toContain("&lt;script&gt;alert(&quot;bad&quot;)&lt;/script&gt; &amp; Resume");
     expect(markup).not.toMatch(/<script|<img/);

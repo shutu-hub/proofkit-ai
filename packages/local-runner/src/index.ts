@@ -876,6 +876,8 @@ export class LocalRunnerService {
             ...(finding.consoleLevel ? { consoleLevel: finding.consoleLevel } : {}),
           })),
           targetBinding: summary.targetBinding,
+          targetBindingAfterRun: summary.targetBindingAfterRun,
+          targetContinuity: summary.targetContinuity,
           integrationCleanup: summary.integrationCleanup,
           businessEvidence: summary.oracles.reduce((count, oracle) => count + (oracle.verificationKind !== "http-contract" && (oracle.sourceEvidenceArtifacts ?? []).some((path) =>
             evidence.some((item) => item.kind === "business" && item.evidenceId === `${summary.runId}:${path}`))

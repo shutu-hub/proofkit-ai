@@ -64,6 +64,16 @@ describe("Mission result projection", () => {
     expect(result.confirmedProductFindings).toBe(0);
   });
 
+  it("projects post-run listener continuity without replacing the pre-action source binding", async () => {
+    const mission = await fixture();
+    const binding = (processId: number) => ({ status: "matching-process-path", method: "windows-listener-process",
+      expectedProjectRoot: "/source", observedProjectRoot: "/source", targetOrigin: "http://localhost:5174",
+      processId, reason: "Observed listener", observedAt: now });
+    mission.observations = [observed({ targetBinding: binding(12), targetBindingAfterRun: binding(13), targetContinuity: "changed" })];
+    expect(projectMissionResult(mission, options).runs[0]).toMatchObject({ targetBinding: { processId: 12 },
+      targetBindingAfterRun: { processId: 13 }, targetContinuity: "changed" });
+  });
+
   it("keeps missing and skipped release slots instead of hiding them", async () => {
     const mission = await fixture("release");
     mission.observations = [observed()];

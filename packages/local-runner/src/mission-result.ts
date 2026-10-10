@@ -132,6 +132,7 @@ function projectRun(mission: TestMission, task: TaskNode | undefined, observatio
   const title = negative?.title ?? savedCharter?.intent ?? task?.title ?? mission.intent;
   const evidence = selectEvidence(observation?.evidence ?? []);
   const binding = TargetBindingSchema.safeParse(data.targetBinding);
+  const finalBinding = TargetBindingSchema.safeParse(data.targetBindingAfterRun);
   const cleanup = IntegrationCleanupSchema.safeParse(data.integrationCleanup);
   const runId = stringValue(data.runId);
   const verdict = VerdictSchema.safeParse(data.verdict);
@@ -158,6 +159,8 @@ function projectRun(mission: TestMission, task: TaskNode | undefined, observatio
     oracles: counts(data.passedOracles, data.oracles),
     businessFacts: numberValue(data.businessEvidence),
     targetBinding: binding.success ? binding.data : undefined,
+    targetBindingAfterRun: finalBinding.success ? finalBinding.data : undefined,
+    targetContinuity: data.targetContinuity === "stable" || data.targetContinuity === "changed" || data.targetContinuity === "unverified" ? data.targetContinuity : undefined,
     integrationCleanup: cleanup.success ? cleanup.data : undefined,
     evidence: evidence.items,
     omittedEvidence: evidence.omitted,

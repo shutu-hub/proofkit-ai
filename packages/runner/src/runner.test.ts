@@ -201,6 +201,66 @@ describe("ExecutionRunner", () => {
     expect(summary.artifacts).toContain("target-change-run/artifacts/target-binding-after-setup.json");
   });
 
+  it("requires one known listener throughout a core Run while keeping quick checks short", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-target-continuity-"));
+    const charter = (level: "quick" | "core") => ({ intent: "Check a stable target", level, mode: "deterministic" as const,
+      preconditions: [], actions: [{ kind: "click" as const, selector: "#ready" }],
+      assertions: [{ kind: "text-visible" as const, text: "Ready" }], sideEffectPolicy: "allow" as const, metadata: {} });
+    for (const [name, finalPid, expectedVerdict, expectedContinuity] of [
+      ["stable", 12, "passed", "stable"],
+      ["replaced", 13, "inconclusive", "changed"],
+    ] as const) {
+      let checks = 0;
+      const summary = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root, targetBinding: async () => ({
+        status: "matching-process-path", method: "windows-listener-process", expectedProjectRoot: "D:/code/AIHR",
+        observedProjectRoot: "D:/code/AIHR", targetOrigin: "http://localhost:5174", processId: ++checks === 1 ? 12 : finalPid,
+        reason: "Listener process path matches the source checkout.", observedAt: new Date().toISOString(),
+      }) }).run(charter("core"), `target-${name}`);
+      expect(checks).toBe(2);
+      expect(summary).toMatchObject({ verdict: expectedVerdict, targetContinuity: expectedContinuity,
+        targetBinding: { processId: 12 }, targetBindingAfterRun: { processId: finalPid } });
+      expect(summary.artifacts).toContain(`target-${name}/artifacts/target-binding-after-run.json`);
+      if (name === "replaced") expect(summary.findings).toContain("Target listener changed or could not be verified after this Run.");
+    }
+    let quickChecks = 0;
+    const quick = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root, targetBinding: async () => ({
+      status: "matching-process-path", method: "windows-listener-process", expectedProjectRoot: "D:/code/AIHR",
+      observedProjectRoot: "D:/code/AIHR", targetOrigin: "http://localhost:5174", processId: ++quickChecks,
+      reason: "Listener process path matches the source checkout.", observedAt: new Date().toISOString(),
+    }) }).run(charter("quick"), "target-quick");
+    expect(quick.verdict).toBe("passed");
+    expect(quickChecks).toBe(1);
+    expect(quick.targetBindingAfterRun).toBeUndefined();
+  });
+
+  it("keeps a core Run inconclusive if the known target cannot be reidentified", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-target-unverified-"));
+    let checks = 0;
+    const summary = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root, targetBinding: async () => ({
+      status: ++checks === 1 ? "matching-process-path" : "unverified",
+      method: checks === 1 ? "windows-listener-process" : "unavailable", expectedProjectRoot: "D:/code/AIHR",
+      ...(checks === 1 ? { observedProjectRoot: "D:/code/AIHR", processId: 12 } : {}),
+      targetOrigin: "http://localhost:5174", reason: "Point-in-time listener check.", observedAt: new Date().toISOString(),
+    }) }).run({ intent: "Check target", level: "core", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "allow", metadata: {} }, "target-unverified");
+    expect(summary).toMatchObject({ verdict: "inconclusive", targetContinuity: "unverified" });
+    expect(summary.findings).toContain("Target listener changed or could not be verified after this Run.");
+
+    checks = 0;
+    const unavailable = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root, targetBinding: async () => {
+      if (++checks === 2) throw new Error("Listener probe failed");
+      return { status: "matching-process-path" as const, method: "windows-listener-process" as const,
+        expectedProjectRoot: "D:/code/AIHR", observedProjectRoot: "D:/code/AIHR",
+        targetOrigin: "http://localhost:5174", processId: 12,
+        reason: "Listener process path matches the source checkout.", observedAt: new Date().toISOString() };
+    } }).run({ intent: "Check target", level: "core", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "allow", metadata: {} }, "target-probe-error");
+    expect(unavailable).toMatchObject({ verdict: "inconclusive", targetContinuity: "unverified" });
+    expect(unavailable.findings).toContain("Target listener could not be checked after this Run.");
+  });
+
   it("can record a different checkout without blocking an explicitly scoped diagnostic run", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-target-record-"));
     const summary = await new ExecutionRunner(new FakeAdapter(), {

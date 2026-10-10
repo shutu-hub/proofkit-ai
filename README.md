@@ -174,6 +174,8 @@ For CDP attachment, ProofKit waits for an application page and requires a unique
 
 On Windows, a loopback Web/Electron target also records the listening process's Git checkout. For an Electron `file:` page, ProofKit checks the configured CDP listener when there is no HTTP page server; a port file is resolved at inspection time. A different checkout blocks the run by default, so a server left running from another working tree cannot silently count as this project's test. `unverified` means ProofKit could not establish that association; a matching process path still does not attest the served source bytes.
 
+When a unique local listener PID is known, `core` and `release` Runs check it again after actions and business Oracles, before closing the surface. A changed or unverified listener makes that Run inconclusive. Both observations are saved when the final check returns; a probe error records unverified continuity in the Run. `quick` keeps the initial check only. These point-in-time checks cannot detect a replacement that happens and reverses between observations.
+
 For a mobile surface, configure an Appium or W3C WebDriver server in the external workspace:
 
 ```yaml

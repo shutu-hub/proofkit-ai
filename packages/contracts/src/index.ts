@@ -314,6 +314,8 @@ export const TargetBindingSchema = z.object({
   observedAt: z.string(),
 });
 export type TargetBinding = z.infer<typeof TargetBindingSchema>;
+export const TargetContinuitySchema = z.enum(["stable", "changed", "unverified"]);
+export type TargetContinuity = z.infer<typeof TargetContinuitySchema>;
 
 export const HttpEndpointObservationSchema = z.object({
   endpoint: z.string(),
@@ -450,6 +452,8 @@ export const RunSummarySchema = z.object({
   runtimeHealth: z.enum(["passed", "failed", "ignored"]).optional(),
   runtimeFindings: z.array(RuntimeFindingSchema).optional(),
   targetBinding: TargetBindingSchema.optional(),
+  targetBindingAfterRun: TargetBindingSchema.optional(),
+  targetContinuity: TargetContinuitySchema.optional(),
   integrationCleanup: IntegrationCleanupSchema.optional(),
   artifacts: z.array(z.string()).default([]),
   findings: z.array(z.string()).default([]),
@@ -1324,6 +1328,8 @@ export const MissionRunResultSchema = z.object({
   oracles: z.object({ passed: z.number().int().nonnegative(), total: z.number().int().nonnegative() }).optional(),
   businessFacts: z.number().int().nonnegative().optional(),
   targetBinding: TargetBindingSchema.optional(),
+  targetBindingAfterRun: TargetBindingSchema.optional(),
+  targetContinuity: TargetContinuitySchema.optional(),
   integrationCleanup: IntegrationCleanupSchema.optional(),
   evidence: z.array(EvidenceRefSchema).max(6),
   omittedEvidence: z.number().int().nonnegative(),

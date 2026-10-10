@@ -276,20 +276,22 @@ export class ExecutionRunner {
     let executionError: Error | undefined;
     let unsubscribe: () => void | Promise<void> = () => {};
     const pendingEvents: Promise<void>[] = [];
-    const inspectAndRecordTarget = async (phase: "before-setup" | "after-setup") => {
-      if (!this.targetBinding) return;
+    const inspectAndRecordTarget = async (phase: "before-setup" | "after-setup" | "after-run"): Promise<TargetBinding | undefined> => {
+      if (!this.targetBinding) return undefined;
       const binding = TargetBindingSchema.parse(await withAbort(this.targetBinding(signal), signal, "Target binding inspection"));
-      summary.targetBinding = binding;
-      const artifact = await this.store.writeJson(runId, phase === "before-setup" ? "target-binding" : "target-binding-after-setup", binding);
+      if (phase === "after-run") summary.targetBindingAfterRun = binding;
+      else summary.targetBinding = binding;
+      const artifact = await this.store.writeJson(runId, phase === "before-setup" ? "target-binding" : `target-binding-${phase}`, binding);
       summary.artifacts.push(artifact);
       await this.emit({ runId, timestamp: binding.observedAt, type: "target.binding", payload: {
         phase, status: binding.status, method: binding.method, targetOrigin: binding.targetOrigin,
         expectedProjectRoot: binding.expectedProjectRoot, observedProjectRoot: binding.observedProjectRoot,
         evidence: artifact,
       } });
-      if (binding.status === "different-project" && this.targetBindingPolicy === "block-different") {
+      if (phase !== "after-run" && binding.status === "different-project" && this.targetBindingPolicy === "block-different") {
         throw new BlockedError(`Target process belongs to another Git checkout: ${binding.observedProjectRoot}`);
       }
+      return binding;
     };
     try {
       throwIfAborted(signal);
@@ -530,6 +532,22 @@ export class ExecutionRunner {
           summary.artifacts.push(artifact);
           summary.oracles.push(recordedResult);
           await this.emit({ runId, timestamp: new Date().toISOString(), type: "oracle.completed", payload: recordedResult });
+        }
+      }
+      // A known listener can be replaced while a long business Oracle waits.
+      // Keep quick checks short; core/release acceptance requires the same PID
+      // at the end when a unique local owner was established before actions.
+      if (charter.level !== "quick" && summary.targetBinding?.processId) {
+        let finalBinding: TargetBinding | undefined;
+        try { finalBinding = await inspectAndRecordTarget("after-run"); }
+        catch (error) {
+          if (signal.aborted) throw abortReason(signal);
+          summary.targetContinuity = "unverified";
+          throw new InconclusiveError("target-continuity-unavailable", "Target listener could not be checked after this Run.");
+        }
+        summary.targetContinuity = compareTargetContinuity(summary.targetBinding, finalBinding);
+        if (summary.targetContinuity !== "stable") {
+          throw new InconclusiveError("target-continuity-unverified", "Target listener changed or could not be verified after this Run.");
         }
       }
     } catch (error) {
@@ -806,6 +824,16 @@ function resolveRuntimeAction(action: Action): Action {
   const value = process.env[action.value.env];
   if (!value) throw new BlockedError(`Required fill environment variable is unset or empty: ${action.value.env}`);
   return { ...action, value };
+}
+
+function compareTargetContinuity(before: TargetBinding, after?: TargetBinding): NonNullable<RunSummary["targetContinuity"]> {
+  if (!after || before.status === "unverified" || after.status === "unverified"
+    || !before.processId || !after.processId || !before.targetOrigin || !after.targetOrigin
+    || !before.observedProjectRoot || !after.observedProjectRoot) return "unverified";
+  const root = (value: string) => process.platform === "win32" ? value.replaceAll("\\", "/").toLowerCase() : value;
+  return before.processId === after.processId && before.status === after.status
+    && before.targetOrigin === after.targetOrigin && root(before.observedProjectRoot) === root(after.observedProjectRoot)
+    ? "stable" : "changed";
 }
 
 function throwIfAborted(signal: AbortSignal): void {
