@@ -131,13 +131,16 @@ export class MissionReportStore {
 export function auditMissionVerdict(result: MissionResult, integrity: MissionEvidenceIntegrity): Pick<MissionResult, "testVerdict" | "testVerdictReason"> {
   const saved = result.verdict ?? "not-asserted";
   if (saved !== "passed" && saved !== "failed") return { testVerdict: saved };
+  const proof = result.proofClassification;
   if (saved === "passed" && result.level !== "quick"
-    && (result.proofClassification?.status !== "explicit" || !result.proofClassification.passedBusinessOracles)) {
-    return { testVerdict: "inconclusive", testVerdictReason: "Saved core/release pass lacks an explicitly classified passing business Oracle; rerun affected scenarios." };
+    && (proof?.status !== "explicit" || !proof.requiredBusinessRuns
+      || proof.requiredRunsWithPassingBusiness !== proof.requiredBusinessRuns)) {
+    return { testVerdict: "inconclusive", testVerdictReason: "Saved core/release pass lacks a classified passing business Oracle in every required Run; rerun affected scenarios." };
   }
   if (saved === "failed" && result.confirmedProductFindings > 0
-    && (result.proofClassification?.status !== "explicit" || !result.proofClassification.failedBusinessOracles)) {
-    return { testVerdict: "inconclusive", testVerdictReason: "Saved confirmed product finding lacks an explicitly classified failing business Oracle; rerun before claiming a product defect." };
+    && (proof?.status !== "explicit" || proof.confirmedProductFindings !== result.confirmedProductFindings
+      || proof.findingsLinkedToFailingBusiness !== result.confirmedProductFindings)) {
+    return { testVerdict: "inconclusive", testVerdictReason: "Saved confirmed product finding is not linked to a classified failing business Oracle in its own Run; rerun before claiming a product defect." };
   }
   const full = result.acceptanceEvidenceIntegrity;
   if (full && full.status !== "intact") {
@@ -178,9 +181,12 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
   const comparisonEvidenceUnavailable = comparisonEvidenceStatus(result, links) === "degraded";
   const proofUnverified = result.proofClassification?.status === "unverified";
   const businessPassUnverified = result.verdict === "passed" && result.level !== "quick"
-    && (result.proofClassification?.status !== "explicit" || !result.proofClassification.passedBusinessOracles);
+    && (result.proofClassification?.status !== "explicit" || !result.proofClassification.requiredBusinessRuns
+      || result.proofClassification.requiredRunsWithPassingBusiness !== result.proofClassification.requiredBusinessRuns);
   const businessFailureUnverified = result.verdict === "failed" && result.confirmedProductFindings > 0
-    && (result.proofClassification?.status !== "explicit" || !result.proofClassification.failedBusinessOracles);
+    && (result.proofClassification?.status !== "explicit"
+      || result.proofClassification.confirmedProductFindings !== result.confirmedProductFindings
+      || result.proofClassification.findingsLinkedToFailingBusiness !== result.confirmedProductFindings);
   const evidenceUnverified = (result.verdict === "passed" || result.verdict === "failed")
     && result.testVerdict === "inconclusive" && !businessPassUnverified && !businessFailureUnverified;
   const currentOutcomeLabel = businessPassUnverified ? "Saved pass · current business proof unverified"
@@ -191,6 +197,9 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
     result.acceptanceEvidenceIntegrity ? `Current Mission evidence integrity: ${result.acceptanceEvidenceIntegrity.status}; ${result.acceptanceEvidenceIntegrity.references.intact}/${result.acceptanceEvidenceIntegrity.references.total} saved reference(s) verified, ${result.acceptanceEvidenceIntegrity.references.omitted} beyond the audit limit. This does not prove whole-project coverage or application state after the Run.` : undefined,
     result.testVerdictReason,
     proofUnverified ? `Current business proof classification is unverified: ${result.proofClassification!.legacyOracles} saved Oracle result(s) lack a verification kind, ${result.proofClassification!.unavailableRuns} Run(s) could not be read, and ${result.proofClassification!.omittedRuns} Run(s) exceeded the audit bound. Rerun affected scenarios before treating the saved business verdict or finding as current proof.` : undefined,
+    result.proofClassification?.requiredBusinessRuns !== undefined ? `Required Run business proof: ${result.proofClassification.requiredRunsWithPassingBusiness ?? 0}/${result.proofClassification.requiredBusinessRuns} primary/replay Run(s) have a classified passing business Oracle.` : undefined,
+    result.confirmedProductFindings ? `Confirmed product finding proof: ${result.proofClassification?.findingsLinkedToFailingBusiness ?? 0}/${result.confirmedProductFindings} finding(s) link to a classified failing business Oracle in the same Run.` : undefined,
+    result.proofClassification?.unlinkedFindingIds?.length ? `Unlinked finding IDs: ${result.proofClassification.unlinkedFindingIds.join(", ")}${result.proofClassification.omittedUnlinkedFindingIds ? ` and ${result.proofClassification.omittedUnlinkedFindingIds} more` : ""}.` : undefined,
     coverage?.requested === "project" ? "Whole-project workflow coverage has not been proven." : "Acceptance applies to the saved scenarios. Whole-project workflow coverage has not been measured.",
     coverage?.inventory === "partial" || route?.inventoryTruncated ? "The source inventory is partial; it cannot establish complete project coverage." : undefined,
     !coverage ? "This saved Mission has no recorded acceptance scope." : undefined,

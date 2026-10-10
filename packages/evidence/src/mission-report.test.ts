@@ -31,6 +31,9 @@ function ref(path: string, sha256?: string): EvidenceRef {
 function explicitProof(passed: boolean): MissionProofClassification {
   return { status: "explicit", checkedRuns: 1, classifiedOracles: 1, businessOracles: 1,
     passedBusinessOracles: passed ? 1 : 0, failedBusinessOracles: passed ? 0 : 1, httpContractOracles: 0,
+    requiredBusinessRuns: 1, requiredRunsWithPassingBusiness: passed ? 1 : 0,
+    confirmedProductFindings: passed ? 0 : 1, findingsLinkedToFailingBusiness: passed ? 0 : 1,
+    unlinkedFindingIds: [], omittedUnlinkedFindingIds: 0,
     legacyOracles: 0, unavailableRuns: 0, omittedRuns: 0, legacyRunIds: [], unavailableRunIds: [] };
 }
 
@@ -226,10 +229,12 @@ describe("Mission report", () => {
       title: "Business mismatch", message: "Saved without an Oracle kind", evidence: [evidence], createdAt: now }];
     const legacy = await store.writeReportSnapshot(input);
     expect(legacy.result).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
-      testVerdictReason: expect.stringContaining("explicitly classified failing business Oracle") });
+      testVerdictReason: expect.stringContaining("classified failing business Oracle in its own Run") });
     expect(await readFile(legacy.path, "utf8")).toContain("Saved failure · current business proof unverified");
     input.proofClassification = { status: "explicit", checkedRuns: 1, classifiedOracles: 1,
       businessOracles: 0, passedBusinessOracles: 0, failedBusinessOracles: 0, httpContractOracles: 1,
+      requiredBusinessRuns: 1, requiredRunsWithPassingBusiness: 0,
+      confirmedProductFindings: 1, findingsLinkedToFailingBusiness: 0,
       legacyOracles: 0, unavailableRuns: 0, omittedRuns: 0, legacyRunIds: [], unavailableRunIds: [] };
     expect((await store.writeReportSnapshot(input)).result.testVerdict).toBe("inconclusive");
   });
@@ -241,11 +246,28 @@ describe("Mission report", () => {
     input.verdict = "passed";
     input.proofClassification = { status: "explicit", checkedRuns: 1, classifiedOracles: 1,
       businessOracles: 0, passedBusinessOracles: 0, failedBusinessOracles: 0, httpContractOracles: 1,
+      requiredBusinessRuns: 1, requiredRunsWithPassingBusiness: 0,
+      confirmedProductFindings: 0, findingsLinkedToFailingBusiness: 0,
       legacyOracles: 0, unavailableRuns: 0, omittedRuns: 0, legacyRunIds: [], unavailableRunIds: [] };
     const snapshot = await new MissionReportStore(workspace).writeReportSnapshot(input);
     expect(snapshot.result).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
       proofClassification: { status: "explicit", passedBusinessOracles: 0 } });
     expect(await readFile(snapshot.path, "utf8")).toContain("Saved pass · current business proof unverified");
+  });
+
+  it("does not let one Run's business pass certify another required Run", async () => {
+    const workspace = await root();
+    const input = result(workspace);
+    input.verdict = "passed";
+    input.runs.push({ title: "Resume replay", surface: "web", runKind: "replay", runId: "run-2",
+      verdict: "passed", evidence: [], omittedEvidence: 0 });
+    input.proofClassification = { ...explicitProof(true), checkedRuns: 2, classifiedOracles: 2,
+      httpContractOracles: 1, requiredBusinessRuns: 2, requiredRunsWithPassingBusiness: 1 };
+    const snapshot = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(snapshot.result).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("every required Run") });
+    const markup = await readFile(snapshot.path, "utf8");
+    expect(markup).toContain("Required Run business proof: 1/2");
   });
 
   it("requires every cited finding and comparison fact to remain intact", async () => {
