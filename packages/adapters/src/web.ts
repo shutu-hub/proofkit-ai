@@ -11,6 +11,8 @@ export type WebAdapterOptions = {
   /** Selects one existing application page when attaching over CDP. */
   targetUrlPrefix?: string;
   targetTitleContains?: string;
+  /** Save only matched declared route patterns; never persist raw hash paths. */
+  routePatterns?: string[];
   headless?: boolean;
   executablePath?: string;
   /**
@@ -144,7 +146,7 @@ export class WebAdapter implements SurfaceAdapter {
       url: sanitizeSurfaceUrl(url),
       title: sanitizeSurfaceText(title, 200),
       text: sanitizeSurfaceText(text, 20_000),
-      metadata: { adapter: this.name },
+      metadata: { adapter: this.name, matchedRoutePaths: matchDeclaredRoutePaths(url, this.options.routePatterns ?? []) },
     };
   }
 
@@ -341,6 +343,22 @@ async function uniqueActionLocator(page: Page, selector: string, state: "visible
   const count = await locator.count();
   if (count !== 1) throw new Error(`Action selector matched ${count} elements: ${sanitizeSurfaceText(selector, 120)}`);
   return locator;
+}
+
+/** Project only declared patterns from the live URL; hash parameters stay local. */
+export function matchDeclaredRoutePaths(value: string, patterns: readonly string[]): string[] {
+  let url: URL;
+  try { url = new URL(value); } catch { return []; }
+  const observed = url.hash.startsWith("#/") ? url.hash.slice(1).split(/[?#]/, 1)[0]
+    : url.protocol === "http:" || url.protocol === "https:" ? url.pathname : undefined;
+  if (!observed) return [];
+  const actual = observed.split("/");
+  return [...new Set(patterns.filter((pattern) => {
+    if (!pattern.startsWith("/") || /[?#\s{}$]/.test(pattern)) return false;
+    const expected = pattern.split("/");
+    return expected.length === actual.length && expected.every((segment, index) =>
+      segment.startsWith(":") ? Boolean(actual[index]) : segment === actual[index]);
+  }))].sort();
 }
 
 /** Never choose the first tab by accident when an attached browser has several pages. */

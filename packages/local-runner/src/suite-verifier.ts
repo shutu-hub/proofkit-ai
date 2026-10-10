@@ -170,7 +170,7 @@ function summarizeRouteCoverage(mission: TestMission, results: SuiteSurfaceResul
             && (!result.primary?.networkLogAvailable || mission.suite!.level === "release" && !result.replay?.networkLogAvailable)))
             ? "Network event log is unavailable for a required run"
             : "No matching successful API response on every required run" } : {}),
-        ...(route.kind === "web" && charterIds.length > 0 ? { reason: "No matching page visit on the configured HTTP target origin in every required run" } : {}),
+        ...(route.kind === "web" && charterIds.length > 0 ? { reason: "No matching page visit on the configured HTTP origin or Electron file document in every required run" } : {}),
         ...(ambiguousRuntimePath && charterIds.length > 0 ? { reason: "Runtime URL cannot identify which source owns this route" } : {}),
       });
     }

@@ -37,6 +37,8 @@ export type LocalRunInput = {
   signal?: AbortSignal;
   /** Internal replay association used to validate fixture identity against saved Run facts. */
   replayOfRunId?: string;
+  /** Internal catalog declarations projected into safe route snapshot facts. */
+  coverageRouteTargets?: RouteCoverageTarget[];
   intent?: string;
   charter?: TestCharter;
   charterPath?: string;
@@ -875,7 +877,7 @@ export class LocalRunnerService {
           businessEvidence: summary.oracles.reduce((count, oracle) => count + (oracle.verificationKind !== "http-contract" && (oracle.sourceEvidenceArtifacts ?? []).some((path) =>
             evidence.some((item) => item.kind === "business" && item.evidenceId === `${summary.runId}:${path}`))
             ? oracle.sourceEvidenceCount ?? 0 : 0), 0),
-          matchedRoutePaths: matchedWebRouteTargets(summary, routeTargets),
+          matchedRoutePaths: matchedWebRouteTargets(summary, routeTargets, adapter === "electron" ? this.config.surfaces.electron?.targetUrlPrefix : undefined),
           matchedApiTargets: apiTraffic.matched,
           networkLogAvailable: apiTraffic.available,
         },
@@ -965,7 +967,8 @@ export class LocalRunnerService {
       const charterId = context.mission.suite ? input.charterId : typeof charter.metadata.catalogId === "string" ? charter.metadata.catalogId : undefined;
       const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
       const baselineRunId = await fileReplaySource(charter, context, adapter, charterId);
-      const started = await this.start({ charter, adapter, signal: context.signal, replayOfRunId: baselineRunId });
+      const coverageRouteTargets = context.mission.suite?.charters.find((item) => item.charterId === charterId)?.routeTargets ?? [];
+      const started = await this.start({ charter, adapter, signal: context.signal, replayOfRunId: baselineRunId, coverageRouteTargets });
       const summary = await this.wait(started.runId);
       return collectSurfaceRun(summary, context, adapter, "primary", baselineRunId, undefined, undefined, charterId);
     };
@@ -990,7 +993,8 @@ export class LocalRunnerService {
           findings: [FindingSchema.parse({ findingId: `replay-source-${adapter}`, severity: "high", category: "test", status: "confirmed", title: "回放缺少主运行证据", message, createdAt: observedAt })],
         };
       }
-      const started = await this.replay(sourceRunId, { adapter, signal: context.signal });
+      const coverageRouteTargets = context.mission.suite?.charters.find((item) => item.charterId === charterId)?.routeTargets ?? [];
+      const started = await this.replay(sourceRunId, { adapter, signal: context.signal, coverageRouteTargets });
       const summary = await this.wait(started.runId);
       return collectSurfaceRun(summary, context, adapter, "replay", sourceRunId, undefined, undefined, charterId);
     };
@@ -1439,6 +1443,7 @@ export class LocalRunnerService {
         devtoolsActivePortPath: input.devtoolsPortFile ?? this.config.surfaces.electron?.devtoolsActivePort,
         targetUrlPrefix: this.config.surfaces.electron?.targetUrlPrefix,
         targetTitleContains: this.config.surfaces.electron?.targetTitleContains,
+        routePatterns: input.coverageRouteTargets?.filter((target) => target.kind === "web").map((target) => target.path),
       });
     }
     if ((input.adapter ?? "web") === "mobile") {
@@ -1463,6 +1468,7 @@ export class LocalRunnerService {
       cdpUrl: input.cdp ?? this.config.surfaces.web?.cdpUrl,
       targetUrlPrefix: this.config.surfaces.web?.targetUrlPrefix,
       targetTitleContains: this.config.surfaces.web?.targetTitleContains,
+      routePatterns: input.coverageRouteTargets?.filter((target) => target.kind === "web").map((target) => target.path),
       headless: !input.headful,
       executablePath: this.config.surfaces.web?.executablePath ?? process.env.PROOFKIT_BROWSER_PATH,
     });
@@ -1554,31 +1560,48 @@ function numberValue(value: unknown): number {
 }
 
 /** Persist only declared route patterns; concrete URL paths may contain private IDs. */
-function matchedWebRouteTargets(summary: RunSummary, targets: RouteCoverageTarget[]): string[] {
-  // A route-shaped URL on an unrelated site is not evidence that the tested
-  // application served that route. Target binding records the configured HTTP
-  // origin even when process-path association itself is unavailable.
-  const targetOrigin = summary.targetBinding?.targetOrigin;
-  if (!targetOrigin) return [];
-  let approvedOrigin: string;
+function matchedWebRouteTargets(summary: RunSummary, targets: RouteCoverageTarget[], fileTargetUrlPrefix?: string): string[] {
+  const declared = new Set(targets.filter((target) => target.kind === "web").map((target) => target.path));
+  if (declared.size === 0) return [];
+  // HTTP pages must have the configured origin recorded in this Run. A file
+  // page must be the exact configured HTML document, not a same-prefix file.
+  let approvedOrigin: string | undefined;
+  let approvedFile: URL | undefined;
   try {
-    const target = new URL(targetOrigin);
-    if (target.protocol !== "http:" && target.protocol !== "https:") return [];
-    approvedOrigin = target.origin;
-  } catch { return []; }
-  const paths = new Set<string>();
-  for (const step of summary.steps) {
-    for (const value of [step.beforeSnapshot?.url, step.receipt?.urlBefore, step.receipt?.urlAfter, step.afterSnapshot?.url]) {
-      if (!value) continue;
-      try {
-        const url = new URL(value);
-        if (url.origin !== approvedOrigin) continue;
-        if (url.hash.startsWith("#/")) paths.add(url.hash.slice(1).split(/[?#]/, 1)[0]!);
-        else paths.add(url.pathname);
-      } catch { /* A malformed adapter URL is not route coverage evidence. */ }
+    const origin = summary.targetBinding?.targetOrigin;
+    if (origin) {
+      const target = new URL(origin);
+      if (target.protocol === "http:" || target.protocol === "https:") approvedOrigin = target.origin;
     }
+  } catch { /* An invalid HTTP target cannot establish HTTP route coverage. */ }
+  try {
+    if (fileTargetUrlPrefix) {
+      const target = new URL(fileTargetUrlPrefix);
+      if (target.protocol === "file:" && !target.search && /\.html?$/i.test(target.pathname)) approvedFile = target;
+    }
+  } catch { /* An invalid file target cannot establish file route coverage. */ }
+  if (!approvedOrigin && !approvedFile) return [];
+  const paths = new Set<string>();
+  const matchedPatterns = new Set<string>();
+  const accept = (value: string, patterns?: unknown, adapter?: unknown) => {
+    let url: URL;
+    try { url = new URL(value); } catch { return; }
+    const http = approvedOrigin !== undefined && url.origin === approvedOrigin;
+    const file = approvedFile !== undefined && url.protocol === "file:" && url.host === approvedFile.host
+      && url.pathname === approvedFile.pathname && adapter === "electron";
+    if (!http && !file) return;
+    if (http) paths.add(url.pathname);
+    if (Array.isArray(patterns)) for (const pattern of patterns) {
+      if (typeof pattern === "string" && declared.has(pattern)) matchedPatterns.add(pattern);
+    }
+  };
+  for (const step of summary.steps) {
+    for (const snapshot of [step.beforeSnapshot, step.afterSnapshot]) {
+      if (snapshot?.url) accept(snapshot.url, snapshot.metadata.matchedRoutePaths, snapshot.metadata.adapter);
+    }
+    for (const value of [step.receipt?.urlBefore, step.receipt?.urlAfter]) if (value) accept(value);
   }
-  return [...new Set(targets.filter((target) => target.kind === "web" && [...paths].some((path) => routeMatches(target.path, path))).map((target) => target.path))].sort();
+  return [...declared].filter((pattern) => matchedPatterns.has(pattern) || [...paths].some((path) => routeMatches(pattern, path))).sort();
 }
 
 function routeMatches(declared: string, observed: string): boolean {

@@ -210,7 +210,7 @@ describe("explicit release suites", () => {
     const coverage = (await service.missionEvidence(mission.missionId)).suiteScope?.routeCoverage;
     expect(coverage).toMatchObject({ mappedCandidates: 2, observedCandidates: 1 });
     expect(coverage?.gaps).toContainEqual(expect.objectContaining({ path: "/resume", status: "mapped-unobserved",
-      reason: "No matching page visit on the configured HTTP target origin in every required run" }));
+      reason: "No matching page visit on the configured HTTP origin or Electron file document in every required run" }));
   });
 
   it("leaves Web route observation unverified when the Run has no target origin", async () => {
@@ -222,7 +222,36 @@ describe("explicit release suites", () => {
     const coverage = (await service.missionEvidence(mission.missionId)).suiteScope?.routeCoverage;
     expect(coverage).toMatchObject({ mappedCandidates: 2, observedCandidates: 1 });
     expect(coverage?.gaps).toContainEqual(expect.objectContaining({ path: "/resume", status: "mapped-unobserved",
-      reason: "No matching page visit on the configured HTTP target origin in every required run" }));
+      reason: "No matching page visit on the configured HTTP origin or Electron file document in every required run" }));
+  });
+
+  it("counts declared Electron file hash routes only on the configured HTML document", async () => {
+    const service = await createSuiteService();
+    service.config.surfaces.electron = { targetUrlPrefix: "file:///C:/fixture/index.html" };
+    stubRuns(service, { fileElectron: true });
+    const mission = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    expect((await service.missionEvidence(mission.missionId)).suiteScope?.routeCoverage?.observedCandidates).toBe(2);
+    expect(JSON.stringify(completed.observations)).not.toContain("private-candidate-123");
+
+    const foreign = await createSuiteService();
+    foreign.config.surfaces.electron = { targetUrlPrefix: "file:///C:/fixture/index.html" };
+    stubRuns(foreign, { fileElectron: true, wrongFileDocument: "resume/electron/replay" });
+    const second = await foreign.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    await foreign.startMission(second.missionId, { approve: true });
+    await foreign.waitMission(second.missionId);
+    const coverage = (await foreign.missionEvidence(second.missionId)).suiteScope?.routeCoverage;
+    expect(coverage).toMatchObject({ mappedCandidates: 2, observedCandidates: 1 });
+    expect(coverage?.gaps).toContainEqual(expect.objectContaining({ path: "/resume", status: "mapped-unobserved" }));
+
+    const unbound = await createSuiteService();
+    stubRuns(unbound, { fileElectron: true });
+    const third = await unbound.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    await unbound.startMission(third.missionId, { approve: true });
+    await unbound.waitMission(third.missionId);
+    expect((await unbound.missionEvidence(third.missionId)).suiteScope?.routeCoverage)
+      .toMatchObject({ mappedCandidates: 2, observedCandidates: 0 });
   });
 
   it("reports stale and ambiguous route mappings without increasing covered counts", async () => {
@@ -460,7 +489,7 @@ async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[];
   return LocalRunnerService.create({ root, workspaceRoot });
 }
 
-function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; wrongVisitedOrigin?: string; missingTargetBinding?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-response" } = {}) {
+function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; wrongVisitedOrigin?: string; missingTargetBinding?: string; fileElectron?: boolean; wrongFileDocument?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-response" } = {}) {
   installMockRunEvidence(service);
   const summaries = new Map<string, RunSummary>();
   const started: Array<{ charterId: string; surface: LocalAdapterName; negativeCaseId?: string }> = [];
@@ -473,6 +502,10 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     const missing = options.missingBusinessFact === `${charterId}/${surface}/${kind}`;
     const visited = options.missingVisitedPath !== `${charterId}/${surface}/${kind}`;
     const visitOrigin = options.wrongVisitedOrigin === `${charterId}/${surface}/${kind}` ? "http://127.0.0.1:9999" : "http://127.0.0.1:8765";
+    const fileElectron = options.fileElectron === true && surface === "electron";
+    const fileDocument = options.wrongFileDocument === `${charterId}/${surface}/${kind}`
+      ? "file:///C:/fixture/index.html.evil" : "file:///C:/fixture/index.html";
+    const routePattern = options.dynamicResume && charterId === "resume" ? "/resumes/:id" : `/${charterId}`;
     const verdict: Verdict = failed ? "failed" : "passed";
     const now = new Date().toISOString();
     const oracleArtifact = `${runId}/oracle.json`;
@@ -483,7 +516,9 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
       steps: kind === "negative" ? [] : [{
         stepId: "step-001", action: { kind: "observe" }, status: "passed", artifacts: [],
         beforeSnapshot: { capturedAt: now, url: "http://127.0.0.1:8765/", metadata: {} },
-        afterSnapshot: { capturedAt: now, url: `${visitOrigin}/${visited ? options.dynamicResume && charterId === "resume" ? "resumes/private-candidate-123" : charterId : ""}`, metadata: {} },
+        afterSnapshot: { capturedAt: now,
+          url: fileElectron ? fileDocument : `${visitOrigin}/${visited ? options.dynamicResume && charterId === "resume" ? "resumes/private-candidate-123" : charterId : ""}`,
+          metadata: fileElectron ? { adapter: "electron", matchedRoutePaths: visited ? [routePattern] : [] } : {} },
       }],
       assertions: kind === "negative" ? [] : [{ assertion: charter.assertions[0]!, passed: true, message: "visible", evidence: [`${runId}/snapshot.json`] }],
       oracles: charter.oracles?.length ? [{ name: `${charterId}-oracle`, verificationKind: "business", passed: !failed, message: failed ? "business state is wrong" : "business state is done", evidence: missing ? [oracleArtifact] : [sourceArtifact, oracleArtifact], sourceEvidenceCount: missing ? 0 : 1, sourceEvidenceArtifacts: missing ? [] : [sourceArtifact], observedAt: now }] : [],
