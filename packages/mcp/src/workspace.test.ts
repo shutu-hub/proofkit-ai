@@ -127,7 +127,8 @@ describe("MCP external workspace", () => {
       const changed = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
       expect(changed.verdict).toBe("passed");
       expect(changed.testVerdict).toBe("inconclusive");
-      expect(changed.testVerdictReason).toContain("unverifiable presented evidence");
+      expect(changed.testVerdictReason).toContain("unverifiable evidence");
+      expect(changed.acceptanceEvidenceIntegrity).toMatchObject({ status: "degraded", references: { unavailable: 1 } });
       expect(changed.evidenceIntegrity).toMatchObject({ status: "degraded", references: { unavailable: 1 } });
       expect(changed.summary.evidenceIntegrity).toEqual(changed.evidenceIntegrity);
       expect(evidence.planning.coverage).toEqual(started.planning.coverage);

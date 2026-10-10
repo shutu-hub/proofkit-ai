@@ -1342,6 +1342,21 @@ export const MissionEvidenceIntegritySchema = z.object({
 });
 export type MissionEvidenceIntegrity = z.infer<typeof MissionEvidenceIntegritySchema>;
 
+/** Current readability of all Mission-owned references, bounded independently of the compact report. */
+export const MissionAcceptanceIntegritySchema = z.object({
+  status: z.enum(["intact", "degraded", "partial", "no-evidence"]),
+  scope: z.literal("mission-evidence"),
+  checkedAt: z.string().datetime(),
+  references: z.object({
+    total: z.number().int().nonnegative(),
+    intact: z.number().int().nonnegative(),
+    unavailable: z.number().int().nonnegative(),
+    legacy: z.number().int().nonnegative(),
+    omitted: z.number().int().nonnegative(),
+  }),
+});
+export type MissionAcceptanceIntegrity = z.infer<typeof MissionAcceptanceIntegritySchema>;
+
 /** Current classification of saved Oracle results; this does not rewrite a historical verdict. */
 export const MissionProofClassificationSchema = z.object({
   status: z.enum(["explicit", "unverified", "not-applicable"]),
@@ -1365,6 +1380,9 @@ export const MissionResultSchema = z.object({
   status: MissionStatusSchema,
   running: z.boolean(),
   verdict: VerdictSchema.optional(),
+  /** Current audited claim; verdict above remains the saved historical result. */
+  testVerdict: z.union([VerdictSchema, z.literal("not-asserted")]).optional(),
+  testVerdictReason: z.string().optional(),
   level: TestLevelSchema,
   levelSelection: TestLevelSelectionSchema.optional(),
   revision: z.number().int().nonnegative(),
@@ -1402,6 +1420,7 @@ export const MissionResultSchema = z.object({
   omittedFindings: z.number().int().nonnegative(),
   confirmedProductFindings: z.number().int().nonnegative(),
   evidenceIntegrity: MissionEvidenceIntegritySchema.optional(),
+  acceptanceEvidenceIntegrity: MissionAcceptanceIntegritySchema.optional(),
   proofClassification: MissionProofClassificationSchema.optional(),
   firstFailure: FailureBoundarySchema.optional(),
   diagnosis: DiagnosisSchema.optional(),

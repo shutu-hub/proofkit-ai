@@ -65,6 +65,8 @@ describe("Mission report", () => {
     const workspace = await root();
     const input = result(workspace);
     input.verdict = "passed";
+    input.proofClassification = { status: "explicit", checkedRuns: 1, classifiedOracles: 1,
+      legacyOracles: 0, unavailableRuns: 0, omittedRuns: 0, legacyRunIds: [], unavailableRunIds: [] };
     input.planning = { source: "submitted", confidence: 0.5, assumptions: [], missingInputs: [], evidenceGaps: ["project-workflow-coverage"], coverage: { requested: "project", source: "explicit", reason: "Requested whole project", inventory: "partial", workflowCoverage: "unmeasured", gaps: ["project-map-truncated"] } };
     input.scope.uncoveredCharterIds = ["billing"];
     const markup = await readFile(await new MissionReportStore(workspace).writeReport(input), "utf8");
@@ -103,6 +105,47 @@ describe("Mission report", () => {
     expect(JSON.parse(await readFile(join(dirname(snapshot.path), "summary.json"), "utf8"))).toMatchObject({
       evidenceIntegrity: { status: "partial", omittedEvidenceReferences: 2 },
     });
+  });
+
+  it("keeps a compact partial report green only when the full Mission evidence audit is intact", async () => {
+    const workspace = await root();
+    const factPath = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "business.json"), "accepted");
+    const evidence = ref(factPath, createHash("sha256").update("accepted").digest("hex"));
+    const input = result(workspace, [evidence]);
+    input.verdict = "passed";
+    input.proofClassification = { status: "explicit", checkedRuns: 1, classifiedOracles: 1,
+      legacyOracles: 0, unavailableRuns: 0, omittedRuns: 0, legacyRunIds: [], unavailableRunIds: [] };
+    const store = new MissionReportStore(workspace);
+    input.acceptanceEvidenceIntegrity = await store.inspectMissionEvidence([evidence], new Set(["run-1"]));
+    expect(input.acceptanceEvidenceIntegrity).toMatchObject({ status: "intact", references: { total: 1, intact: 1, omitted: 0 } });
+    expect(await store.inspectMissionEvidence([evidence], new Set(["foreign-run"])))
+      .toMatchObject({ status: "degraded", references: { unavailable: 1 } });
+    const intact = await store.writeReportSnapshot(input);
+    expect(intact.result).toMatchObject({ verdict: "passed", testVerdict: "passed", evidenceIntegrity: { status: "intact" } });
+    expect(await readFile(intact.path, "utf8")).toContain('data-verdict="passed"');
+
+    input.runs[0]!.omittedEvidence = 1;
+    const partial = await store.writeReportSnapshot(input);
+    expect(partial.result).toMatchObject({ verdict: "passed", testVerdict: "passed",
+      acceptanceEvidenceIntegrity: { status: "intact" }, evidenceIntegrity: { status: "partial" } });
+    expect(JSON.parse(await readFile(join(dirname(partial.path), "summary.json"), "utf8")))
+      .toMatchObject({ verdict: "passed", testVerdict: "passed" });
+    expect(await readFile(partial.path, "utf8")).toContain('data-verdict="passed"');
+
+    input.runs[0]!.omittedEvidence = 0;
+    await writeFile(factPath, "changed");
+    input.acceptanceEvidenceIntegrity = await store.inspectMissionEvidence([evidence], new Set(["run-1"]));
+    const degraded = await store.writeReportSnapshot(input);
+    expect(degraded.result).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      acceptanceEvidenceIntegrity: { status: "degraded" }, evidenceIntegrity: { status: "degraded" } });
+    expect(await readFile(degraded.path, "utf8")).toContain("Saved pass · current evidence unverified");
+
+    await writeFile(factPath, "accepted");
+    input.acceptanceEvidenceIntegrity = { status: "partial", scope: "mission-evidence", checkedAt: now,
+      references: { total: 2049, intact: 2048, unavailable: 0, legacy: 0, omitted: 1 } };
+    const exceeded = await store.writeReportSnapshot(input);
+    expect(exceeded.result).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("within its limits"), acceptanceEvidenceIntegrity: { status: "partial" } });
   });
 
   it("encodes valid evidence paths and rejects missing, external, remote and unrelated files", async () => {

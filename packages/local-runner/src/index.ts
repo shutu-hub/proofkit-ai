@@ -3,11 +3,11 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
-import { createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofkit/evidence";
+import { auditMissionVerdict, createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofkit/evidence";
 import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
-import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionComparison, type MissionEvidenceIntegrity, type MissionProofClassification, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
+import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionAcceptanceIntegrity, type MissionComparison, type MissionEvidenceIntegrity, type MissionProofClassification, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowInventory, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject, verifySourceLocationHints } from "@proofkit/project";
@@ -641,6 +641,7 @@ export class LocalRunnerService {
     comparison?: MissionComparison;
     comparisonUnavailable?: string;
     evidenceIntegrity: MissionEvidenceIntegrity;
+    acceptanceEvidenceIntegrity: MissionAcceptanceIntegrity;
     proofClassification: MissionProofClassification;
     summary: MissionResult;
     report?: string;
@@ -662,7 +663,23 @@ export class LocalRunnerService {
     const suiteScope = summarizeSuiteScope(mission, this.evidenceDir);
     const workflowExecution = summarizeWorkflowExecution(mission, suiteScope);
     const proofClassification = await auditMissionProofClassification(mission, (runId) => this.loadRunSummary(runId));
-    let summary = projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, comparison, comparisonUnavailable, proofClassification });
+    const referencedRunIds = new Set(mission.observations.flatMap((item) => {
+      const id = item.kind === "surface.run" ? item.data.runId
+        : item.kind === "surface.inspected" ? item.data.inspectionId : undefined;
+      return typeof id === "string" && /^[a-zA-Z0-9_-]+$/.test(id) ? [id] : [];
+    }));
+    const missionReferences = [
+      ...mission.evidence,
+      ...mission.agentSteps.flatMap((step) => step.evidence),
+      ...mission.toolCalls.flatMap((call) => call.evidence),
+      ...mission.observations.flatMap((observation) => observation.evidence),
+      ...mission.findings.flatMap((finding) => finding.evidence),
+      ...(mission.firstFailure?.evidence ?? []),
+      ...(mission.diagnosis?.evidence ?? []),
+      ...mission.repairSuggestions.flatMap((suggestion) => suggestion.evidence),
+    ];
+    const acceptanceEvidenceIntegrity = await this.missionReports.inspectMissionEvidence(missionReferences, referencedRunIds);
+    let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, comparison, comparisonUnavailable, proofClassification }), acceptanceEvidenceIntegrity };
     let report: string | undefined;
     let reportUnavailable: string | undefined;
     let evidenceIntegrity: MissionEvidenceIntegrity;
@@ -676,16 +693,10 @@ export class LocalRunnerService {
       // path escapes its ownership boundary. Rendering never changes a verdict.
       reportUnavailable = "The Mission report could not be written inside this test workspace.";
       evidenceIntegrity = await this.missionReports.inspectIntegrity(summary);
-      summary = { ...summary, evidenceIntegrity };
+      summary = { ...summary, evidenceIntegrity, ...auditMissionVerdict(summary, evidenceIntegrity) };
     }
-    const classificationGap = mission.verdict === "passed" && mission.level !== "quick"
-      && proofClassification.status !== "explicit";
-    const evidenceGap = mission.verdict === "passed"
-      && (evidenceIntegrity.status === "degraded" || evidenceIntegrity.status === "no-evidence");
-    const testVerdict = classificationGap || evidenceGap ? "inconclusive" : mission.verdict ?? "not-asserted";
-    const testVerdictReason = classificationGap
-      ? "Saved core/release pass lacks explicitly classified business proof; rerun affected scenarios."
-      : evidenceGap ? "Saved pass has unavailable or unverifiable presented evidence; rerun before claiming acceptance." : undefined;
+    const testVerdict = summary.testVerdict ?? "not-asserted";
+    const testVerdictReason = summary.testVerdictReason;
     return {
       missionId: mission.missionId,
       replayOfMissionId: mission.replayOfMissionId,
@@ -729,6 +740,7 @@ export class LocalRunnerService {
       ...(comparison ? { comparison } : {}),
       ...(comparisonUnavailable ? { comparisonUnavailable } : {}),
       evidenceIntegrity,
+      acceptanceEvidenceIntegrity,
       proofClassification,
       summary,
       ...(report ? { report } : {}),

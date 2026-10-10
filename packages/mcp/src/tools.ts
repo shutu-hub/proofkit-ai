@@ -123,12 +123,12 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "get_mission_status",
-    "Read saved mission status, task graph and historical verdict. The status receipt is not an evidence audit; call get_mission_evidence before claiming a product outcome or repair.",
+    "Read saved mission status, task graph and historical verdict. testVerdict stays not-asserted here because this receipt does not audit evidence; call get_mission_evidence before claiming a product outcome or repair.",
     { missionId: z.string().min(1) },
     READ_ONLY_TOOL,
     async ({ missionId }) => {
       const current = await runner.missionStatus(missionId);
-      return result({ ...current, testVerdict: current.mission.verdict ?? "not-asserted" });
+      return result({ ...current, testVerdict: "not-asserted" });
     },
   );
 
@@ -141,7 +141,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "get_mission_evidence",
-    "Read traceable Mission evidence, current presented-evidence integrity and Oracle proof classification, a bounded result summary and its local HTML report path. testVerdict is downgraded to inconclusive when a saved pass lacks required current proof; verdict retains the historical value.",
+    "Read traceable Mission evidence, current full-reference and presented-evidence integrity, Oracle proof classification, a bounded summary and local HTML report. testVerdict is downgraded to inconclusive when a saved pass lacks required current proof; verdict retains the historical value.",
     { missionId: z.string().min(1) },
     async ({ missionId }) => {
       const evidence = await runner.missionEvidence(missionId);
@@ -294,6 +294,7 @@ async function awaitTestResult(runner: LocalRunnerService, missionId: string, ti
           testVerdict: evidence.testVerdict,
           testVerdictReason: evidence.testVerdictReason,
           level: evidence.level, summary: evidence.summary, evidenceIntegrity: evidence.evidenceIntegrity,
+          acceptanceEvidenceIntegrity: evidence.acceptanceEvidenceIntegrity,
           proofClassification: evidence.proofClassification,
           firstFailure: evidence.firstFailure, report: evidence.report, reportUnavailable: evidence.reportUnavailable,
           next: ["get_mission_evidence"] };
@@ -377,7 +378,7 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
     status,
     running: started.running,
     verdict: mission.verdict,
-    testVerdict: mission.verdict ?? "not-asserted",
+    testVerdict: "not-asserted",
     level: mission.level,
     levelSelection: mission.levelSelection,
     planning: mission.plan.planning,

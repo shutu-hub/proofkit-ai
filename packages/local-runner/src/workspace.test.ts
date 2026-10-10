@@ -143,6 +143,8 @@ describe("external test workspace", () => {
     expect(acceptedEvidence).toMatchObject({
       projectRoot: root, workspaceRoot, verdict: "passed",
       testVerdict: "passed",
+      summary: { verdict: "passed", testVerdict: "passed" },
+      acceptanceEvidenceIntegrity: { status: "intact", scope: "mission-evidence", references: { omitted: 0 } },
       proofClassification: { status: "explicit", checkedRuns: 1, classifiedOracles: 1, legacyOracles: 0 },
       targetBindings: [{ surface: "web", binding: { status: "unverified" } }],
       evidenceIntegrity: { visibleConfirmedFindings: { saved: 0, supported: 0 } },
@@ -161,7 +163,9 @@ describe("external test workspace", () => {
     const degraded = await restarted.missionEvidence(mission.missionId);
     expect(degraded.verdict).toBe("passed");
     expect(degraded.testVerdict).toBe("inconclusive");
-    expect(degraded.testVerdictReason).toContain("unverifiable presented evidence");
+    expect(degraded.testVerdictReason).toContain("unverifiable evidence");
+    expect(degraded.acceptanceEvidenceIntegrity).toMatchObject({ status: "degraded", references: { unavailable: 1 } });
+    expect(degraded.summary).toMatchObject({ verdict: "passed", testVerdict: "inconclusive" });
     expect(degraded.evidenceIntegrity).toMatchObject({ status: "degraded", references: { unavailable: 1 } });
     expect(degraded.summary.evidenceIntegrity).toEqual(degraded.evidenceIntegrity);
     expect(await readFile(degraded.report!, "utf8")).toContain("Saved pass · current evidence unverified");
@@ -175,6 +179,7 @@ describe("external test workspace", () => {
     expect(legacyEvidence.verdict).toBe("passed");
     expect(legacyEvidence.testVerdict).toBe("inconclusive");
     expect(legacyEvidence.testVerdictReason).toContain("explicitly classified business proof");
+    expect(legacyEvidence.summary).toMatchObject({ verdict: "passed", testVerdict: "inconclusive" });
     expect(legacyEvidence.proofClassification).toMatchObject({ status: "unverified", legacyOracles: 1,
       legacyRunIds: [missionRunId] });
     expect(legacyEvidence.summary.proofClassification).toEqual(legacyEvidence.proofClassification);

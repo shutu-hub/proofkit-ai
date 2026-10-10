@@ -2,9 +2,12 @@ import { mkdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { MissionEvidenceIntegritySchema, MissionResultSchema, type EvidenceRef, type MissionEvidenceIntegrity, type MissionResult, type MissionRunResult } from "@proofkit/contracts";
+import { MissionAcceptanceIntegritySchema, MissionEvidenceIntegritySchema, MissionResultSchema, type EvidenceRef, type MissionAcceptanceIntegrity, type MissionEvidenceIntegrity, type MissionResult, type MissionRunResult } from "@proofkit/contracts";
 
 type EvidenceLink = { href?: string; runId?: string };
+const MAX_MISSION_AUDIT_REFERENCES = 2048;
+const MISSION_AUDIT_CONCURRENCY = 8;
+const MAX_MISSION_AUDIT_MS = 15_000;
 
 /** Static Mission snapshots live beside the existing Mission store, inside its workspace. */
 export class MissionReportStore {
@@ -32,7 +35,7 @@ export class MissionReportStore {
     if (!within(workspace, reportDir)) throw new Error("Mission report directory must stay within its workspace");
     const links = await this.buildLinks(result, workspace, reportDir);
     const integrity = summarizeIntegrity(result, links);
-    const snapshot = MissionResultSchema.parse({ ...result, evidenceIntegrity: integrity });
+    const snapshot = MissionResultSchema.parse({ ...result, evidenceIntegrity: integrity, ...auditMissionVerdict(result, integrity) });
     await atomicWrite(join(reportDir, "summary.json"), `${JSON.stringify(snapshot, null, 2)}\n`);
     const path = join(reportDir, "report.html");
     await atomicWrite(path, renderMissionReport(snapshot, links));
@@ -52,12 +55,50 @@ export class MissionReportStore {
     return summarizeIntegrity(result, links);
   }
 
+  /** Audit the Mission's full saved reference set; presentation caps do not make an ordinary Run fail. */
+  async inspectMissionEvidence(refs: EvidenceRef[], runIds: Set<string>): Promise<MissionAcceptanceIntegrity> {
+    const unique = [...new Map(refs.map((ref) => [evidenceKey(ref), ref])).values()];
+    const inspected = unique.slice(0, MAX_MISSION_AUDIT_REFERENCES);
+    const deadline = Date.now() + MAX_MISSION_AUDIT_MS;
+    let checked = 0;
+    let intact = 0;
+    let unavailable = 0;
+    let legacy = 0;
+    let workspace: string | undefined;
+    try { workspace = await realpath(this.workspaceRoot); } catch { /* Missing workspace makes refs unavailable. */ }
+    for (let start = 0; start < inspected.length; start += MISSION_AUDIT_CONCURRENCY) {
+      if (Date.now() >= deadline) break;
+      const batch = inspected.slice(start, start + MISSION_AUDIT_CONCURRENCY);
+      const results = await Promise.all(batch.map(async (ref) => {
+        if (!ref.sha256) return "legacy" as const;
+        if (!workspace) return "unavailable" as const;
+        const link = await this.evidenceLink(ref, workspace, workspace, runIds);
+        return link.href ? "intact" as const : "unavailable" as const;
+      }));
+      for (const result of results) {
+        if (result === "intact") intact++;
+        else if (result === "legacy") legacy++;
+        else unavailable++;
+      }
+      checked += batch.length;
+    }
+    const omitted = unique.length - checked;
+    return MissionAcceptanceIntegritySchema.parse({
+      status: unavailable || legacy ? "degraded" : omitted ? "partial" : unique.length ? "intact" : "no-evidence",
+      scope: "mission-evidence", checkedAt: new Date().toISOString(),
+      references: { total: unique.length, intact, unavailable, legacy, omitted },
+    });
+  }
+
   private async buildLinks(result: MissionResult, workspace: string, reportDir: string): Promise<Map<string, EvidenceLink>> {
     const runIds = referencedRunIds(result);
     const links = new Map<string, EvidenceLink>();
-    await Promise.all(uniqueEvidence(result).map(async (ref) => {
-      links.set(evidenceKey(ref), await this.evidenceLink(ref, workspace, reportDir, runIds));
-    }));
+    const refs = uniqueEvidence(result);
+    for (let start = 0; start < refs.length; start += MISSION_AUDIT_CONCURRENCY) {
+      await Promise.all(refs.slice(start, start + MISSION_AUDIT_CONCURRENCY).map(async (ref) => {
+        links.set(evidenceKey(ref), await this.evidenceLink(ref, workspace, reportDir, runIds));
+      }));
+    }
     return links;
   }
 
@@ -86,6 +127,25 @@ export class MissionReportStore {
   }
 }
 
+/** Keep the saved verdict separate from what the currently readable evidence supports. */
+export function auditMissionVerdict(result: MissionResult, integrity: MissionEvidenceIntegrity): Pick<MissionResult, "testVerdict" | "testVerdictReason"> {
+  if (result.verdict !== "passed") return { testVerdict: result.verdict ?? "not-asserted" };
+  if (result.level !== "quick" && result.proofClassification?.status !== "explicit") {
+    return { testVerdict: "inconclusive", testVerdictReason: "Saved core/release pass lacks explicitly classified business proof; rerun affected scenarios." };
+  }
+  const full = result.acceptanceEvidenceIntegrity;
+  if (full && full.status !== "intact") {
+    const reason = full.status === "partial"
+      ? "Saved Mission evidence audit did not cover every reference within its limits; rerun or split the scope before claiming current acceptance."
+      : "Saved Mission has unavailable or unverifiable evidence; rerun before claiming acceptance.";
+    return { testVerdict: "inconclusive", testVerdictReason: reason };
+  }
+  if (integrity.status === "degraded" || integrity.status === "no-evidence" || (!full && integrity.status === "partial")) {
+    return { testVerdict: "inconclusive", testVerdictReason: "Saved pass has unavailable or incompletely audited presented evidence; rerun before claiming acceptance." };
+  }
+  return { testVerdict: "passed" };
+}
+
 function renderMissionReport(result: MissionResult, links: Map<string, EvidenceLink>): string {
   const evidence = (refs: EvidenceRef[], expectedRunId?: string) => refs.map((ref) => {
     const label = evidenceLabel(ref.kind);
@@ -108,9 +168,15 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
   const staleFindings = savedConfirmed.length - currentlyVerified;
   const comparisonEvidenceUnavailable = comparisonEvidenceStatus(result, links) === "degraded";
   const proofUnverified = result.proofClassification?.status === "unverified";
-  const evidenceUnverified = result.evidenceIntegrity?.status === "degraded" || result.evidenceIntegrity?.status === "no-evidence";
+  const businessPassUnverified = result.verdict === "passed" && result.level !== "quick"
+    && result.proofClassification?.status !== "explicit";
+  const evidenceUnverified = result.verdict === "passed" && result.testVerdict === "inconclusive" && !businessPassUnverified;
+  const currentOutcomeLabel = businessPassUnverified ? "Saved pass · current business proof unverified"
+    : result.verdict === "passed" && evidenceUnverified ? "Saved pass · current evidence unverified" : outcomeLabel(outcome);
   const limits = [
     result.evidenceIntegrity ? `Current presented evidence integrity: ${result.evidenceIntegrity.status}; ${result.evidenceIntegrity.references.intact}/${result.evidenceIntegrity.references.total} reference(s) verified at ${result.evidenceIntegrity.checkedAt}. This does not change the saved acceptance verdict.` : undefined,
+    result.acceptanceEvidenceIntegrity ? `Current Mission evidence integrity: ${result.acceptanceEvidenceIntegrity.status}; ${result.acceptanceEvidenceIntegrity.references.intact}/${result.acceptanceEvidenceIntegrity.references.total} saved reference(s) verified, ${result.acceptanceEvidenceIntegrity.references.omitted} beyond the audit limit. This does not prove whole-project coverage or application state after the Run.` : undefined,
+    result.testVerdictReason,
     proofUnverified ? `Current business proof classification is unverified: ${result.proofClassification!.legacyOracles} saved Oracle result(s) lack a verification kind, ${result.proofClassification!.unavailableRuns} Run(s) could not be read, and ${result.proofClassification!.omittedRuns} Run(s) exceeded the audit bound. Rerun affected scenarios before treating the saved business verdict or finding as current proof.` : undefined,
     coverage?.requested === "project" ? "Whole-project workflow coverage has not been proven." : "Acceptance applies to the saved scenarios. Whole-project workflow coverage has not been measured.",
     coverage?.inventory === "partial" || route?.inventoryTruncated ? "The source inventory is partial; it cannot establish complete project coverage." : undefined,
@@ -146,7 +212,7 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>ProofKit · ${html(result.intent)}</title><style>
 :root{color-scheme:light;--ink:#1c302e;--muted:#5d706c;--line:#d9e2df;--paper:#fff;--canvas:#f4f7f5;--accent:#17685a}*{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--ink);font:15px/1.55 system-ui,-apple-system,sans-serif}main{max-width:1180px;margin:0 auto;padding:28px 28px 48px}header,.section-heading{display:flex;justify-content:space-between;align-items:center;gap:16px}header{margin-bottom:22px}.brand{font-weight:750;letter-spacing:-.5px;font-size:21px}a{color:var(--accent);text-underline-offset:3px}nav{display:flex;gap:20px}h1,h2,h3,p{margin:0}h1{font-size:clamp(25px,3.8vw,40px);line-height:1.2;letter-spacing:-1px;margin:12px 0}h2{font-size:19px;line-height:1.4}h3{font-size:16px}p{margin-top:8px;overflow-wrap:anywhere}.meta,small{color:var(--muted);font-size:13px}.section-label{font-size:12px;text-transform:uppercase;letter-spacing:.07em;font-weight:650;color:var(--muted)}.hero{background:var(--paper);border:1px solid var(--line);border-top:4px solid var(--accent);padding:24px 28px}.hero[data-verdict=failed]{border-top-color:#a42d37}.hero[data-verdict=inconclusive],.hero[data-verdict=blocked]{border-top-color:#9a6716}.hero-top{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.badge{display:inline-block;font-size:12px;line-height:1.5;padding:3px 9px;border:1px solid var(--line);border-radius:4px}.status-passed{color:#146247;background:#edf6f0}.status-failed{color:#9f2733;background:#fff0f1}.status-blocked,.status-inconclusive{color:#83580d;background:#fff6e7}.metrics{display:flex;flex-wrap:wrap;gap:26px;border-top:1px solid var(--line);margin-top:22px;padding-top:16px}.metrics strong{font-size:21px;font-weight:650;margin-right:6px}.scope{padding:20px 0;border-bottom:1px solid var(--line)}.scope ul{margin:8px 0 0;padding-left:20px;font-size:13px;color:var(--muted)}section{margin-top:24px}.failure{padding:18px 22px;background:#fff5f2;border-left:3px solid #a42d37}.failure h2{margin-top:6px;overflow-wrap:anywhere}.links{display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:8px}.evidence-link,.unavailable{font-size:13px}.unavailable{color:#83580d}.comparison{border:1px solid var(--line);background:var(--paper);padding:18px 22px}.comparison p{font-size:14px}.table-wrap{overflow-x:auto;margin-top:12px;border:1px solid var(--line);background:var(--paper)}table{width:100%;border-collapse:collapse;min-width:760px;table-layout:fixed}th{font-size:12px;color:var(--muted);font-weight:650;background:#eef3f0}th,td{padding:14px 16px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}th:nth-child(1){width:25%}th:nth-child(2){width:12%}th:nth-child(3){width:19%}th:nth-child(4){width:20%}th:nth-child(5){width:24%}tbody tr:last-child td{border-bottom:0}td{font-size:14px;overflow-wrap:anywhere}small{display:block;margin-top:4px}.row-issue{font-size:12px;color:#83580d}.finding{padding:18px 0;border-bottom:1px solid var(--line)}.finding h3{margin-top:5px}.finding p{font-size:14px}details{margin-top:14px}summary{cursor:pointer;color:var(--accent);font-weight:600;overflow-wrap:anywhere}details p,details li{font-size:14px}footer{margin-top:30px;border-top:1px solid var(--line);padding-top:16px;font-size:12px;color:var(--muted);overflow-wrap:anywhere}a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:4px}@media(max-width:600px){main{padding:16px 16px 32px}.hero{padding:18px}.metrics{gap:14px}.metrics strong{font-size:18px}header{align-items:flex-start}nav{gap:12px;font-size:13px}.section-heading{align-items:flex-start;flex-direction:column;gap:4px}.failure,.comparison{padding:16px}.table-wrap{margin-right:0}th,td{padding:12px}}
 </style></head><body><main><header><div class="brand">ProofKit <span class="meta">/ Mission result</span></div><nav aria-label="Report navigation"><a href="#execution">Executions</a><a href="summary.json">Result JSON</a></nav></header>
-<section class="hero" data-verdict="${html(result.verdict ?? "pending")}" aria-labelledby="outcome"><div class="hero-top"><span class="badge">${html(result.level)}</span><span class="badge">${html(scopeLabel)}</span>${result.evidenceIntegrity ? `<span class="badge">Evidence ${html(result.evidenceIntegrity.status)}</span>` : ""}${proofUnverified ? '<span class="badge">Business proof unverified</span>' : ""}<span class="meta">${html(result.status)}${result.running ? " · execution owner active" : ""}</span></div><h1 id="outcome">${html(result.verdict === "passed" && proofUnverified ? "Saved pass · current business proof unverified" : result.verdict === "passed" && evidenceUnverified ? "Saved pass · current evidence unverified" : outcomeLabel(outcome))}</h1><p>${html(result.intent)}</p><div class="metrics"><div><strong>${result.scope.charterCount}</strong> saved scenario(s)</div><div><strong>${result.observedRuns} / ${result.expectedRuns}</strong> run observations / planned runs</div><div><strong>${result.confirmedProductFindings}</strong> saved confirmed product finding(s)</div></div></section>
+<section class="hero" data-verdict="${html(result.testVerdict ?? result.verdict ?? "pending")}" aria-labelledby="outcome"><div class="hero-top"><span class="badge">${html(result.level)}</span><span class="badge">${html(scopeLabel)}</span>${result.evidenceIntegrity ? `<span class="badge">Evidence ${html(result.evidenceIntegrity.status)}</span>` : ""}${businessPassUnverified ? '<span class="badge">Business proof unverified</span>' : ""}${result.testVerdict === "inconclusive" && result.verdict === "passed" ? '<span class="badge status-inconclusive">Current acceptance inconclusive</span>' : ""}<span class="meta">${html(result.status)}${result.running ? " · execution owner active" : ""}</span></div><h1 id="outcome">${html(currentOutcomeLabel)}</h1><p>${html(result.intent)}</p><div class="metrics"><div><strong>${result.scope.charterCount}</strong> saved scenario(s)</div><div><strong>${result.observedRuns} / ${result.expectedRuns}</strong> run observations / planned runs</div><div><strong>${result.confirmedProductFindings}</strong> saved confirmed product finding(s)</div></div></section>
 <section class="scope" aria-labelledby="scope"><h2 id="scope">Acceptance scope</h2><p class="meta">${html(result.scope.surfaces.join(" · "))}${result.scope.suiteId ? ` · Suite ${html(result.scope.suiteId)}` : ""}</p><ul>${limits.map((limit) => `<li>${html(limit)}</li>`).join("")}</ul>${planningGaps.length ? `<details open><summary>Missing test requirements</summary><ul>${planningGaps.map((gap) => `<li>${html(gap)}</li>`).join("")}</ul></details>` : ""}</section>
 ${firstFailure}${comparison}<section id="execution" aria-labelledby="execution-title"><div class="section-heading"><h2 id="execution-title">Scenario executions</h2><span class="meta">${result.tasks.settled} / ${result.tasks.total} tasks settled · ${result.tasks.skipped} skipped</span></div><div class="table-wrap" role="region" aria-label="Scenario execution matrix" tabindex="0"><table><thead><tr><th>Scenario</th><th>Surface / kind</th><th>Observed outcome</th><th>Verification facts</th><th>Evidence</th></tr></thead><tbody>${rows || '<tr><td colspan="5">No execution tasks recorded.</td></tr>'}</tbody></table></div><p class="meta">Task counts describe execution progress. The Mission verdict is the saved acceptance result.</p></section>${findingsSection}${repair}
 <section><details><summary>Audit details</summary><p>Mission: ${html(result.missionId)}${result.replayOfMissionId ? `<br>Replay of: ${html(result.replayOfMissionId)}` : ""}<br>Project: ${html(result.projectRoot)}<br>Workspace: ${html(result.workspaceRoot)}<br>Source inventory: ${html(coverage?.inventory ?? "not recorded")}<br>Workflow coverage: ${html(coverage?.workflowCoverage ?? "not recorded")}<br>Level selection: ${html(result.levelSelection?.reason ?? "not recorded")}</p>${result.planning?.assumptions.length ? `<ul>${result.planning.assumptions.map((assumption) => `<li>${html(assumption)}</li>`).join("")}</ul>` : ""}</details></section>

@@ -99,6 +99,7 @@ Check get_mission_evidence.evidenceIntegrity.status before presenting a saved
 confirmed finding or repair as currently supported. "degraded" means one or
 more presented references or confirmed findings lack verifiable bytes;
 "partial" means the bounded result omitted some rows, findings or references;
+read acceptanceEvidenceIntegrity for the full Mission reference audit and
 claim current support only when every cited finding and repair fact verifies.
 "no-evidence" cannot support a product claim. The saved verdict is historical,
 and "intact" covers only the presented references, not all project workflows.
@@ -109,9 +110,10 @@ the affected scenarios before claiming current business proof. "explicit" only
 means Oracle kinds were recorded; still check the Mission's business facts,
 coverage and cited evidence.
 For a saved pass whose required proof classification is unverified or whose
-presented evidence is degraded or absent, testVerdict is inconclusive and
+Mission evidence is degraded, absent or beyond the audit limit, testVerdict is inconclusive and
 testVerdictReason explains the rerun needed. Do not report the saved pass as a
-current acceptance result.
+current acceptance result. A compact partial report can retain a pass only when
+the full Mission evidence audit is intact.
 
 For an authorized fix, use replay_mission on the original Mission with the
 same scope and fixture bytes, then compare_missions after the replay finishes.

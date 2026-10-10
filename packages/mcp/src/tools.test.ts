@@ -195,6 +195,7 @@ describe("ProofKit MCP tools", () => {
     const missionEvidence = vi.fn(async () => ({ missionId: "mission-test", status: "completed", running: false,
       verdict: "passed", testVerdict: "inconclusive", testVerdictReason: "Legacy Oracle proof is unverified", level: "core", summary: { missionId: "mission-test", verdict: "passed" },
       evidenceIntegrity: { status: "intact" }, proofClassification: { status: "unverified", legacyOracles: 1 },
+      acceptanceEvidenceIntegrity: { status: "intact", scope: "mission-evidence", references: { total: 1, intact: 1, unavailable: 0, legacy: 0, omitted: 0 } },
       report: "C:/workspace/report.html" }));
     const runner = { missionStatus, missionEvidence, startMission: vi.fn() } as unknown as LocalRunnerService;
     const { client, server } = await connectedClient(runner);
@@ -202,6 +203,7 @@ describe("ProofKit MCP tools", () => {
       const response = await client.callTool({ name: "await_test_result", arguments: { missionId: "mission-test", timeoutMs: 1000 } });
       expect(JSON.parse(textContent(response))).toMatchObject({ state: "terminal", missionId: "mission-test",
         status: "completed", verdict: "passed", testVerdict: "inconclusive", evidenceIntegrity: { status: "intact" },
+        acceptanceEvidenceIntegrity: { status: "intact", references: { total: 1, intact: 1 } },
         proofClassification: { status: "unverified", legacyOracles: 1 },
         testVerdictReason: "Legacy Oracle proof is unverified",
         report: "C:/workspace/report.html", next: ["get_mission_evidence"] });
@@ -255,6 +257,17 @@ describe("ProofKit MCP tools", () => {
         testVerdict: "not-asserted", readiness: { ready: false, missing: ["规划证据缺口：project-workflow-coverage"] },
         next: ["inspect_test_scope"] });
       expect(runner.startMission).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("never exposes a saved pass as a current verdict through the unaudited status tool", async () => {
+    const mission = fixtureMission("completed");
+    mission.verdict = "passed";
+    const runner = { missionStatus: vi.fn(async () => ({ mission, running: false })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "get_mission_status", arguments: { missionId: mission.missionId } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ mission: { verdict: "passed" }, testVerdict: "not-asserted" });
     } finally { await client.close(); await server.close(); }
   });
 
@@ -334,6 +347,20 @@ describe("ProofKit MCP tools", () => {
     expect(runner.startMission).toHaveBeenCalled();
     await client.close();
     await server.close();
+  });
+
+  it("requires an evidence read even when a newly started Mission already has a saved pass", async () => {
+    const pending = fixtureMission("awaiting-approval");
+    const completed = fixtureMission("completed");
+    completed.verdict = "passed";
+    const runner = { config: { surfaces: {} }, createMission: vi.fn(async () => pending),
+      startMission: vi.fn(async () => ({ mission: completed, running: false })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "run_test", arguments: { intent: "测试简历获取" } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ status: "completed", verdict: "passed",
+        testVerdict: "not-asserted", next: ["get_mission_evidence"] });
+    } finally { await client.close(); await server.close(); }
   });
 
   it("holds an incomplete core request before surface execution", async () => {

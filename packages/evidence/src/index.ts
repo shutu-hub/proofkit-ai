@@ -5,7 +5,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { RunEventSchema, RunSummarySchema, type RunEvent, type RunSummary } from "@proofkit/contracts";
 
-export { MissionReportStore } from "./mission-report.js";
+export { MissionReportStore, auditMissionVerdict } from "./mission-report.js";
 export { LocalExecutionOwnership, type LocalExecutionLease } from "./local-ownership.js";
 
 /** Commit a complete, flushed JSON snapshot with one atomic replacement. */
