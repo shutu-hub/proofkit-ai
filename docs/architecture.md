@@ -215,6 +215,16 @@ Exactly one matching request is required. Redirects, duplicate requests,
 missing responses, request failure, page closure, unaccepted status, invalid
 JSON or unavailable selected fields produce `inconclusive` evidence gaps.
 
+The legacy window ends `requestWindowMs` after the trigger. A Charter can set
+`requestStartTimeoutMs` to wait that long after the trigger for the first
+matching request. In this delayed mode, duplicate detection continues until
+`requestWindowMs` after the first request, or the end of a longer trigger.
+The shared `timeoutMs` still bounds trigger, request wait, guard, response and
+body acquisition. The capture records `requestStartedAt`. A request outside
+the observation window cannot be excluded by this action; temporal matching
+does not prove business causality or prevent later duplicates. Independent
+business reads and isolated test actors remain necessary.
+
 The action selects 1–16 scalar fields through bounded RFC 6901 pointers.
 Decimal IDs are normalized without accepting unsafe JavaScript integers;
 other ID formats can use the `string` field type. The saved step and response

@@ -79,9 +79,11 @@ export const CaptureResponseActionSchema = z.object({
     statuses: z.array(z.number().int().min(200).max(599)).min(1).max(10).default([200, 201]),
     fields: ResponseProjectionSchema,
   }).strict(),
-  /** Continue observing requests for this interval after the trigger completes. */
+  /** In legacy mode, observe requests this long after the trigger. In delayed mode, guard against duplicates this long after the first request. */
   requestWindowMs: z.number().int().min(1).max(5000).default(500),
-  timeoutMs: z.number().int().positive().max(60000).default(10000),
+  /** Opt in to waiting for a request after the trigger. The total timeout still bounds the entire action. */
+  requestStartTimeoutMs: z.number().int().min(1).max(300000).optional(),
+  timeoutMs: z.number().int().positive().max(600000).default(10000),
 }).strict();
 export type CaptureResponseAction = z.infer<typeof CaptureResponseActionSchema>;
 export const ResponseObservationSchema = z.object({
@@ -92,6 +94,7 @@ export const ResponseObservationSchema = z.object({
   status: z.number().int().min(200).max(599),
   requestCount: z.literal(1),
   windowStartedAt: z.string(),
+  requestStartedAt: z.string().datetime().optional(),
   windowEndedAt: z.string(),
   capturedAt: z.string(),
   bodyBytes: z.number().int().min(1).max(65536),

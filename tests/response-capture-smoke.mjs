@@ -69,8 +69,9 @@ const http = createServer(async (request, response) => {
         <form><input type="file" name="resume" hidden><button id="submit" type="submit">Submit</button></form><p id="result"></p>
         <script>document.querySelector('form').onsubmit=async(event)=>{
           event.preventDefault(); const form=event.target;
-          if(${JSON.stringify(mode)}==='no-match'){document.querySelector('#result').textContent='Accepted';return;}
+          if(${JSON.stringify(mode)}==='no-match'||${JSON.stringify(mode)}==='delayed-missing'){document.querySelector('#result').textContent='Accepted';return;}
           const send=()=>fetch('/api/v1/intakes?mode='+${JSON.stringify(mode)},{method:'POST',body:new FormData(form)});
+          if(${JSON.stringify(mode)}==='delayed')await new Promise(resolve=>setTimeout(resolve,250));
           const responses=await Promise.all(${JSON.stringify(mode)}==='duplicate'?[send(),send()]:[send()]);
           await Promise.all(responses.map(response=>response.json()));
           document.querySelector('#result').textContent=${JSON.stringify(mode)}==='rejected'?'Rejected':'Accepted';
@@ -149,15 +150,20 @@ try {
   assert.equal(new Set(await Promise.all(release.evidence.summary.runs.map(async (item) => (await savedRun(item.runId)).steps[2].response.fields.fileId))).size, 6);
   await verifyEvidence(release);
   for (const surface of ["web", "electron"]) {
-    for (const mode of ["chunked", "gzip"]) {
+    for (const mode of ["chunked", "gzip", "delayed"]) {
       const result = await run(charter(mode), surface);
-      assert.equal(result.status.mission.verdict, "passed", JSON.stringify(result.status.mission.findings)); await verifyEvidence(result);
+      assert.equal(result.status.mission.verdict, "passed", JSON.stringify(result.status.mission.findings));
+      if (mode === "delayed") {
+        const capture = (await savedRun(result.evidence.summary.runs[0].runId)).steps[2].response;
+        assert.ok(Date.parse(capture.requestStartedAt) - Date.parse(capture.windowStartedAt) >= 100);
+      }
+      await verifyEvidence(result);
     }
-    for (const mode of ["pending", "duplicate", "no-match", "stalled-body", "wrong-identity"]) {
+    for (const mode of ["pending", "duplicate", "no-match", "delayed-missing", "stalled-body", "wrong-identity"]) {
       const result = await run(charter(mode), surface);
       assert.equal(result.status.mission.verdict, mode === "wrong-identity" ? "failed" : "inconclusive", JSON.stringify(result.status.mission.findings));
       if (mode !== "wrong-identity") assert.ok(!result.status.mission.findings.some((item) => item.category === "product" && item.status === "confirmed"));
-      if (["duplicate", "no-match", "stalled-body"].includes(mode)) {
+      if (["duplicate", "no-match", "delayed-missing", "stalled-body"].includes(mode)) {
         assert.ok(result.status.mission.findings.some((item) => item.category === "test" && item.status === "unverified"));
         const saved = await savedRun(result.evidence.summary.runs[0].runId);
         assert.equal(saved.steps[2].response, undefined);
@@ -172,7 +178,7 @@ try {
   console.log(JSON.stringify({ workspace, report: release.evidence.report, missions: results,
     verified: ["web-electron-response-id", "fresh-replay-ids", "six-release-run-identities", "config-only-id-status-check",
       "independent-byte-and-relation-check", "historical-success-rejected", "pending-inconclusive", "duplicate-no-match-stalled-gaps",
-      "chunked-gzip-json", "business-defect-repair-replay", "unselected-bodies-not-persisted", "no-source-writes"] }, null, 2));
+      "chunked-gzip-json", "delayed-request-and-timeout", "business-defect-repair-replay", "unselected-bodies-not-persisted", "no-source-writes"] }, null, 2));
 } finally {
   await client?.close(); await server?.close();
   if (electron && electron.exitCode === null) {
@@ -188,7 +194,8 @@ try {
 function charter(mode, level = "core") {
   const actions = (mode) => [{ kind: "goto", url: `${baseUrl}/case/${mode}` },
     { kind: "setInputFiles", selector: 'input[type="file"]', files: [fixtureRef] },
-    { kind: "captureResponse", name: "intake", trigger: { kind: "click", selector: "#submit" }, requestWindowMs: 100, timeoutMs: 2_000,
+    { kind: "captureResponse", name: "intake", trigger: { kind: "click", selector: "#submit" }, requestWindowMs: 100,
+      ...(mode === "delayed" || mode === "delayed-missing" ? { requestStartTimeoutMs: mode === "delayed" ? 800 : 80 } : {}), timeoutMs: 2_000,
       response: { url: `${baseUrl}/api/v1/intakes`, method: "POST", statuses: [mode === "rejected" ? 422 : 201], fields: {
         fileId: { pointer: "/data/file_id", type: "id" }, candidateId: { pointer: "/data/candidate_id", type: "id" }, jobId: { pointer: "/data/job_id", type: "id" } } } },
     { kind: "waitForText", text: mode === "rejected" ? "Rejected" : "Accepted" }];

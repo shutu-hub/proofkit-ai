@@ -49,6 +49,39 @@ describe("bounded action response observation", () => {
     });
     expect(result.fields.fileId).toBe("41"); f.clean();
   });
+  it("captures a request that starts after the legacy action window", async () => {
+    const f = fixture(); const req = f.request();
+    const result = await captureActionResponse(f.page,
+      { ...action, requestStartTimeoutMs: 100, requestWindowMs: 10, timeoutMs: 250 }, async () => {
+        setTimeout(() => f.send(req, f.response(req)), 35);
+      });
+    expect(result.fields.fileId).toBe("41");
+    expect(result.requestStartedAt).toBeDefined();
+    expect(Date.parse(result.requestStartedAt!) - Date.parse(result.windowStartedAt)).toBeGreaterThanOrEqual(20);
+    f.clean();
+  });
+  it("rejects a missing delayed request and a duplicate during its guard window", async () => {
+    const missing = fixture();
+    await expect(captureActionResponse(missing.page,
+      { ...action, requestStartTimeoutMs: 25, requestWindowMs: 10, timeoutMs: 200 }, async () => {}))
+      .rejects.toMatchObject({ code: "response-not-observed" });
+    missing.clean();
+
+    const duplicate = fixture(); const first = duplicate.request();
+    await expect(captureActionResponse(duplicate.page,
+      { ...action, requestStartTimeoutMs: 100, requestWindowMs: 25, timeoutMs: 200 }, async () => {
+        setTimeout(() => { duplicate.send(first, duplicate.response(first)); duplicate.send(); }, 20);
+      })).rejects.toMatchObject({ code: "response-ambiguous" });
+    duplicate.clean();
+  });
+  it("preserves cancellation while awaiting a delayed request", async () => {
+    const f = fixture(); const controller = new AbortController(); const reason = { stop: "await-request" };
+    const running = captureActionResponse(f.page,
+      { ...action, requestStartTimeoutMs: 100, requestWindowMs: 10, timeoutMs: 200 }, async () => {}, controller.signal);
+    setTimeout(() => controller.abort(reason), 15);
+    await expect(running).rejects.toBe(reason);
+    f.clean(); expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  });
   it.each(["duplicate", "none", "redirect-request", "redirect-response", "request-failed", "page-close"])("cleans an ambiguous or missing observation: %s", async (kind) => {
     const f = fixture();
     await expect(captureActionResponse(f.page, action, async () => {

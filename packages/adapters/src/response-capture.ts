@@ -64,6 +64,11 @@ export async function captureActionResponse(page: Page, input: CaptureResponseAc
   let accepting = true;
   let requestCount = 0;
   let selectedRequest: Request | undefined;
+  let requestStartedAt: string | undefined;
+  let requestStartedClock: number | undefined;
+  let resolveRequestStarted!: () => void;
+  const requestStartedPromise = new Promise<void>((resolve) => { resolveRequestStarted = resolve; });
+  let requestStartTimer: ReturnType<typeof setTimeout> | undefined;
   let resolveResponse!: (response: Response) => void;
   const responsePromise = new Promise<Response>((resolve) => { resolveResponse = resolve; });
   const onRequest = (request: Request) => {
@@ -79,7 +84,12 @@ export async function captureActionResponse(page: Page, input: CaptureResponseAc
       requestCount++;
       if (requestCount > 1) {
         controller.abort(gap("response-ambiguous", "More than one matching request occurred in the action window"));
-      } else selectedRequest = request;
+      } else {
+        selectedRequest = request;
+        requestStartedAt = new Date().toISOString();
+        requestStartedClock = performance.now();
+        resolveRequestStarted();
+      }
     } catch { /* Worker requests without a frame cannot establish this association. */ }
   };
   const onResponse = (response: Response) => { if (response.request() === selectedRequest) resolveResponse(response); };
@@ -94,7 +104,17 @@ export async function captureActionResponse(page: Page, input: CaptureResponseAc
     page.on("requestfailed", onFailure);
     page.on("close", onClose);
     await scoped(trigger({ signal: scopedSignal, remainingTimeoutMs }), scopedSignal);
-    await delay(action.requestWindowMs, scopedSignal);
+    if (action.requestStartTimeoutMs !== undefined) {
+      if (!selectedRequest) {
+        requestStartTimer = setTimeout(() => controller.abort(gap("response-not-observed", "No matching request started within the declared delay")), action.requestStartTimeoutMs);
+        await scoped(requestStartedPromise, scopedSignal);
+      }
+      if (requestStartTimer) { clearTimeout(requestStartTimer); requestStartTimer = undefined; }
+      const remainingGuardMs = Math.max(0, action.requestWindowMs - (performance.now() - requestStartedClock!));
+      if (remainingGuardMs > 0) await delay(remainingGuardMs, scopedSignal);
+    } else {
+      await delay(action.requestWindowMs, scopedSignal);
+    }
     accepting = false;
     const windowEndedAt = new Date().toISOString();
     if (requestCount !== 1) throw gap("response-not-observed", "No matching request occurred in the action window");
@@ -124,12 +144,13 @@ export async function captureActionResponse(page: Page, input: CaptureResponseAc
     catch { throw gap("response-json-invalid", "The selected response is not valid JSON"); }
     return ResponseObservationSchema.parse({
       name: action.name, association: "action-window", url: endpoint.href, method: action.response.method, status, requestCount: 1,
-      windowStartedAt, windowEndedAt, capturedAt: new Date().toISOString(), bodyBytes: bytes.length,
+      windowStartedAt, requestStartedAt, windowEndedAt, capturedAt: new Date().toISOString(), bodyBytes: bytes.length,
       bodySha256: createHash("sha256").update(bytes).digest("hex"), fields: projectResponseFields(body, action.response.fields),
     });
   } finally {
     accepting = false;
     clearTimeout(timer);
+    if (requestStartTimer) clearTimeout(requestStartTimer);
     signal?.removeEventListener("abort", abort);
     page.off("request", onRequest);
     page.off("response", onResponse);

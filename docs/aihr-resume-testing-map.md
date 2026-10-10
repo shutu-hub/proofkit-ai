@@ -56,6 +56,10 @@ apps/micro-resume-collection/src/App.vue 选择 BOSS 页签
 公开列表只返回按企业/工作空间限定的 `run_id`、来源、状态、时间与计数。
 
 ProofKit 当前 `captureResponse` 只接纳所连接页面主 frame、动作时间窗内的唯一请求。
+对“立即运行”的异步 worker 链路，可显式配置 `requestStartTimeoutMs`，在点击完成后
+有界等待首个匹配请求，再用 `requestWindowMs` 检查首个请求后的重复请求；整个动作仍受
+`timeoutMs` 限制。证据记录请求开始时间。时间关联不等于业务因果证明，观察窗外的
+重复请求也不能据此排除，仍需独立业务读取和隔离测试账号。
 AIHR 网关请求由 shell renderer 的 backend bridge 发起；能否在实际连接的 Electron 页面
 观察到 `POST /resume-collection/runs`，以及它是否发生在合理的动作窗口内，必须先用
 隔离 CDP 运行核实。不能从源码直接认定该捕获可用，也不能把连接器自己创建的 run
