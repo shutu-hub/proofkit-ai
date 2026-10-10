@@ -26,6 +26,12 @@ describe("MobileAdapter", () => {
       if (path.endsWith("/url")) return response({ value: "http://device.local/home" });
       if (path.endsWith("/title")) return response({ value: "ProofKit" });
       if (path.endsWith("/screenshot")) return response({ value: Buffer.from("png").toString("base64") });
+      if (path.endsWith("/elements") && init?.method === "POST") {
+        const query = JSON.parse(String(init.body)).value as string;
+        if (query.includes("Configuration failed")) return response({ value: [] });
+        return response({ value: [{ "element-6066-11e4-a52e-4f735466cecf": "visible-element" }] });
+      }
+      if (path.endsWith("/element/visible-element/displayed")) return response({ value: true });
       if (path.endsWith("/element") && init?.method === "POST") return response({ value: { "element-6066-11e4-a52e-4f735466cecf": "element-1" } });
       if (path.includes("/element/")) return response({ value: null });
       if (path.endsWith("/actions") || path.endsWith("/url")) return response({ value: null });
@@ -73,6 +79,77 @@ describe("MobileAdapter", () => {
     await adapter.act({ kind: "click", selector: "Continue" });
     await adapter.close();
     expect(requests.some((request) => request.method === "DELETE")).toBe(false);
+  });
+
+  it("aborts an in-flight locator request without sending a late click", async () => {
+    const requests: string[] = [];
+    let locatorStarted!: () => void;
+    const inLocator = new Promise<void>((resolve) => { locatorStarted = resolve; });
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      requests.push(`${init?.method ?? "GET"} ${path}`);
+      if (path.endsWith("/url")) return response({ value: "http://device.local/home" });
+      if (path.endsWith("/element") && init?.method === "POST") {
+        locatorStarted();
+        return await new Promise<Response>((_resolve, reject) => {
+          const onAbort = () => reject(init.signal?.reason);
+          if (init.signal?.aborted) onAbort();
+          else init.signal?.addEventListener("abort", onAbort, { once: true });
+        });
+      }
+      throw new Error(`unexpected request ${init?.method ?? "GET"} ${path}`);
+    }) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing", keepSession: true });
+    await adapter.connect();
+    const controller = new AbortController();
+    const reason = new Error("cancel mobile run");
+    const action = adapter.act({ kind: "click", selector: "accessibility=Continue" }, { signal: controller.signal });
+    await inLocator;
+    controller.abort(reason);
+    await expect(action).rejects.toBe(reason);
+    expect(requests.some((request) => request.endsWith("/click"))).toBe(false);
+    expect(requests.filter((request) => request.endsWith("/element"))).toHaveLength(1);
+  });
+
+  it("does not treat hidden source text as visible", async () => {
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/elements") && init?.method === "POST") {
+        return response({ value: [{ "element-6066-11e4-a52e-4f735466cecf": "hidden-element" }] });
+      }
+      if (path.endsWith("/element/hidden-element/displayed")) return response({ value: false });
+      throw new Error(`unexpected request ${init?.method ?? "GET"} ${path}`);
+    }) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing", keepSession: true });
+    await adapter.connect();
+    expect((await adapter.assert({ kind: "text-visible", text: "Hidden" })).passed).toBe(false);
+    expect((await adapter.assert({ kind: "text-not-visible", text: "Hidden" })).passed).toBe(true);
+  });
+
+  it("classifies unsupported mobile visibility commands as inconclusive", async () => {
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      value: { error: "unsupported operation", message: "XPath unavailable" },
+    }), { status: 404, headers: { "content-type": "application/json" } })) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    await adapter.connect();
+    await expect(adapter.assert({ kind: "text-not-visible", text: "Error" }))
+      .rejects.toMatchObject({ name: "InconclusiveError", code: "mobile-visibility-unavailable" });
+  });
+
+  it("quotes text containing both quote characters in the WebDriver XPath", async () => {
+    let expression: string | undefined;
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/elements")) {
+        expression = JSON.parse(String(init?.body)).value as string;
+        return response({ value: [] });
+      }
+      throw new Error(`unexpected request ${path}`);
+    }) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    await adapter.connect();
+    expect((await adapter.assert({ kind: "text-not-visible", text: `He said "don't"` })).passed).toBe(true);
+    expect(expression).toContain(`concat("He said ", '"', "don't", '"', "")`);
   });
 });
 

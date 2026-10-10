@@ -188,6 +188,8 @@ surfaces:
 
 Then run the same Charter with `--adapter mobile`. Mobile selectors may use `accessibility=`, `id=`, `xpath=`, `class=` or `css=` prefixes. The mobile driver must be loopback when invoked through MCP.
 
+Mobile text assertions use WebDriver element lookup and `/displayed`, so hidden source text is not treated as visible. The MCP-to-Mission path has a fake-driver HTTP smoke (`pnpm test:smoke:mobile`) covering a passed core test and an independently confirmed backend defect. Emulator and physical-device acceptance are still pending.
+
 Relative Charter and output paths resolve against the selected test workspace. Runs are stored under `<workspaceRoot>/.proofkit/runs/<run-id>/` by default. Each run contains `run.json`, `events.jsonl`, artifacts, and `report.html`.
 
 For a Mission, `get_mission_evidence` returns `summary`, `evidenceIntegrity` for the compact presentation, `acceptanceEvidenceIntegrity` for all saved Mission references (up to 2048), and a `report` path. Use audited `testVerdict` for the current acceptance claim; `verdict` is the saved historical result. A partial compact presentation can still support a pass when the full reference audit is intact. A saved failure cannot support a current product-defect claim after its cited evidence or Oracle classification becomes unverified. CLI users can generate the same result:
