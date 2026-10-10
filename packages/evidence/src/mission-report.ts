@@ -4,7 +4,7 @@ import { createReadStream } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { MissionEvidenceIntegritySchema, MissionResultSchema, type EvidenceRef, type MissionEvidenceIntegrity, type MissionResult, type MissionRunResult } from "@proofkit/contracts";
 
-type EvidenceLink = { href?: string };
+type EvidenceLink = { href?: string; runId?: string };
 
 /** Static Mission snapshots live beside the existing Mission store, inside its workspace. */
 export class MissionReportStore {
@@ -56,40 +56,41 @@ export class MissionReportStore {
     const runIds = referencedRunIds(result);
     const links = new Map<string, EvidenceLink>();
     await Promise.all(uniqueEvidence(result).map(async (ref) => {
-      links.set(evidenceKey(ref), { href: await this.evidenceHref(ref, workspace, reportDir, runIds) });
+      links.set(evidenceKey(ref), await this.evidenceLink(ref, workspace, reportDir, runIds));
     }));
     return links;
   }
 
-  private async evidenceHref(ref: EvidenceRef, workspace: string, reportDir: string, runIds: Set<string>): Promise<string | undefined> {
+  private async evidenceLink(ref: EvidenceRef, workspace: string, reportDir: string, runIds: Set<string>): Promise<EvidenceLink> {
     try {
-      if (!ref.sha256) return undefined;
+      if (!ref.sha256) return {};
       const path = ref.path;
       const target = isAbsolute(path) ? resolve(path) : resolve(this.runRoot, path);
       const parts = relative(this.runRoot, target).split(sep);
       const runId = parts[0];
-      if (!runId || !/^[a-zA-Z0-9_-]+$/.test(runId) || !runIds.has(runId) || !allowedRunFile(parts.slice(1))) return undefined;
+      if (!runId || !/^[a-zA-Z0-9_-]+$/.test(runId) || !runIds.has(runId) || !allowedRunFile(parts.slice(1))) return {};
       const canonicalRoot = await realpath(this.runRoot);
       const canonicalRun = await realpath(join(this.runRoot, runId));
       const canonicalTarget = await realpath(target);
       if (!within(workspace, canonicalRoot) || !samePath(canonicalRun, join(canonicalRoot, runId))
-        || !within(canonicalRun, canonicalTarget) || !allowedRunFile(relative(canonicalRun, canonicalTarget).split(sep))) return undefined;
+        || !within(canonicalRun, canonicalTarget) || !allowedRunFile(relative(canonicalRun, canonicalTarget).split(sep))) return {};
       const file = await stat(canonicalTarget);
-      if (!file.isFile() || file.size <= 0 || file.size > 64 * 1024 * 1024) return undefined;
+      if (!file.isFile() || file.size <= 0 || file.size > 64 * 1024 * 1024) return {};
       const digest = createHash("sha256");
       for await (const chunk of createReadStream(canonicalTarget)) digest.update(chunk);
-      if (digest.digest("hex") !== ref.sha256.toLowerCase()) return undefined;
-      return relative(reportDir, canonicalTarget).split(sep).map(encodeURIComponent).join("/");
+      if (digest.digest("hex") !== ref.sha256.toLowerCase()) return {};
+      return { href: relative(reportDir, canonicalTarget).split(sep).map(encodeURIComponent).join("/"), runId };
     } catch {
-      return undefined;
+      return {};
     }
   }
 }
 
 function renderMissionReport(result: MissionResult, links: Map<string, EvidenceLink>): string {
-  const evidence = (refs: EvidenceRef[]) => refs.map((ref) => {
+  const evidence = (refs: EvidenceRef[], expectedRunId?: string) => refs.map((ref) => {
     const label = evidenceLabel(ref.kind);
-    const href = links.get(evidenceKey(ref))?.href;
+    const link = links.get(evidenceKey(ref));
+    const href = expectedRunId === undefined || link?.runId === expectedRunId ? link?.href : undefined;
     return href ? `<a class="evidence-link" href="${html(href)}" title="${html(ref.description ?? label)}">${html(label)}</a>`
       : ref.sha256 ? `<span class="unavailable" title="Saved evidence is missing, changed or outside this Run.">${html(label)} unavailable</span>`
         : `<span class="unavailable" title="Legacy evidence has no saved digest.">${html(label)} integrity unverified</span>`;
@@ -102,12 +103,12 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
   const workflowExecution = result.scope.workflowExecution;
   const unavailable = [...links.values()].filter((link) => !link.href).length;
   const unverified = [...new Map(collectEvidence(result).map((ref) => [evidenceKey(ref), ref])).values()].filter((ref) => !ref.sha256).length;
-  const hasAvailableEvidence = (refs: EvidenceRef[]) => refs.some((ref) => Boolean(links.get(evidenceKey(ref))?.href));
   const savedConfirmed = result.findings.filter((finding) => finding.category === "product" && finding.status === "confirmed");
-  const currentlyVerified = savedConfirmed.filter((finding) => hasAvailableEvidence(finding.evidence)).length;
+  const currentlyVerified = savedConfirmed.filter((finding) => hasCompleteEvidence(finding.evidence, links)).length;
   const staleFindings = savedConfirmed.length - currentlyVerified;
   const comparisonEvidenceUnavailable = result.comparison?.defects.some((defect) =>
-    !hasAvailableEvidence(defect.baselineEvidence) || !hasAvailableEvidence(defect.candidateEvidence)) ?? false;
+    !hasCompleteEvidence(defect.baselineEvidence, links, defect.baselineRunId)
+    || !defect.candidateRunId || !hasCompleteEvidence(defect.candidateEvidence, links, defect.candidateRunId)) ?? false;
   const limits = [
     result.evidenceIntegrity ? `Current presented evidence integrity: ${result.evidenceIntegrity.status}; ${result.evidenceIntegrity.references.intact}/${result.evidenceIntegrity.references.total} reference(s) verified at ${result.evidenceIntegrity.checkedAt}. This does not change the saved acceptance verdict.` : undefined,
     coverage?.requested === "project" ? "Whole-project workflow coverage has not been proven." : "Acceptance applies to the saved scenarios. Whole-project workflow coverage has not been measured.",
@@ -134,11 +135,11 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
   ].filter((item): item is string => Boolean(item));
   const planningGaps = [...new Set([...(result.planning?.missingInputs ?? []), ...(result.planning?.evidenceGaps ?? []).map(gapLabel)])];
   const firstFailure = result.firstFailure ? `<section class="failure" aria-labelledby="first-failure"><div class="section-label">First failure · ${html(result.firstFailure.kind)}</div><h2 id="first-failure">${html(result.firstFailure.message)}</h2><p class="meta">${html([result.firstFailure.charterId, result.firstFailure.surface, result.firstFailure.oracleName].filter(Boolean).join(" · "))}</p><div class="links">${evidence(result.firstFailure.evidence)}</div></section>` : "";
-  const comparison = result.comparison ? `<section class="comparison"><div><div class="section-label">Repair replay · saved result</div><h2>${html(comparisonLabel(result.comparison.status))}</h2><p>${html(result.comparison.reason)}</p>${comparisonEvidenceUnavailable ? '<p class="unavailable">Current evidence cannot verify this saved comparison. Rerun comparison before claiming the repair is verified.</p>' : ""}</div><details><summary>Comparison evidence and limits</summary><p>Source change: ${html(result.comparison.sourceChange)} · Candidate source: ${html(result.comparison.candidateSourceStability)}</p><ul>${result.comparison.gaps.map((gap) => `<li>${html(gap)}</li>`).join("")}</ul>${result.comparison.defects.map((defect) => `<p>${html(defect.oracleName)} · ${html(defect.surface)} · ${html(defect.outcome)}<br>Before: ${evidence(defect.baselineEvidence)}<br>Replay: ${evidence(defect.candidateEvidence)}</p>`).join("")}${result.comparison.omittedRuns || result.comparison.omittedDefects ? `<p class="meta">${result.comparison.omittedRuns} comparison runs and ${result.comparison.omittedDefects} defects omitted.</p>` : ""}<p class="meta">This comparison does not establish which source change caused the result.</p></details></section>`
+  const comparison = result.comparison ? `<section class="comparison"><div><div class="section-label">Repair replay · saved result</div><h2>${html(comparisonLabel(result.comparison.status))}</h2><p>${html(result.comparison.reason)}</p>${comparisonEvidenceUnavailable ? '<p class="unavailable">Current evidence cannot verify this saved comparison. Rerun comparison before claiming the repair is verified.</p>' : ""}</div><details><summary>Comparison evidence and limits</summary><p>Source change: ${html(result.comparison.sourceChange)} · Candidate source: ${html(result.comparison.candidateSourceStability)}</p><ul>${result.comparison.gaps.map((gap) => `<li>${html(gap)}</li>`).join("")}</ul>${result.comparison.defects.map((defect) => `<p>${html(defect.oracleName)} · ${html(defect.surface)} · ${html(defect.outcome)}<br>Before: ${evidence(defect.baselineEvidence, defect.baselineRunId)}<br>Replay: ${evidence(defect.candidateEvidence, defect.candidateRunId ?? "")}</p>`).join("")}${result.comparison.omittedRuns || result.comparison.omittedDefects ? `<p class="meta">${result.comparison.omittedRuns} comparison runs and ${result.comparison.omittedDefects} defects omitted.</p>` : ""}<p class="meta">This comparison does not establish which source change caused the result.</p></details></section>`
     : result.comparisonUnavailable ? `<section class="comparison"><h2>Repair comparison unavailable</h2><p>${html(result.comparisonUnavailable)}</p></section>` : "";
   const rows = result.runs.map((run) => `<tr><td><strong>${html(run.title)}</strong>${run.charterId ? `<small>${html(run.charterId)}</small>` : ""}${run.issue ? `<p class="row-issue">${html(run.issue)}</p>` : ""}</td><td>${html(run.surface ?? "unknown")}<small>${html(run.runKind)}${run.negativeCaseId ? ` · ${html(run.negativeCaseId)}` : ""}</small></td><td>${runOutcome(run)}<small>Task: ${html(run.taskStatus ?? "unassociated")}</small></td><td><small>UI: ${countLabel(run.assertions)}<br>Business checks: ${countLabel(run.oracles)}<br>Business facts: ${run.businessFacts ?? "not recorded"}</small><small>Target: ${html(run.targetBinding?.status ?? "not inspected")}<br>Cleanup: ${html(run.integrationCleanup?.status ?? "not recorded")}${run.integrationCleanup ? ` (${run.integrationCleanup.verifiedResources}/${run.integrationCleanup.declaredResources})` : ""}</small></td><td><div class="links">${evidence(run.evidence) || "No saved evidence"}</div>${run.omittedEvidence ? `<small>${run.omittedEvidence} more reference(s) in Run report</small>` : ""}</td></tr>`).join("");
-  const findings = result.findings.map((finding) => `<article class="finding"><div class="section-label">${html(finding.category)} · ${finding.category === "product" && finding.status === "confirmed" && !hasAvailableEvidence(finding.evidence) ? "saved confirmed · evidence currently unverified" : html(finding.status)} · ${html(finding.severity)}</div><h3>${html(finding.title)}</h3><p>${html(finding.message)}</p><div class="links">${evidence(finding.evidence)}</div></article>`);
-  const findingsSection = findings.length ? `<section><div class="section-heading"><h2>Findings</h2><span class="meta">${currentlyVerified} / ${savedConfirmed.length} visible saved confirmed product finding(s) have available evidence</span></div>${findings.slice(0, 3).join("")}${findings.length > 3 ? `<details><summary>${findings.length - 3} more findings</summary>${findings.slice(3).join("")}</details>` : ""}${result.omittedFindings ? `<p class="meta">${result.omittedFindings} finding(s) omitted. The full audit is retained in the Mission store.</p>` : ""}</section>` : "";
+  const findings = result.findings.map((finding) => `<article class="finding"><div class="section-label">${html(finding.category)} · ${finding.category === "product" && finding.status === "confirmed" && !hasCompleteEvidence(finding.evidence, links) ? "saved confirmed · evidence currently unverified" : html(finding.status)} · ${html(finding.severity)}</div><h3>${html(finding.title)}</h3><p>${html(finding.message)}</p><div class="links">${evidence(finding.evidence)}</div></article>`);
+  const findingsSection = findings.length ? `<section><div class="section-heading"><h2>Findings</h2><span class="meta">${currentlyVerified} / ${savedConfirmed.length} visible saved confirmed product finding(s) have all cited evidence</span></div>${findings.slice(0, 3).join("")}${findings.length > 3 ? `<details><summary>${findings.length - 3} more findings</summary>${findings.slice(3).join("")}</details>` : ""}${result.omittedFindings ? `<p class="meta">${result.omittedFindings} finding(s) omitted. The full audit is retained in the Mission store.</p>` : ""}</section>` : "";
   const repair = result.repairSuggestions.length || result.diagnosis ? `<section><details><summary>Diagnosis and proposed repair</summary>${result.diagnosis ? `<p>${html(result.diagnosis.summary)}</p>${result.diagnosis.sourceLocations.length ? `<p>Source locations: ${result.diagnosis.sourceLocations.map(html).join(", ")}</p>` : ""}<div class="links">${evidence(result.diagnosis.evidence)}</div>` : ""}${result.repairSuggestions.map((suggestion) => `<h3>${html(suggestion.title)} · ${html(suggestion.status)}</h3><p>${html(suggestion.rationale)}</p><ul>${suggestion.changes.map((change) => `<li>${html(change)}</li>`).join("")}</ul><div class="links">${evidence(suggestion.evidence)}</div>`).join("")}${result.omittedRepairSuggestions ? `<p class="meta">${result.omittedRepairSuggestions} proposal(s) omitted.</p>` : ""}</details></section>` : "";
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>ProofKit · ${html(result.intent)}</title><style>
@@ -155,11 +156,22 @@ function evidenceKey(ref: EvidenceRef): string {
   return JSON.stringify([ref.path, ref.sha256 ?? null]);
 }
 
+function hasCompleteEvidence(refs: EvidenceRef[], links: Map<string, EvidenceLink>, expectedRunId?: string): boolean {
+  return refs.length > 0 && refs.every((ref) => {
+    const link = links.get(evidenceKey(ref));
+    return Boolean(link?.href) && (expectedRunId === undefined || link?.runId === expectedRunId);
+  });
+}
+
 function referencedRunIds(result: MissionResult): Set<string> {
   const ids = new Set(result.runs.flatMap((run) => run.runId ? [run.runId] : []));
   for (const run of result.comparison?.runs ?? []) {
     if (run.baselineRunId) ids.add(run.baselineRunId);
     if (run.candidateRunId) ids.add(run.candidateRunId);
+  }
+  for (const defect of result.comparison?.defects ?? []) {
+    ids.add(defect.baselineRunId);
+    if (defect.candidateRunId) ids.add(defect.candidateRunId);
   }
   return ids;
 }
@@ -171,17 +183,20 @@ function uniqueEvidence(result: MissionResult): EvidenceRef[] {
 function summarizeIntegrity(result: MissionResult, links: Map<string, EvidenceLink>): MissionEvidenceIntegrity {
   const refs = uniqueEvidence(result);
   const available = (ref: EvidenceRef) => Boolean(links.get(evidenceKey(ref))?.href);
-  const supports = (evidence: EvidenceRef[]) => evidence.some(available);
   const intact = refs.filter(available).length;
   const legacy = refs.filter((ref) => !ref.sha256).length;
   const unavailable = refs.length - intact - legacy;
   const savedConfirmed = result.findings.filter((finding) => finding.category === "product" && finding.status === "confirmed");
-  const unsupportedFindingIds = savedConfirmed.filter((finding) => !supports(finding.evidence)).map((finding) => finding.findingId);
+  const unsupportedFindingIds = savedConfirmed.filter((finding) => !hasCompleteEvidence(finding.evidence, links)).map((finding) => finding.findingId);
   const defects = result.comparison?.defects ?? [];
   const comparison = defects.length === 0 ? "not-present" : defects.every((defect) =>
-    supports(defect.baselineEvidence) && supports(defect.candidateEvidence)) ? "intact" : "degraded";
+    hasCompleteEvidence(defect.baselineEvidence, links, defect.baselineRunId)
+      && Boolean(defect.candidateRunId) && hasCompleteEvidence(defect.candidateEvidence, links, defect.candidateRunId)) ? "intact" : "degraded";
   const omittedEvidenceReferences = result.runs.reduce((count, run) => count + run.omittedEvidence, 0);
-  const omitted = omittedEvidenceReferences + result.omittedRunResults + result.omittedFindings + result.omittedRepairSuggestions;
+  const omittedComparisonRuns = result.comparison?.omittedRuns ?? 0;
+  const omittedComparisonDefects = result.comparison?.omittedDefects ?? 0;
+  const omitted = omittedEvidenceReferences + result.omittedRunResults + result.omittedFindings
+    + result.omittedRepairSuggestions + omittedComparisonRuns + omittedComparisonDefects;
   const status = unavailable || legacy || unsupportedFindingIds.length || comparison === "degraded" ? "degraded"
     : omitted ? "partial" : refs.length === 0 ? "no-evidence" : "intact";
   return MissionEvidenceIntegritySchema.parse({
@@ -194,6 +209,8 @@ function summarizeIntegrity(result: MissionResult, links: Map<string, EvidenceLi
     omittedRunResults: result.omittedRunResults,
     omittedFindings: result.omittedFindings,
     omittedRepairSuggestions: result.omittedRepairSuggestions,
+    omittedComparisonRuns,
+    omittedComparisonDefects,
   });
 }
 

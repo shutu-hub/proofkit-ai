@@ -1335,6 +1335,8 @@ export const MissionEvidenceIntegritySchema = z.object({
   omittedRunResults: z.number().int().nonnegative(),
   omittedFindings: z.number().int().nonnegative(),
   omittedRepairSuggestions: z.number().int().nonnegative(),
+  omittedComparisonRuns: z.number().int().nonnegative(),
+  omittedComparisonDefects: z.number().int().nonnegative(),
 });
 export type MissionEvidenceIntegrity = z.infer<typeof MissionEvidenceIntegritySchema>;
 
