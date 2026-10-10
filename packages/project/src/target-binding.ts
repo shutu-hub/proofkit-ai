@@ -42,8 +42,8 @@ export async function inspectTargetBinding(projectRoot: string, targetUrl?: stri
   }
   try {
     const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
-    const listeners = process.platform === "win32" ? await windowsListeners(port, signal) : await linuxListeners(port, signal);
-    if (listeners.length === 0) return unavailable("No local listener process was found for the target port.", target.origin);
+    const listeners = process.platform === "win32" ? await windowsListeners(port, target.hostname, signal) : await linuxListeners(port, target.hostname, signal);
+    if (listeners.length === 0) return unavailable("No local listener process was found for the target address and port.", target.origin);
     const observed: ProcessRootObservation[] = [];
     for (const listener of listeners) {
       const roots = await Promise.all((listener.codePaths ?? runtimeCodePaths(listener)).map((path) => gitRoot(dirname(path), signal)));
@@ -89,8 +89,9 @@ function quotedWindowsPaths(commandLine: string): string[] {
   return [...commandLine.matchAll(/"([A-Za-z]:[\\/][^"]+)"/g)].map((match) => match[1]!).filter((path) => CODE_EXTENSIONS.test(path));
 }
 
-async function windowsListeners(port: number, signal?: AbortSignal): Promise<ListenerProcess[]> {
-  const script = `$port=${port}; $items=@(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop | Select-Object -ExpandProperty OwningProcess -Unique | Select-Object -First 8 | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$_" -ErrorAction Stop | Select-Object ProcessId,ExecutablePath,CommandLine }); ConvertTo-Json -InputObject $items -Compress -Depth 3`;
+async function windowsListeners(port: number, hostname: string, signal?: AbortSignal): Promise<ListenerProcess[]> {
+  const addresses = targetListenerAddresses(hostname).map((address) => `'${address}'`).join(",");
+  const script = `$port=${port}; $addresses=@(${addresses}); $items=@(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop | Where-Object { $addresses -contains $_.LocalAddress } | Select-Object -ExpandProperty OwningProcess -Unique | Select-Object -First 8 | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$_" -ErrorAction Stop | Select-Object ProcessId,ExecutablePath,CommandLine }); ConvertTo-Json -InputObject $items -Compress -Depth 3`;
   const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     encoding: "utf8", timeout: 10_000, maxBuffer: 256 * 1024, windowsHide: true, signal,
   });
@@ -109,15 +110,23 @@ async function windowsListeners(port: number, signal?: AbortSignal): Promise<Lis
   });
 }
 
+function targetListenerAddresses(hostname: string): string[] {
+  const host = hostname.toLowerCase();
+  if (host === "localhost") return ["127.0.0.1", "0.0.0.0", "::1", "::"];
+  if (host === "::1" || host === "[::1]") return ["::1", "::"];
+  // inspectTargetBinding has already accepted only a numeric 127/8 host.
+  return [host, "0.0.0.0"];
+}
+
 /** Match listening socket inodes before inspecting processes. No command line is persisted. */
-async function linuxListeners(port: number, signal?: AbortSignal): Promise<ListenerProcess[]> {
+async function linuxListeners(port: number, hostname: string, signal?: AbortSignal): Promise<ListenerProcess[]> {
   const tables = await Promise.all(["/proc/net/tcp", "/proc/net/tcp6"].map(async (path) => {
     try { return await readLinuxSocketTable(path, signal); }
     catch (error) { if (vanished(error)) return undefined; throw error; }
   }));
   if (tables.every((table) => table === undefined)) throw new Error("Linux socket tables are unavailable");
   const ownUid = process.getuid?.();
-  const inodes = parseLinuxListeningInodes(tables.filter((table): table is string => table !== undefined), port, ownUid);
+  const inodes = parseLinuxListeningInodes(tables.filter((table): table is string => table !== undefined), port, ownUid, hostname);
   if (inodes.size === 0) return [];
 
   const deadline = Date.now() + 8_000;
@@ -177,13 +186,13 @@ async function readLinuxSocketTable(path: string, signal?: AbortSignal): Promise
 }
 
 /** Pure parser for /proc/net/tcp{,6}; unknown or foreign owners cannot prove one local target. */
-export function parseLinuxListeningInodes(tables: string[], port: number, ownUid?: number): Set<string> {
+export function parseLinuxListeningInodes(tables: string[], port: number, ownUid?: number, hostname?: string): Set<string> {
   const inodes = new Set<string>();
   for (const table of tables) {
     for (const line of table.split("\n").slice(1)) {
       const fields = line.trim().split(/\s+/);
       const localPort = Number.parseInt(fields[1]?.split(":").at(-1) ?? "", 16);
-      if (fields[3] !== "0A" || localPort !== port) continue;
+      if (fields[3] !== "0A" || localPort !== port || !linuxAddressMatchesTarget(fields[1] ?? "", hostname)) continue;
       const uid = Number(fields[7]);
       if (!Number.isInteger(uid) || !/^\d+$/.test(fields[9] ?? "")) throw new Error("Linux listener socket metadata is incomplete");
       if (ownUid !== undefined && ownUid !== 0 && uid !== ownUid) throw new Error("Linux listener socket belongs to another user");
@@ -191,6 +200,24 @@ export function parseLinuxListeningInodes(tables: string[], port: number, ownUid
     }
   }
   return inodes;
+}
+
+function linuxAddressMatchesTarget(local: string, hostname?: string): boolean {
+  if (!hostname) return true;
+  const address = local.split(":")[0]?.toUpperCase();
+  const host = hostname.toLowerCase();
+  if (address?.length === 8) {
+    if (address === "00000000") return host === "localhost" || /^127(?:\.\d{1,3}){3}$/.test(host);
+    const ipv4 = host === "localhost" ? "127.0.0.1" : host;
+    if (!/^127(?:\.\d{1,3}){3}$/.test(ipv4)) return false;
+    const octets = ipv4.split(".").map(Number);
+    if (octets.some((octet) => octet > 255)) return false;
+    return address === octets.reverse().map((octet) => octet.toString(16).padStart(2, "0")).join("").toUpperCase();
+  }
+  if (address?.length === 32 && (host === "localhost" || host === "::1" || host === "[::1]")) {
+    return address === "00000000000000000000000000000000" || address === "00000000000000000000000001000000";
+  }
+  return false;
 }
 
 async function linuxRuntimeCodePaths(procDir: string): Promise<string[]> {
