@@ -16,7 +16,18 @@ export async function auditMissionProofClassification(
     .map((item) => item.data.runId).filter((value): value is string => typeof value === "string" && RUN_ID.test(value)));
   const invalidRuns = identifiers.length - identifiers.filter((value) => typeof value === "string" && RUN_ID.test(value)).length;
   const inspected = validIds.slice(0, MAX_AUDIT_RUNS);
+  const inspectedIds = new Set(inspected);
   const omittedRuns = Math.max(0, validIds.length - inspected.length);
+  const runBusinessEvidenceIds = new Map<string, Set<string>>();
+  for (const observation of runObservations) {
+    const id = observation.data.runId;
+    if (typeof id !== "string" || !inspectedIds.has(id)) continue;
+    const ids = runBusinessEvidenceIds.get(id) ?? new Set<string>();
+    for (const ref of observation.evidence) {
+      if (ref.kind === "business" && ref.sha256) ids.add(ref.evidenceId);
+    }
+    runBusinessEvidenceIds.set(id, ids);
+  }
   let checkedRuns = 0;
   let classifiedOracles = 0;
   let businessOracles = 0;
@@ -40,8 +51,13 @@ export async function auditMissionProofClassification(
           classifiedOracles++;
           if (oracle.verificationKind === "business") {
             businessOracles++;
-            if (oracle.passed) { passedBusinessOracles++; passedBusiness++; }
-            else {
+            if (oracle.passed) {
+              passedBusinessOracles++;
+              if ((oracle.sourceEvidenceCount ?? 0) > 0
+                && (oracle.sourceEvidenceArtifacts ?? []).some((artifact) => runBusinessEvidenceIds.get(id)?.has(`${id}:${artifact}`))) {
+                passedBusiness++;
+              }
+            } else {
               failedBusinessOracles++;
               if ((oracle.sourceEvidenceCount ?? 0) > 0) {
                 for (const artifact of oracle.sourceEvidenceArtifacts ?? []) failedSourceEvidenceIds.add(`${id}:${artifact}`);
@@ -64,7 +80,7 @@ export async function auditMissionProofClassification(
   const evidenceRuns = new Map<string, Set<string>>();
   for (const observation of runObservations) {
     const id = observation.data.runId;
-    if (typeof id !== "string" || !RUN_ID.test(id)) continue;
+    if (typeof id !== "string" || !inspectedIds.has(id)) continue;
     for (const evidence of observation.evidence) {
       const key = evidenceIdentity(evidence);
       const owners = evidenceRuns.get(key) ?? new Set<string>();

@@ -22,7 +22,7 @@ const run = (runId: string, verificationKind?: "business" | "http-contract", pas
 
 describe("saved Mission proof classification", () => {
   it("distinguishes explicitly classified Runs from historical Oracle results", async () => {
-    const mission = { observations: [observation("current-business"), observation("current-status"), observation("legacy")] };
+    const mission = { observations: [observation("current-business", [ref("current-business")]), observation("current-status"), observation("legacy")] };
     const runs = new Map([run("current-business", "business"), run("current-status", "http-contract"), run("legacy")]
       .map((value) => [value.runId, value]));
     const audit = await auditMissionProofClassification(mission, async (id) => runs.get(id)!);
@@ -56,6 +56,17 @@ describe("saved Mission proof classification", () => {
       findings: [finding([unrelated])],
     }, load);
     expect(sameRunUnrelated).toMatchObject({ findingsLinkedToFailingBusiness: 0, unlinkedFindingIds: ["binding-defect"] });
+  });
+
+  it("does not count a passing business Oracle without its source artifact in the same Run evidence", async () => {
+    const withSource = observation("with-source", [ref("with-source")]);
+    const withoutSource = observation("without-source");
+    const runs = new Map([run("with-source", "business"), run("without-source", "business")]
+      .map((value) => [value.runId, value]));
+    const audit = await auditMissionProofClassification({ observations: [withSource, withoutSource] },
+      async (id) => runs.get(id)!);
+    expect(audit).toMatchObject({ status: "explicit", passedBusinessOracles: 2,
+      requiredBusinessRuns: 2, requiredRunsWithPassingBusiness: 1 });
   });
 
   it("separates failed business checks from passing business and HTTP-contract checks", async () => {
