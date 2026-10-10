@@ -309,11 +309,12 @@ describe("AIHR project integration", () => {
     const charter = TestCharterSchema.parse({ ...aihrCharter(), oracles: ["aihr.onlineResumePipeline"] });
     const started = await service.start({ charter });
     const summary = await service.wait(started.runId);
-    expect(summary.verdict).toBe("failed");
+    expect(summary.verdict).toBe("inconclusive");
     const runRoot = join(root, ".proofkit", "runs", summary.runId);
     const saved = [JSON.stringify(summary), await readFile(join(runRoot, "events.jsonl"), "utf8")].join("\n");
-    expect(saved).toContain("AIHR gateway 503");
+    expect(summary.findings).toEqual(["Business Oracle 1 could not establish a result; inspect its reader and connector."]);
     expect(saved).not.toContain(marker);
+    expect(analyzeRun({ summary, evidence: [] }).finding).toMatchObject({ category: "test", status: "unverified" });
   });
 
   it.each([

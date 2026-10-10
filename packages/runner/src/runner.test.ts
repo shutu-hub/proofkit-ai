@@ -655,9 +655,40 @@ describe("ExecutionRunner", () => {
       evidenceDir: root,
       oracles: [{ name: "resume-terminal", check: async () => ({ name: "unrelated", passed: true, message: "complete", evidence: [JSON.stringify({ status: "complete" })] }) }],
     }).run({ intent: "check resume", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [], oracles: ["resume-terminal"], sideEffectPolicy: "deny", metadata: {} }, "mismatched-oracle-run");
-    expect(summary.verdict).toBe("failed");
+    expect(summary.verdict).toBe("inconclusive");
     expect(summary.oracles).toHaveLength(0);
-    expect(summary.findings.some((finding) => finding.includes("returned a result for unrelated"))).toBe(true);
+    expect(summary.findings.some((finding) => finding.includes("Business Oracle 1 could not establish a result"))).toBe(true);
+  });
+
+  it("treats a business Oracle reader exception as inconclusive without persisting private source data", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-oracle-reader-"));
+    const marker = "PRIVATE_RESUME_CONTACT_24680";
+    const summary = await new ExecutionRunner(new FakeAdapter(), {
+      evidenceDir: root,
+      oracles: [{ name: "resume-terminal", check: async () => { throw new Error(`gateway unavailable: ${marker}`); } }],
+    }).run({ intent: "check resume", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [], oracles: ["resume-terminal"], sideEffectPolicy: "deny", metadata: {} }, "reader-error-run");
+    expect(summary.verdict).toBe("inconclusive");
+    expect(summary.oracles).toHaveLength(0);
+    const persisted = JSON.stringify(summary) + await readFile(join(root, "reader-error-run", "events.jsonl"), "utf8");
+    expect(persisted).toContain("Business Oracle 1 could not establish a result");
+    expect(persisted).not.toContain(marker);
+  });
+
+  it("preserves cancellation while a business Oracle is still reading", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-oracle-cancel-"));
+    const controller = new AbortController();
+    let reading!: () => void;
+    const entered = new Promise<void>((resolve) => { reading = resolve; });
+    const running = new ExecutionRunner(new FakeAdapter(), {
+      evidenceDir: root,
+      signal: controller.signal,
+      oracles: [{ name: "resume-terminal", check: async () => { reading(); return new Promise<never>(() => {}); } }],
+    }).run({ intent: "check resume", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [], oracles: ["resume-terminal"], sideEffectPolicy: "deny", metadata: {} }, "oracle-cancel-run");
+    await entered;
+    controller.abort(new CancelledError("cancelled during Oracle read"));
+    const summary = await running;
+    expect(summary.verdict).toBe("cancelled");
+    expect(summary.oracles).toHaveLength(0);
   });
 
   it("blocks an unregistered capability before execution", async () => {

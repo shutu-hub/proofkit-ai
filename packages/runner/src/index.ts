@@ -492,12 +492,20 @@ export class ExecutionRunner {
         }
         for (const oracle of this.oracles) {
           throwIfAborted(signal);
-          const parsedResult = OracleResultSchema.parse(await withAbort(oracle.check({ runId, charter, steps: summary.steps, assertions: summary.assertions, signal }), signal, `Oracle ${oracle.name}`));
+          let parsedResult: OracleResult;
+          try {
+            parsedResult = OracleResultSchema.parse(await withAbort(oracle.check({ runId, charter, steps: summary.steps, assertions: summary.assertions, signal }), signal, `Oracle ${oracle.name}`));
+            if (parsedResult.name !== oracle.name) throw new Error("Oracle result name mismatch");
+          } catch {
+            if (signal.aborted) throw abortReason(signal);
+            // A reader error or invalid connector result cannot establish a product
+            // failure. Connector exceptions may contain response bodies or secrets.
+            throw new InconclusiveError("oracle-unavailable", `Business Oracle ${summary.oracles.length + 1} could not establish a result; inspect its reader and connector.`);
+          }
           const recordedAt = new Date().toISOString();
           // Older project connectors omit the field. Persist an explicit kind
           // for every new Run while keeping their existing business semantics.
           const result: OracleResult = { ...parsedResult, verificationKind: parsedResult.verificationKind ?? "business", recordedAt };
-          if (result.name !== oracle.name) throw new Error(`Oracle ${oracle.name} returned a result for ${result.name}`);
           const sourceFacts = result.evidence.filter((item) => item.trim().length > 0).map((item) => {
             try { return JSON.parse(item) as unknown; } catch { return item; }
           });
@@ -561,13 +569,14 @@ export class ExecutionRunner {
       : baseVerdict;
     if (hasIncompleteIntegrationCleanup(summary.integrationCleanup) && summary.verdict === "passed") summary.verdict = "blocked";
     if (summary.verdict === "blocked" && environmentBlocked) summary.findings.push("Configured runtime environment blocker was observed; inspect runtime-findings.json.");
-    if (summary.verdict === "inconclusive") summary.findings.push(
-      executionError instanceof InconclusiveError ? executionError.message : charter.assertions.length === 0 && this.oracles.length === 0
+    if (summary.verdict === "inconclusive") {
+      const reason = executionError instanceof InconclusiveError ? executionError.message : charter.assertions.length === 0 && this.oracles.length === 0
         ? "No executable assertion or business oracle was declared."
         : summary.assertions.some((result) => result.evidence.length === 0)
           ? "A surface assertion has no contemporaneous saved observation; its result cannot establish product correctness."
-        : "A business oracle could not establish its result; inspect its saved report for reader access, transport and terminal-state gaps.",
-    );
+          : "A business oracle could not establish its result; inspect its saved report for reader access, transport and terminal-state gaps.";
+      if (!summary.findings.includes(reason)) summary.findings.push(reason);
+    }
     summary.status = "completed";
     summary.endedAt = new Date().toISOString();
     await this.store.writeSummary(summary);
