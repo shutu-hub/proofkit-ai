@@ -221,6 +221,8 @@ actual Codex Skill/MCP behavior using the configured provider; add
 `--implicit-skill` to test discovery without an explicit Skill mention. The
 host evaluator stops on provider access or MCP cancellation and reports those
 cases as infrastructure-blocked. See [host effectiveness check](docs/agent-integration.md#host-effectiveness-check).
+Set `PROOFKIT_ELECTRON_PATH` and run `pnpm benchmark:host:electron` for the
+two optional native-MCP Electron/CDP cases.
 
 To evaluate an OpenAI-compatible or local model with the same cases, set the endpoint and model before running it:
 

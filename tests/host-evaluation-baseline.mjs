@@ -11,11 +11,11 @@ const selected = requested ? requested.split(",").map((id) => {
   const found = hostCases.find((item) => item.id === id);
   if (!found) throw new Error(`Unknown host case: ${id}`);
   return found;
-}) : hostCases;
+}) : hostCases.filter((item) => !item.optional);
 const root = await mkdtemp(join(tmpdir(), "proofkit-host-baseline-"));
 const cases = [];
 console.log(JSON.stringify({ baselineRoot: root, cases: selected.map((item) => item.id),
-  scope: "scripted native MCP and real Chrome; no language model is evaluated" }));
+  scope: "scripted native MCP and real Chrome/Electron where selected; no language model is evaluated" }));
 for (const expected of selected) {
   const fixture = await createHostFixture(join(root, expected.id), expected);
   try {
@@ -53,9 +53,9 @@ async function evaluate(fixture, expected) {
   let answer;
   try {
     await withDeadline(client.connect(transport), 15_000, "native MCP connection");
-    const scope = await call("inspect_test_scope", { focus: "简历", level: expected.level, surface: "web" });
+    const scope = await call("inspect_test_scope", { focus: "简历", level: expected.level, surface: expected.surface });
     if (scope.testVerdict !== "not-asserted") throw new Error("Scope inspection unexpectedly claims acceptance");
-    const input = { intent: expected.prompt, level: expected.level, coverage: expected.coverage, surface: "web" };
+    const input = { intent: expected.prompt, level: expected.level, coverage: expected.coverage, surface: expected.surface };
     if (expected.noCatalog || expected.coverage === "project") {
       input.charter = JSON.parse(await readFile(join(fixture.workspace, ".proofkit", "charters", "resume-core.yml"), "utf8"));
     }
@@ -66,7 +66,7 @@ async function evaluate(fixture, expected) {
         throw new Error("Project coverage gap unexpectedly became executable or passed");
       }
       answer = { missionId: started.missionId, verdict: "not-asserted",
-        level: started.level, coverage: started.planning?.coverage?.requested,
+        level: started.level, coverage: started.planning?.coverage?.requested, surface: expected.surface,
         report: null, evidencePaths: [], gaps: started.readiness?.missing ?? [],
         summary: "The saved Mission lacks whole-project workflow coverage proof." };
     } else {
@@ -76,7 +76,7 @@ async function evaluate(fixture, expected) {
       const issues = (evidence.summary?.runs ?? []).flatMap((row) => row.issue ? [row.issue] : []);
       if (status.mission?.firstFailure?.message) issues.push(status.mission.firstFailure.message);
       answer = { missionId: started.missionId, verdict: evidence.summary?.verdict,
-        level: started.level, coverage: started.planning?.coverage?.requested,
+        level: started.level, coverage: started.planning?.coverage?.requested, surface: expected.surface,
         report: evidence.report, evidencePaths: (evidence.evidence ?? []).filter((item) => typeof item.path === "string").map((item) => item.path),
         gaps: [...new Set(issues)], summary: `Saved Mission result: ${evidence.summary?.verdict}` };
     }
@@ -89,7 +89,7 @@ async function evaluate(fixture, expected) {
   catch (error) { if (error.code !== "ENOENT") throw error; }
   const validation = await verifyHostSession({ expected, answer, calls, missions, runs,
     workspace: fixture.workspace, sourceUnchanged: await fixture.sourceUnchanged() });
-  return { caseId: expected.id, expected: { verdict: expected.verdict, level: expected.level, coverage: expected.coverage },
+  return { caseId: expected.id, expected: { verdict: expected.verdict, level: expected.level, coverage: expected.coverage, surface: expected.surface },
     answer, tools: calls.map(({ tool, status }) => ({ tool, status })),
     missionIds: missions.map((item) => item.missionId), evidenceRoot: fixture.workspace, validation };
 }

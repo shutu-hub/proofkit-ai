@@ -13,16 +13,17 @@ async function fixture(t, verdict = "passed") {
   const facts = '{"fileId":"101","jobId":"7","state":"complete"}';
   await writeFile(evidencePath, facts);
   await writeFile(report, "<html>Saved mission result</html>");
-  const mission = { missionId: "mission-1", level: "core", status: "completed", verdict,
+  const mission = { missionId: "mission-1", surface: "web", level: "core", status: "completed", verdict,
     plan: { planning: { coverage: { requested: "declared" } } },
     findings: verdict === "failed" ? [{ category: "product", status: "confirmed", evidence: [{ kind: "business", path: evidencePath }] }] : [] };
   const result = { report, summary: { verdict }, evidence: [{ kind: "business", path: evidencePath, sha256: hash(facts) }] };
   const call = (tool, arguments_, result_) => ({ tool, arguments: arguments_, result: result_, status: "completed" });
   return { workspace, expected: { verdict, level: "core", coverage: "declared" },
-    answer: { missionId: mission.missionId, verdict, level: "core", coverage: "declared", report, evidencePaths: [evidencePath], gaps: verdict === "inconclusive" ? ["Terminal state unavailable"] : [] },
-    calls: [call("inspect_test_scope", {}, {}), call("run_test", { level: "core", coverage: "declared" }, { missionId: mission.missionId }),
+    answer: { missionId: mission.missionId, verdict, level: "core", coverage: "declared", surface: "web", report, evidencePaths: [evidencePath], gaps: verdict === "inconclusive" ? ["Terminal state unavailable"] : [] },
+    calls: [call("inspect_test_scope", {}, {}), call("run_test", { level: "core", coverage: "declared", surface: "web" }, { missionId: mission.missionId }),
       call("get_mission_status", { missionId: mission.missionId }, { mission }), call("get_mission_evidence", { missionId: mission.missionId }, result)],
-    missions: [mission], runs: [{ verdict, assertions: [{ passed: true }], oracles: [{ sourceEvidenceCount: 1 }] }], sourceUnchanged: true };
+    missions: [mission], runs: [{ verdict, steps: [{ beforeSnapshot: { metadata: { adapter: "web" } } }],
+      assertions: [{ passed: true }], oracles: [{ sourceEvidenceCount: 1 }] }], sourceUnchanged: true };
 }
 async function rejects(input, issue) {
   const result = await verifyHostSession(input);
@@ -41,6 +42,13 @@ test("rejects saved intensity/scope downgrades even when answer preserves the re
   const input = await fixture(t); input.missions[0].level = "quick"; input.missions[0].plan.planning.coverage.requested = "declared";
   input.expected.coverage = "project"; input.answer.coverage = "project";
   await rejects(input, "saved-intensity-changed"); await rejects(input, "saved-acceptance-scope-changed");
+});
+test("rejects a requested Electron run silently downgraded to Web", async (t) => {
+  const input = await fixture(t);
+  input.expected.surface = "electron"; input.answer.surface = "electron";
+  await rejects(input, "tool-surface-changed");
+  await rejects(input, "saved-surface-changed");
+  await rejects(input, "run-surface-changed");
 });
 test("requires status and terminal evidence for the same saved Mission", async (t) => {
   const input = await fixture(t); input.calls[2].arguments.missionId = "other-mission";
@@ -72,7 +80,7 @@ test("rejects source modification, repeated Missions and nonterminal claims", as
 test("a project coverage gap must preserve scope and must not execute a Run", async (t) => {
   const input = await fixture(t);
   input.expected = { verdict: "not-asserted", level: "core", coverage: "project" };
-  input.answer = { missionId: null, verdict: "not-asserted", level: "core", coverage: "project", report: null, evidencePaths: [], gaps: ["全项目业务流程覆盖尚未实现"] };
+  input.answer = { missionId: null, verdict: "not-asserted", level: "core", coverage: "project", surface: "web", report: null, evidencePaths: [], gaps: ["全项目业务流程覆盖尚未实现"] };
   input.missions = []; input.runs = []; input.calls.splice(1);
   assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
   input.runs.push({ verdict: "passed" }); await rejects(input, "unready-request-executed");

@@ -14,15 +14,18 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   if (!answer || typeof answer !== "object") return { passed: false, issues };
   check(answer.level === expected.level, "answer-intensity-changed");
   check(answer.coverage === expected.coverage, "answer-acceptance-scope-changed");
+  check(answer.surface === (expected.surface ?? "web"), "answer-surface-changed");
   check(answer.verdict === expected.verdict, "answer-verdict-does-not-match-case");
   const starts = successful.filter((call) => ["run_test", "create_test_mission"].includes(call.tool));
   for (const call of starts) {
     const planning = call.result?.planning ?? call.result?.plan?.planning;
     check((call.arguments.level ?? call.result?.level) === expected.level, "tool-intensity-changed");
     check((call.arguments.coverage ?? planning?.coverage?.requested) === expected.coverage, "tool-acceptance-scope-changed");
+    check((call.arguments.surface ?? call.result?.surface) === (expected.surface ?? "web"), "tool-surface-changed");
   }
   check(missions.every((mission) => mission.level === expected.level), "saved-intensity-changed");
   check(missions.every((mission) => mission.plan.planning?.coverage?.requested === expected.coverage), "saved-acceptance-scope-changed");
+  check(missions.every((mission) => mission.surface === (expected.surface ?? "web")), "saved-surface-changed");
 
   if (expected.verdict === "not-asserted") {
     check(runs.length === 0, "unready-request-executed");
@@ -54,6 +57,8 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   const report = await readOwned(answer.report, workspace);
   check(report !== null, "answer-report-unavailable");
   check(runs.length === 1 && runs[0].verdict === expected.verdict, "unexpected-run-outcome-or-count");
+  check(runs.every((run) => run.steps.some((step) => step.beforeSnapshot?.metadata?.adapter === (expected.surface ?? "web")
+    || step.afterSnapshot?.metadata?.adapter === (expected.surface ?? "web"))), "run-surface-changed");
   check(runs.every((run) => run.assertions.some((assertion) => assertion.passed)), "positive-page-proof-missing");
   if (expected.level !== "quick") {
     check(runs.every((run) => run.oracles.some((oracle) => (oracle.sourceEvidenceCount ?? 0) > 0)), "independent-business-proof-missing");

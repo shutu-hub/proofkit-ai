@@ -66,11 +66,15 @@ node tests/host-evaluation-baseline.mjs
 node tests/host-evaluation.mjs --run --cases core-pass,core-defect,core-pending,project-gap,quick-pass,author-core
 ```
 
-The first uses the generated native MCP launcher and real Chrome, but scripted
+Set `PROOFKIT_ELECTRON_PATH` to a local Electron executable and run
+`node tests/host-evaluation-baseline.mjs --cases electron-core-pass,electron-core-defect`
+for the optional desktop cases. The first command uses the generated native MCP launcher and real Chrome, but scripted
 tool calls. It verifies saved Missions, Runs, report links and SHA-256 evidence
 for success, a wrong business relation, an unfinished worker, a whole-project
 coverage gap, a quick page check and a submitted Charter without a catalog
 entry. Its `scripted-mcp-baseline` result **does not measure an AI host**.
+The desktop cases use a separate Electron profile and CDP port, and the
+verifier rejects an answer or saved Run silently switched to Web.
 
 The second starts the installed Codex CLI with its existing provider and
 credentials. It activates `$proofkit-test`, records the host's actual MCP calls

@@ -128,6 +128,9 @@ the generated native stdio MCP launcher and real Chrome: core pass, seeded
 business-relation defect, pending business state, project-coverage gap, quick
 page check and inline Charter. Its verifier checks Mission/Run facts, report
 and hashed evidence under an external workspace, with the source unchanged.
+Two optional cases passed through a separately launched Electron/CDP process
+using the same generated MCP connection; they distinguish a successful core
+run from a seeded business-relation defect and reject a silent Web fallback.
 The first real Codex attempt recognized the Skill but did not complete a
 ProofKit tool call; the configured provider returned insufficient balance and
 the host cancelled MCP calls. The benchmark now stops on that infrastructure

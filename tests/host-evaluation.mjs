@@ -10,9 +10,10 @@ const selected = requested ? requested.split(",").map((id) => {
   const found = hostCases.find((item) => item.id === id);
   if (!found) throw new Error(`Unknown host case: ${id}`);
   return found;
-}) : hostCases;
+}) : hostCases.filter((item) => !item.optional);
 if (!process.argv.includes("--run")) {
-  console.log(JSON.stringify({ execution: "not-started", cases: selected.map(({ id, prompt, level, coverage, verdict }) => ({ id, prompt, level, coverage, expectedVerdict: verdict })),
+  console.log(JSON.stringify({ execution: "not-started", cases: selected.map(({ id, prompt, surface, level, coverage, verdict }) => ({ id, prompt, surface, level, coverage, expectedVerdict: verdict })),
+    optionalElectronCases: hostCases.filter((item) => item.optional).map((item) => item.id),
     next: "Add --run to use the installed Codex CLI and its configured model/auth. Model usage is separate from deterministic tests." }, null, 2));
 } else {
   const root = await mkdtemp(join(tmpdir(), "proofkit-host-evaluation-"));
@@ -50,9 +51,10 @@ async function evaluate(fixture, expected, cli, timeoutMs) {
     properties: {
       missionId: { type: ["string", "null"] }, verdict: { type: "string", enum: ["passed", "failed", "blocked", "cancelled", "inconclusive", "not-asserted"] },
       level: { type: "string", enum: ["quick", "core", "release"] }, coverage: { type: "string", enum: ["declared", "project"] },
+      surface: { type: "string", enum: ["web", "electron", "mobile"] },
       report: { type: ["string", "null"] }, evidencePaths: { type: "array", items: { type: "string" } },
       gaps: { type: "array", items: { type: "string" } }, summary: { type: "string" },
-    }, required: ["missionId", "verdict", "level", "coverage", "report", "evidencePaths", "gaps", "summary"] }));
+    }, required: ["missionId", "verdict", "level", "coverage", "surface", "report", "evidencePaths", "gaps", "summary"] }));
   const { serverName, command, args, env } = fixture.setup.connection;
   const toml = (value) => JSON.stringify(value);
   const overrides = [`mcp_servers.${serverName}.command=${toml(command)}`, `mcp_servers.${serverName}.args=${toml(args)}`,
@@ -87,7 +89,7 @@ async function evaluate(fixture, expected, cli, timeoutMs) {
     ? await verifyHostSession({ expected, answer, calls, missions, runs, workspace: fixture.workspace, sourceUnchanged: await fixture.sourceUnchanged() })
     : { passed: false, issues: [execution.blocker ?? execution.stopReason ?? "host-process-failed"] };
   return { caseId: expected.id, prompt: expected.prompt, skillActivation: process.argv.includes("--implicit-skill") ? "implicit" : "explicit",
-    expected: { verdict: expected.verdict, level: expected.level, coverage: expected.coverage }, answer,
+    expected: { verdict: expected.verdict, level: expected.level, coverage: expected.coverage, surface: expected.surface }, answer,
     hostOutcome, execution: { code: execution.code, timedOut: execution.timedOut, durationMs: execution.durationMs,
       blocker: execution.blocker, stopReason: execution.stopReason },
     tools: calls.map(({ tool, status }) => ({ tool, status })), missionIds: missions.map((item) => item.missionId),
