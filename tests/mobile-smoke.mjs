@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { TestCharterSchema } from "../packages/contracts/dist/index.js";
@@ -19,6 +19,7 @@ const requests = [];
 let activeSessionId;
 let sequence = 0;
 let mode = "success";
+let rejectNextDelete = false;
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6px8AAAAASUVORK5CYII=";
 const driver = createServer((request, response) => {
   void handle(request, response).catch((error) => {
@@ -86,14 +87,26 @@ try {
   const defect = await runMission("failed");
   assert.ok(defect.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"
     && finding.evidence.some((item) => item.kind === "business" && item.path.endsWith("oracle-1-source.json"))));
+  mode = "success";
+  rejectNextDelete = true;
+  const cleanupGap = await runMission("inconclusive");
+  assert.ok(cleanupGap.summary.runs.some((run) => run.verdict === "inconclusive"));
+  assert.ok(cleanupGap.report);
+  const report = JSON.parse(await readFile(join(dirname(cleanupGap.report), "summary.json"), "utf8"));
+  assert.equal(report.testVerdict, "inconclusive");
+  assert.equal(sessions.size, 1, "the rejected DELETE leaves a session for explicit cleanup");
+  const orphanId = [...sessions.keys()][0];
+  const cleanup = await fetch(`${serverUrl}/session/${orphanId}`, { method: "DELETE" });
+  assert.equal(cleanup.ok, true);
+  assert.equal(sessions.size, 0);
   assert.ok(requests.some((item) => item.endsWith("/elements")));
   assert.ok(requests.some((item) => item.endsWith("/displayed")));
-  assert.equal(requests.filter((item) => item.endsWith("/click")).length, 2);
-  assert.equal(requests.filter((item) => item.startsWith("DELETE /session/")).length, 4);
+  assert.equal(requests.filter((item) => item.endsWith("/click")).length, 3);
+  assert.equal(requests.filter((item) => item.startsWith("DELETE /session/")).length, 6);
   assert.equal(await readFile(join(source, "package.json"), "utf8"), sourceBytes);
   console.log(JSON.stringify({ successMission: success.missionId, defectMission: defect.missionId,
     verified: ["native-mcp-mobile-inspection", "cli-mobile-inspection", "native-mcp-mobile-core", "w3c-http-session", "displayed-text", "independent-business-oracle",
-      "evidence-linked-defect", "session-cleanup", "external-workspace", "source-unchanged"] }, null, 2));
+      "evidence-linked-defect", "session-cleanup", "cleanup-failure-non-green", "external-workspace", "source-unchanged"] }, null, 2));
 } finally {
   await client?.close();
   await mcp?.close();
@@ -128,7 +141,11 @@ async function runMission(expectedVerdict) {
   assert.ok(runId);
   const run = JSON.parse(await readFile(join(workspaceRoot, ".proofkit", "runs", runId, "run.json"), "utf8"));
   assert.equal(run.assertions[0].passed, true);
-  assert.equal(run.oracles[0].passed, expectedVerdict === "passed");
+  assert.equal(run.oracles[0].passed, expectedVerdict !== "failed");
+  if (expectedVerdict === "inconclusive") {
+    assert.ok(run.findings.includes("Adapter close failed; inspect trusted local diagnostics."));
+    assert.equal(run.oracles[0].passed, true, "the business Oracle passed before cleanup failed");
+  }
   assert.equal(run.steps[1].action.kind, "click");
   return evidence;
 }
@@ -181,6 +198,10 @@ async function handle(request, response) {
   if (!session) return send({ error: "invalid session id", message: "Unknown mobile session" }, 404);
   const route = match[2] ?? "";
   if (!route && request.method === "DELETE") {
+    if (rejectNextDelete) {
+      rejectNextDelete = false;
+      return send({ error: "unknown error", message: "Fixture refuses session cleanup" }, 500);
+    }
     sessions.delete(match[1]);
     if (activeSessionId === match[1]) activeSessionId = undefined;
     return send(null);

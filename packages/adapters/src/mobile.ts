@@ -145,7 +145,11 @@ export class MobileAdapter implements SurfaceAdapter {
 
   async close(): Promise<void> {
     if (!this.sessionId || this.options.keepSession) return;
-    await this.request("DELETE", `/session/${encodeURIComponent(this.sessionId)}`, undefined, false).catch(() => {});
+    try {
+      await this.request("DELETE", `/session/${encodeURIComponent(this.sessionId)}`, undefined, false);
+    } catch {
+      throw new InconclusiveError("mobile-session-cleanup-unverified", "Mobile driver session cleanup could not be verified; the session may still be active.");
+    }
     this.sessionId = undefined;
   }
 

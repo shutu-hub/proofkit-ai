@@ -81,6 +81,42 @@ describe("MobileAdapter", () => {
     expect(requests.some((request) => request.method === "DELETE")).toBe(false);
   });
 
+  it("keeps the session available for cleanup retry after a driver HTTP failure", async () => {
+    const requests: string[] = [];
+    globalThis.fetch = vi.fn(async (input, init) => {
+      requests.push(`${init?.method} ${new URL(String(input)).pathname}`);
+      if (requests.length === 1) return new Response(JSON.stringify({ value: { error: "unknown error", message: "private driver detail" } }), { status: 500 });
+      return response({ value: null });
+    }) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    await adapter.connect();
+    await expect(adapter.close()).rejects.toMatchObject({
+      name: "InconclusiveError", code: "mobile-session-cleanup-unverified",
+      message: expect.not.stringContaining("private driver detail"),
+    });
+    await adapter.close();
+    await adapter.close();
+    expect(requests).toEqual(["DELETE /session/existing", "DELETE /session/existing"]);
+  });
+
+  it("surfaces a timed-out session deletion without forgetting the session", async () => {
+    const requests: string[] = [];
+    globalThis.fetch = vi.fn(async (input, init) => {
+      requests.push(`${init?.method} ${new URL(String(input)).pathname}`);
+      if (requests.length > 1) return response({ value: null });
+      return await new Promise<Response>((_resolve, reject) => {
+        const onAbort = () => reject(init?.signal?.reason);
+        if (init?.signal?.aborted) onAbort();
+        else init?.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    }) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing", requestTimeoutMs: 10 });
+    await adapter.connect();
+    await expect(adapter.close()).rejects.toMatchObject({ name: "InconclusiveError", code: "mobile-session-cleanup-unverified" });
+    await adapter.close();
+    expect(requests).toEqual(["DELETE /session/existing", "DELETE /session/existing"]);
+  });
+
   it("aborts an in-flight locator request without sending a late click", async () => {
     const requests: string[] = [];
     let locatorStarted!: () => void;

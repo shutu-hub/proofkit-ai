@@ -128,6 +128,8 @@ Mission 采集 Run 证据时，业务事实、断言快照等 artifact 必须同
 
 Web/Electron 已有真实隔离样例验证，包含跨端回放、注入缺陷、业务来源证据和结果比较。AIHR 普通上传、在线采集、手动录入及桌面端“立即运行”均有连接器参考；手动录入用本次响应的身份和文件摘要核对五个业务 reader，缺失身份、重试或合法版本改绑保持证据不足。桌面端参考场景把页面点击后捕获的 Run ID 绑定到单份测试简历的独立业务读取，并在隔离 Chrome/Electron 样例中验证成功与错误岗位关系。真实部署的简历业务验收仍待完成。移动端已有 W3C/Appium 适配器；MCP/CLI 页面侦察及 MCP → Mission → Runner → HTTP 假 WebDriver → 独立业务 Oracle 的核心链路已验证成功和后台缺陷两种结果。文字断言查询元素的 `/displayed` 状态，驱动无法验证时返回证据不足。模拟器、真实设备和真实移动业务仍待验收。
 
+移动端自建 WebDriver 会话关闭时，删除请求失败或超时会保留会话 ID 供同一适配器重试，并让 Run 与 Mission 返回证据不足；隔离 HTTP 烟测验证了业务检查通过但会话删除失败时报告不通过。成功的删除响应只证明驱动确认请求，不能独立证明设备进程或应用状态已清理；真实设备上的残留状态仍需额外验证。
+
 Mission 紧凑结果页汇总结论、验收范围、场景与各端执行、首个失败、证据和修复回放比较。MCP `get_mission_evidence` 返回 `summary`、报告路径及当前 `evidenceIntegrity`：`intact`、`degraded`、`partial` 或 `no-evidence`，并列出已检查引用和可继续支持的可见产品问题数。它只覆盖有界展示结果；独立的 `acceptanceEvidenceIntegrity` 审计整个 Mission 保存的证据引用，最多检查 2048 条。结果页因展示上限为 `partial` 时，只要完整证据审计为 `intact`，仍可保留通过结论；完整审计损坏、缺失或超限则把历史通过降为 `inconclusive`。已保存的失败若声称确认产品缺陷，却缺少明确分类的业务证明或其引用证据已经失效，当前结论也降为 `inconclusive`；证据完好的普通测试失败仍为 `failed`。CLI `mission report` 生成同一静态快照；`summary.json`、MCP 和报告页面共用当前审计后的 `testVerdict`，同时保留历史 `verdict`。报告保留缺失运行、覆盖缺口及负向测试的预期结果，证据缺失、越界或摘要不符时显示不可用。完整证据审计不等于全项目覆盖证明；修复比较需要重新运行才能给出当前证明。
 
 CI 可用 `proofkit mission check <id>` 对已保存 Mission 重新审计，输出机器可读 JSON，其中 `summary` 遵循带版本号的 `MissionResult` 协议；检查不加载工作区连接器，也不重新执行产品。`mission run` 和 `mission replay` 同样按当前 `testVerdict` 退出。退出码 0 为通过，1 为已观察失败，2 为阻断、取消、证据不足或尚未断言。`mission report` 只负责生成报告快照，不能充当验收门禁。
