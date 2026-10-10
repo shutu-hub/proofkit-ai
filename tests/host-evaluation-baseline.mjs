@@ -57,7 +57,8 @@ async function evaluate(fixture, expected) {
     if (scope.testVerdict !== "not-asserted") throw new Error("Scope inspection unexpectedly claims acceptance");
     const input = { intent: expected.prompt, level: expected.level, coverage: expected.coverage, surface: expected.surface };
     if (expected.noCatalog || expected.coverage === "project") {
-      input.charter = JSON.parse(await readFile(join(fixture.workspace, ".proofkit", "charters", "resume-core.yml"), "utf8"));
+      input.charter = expected.noCatalog ? fixture.corePlan
+        : JSON.parse(await readFile(join(fixture.workspace, ".proofkit", "charters", "resume-core.yml"), "utf8"));
     }
     const started = await call("run_test", input);
     if (expected.coverage === "project") {
@@ -93,7 +94,8 @@ async function evaluate(fixture, expected) {
     .filter((item) => item.isDirectory()).map(async (item) => JSON.parse(await readFile(join(runRoot, item.name, "run.json"), "utf8")))); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
   const validation = await verifyHostSession({ expected, answer, calls, missions, runs,
-    workspace: fixture.workspace, sourceUnchanged: await fixture.sourceUnchanged() });
+    workspace: fixture.workspace, sourceUnchanged: await fixture.sourceUnchanged(),
+    workspaceContractsUnchanged: await fixture.workspaceContractsUnchanged() });
   return { caseId: expected.id, expected: { verdict: expected.verdict, level: expected.level, coverage: expected.coverage, surface: expected.surface },
     answer, tools: calls.map(({ tool, status }) => ({ tool, status })),
     missionIds: missions.map((item) => item.missionId), evidenceRoot: fixture.workspace, validation };

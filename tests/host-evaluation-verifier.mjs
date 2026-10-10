@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /** The host's answer is a claim; saved Missions and tool observations are the ground truth. */
-export async function verifyHostSession({ expected, answer, calls, missions, runs, workspace, sourceUnchanged }) {
+export async function verifyHostSession({ expected, answer, calls, missions, runs, workspace, sourceUnchanged, workspaceContractsUnchanged }) {
   const issues = [];
   const check = (condition, issue) => { if (!condition) issues.push(issue); };
   const productRuns = runs.filter((run) => !isSurfaceInspection(run));
   const successful = calls.filter((call) => call.status === "completed" && !call.isError);
   const names = successful.map((call) => call.tool);
   check(sourceUnchanged, "tested-source-changed");
+  check(workspaceContractsUnchanged, "test-contracts-changed");
   check(names.includes("inspect_test_scope"), "scope-not-inspected");
   check(answer && typeof answer === "object", "missing-structured-answer");
   if (!answer || typeof answer !== "object") return { passed: false, issues };
@@ -18,6 +19,10 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   check(answer.surface === (expected.surface ?? "web"), "answer-surface-changed");
   check(answer.verdict === expected.verdict, "answer-verdict-does-not-match-case");
   const starts = successful.filter((call) => ["run_test", "create_test_mission"].includes(call.tool));
+  if (expected.noCatalog) {
+    check(starts.some((call) => call.tool === "run_test" && call.arguments.charter
+      && typeof call.arguments.charter === "object" && !call.arguments.charterId && !call.arguments.suiteId), "authored-charter-not-submitted-inline");
+  }
   for (const call of starts) {
     const planning = call.result?.planning ?? call.result?.plan?.planning;
     check((call.arguments.level ?? call.result?.level) === expected.level, "tool-intensity-changed");
@@ -65,6 +70,34 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   check(productRuns.every((run) => run.assertions.some((assertion) => assertion.passed)), "positive-page-proof-missing");
   if (expected.level !== "quick") {
     check(productRuns.every((run) => run.oracles.some((oracle) => (oracle.sourceEvidenceCount ?? 0) > 0)), "independent-business-proof-missing");
+    for (const run of productRuns) {
+      const captured = run.steps?.filter((step) => step.action?.kind === "captureResponse" && step.status === "passed"
+        && step.response?.association === "action-window" && step.response?.requestCount === 1) ?? [];
+      const response = captured.find((step) => typeof step.response.fields?.fileId === "string"
+        && step.response.fields.fileId !== "101" && typeof step.response.fields?.jobId === "string")?.response;
+      check(Boolean(response), "current-action-identity-not-captured");
+      if (!response) continue;
+      let matchedSource = false;
+      for (const oracle of run.oracles ?? []) {
+        for (const artifact of oracle.sourceEvidenceArtifacts ?? []) {
+          if (typeof artifact !== "string" || !artifact.startsWith(`${run.runId}/artifacts/`)
+            || artifact.split("/").some((part) => part === ".." || part === ".") || artifact.includes("\\")) continue;
+          const sourcePath = join(workspace, ".proofkit", "runs", artifact);
+          const bytes = await readOwned(sourcePath, workspace);
+          if (!bytes) continue;
+          const sourceRef = observed?.evidence?.find((ref) => ref.path === sourcePath && ref.kind === "business" && ref.sha256 === hash(bytes));
+          if (!sourceRef || !(answer.evidencePaths ?? []).includes(sourcePath)) continue;
+          let source;
+          try { source = JSON.parse(bytes.toString("utf8")); } catch { continue; }
+          if (source.oracle !== oracle.name || !Array.isArray(source.facts)) continue;
+          if (source.facts.some((fact) => fact.captured?.fileId === response.fields.fileId
+            && fact.captured?.jobId === response.fields.jobId && fact.observed?.fileId === response.fields.fileId)) {
+            matchedSource = true;
+          }
+        }
+      }
+      check(matchedSource, "oracle-not-bound-to-current-action");
+    }
   }
   if (expected.verdict === "failed") {
     check(mission?.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"

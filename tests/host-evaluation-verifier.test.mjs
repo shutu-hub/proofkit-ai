@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -8,9 +8,12 @@ import { hash, parseMcpToolEvents, verifyHostSession } from "./host-evaluation-v
 async function fixture(t, verdict = "passed") {
   const workspace = await mkdtemp(join(tmpdir(), "proofkit-host-verifier-"));
   t.after(() => rm(workspace, { recursive: true, force: true }));
-  const evidencePath = join(workspace, "oracle-source.json");
+  const sourceArtifact = "run-1/artifacts/oracle-1-source.json";
+  const evidencePath = join(workspace, ".proofkit", "runs", sourceArtifact);
   const report = join(workspace, "report.html");
-  const facts = '{"fileId":"101","jobId":"7","state":"complete"}';
+  const facts = JSON.stringify({ oracle: "resume.terminal", facts: [{ captured: { fileId: "102", jobId: "7" },
+    observed: { fileId: "102", jobId: verdict === "failed" ? "9" : "7", state: verdict === "inconclusive" ? "pending" : "complete" } }] });
+  await mkdir(join(workspace, ".proofkit", "runs", "run-1", "artifacts"), { recursive: true });
   await writeFile(evidencePath, facts);
   await writeFile(report, "<html>Saved mission result</html>");
   const mission = { missionId: "mission-1", surface: "web", level: "core", status: "completed", verdict,
@@ -22,8 +25,11 @@ async function fixture(t, verdict = "passed") {
     answer: { missionId: mission.missionId, verdict, level: "core", coverage: "declared", surface: "web", report, evidencePaths: [evidencePath], gaps: verdict === "inconclusive" ? ["Terminal state unavailable"] : [] },
     calls: [call("inspect_test_scope", {}, {}), call("run_test", { level: "core", coverage: "declared", surface: "web" }, { missionId: mission.missionId }),
       call("get_mission_status", { missionId: mission.missionId }, { mission }), call("get_mission_evidence", { missionId: mission.missionId }, result)],
-    missions: [mission], runs: [{ verdict, steps: [{ beforeSnapshot: { metadata: { adapter: "web" } } }],
-      assertions: [{ passed: true }], oracles: [{ sourceEvidenceCount: 1 }] }], sourceUnchanged: true };
+    missions: [mission], runs: [{ runId: "run-1", verdict, steps: [{ beforeSnapshot: { metadata: { adapter: "web" } } },
+      { action: { kind: "captureResponse" }, status: "passed", response: { association: "action-window", requestCount: 1,
+        fields: { fileId: "102", jobId: "7" } } }],
+      assertions: [{ passed: true }], oracles: [{ name: "resume.terminal", sourceEvidenceCount: 1,
+        sourceEvidenceArtifacts: [sourceArtifact] }] }], sourceUnchanged: true, workspaceContractsUnchanged: true };
 }
 async function rejects(input, issue) {
   const result = await verifyHostSession(input);
@@ -69,6 +75,29 @@ test("accepts a terminal bounded wait as the same-Mission status observation", a
 test("rejects missing independent proof and product failure without business facts", async (t) => {
   const input = await fixture(t, "failed"); input.runs[0].oracles = []; input.missions[0].findings[0].evidence = [];
   await rejects(input, "independent-business-proof-missing"); await rejects(input, "seeded-defect-not-evidenced");
+});
+test("requires a newly captured identity bound to the independent reader", async (t) => {
+  const input = await fixture(t);
+  input.runs[0].steps[1].response.fields.fileId = "101";
+  await rejects(input, "current-action-identity-not-captured");
+  input.runs[0].steps[1].response.fields.fileId = "103";
+  await rejects(input, "oracle-not-bound-to-current-action");
+  input.runs[0].steps[1].response.fields.fileId = "102";
+  input.runs[0].oracles[0].sourceEvidenceArtifacts = ["run-1/../artifacts/oracle-1-source.json"];
+  await rejects(input, "oracle-not-bound-to-current-action");
+  input.runs[0].oracles[0].sourceEvidenceArtifacts = ["run-1/artifacts/oracle-1-source.json"];
+  input.calls[3].result.evidence[0].sha256 = hash("different source");
+  await rejects(input, "oracle-not-bound-to-current-action");
+});
+test("requires unchanged workspace contracts and an inline authored Charter", async (t) => {
+  const input = await fixture(t);
+  input.workspaceContractsUnchanged = false;
+  await rejects(input, "test-contracts-changed");
+  input.workspaceContractsUnchanged = true;
+  input.expected.noCatalog = true;
+  await rejects(input, "authored-charter-not-submitted-inline");
+  input.calls[1].arguments.charter = { actions: [{ kind: "captureResponse" }] };
+  assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
 });
 test("detects changed evidence bytes and links invented by the host", async (t) => {
   const input = await fixture(t); await writeFile(input.answer.evidencePaths[0], "changed after observation");

@@ -64,8 +64,8 @@ async function evaluate(fixture, expected, cli, timeoutMs) {
   const toml = (value) => JSON.stringify(value);
   const overrides = [`mcp_servers.${serverName}.command=${toml(command)}`, `mcp_servers.${serverName}.args=${toml(args)}`,
     `mcp_servers.${serverName}.required=true`, `mcp_servers.${serverName}.tool_timeout_sec=60`,
-    // This server is bound to a synthetic, side-effect-denying fixture. Tool calls
-    // may save evidence there; an unattended evaluation must permit those calls.
+    // This server is bound to an isolated in-memory HTTP fixture. Tool calls
+    // may submit local test data and save evidence there.
     `mcp_servers.${serverName}.default_tools_approval_mode="approve"`,
     ...Object.entries(env).map(([key, value]) => `mcp_servers.${serverName}.env.${key}=${toml(value)}`)];
   if (windowsSandbox) overrides.push(`windows.sandbox=${toml(windowsSandbox)}`);
@@ -95,7 +95,8 @@ async function evaluate(fixture, expected, cli, timeoutMs) {
   const hostOutcome = execution.blocker ? "infrastructure-blocked"
     : execution.timedOut || execution.code !== 0 ? "incomplete" : "evaluated";
   const validation = hostOutcome === "evaluated"
-    ? await verifyHostSession({ expected, answer, calls, missions, runs, workspace: fixture.workspace, sourceUnchanged: await fixture.sourceUnchanged() })
+    ? await verifyHostSession({ expected, answer, calls, missions, runs, workspace: fixture.workspace,
+      sourceUnchanged: await fixture.sourceUnchanged(), workspaceContractsUnchanged: await fixture.workspaceContractsUnchanged() })
     : { passed: false, issues: [execution.blocker ?? execution.stopReason ?? "host-process-failed"] };
   return { caseId: expected.id, prompt: expected.prompt, skillActivation: process.argv.includes("--implicit-skill") ? "implicit" : "explicit",
     expected: { verdict: expected.verdict, level: expected.level, coverage: expected.coverage, surface: expected.surface }, answer,

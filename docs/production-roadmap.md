@@ -130,6 +130,11 @@ the generated native stdio MCP launcher and real Chrome: core pass, seeded
 business-relation defect, pending business state, project-coverage gap, quick
 page check and inline Charter. Its verifier checks Mission/Run facts, report
 and hashed evidence under an external workspace, with the source unchanged.
+The current fixture clicks a resume-acquisition button, captures the new file
+ID from its response and requires the independent Oracle to read that same ID.
+The verifier checks the action-window capture, Oracle source facts, cited source
+digest and unchanged workspace config, connector and catalog Charters. All
+eight scripted Web/Electron cases pass this stricter gate.
 Two optional cases passed through a separately launched Electron/CDP process
 using the same generated MCP connection; they distinguish a successful core
 run from a seeded business-relation defect and reject a silent Web fallback.
@@ -139,12 +144,13 @@ infrastructure or incomplete outcomes, stops after a provider/approval blocker,
 and now bounds output-pipe draining after the host exits. A per-invocation
 `--windows-sandbox unelevated` override made shell execution work on this host;
 the benchmark permits its synthetic ProofKit MCP server's tool calls without
-changing the user's saved Codex configuration. The fixture denies business
-writes. This setting is for isolated evaluation and is not an application
+changing the user's saved Codex configuration. The synthetic page writes only
+to its in-memory loopback fixture; connector write capabilities remain disabled.
+This setting is for isolated evaluation and is not an application
 permission or evidence of production-safe isolation.
 
 On 2026-10-10, all eight real Codex CLI cases separately completed with
-implicit Skill activation and passed the saved-session verifier: six Web cases
+implicit Skill activation and passed the earlier saved-session verifier: six Web cases
 (`quick-pass`, default `core-pass`, seeded `core-defect`, `core-pending`,
 `project-gap`, and no-catalog `author-core`) plus Electron core pass and seeded
 defect. The executable cases saved Mission/Run evidence with scope-correct
@@ -158,9 +164,14 @@ read-only action shape. The `run_test` receipt now follows the active owner,
 avoiding a stale second-approval instruction. A previous project-gap attempt
 mixed the project Mission ID with a partial-scope report; the tighter Skill and
 MCP next-action guidance prevented that in the verified rerun. Earlier host
-deadline outcomes remain incomplete, even where a saved Mission passed. Eight
-synthetic cases establish a working path on this host, not a general false-pass
-rate or live AIHR acceptance.
+deadline outcomes remain incomplete, even where a saved Mission passed. Those
+eight cases used a fixed historical resume object and do not establish that the
+Oracle verified the object created by the current action. Under the new
+action-identity gate, four real Codex cases have passed separately: Web core
+success, seeded relation defect, inline Charter authoring and Electron core
+success. The remaining real-host cases need reruns. These synthetic cases
+establish a working path on this host, not a general false-pass rate or live
+AIHR acceptance.
 
 The MCP `await_test_result` tool now waits up to 30 seconds on the saved Mission
 without starting or cancelling it. It returns a compact terminal summary and
@@ -168,8 +179,8 @@ current evidence integrity, a still-running receipt, or a no-owner action. The
 portable Skill uses this path so the host does not have to infer completion from
 repeated full Mission reads. MCP unit tests and all six scripted real-Chrome
 host cases exercise it, including pass, seeded defect, pending business state,
-project coverage gap, quick level and inline Charter. Real-host adherence is
-verified for the eight isolated cases above.
+project coverage gap, quick level and inline Charter. Real-host adherence to
+the current identity gate is verified for the four isolated cases above.
 
 The planning quality gate is covered by tests for missing structural proof, partial discovery versus declared acceptance, whole-project requests, legacy gates, replay and model-reported high confidence. It is a deterministic readiness signal, not a calibrated probability or a substitute for real surface and business evidence. Curated release suites retain their reviewed declared-case scope; the missing-negative-case gap applies to generated release Charters. The real Web/Electron fixture also verifies submitted core scenarios with more than 200 static routes, independent HTTP business facts and a whole-project readiness gate. These checks do not constitute live AIHR acceptance or a measured whole-project workflow inventory.
 
