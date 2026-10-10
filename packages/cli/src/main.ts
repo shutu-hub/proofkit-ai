@@ -9,6 +9,7 @@ import { EvidenceStore } from "@proofkit/evidence";
 import { IntentPlanner, loadCharter } from "@proofkit/planner";
 import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
 import { initProject, loadConfig, resolveProjectContext, resolveWithinWorkspace, scanProject } from "@proofkit/project";
+import { setupAgent, type AgentHarness } from "./agent-setup.js";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -16,6 +17,20 @@ export function createProgram(): Command {
     .name("proofkit")
     .description("Evidence-driven AI system testing for Web, Electron and mobile")
     .version("0.1.0");
+
+  const agent = program.command("agent").description("Export host Agent Skills and native MCP onboarding configuration");
+  agent.command("setup")
+    .description("Generate an external onboarding bundle; optionally install the portable testing Skill")
+    .requiredOption("--harness <harness>", "codex, claude-code or generic")
+    .option("--root <path>", "tested project root", ".")
+    .option("--install-skill", "install the portable Skill in the host's personal discovery directory")
+    .option("--skills-dir <path>", "explicit personal Skill directory; required for generic installation")
+    .option("--allow-capability-writes", "emit operator opt-in for trusted test-environment write capabilities")
+    .action(async (options: RootOptions & { harness: AgentHarness; installSkill?: boolean; skillsDir?: string; allowCapabilityWrites?: boolean }) => {
+      console.log(JSON.stringify(await setupAgent({ root: options.root, workspaceRoot: options.workspace,
+        harness: options.harness, installSkill: options.installSkill, skillsDir: options.skillsDir,
+        allowCapabilityWrites: options.allowCapabilityWrites }), null, 2));
+    });
 
   program.command("init")
     .description("Create a ProofKit test workspace bound to the source project")
@@ -391,8 +406,8 @@ export function createProgram(): Command {
     });
 
   // Every leaf command resolves the same source/workspace pair.
-  for (const command of [...program.commands, ...mission.commands, ...resources.commands]) {
-    if (command !== mission && command !== resources) command.option("--workspace <path>", "test workspace root; defaults to an external workspace or existing project .proofkit");
+  for (const command of [...program.commands, ...mission.commands, ...resources.commands, ...agent.commands]) {
+    if (command !== mission && command !== resources && command !== agent) command.option("--workspace <path>", "test workspace root; defaults to an external workspace or legacy .proofkit (agent setup always external)");
   }
   return program;
 }

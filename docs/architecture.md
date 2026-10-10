@@ -37,6 +37,18 @@ The implementation uses Node.js 22+, TypeScript, a pnpm workspace, Zod contracts
 
 The public installation boundary is a single `proofkit-ai` npm tarball with `proofkit` and `proofkit-mcp` commands. Its build bundles the internal workspace modules, keeps third-party runtime dependencies explicit, and includes only the two entrypoints, README and license. A distribution smoke installs that tarball outside the repository and exercises both CLI and MCP. The internal `@proofkit/*` package names are not the user installation contract; npm registry publication has not occurred.
 
+The CLI's `agent setup` composes the existing project initializer with embedded
+portable Skill templates and native Codex TOML/Claude-compatible JSON exports.
+It does not instantiate Local Runner, import connectors or execute host
+registration. All bundle artifacts are published in an external workspace;
+optional personal Skill installation refuses conflicting or redirected trees.
+Source/workspace identity determines the server name; launcher/config/Skill
+content determines the immutable bundle directory. Structured registration
+argv avoids introducing shell evaluation. Export and installation status are
+separate from actual MCP connection and product acceptance. Installed-package
+smoke launches the MCP server using the generated native JSON configuration.
+Host Skill discovery and model adherence still require host-level evaluation.
+
 ## Source and test workspace
 
 `ProjectContext` separates `projectRoot` (the tested source and process working directory) from `workspaceRoot` (ProofKit configuration, connectors, plans, mission state and evidence). New projects default to `~/.proofkit/workspaces/<project-name>-<path-hash>/`; users can choose an explicit workspace through CLI `--workspace` or MCP `PROOFKIT_WORKSPACE_ROOT`. `PROOFKIT_WORKSPACE_HOME` selects the parent directory for automatic workspaces.

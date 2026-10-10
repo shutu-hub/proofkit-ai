@@ -78,6 +78,8 @@ Runner 在执行页面步骤前原子保存资源登记日志。若进程退出�
 
 源项目供扫描和应用启动；配置、用例、连接器、Mission 和证据默认放外部工作区。Electron 地址和窗口筛选配置一次，后续自然语言测试复用。业务写入使用声明的测试环境、权限与清理机制。
 
+`proofkit agent setup --harness codex|claude-code|generic` 生成便于宿主接入的配置与 `proofkit-test` Skill。配置采用当前安装的绝对 Node/MCP 路径，服务器名绑定源项目与外部工作区；可用 `--install-skill` 安装个人 Skill。Codex 默认 `~/.agents/skills`，Claude Code 默认 `~/.claude/skills`，generic 安装需显式指定宿主的 Skill 目录。接入产物使用内容摘要目录，重复生成复用，已有自定义 Skill 不覆盖。此命令不加载连接器、不启动应用、不修改宿主 MCP 设置，返回未检查连接及 `not-asserted`；用户或宿主仍需注册配置并调用 `inspect_test_scope` 核对绑定。Skill 固化测试流程，实际模型执行质量仍需评测。
+
 ## 当前边界与下一阶段
 
 Web/Electron 已有真实隔离样例验证，包含跨端回放、注入缺陷、业务来源证据和结果比较。AIHR 普通上传、在线采集和手动录入均有连接器参考；手动录入用本次响应的身份和文件摘要核对五个业务 reader，缺失身份、重试或合法版本改绑保持证据不足。真实部署的简历业务验收仍待完成。移动端已有 W3C/Appium 适配器，真实设备尚未验收。

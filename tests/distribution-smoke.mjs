@@ -17,7 +17,7 @@ let environmentServer;
 try {
   const packDir = join(scratch, "pack");
   const installDir = join(scratch, "install");
-  const source = join(scratch, "source");
+  const source = join(scratch, "source 用户 app");
   const workspace = join(scratch, "workspace");
   await Promise.all([mkdir(packDir), mkdir(installDir), mkdir(source)]);
   await writeFile(join(source, "package.json"), JSON.stringify({ name: "external-web-fixture", dependencies: { vite: "*" } }));
@@ -48,6 +48,34 @@ try {
   assert.match(inspectionHelp, /--ready-text <text>/);
   assert.match(inspectionHelp, /--ready-timeout-ms <milliseconds>/);
   await command(process.execPath, [cli, "init", "--root", source, "--workspace", workspace], scratch);
+  const personalSkills = join(scratch, "host skills");
+  const setupArgs = [cli, "agent", "setup", "--harness", "claude-code", "--root", source, "--workspace", workspace,
+    "--install-skill", "--skills-dir", personalSkills];
+  const onboarding = JSON.parse((await command(process.execPath, setupArgs, scratch)).stdout);
+  assert.equal(onboarding.testVerdict, "not-asserted");
+  assert.equal(onboarding.connection.status, "not-checked");
+  assert.equal(onboarding.defaultLevel, "core");
+  assert.equal(onboarding.skill.installation.status, "created");
+  assert.equal(onboarding.connection.args[0], await realpath(mcp));
+  const installedSkill = await readFile(join(personalSkills, "proofkit-test", "SKILL.md"), "utf8");
+  const skillHeader = parseYaml(installedSkill.split("---")[1]);
+  assert.equal(skillHeader.name, "proofkit-test");
+  assert.equal(await readFile(join(onboarding.skill.path, "SKILL.md"), "utf8"), installedSkill);
+  const skillReference = await readFile(join(personalSkills, "proofkit-test", "references", "charter-authoring.md"), "utf8");
+  assert.ok(skillReference.length > 0);
+  const reused = JSON.parse((await command(process.execPath, setupArgs, scratch)).stdout);
+  assert.equal(reused.bundle.path, onboarding.bundle.path);
+  assert.equal(reused.bundle.status, "reused");
+  assert.equal(reused.skill.installation.status, "reused");
+  const codexSetup = JSON.parse((await command(process.execPath, [cli, "agent", "setup", "--harness", "codex",
+    "--root", source, "--workspace", workspace], scratch)).stdout);
+  assert.equal(codexSetup.connection.serverName, onboarding.connection.serverName);
+  assert.equal(codexSetup.skill.installation.status, "not-requested");
+  assert.equal(codexSetup.connection.registration.command, "codex");
+  const nativeConfig = JSON.parse(await readFile(onboarding.connection.configPath, "utf8"));
+  const emittedServer = nativeConfig.mcpServers[onboarding.connection.serverName];
+  assert.equal(emittedServer.type, "stdio");
+  assert.deepEqual(emittedServer.env, { PROOFKIT_ROOT: await realpath(source), PROOFKIT_WORKSPACE_ROOT: await realpath(workspace) });
   const doctor = await command(process.execPath, [cli, "doctor", "--root", source, "--workspace", workspace], scratch);
   assert.match(doctor.stdout, /web surface\s+detected/);
   const scope = JSON.parse((await command(process.execPath, [cli, "scope", "--root", source, "--workspace", workspace, "--limit", "1"], scratch)).stdout);
@@ -92,14 +120,21 @@ try {
   const npmBin = await npmExecutable();
   const mcpEnv = { ...process.env, PROOFKIT_ROOT: source, PROOFKIT_WORKSPACE_ROOT: workspace };
   for (const key of Object.keys(mcpEnv)) if (/^npm_config_/i.test(key)) delete mcpEnv[key];
-  const transport = new StdioClientTransport({
+  const binTransport = new StdioClientTransport({
     command: npmBin.executable,
     args: [...npmBin.prefix, "exec", "--prefix", installDir, "--", "proofkit-mcp"],
     env: mcpEnv,
   });
+  const binClient = new Client({ name: "proofkit-installed-bin-smoke", version: "1" });
+  try {
+    await withDeadline(binClient.connect(binTransport), 10_000, "Installed MCP binary connection");
+    assert.ok((await binClient.listTools()).tools.some((tool) => tool.name === "run_test"));
+  } finally { await binClient.close(); }
+  const transport = new StdioClientTransport({ command: emittedServer.command, args: emittedServer.args,
+    env: { ...mcpEnv, ...emittedServer.env } });
   const client = new Client({ name: "proofkit-distribution-smoke", version: "1" });
   try {
-    await withDeadline(client.connect(transport), 10_000, "MCP connection");
+    await withDeadline(client.connect(transport), 10_000, "Emitted native MCP configuration connection");
     const listed = await withDeadline(client.listTools(), 10_000, "MCP tool listing");
     assert.ok(listed.tools.some((tool) => tool.name === "inspect_surface"));
     const surfaceInspection = listed.tools.find((tool) => tool.name === "inspect_surface");
@@ -173,7 +208,7 @@ try {
   assert.equal(workspaceFiles.includes("missions"), false);
   assert.equal(workspaceFiles.includes("runs"), false);
   assert.equal((await readdir(join(workspace, ".proofkit", "inspections"))).length, 2);
-  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
+  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-agent-skill-and-idempotent-setup", "codex-and-claude-native-config-export", "emitted-native-config-stdio-connection", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
 } finally {
   if (environmentServer) {
     environmentServer.closeAllConnections();

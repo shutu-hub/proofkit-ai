@@ -18,6 +18,7 @@ See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for
 - Checks configured Web/Electron HTTP endpoints, CDP discovery status and local source association before testing, with a bounded deadline and a hashed observation artifact. Login, samples and business readiness remain explicitly unchecked.
 - Prioritizes a literal scope focus before retaining bounded routes and entry points; eligible Charter aliases also prioritize their reviewed route targets. Partial scans remain explicit.
 - Matches one-sentence requests to curated, workspace-owned Charters by explicit aliases; ambiguous matches require a Charter ID, and missing assertions or business Oracles stop automatic execution.
+- Exports a portable `proofkit-test` Agent Skill and native Codex/Claude Code MCP configuration, with optional personal Skill installation and an explicit unconnected setup result.
 - Converts intent into a saved YAML Test Charter that can be reviewed and edited.
 - Records plan quality, missing inputs and evidence gaps; a model's self-reported confidence cannot make a Mission pass.
 - Separates test intensity from acceptance scope: a partial source map does not block a complete declared module scenario, while whole-project acceptance stays gated until workflow coverage can be proved.
@@ -68,6 +69,17 @@ proofkit --version
 ```
 
 The distribution test packs the project, installs only that tarball in a fresh temporary directory, runs CLI onboarding, and calls the installed MCP server over stdio. A registry release can later use `npm install -g proofkit-ai` with the same two commands.
+
+For host-agent use, generate the onboarding bundle and install its testing Skill:
+
+```bash
+proofkit agent setup --harness codex --root /path/to/your/project --workspace /path/to/test-workspace --install-skill
+# Alternatively: --harness claude-code
+```
+
+The command returns an external bundle containing `proofkit-test/SKILL.md`, a Charter reference, a native `mcp.toml` or `mcp.json` fragment, and `setup.json`. `connection.registration` provides the host's registration command and argument array; run that command with those arguments, or merge the fragment through the host's supported MCP configuration workflow. Verify the host can call `inspect_test_scope` and confirm its `projectRoot` before testing. The Skill guides default `core` testing, independent business checks, evidence reporting and repair replay; it still relies on the host's reasoning. See [agent onboarding](docs/agent-integration.md#agent-onboarding) for discovery paths and limits.
+
+Setup always uses an external workspace, including projects with a legacy source-local `.proofkit`. It does not register MCP automatically, load connectors, start applications or assert product correctness. Optional Skill installation preserves custom content and reuses identical files. A generic MCP harness uses `--harness generic`; installing its Skill also requires `--skills-dir` pointing to its documented discovery directory.
 
 `--root` identifies the tested source. For a new project, ProofKit writes its test files to `~/.proofkit/workspaces/<project-name>-<path-hash>/.proofkit/`. Add `--workspace /path/to/test-workspace` to any command to select an explicit workspace. An existing source project's `.proofkit` keeps its legacy layout unless you supply `--workspace`.
 

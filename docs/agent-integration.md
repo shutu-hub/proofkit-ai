@@ -2,6 +2,71 @@
 
 ProofKit is designed to be used by a coding agent. The user describes the behavior in natural language; the agent calls the ProofKit MCP server and receives a compact, evidence-backed result. The tested repository does not need ProofKit test code in its business modules.
 
+## Agent onboarding
+
+After installing the built package, generate a native connection bundle:
+
+```bash
+proofkit agent setup --harness codex --root /path/to/source --workspace /path/to/test-workspace --install-skill
+proofkit agent setup --harness claude-code --root /path/to/source --workspace /path/to/test-workspace --install-skill
+```
+
+Choose the command for the host you use. The external bundle lives under
+`.proofkit/agents/<harness>/<content-hash>/` and contains a portable
+`proofkit-test/SKILL.md`, `references/charter-authoring.md`, native `mcp.toml`
+(Codex) or `mcp.json` (`mcpServers` for Claude/generic), and `setup.json`.
+It uses the installed absolute Node/MCP entrypoint paths and binds both
+`PROOFKIT_ROOT` and `PROOFKIT_WORKSPACE_ROOT`. Moving or uninstalling the
+package requires a new export and host registration. The server name hashes
+the source/workspace pair so different bindings have different names.
+
+`--install-skill` installs to `~/.agents/skills/proofkit-test` for Codex or
+`~/.claude/skills/proofkit-test` for Claude Code. `--skills-dir` overrides the
+personal discovery directory and requires `--install-skill`. A generic harness
+can consume the JSON fragment; its Skill discovery is host-specific, so an
+explicit `--skills-dir` is required to install. DeepSeek Harness compatibility
+depends on the actual harness's MCP and Skill support. These exports do not
+verify its discovery implementation.
+
+Use `connection.registration.command` and its **argument array** to register
+the server with the host, or merge the generated native fragment through the
+host's configuration workflow. The Claude registration uses user scope;
+Codex uses its native `mcp add`. Setup does not execute these commands or edit
+host MCP settings. Avoid joining arguments into an unescaped shell string:
+paths and environment values can contain spaces or shell characters.
+Refresh the host's Skill discovery if required, then call `inspect_test_scope`
+through that host and check the source binding. A generated bundle reports
+`connection.status: not-checked` and `testVerdict: not-asserted`.
+
+The Skill preserves scope/platform/intensity, defaults to `core`, reuses
+eligible saved scenarios or submits a validated Charter, requires independent
+business evidence, follows one Mission through termination, and reports the
+saved verdict with evidence and scoped repair comparison. It cannot configure
+an unknown application's login, isolation, APIs or business invariants merely
+by being installed. Configure those in the external workspace, then verify a
+real workflow. Syntax and MCP connection tests do not establish model behavior.
+
+Setup validates the existing project/workspace binding, canonicalizes output
+paths, rejects source destinations and workspace path escapes, and never
+imports trusted connector code. The default is external even when the source
+has a legacy `.proofkit`. Identical exports/installations are reused; custom,
+modified, incomplete or redirected artifact trees cause a conflict without
+overwrite. Bundles are published from complete temporary directories. New
+config/Skill content creates a new bundle; changing an existing installed
+Skill requires reviewing and moving the old Skill before reinstalling.
+The path checks are cooperative local protections, not an adversarial
+filesystem sandbox or crash-durability guarantee.
+
+`--allow-capability-writes` emits the existing process-level operator opt-in.
+It does not change workspace side-effect policy, provide credentials or prove
+test-environment isolation. Existing execution gates still apply.
+
+Discovery/configuration references:
+[Codex Skills](https://developers.openai.com/codex/skills/),
+[Codex MCP](https://developers.openai.com/codex/mcp/),
+[Claude Code Skills](https://code.claude.com/docs/en/skills),
+[Claude Code MCP](https://code.claude.com/docs/en/mcp).
+
 ## Recommended connection
 
 Register one local MCP server for the project root. Clients with MCP support, including Codex and Claude Code, use the same high-level tools. DeepSeek Harness can use this interface when its harness supports MCP, or invoke the CLI otherwise:

@@ -105,6 +105,7 @@ fixture; it does not prove power-loss durability or live AIHR cleanup.
 - Create a fixed Web/Electron benchmark with known workflows and seeded defects.
 - Use the bounded project test map to measure candidate entry-point and route coverage; partial scans must remain visible through the `truncated` flag. Static Web and method-qualified API route measurement is implemented for explicit release suites; entry-point execution evidence remains open.
 - Register known business Charters by explicit aliases so one-sentence Agent requests reuse verified workflows; stop automatic execution when a required assertion or Oracle is missing.
+- Deliver a portable `proofkit-test` Skill through `agent setup`, with external native Codex/Claude MCP configuration and optional personal installation. The Skill preserves requested scope and level, requires independent business checks and follows the same Mission through evidence and replay. Generated setup explicitly remains unconnected; generic discovery is host-specific. Actual host invocation/adherence benchmarks remain open.
 - Let a host coding agent submit a structured Charter directly to `run_test` or `create_test_mission` when no catalog entry exists; recompute planning gaps and validate registered operations, origin and side-effect policy before Mission persistence. CLI Mission creation also accepts a workspace-owned Charter file.
 - Give host agents a read-only `inspect_surface` entry point before Charter authoring. It uses the ordinary Run evidence lifecycle, returns bounded Web/Electron control hints with unique observed selectors, and explicitly reports no product verdict; real Web and Electron smoke tests exercise those hints.
 - Give host agents `inspect_test_scope`/CLI `scope` to join source locations, compatible saved-plan checks and registered business capability/Oracle hints without executing a test. Shared route reconciliation keeps static mapping semantics aligned with release suites. Literal focus, output omission and truncated inventory stay explicit; this does not infer whole-project workflow coverage or evaluate runtime readiness.
@@ -232,5 +233,12 @@ Mission evidence now includes a bounded result projection and a static HTML/JSON
 - Optional result aggregation; no hosted service required for the core product.
 
 **Current distribution evidence:** `pnpm test:distribution` builds one `proofkit-ai` tarball, installs it in a fresh directory without the repository's `node_modules`, runs CLI onboarding, and calls the installed MCP server over stdio. The internal `@proofkit/*` modules are bundled into the two entrypoints. npm publication and cross-platform release verification remain open.
+
+The installed-package smoke also generates Codex/Claude native onboarding
+artifacts, installs and reuses the portable Skill in an isolated personal
+directory, and connects via the emitted JSON MCP launcher configuration.
+Source files remain unchanged and no Mission/Run is started by setup. This
+checks artifact delivery and stdio interoperability, not automatic discovery
+inside either host or effectiveness of natural-language testing.
 
 **Release rule:** ProofKit must report coverage gaps, blocked prerequisites and inconclusive business observations explicitly. "Whole project tested" is not a valid claim without measured workflow coverage and seeded-defect evidence.
