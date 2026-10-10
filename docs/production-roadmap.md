@@ -138,6 +138,13 @@ ProofKit tool call; the configured provider returned insufficient balance and
 the host cancelled MCP calls. The benchmark now stops on that infrastructure
 blocker and leaves later cases unrun. It has not measured Codex adherence,
 implicit activation, false-pass rate or model cost on a completed Mission.
+On 2026-10-10, an implicit-Skill `quick-pass` retry with an isolated writable
+test workspace reached its 90-second host deadline while the host command to
+read the generated Skill remained in progress. It made no MCP call and saved
+no Mission. The evaluator wrote `host-evaluation.json` and terminated after a
+bounded pipe drain even when a descendant held stdout open. This is an
+incomplete host run, not a ProofKit product verdict; the writable sandbox
+change has not yet established successful host execution.
 
 The MCP `await_test_result` tool now waits up to 30 seconds on the saved Mission
 without starting or cancelling it. It returns a compact terminal summary and

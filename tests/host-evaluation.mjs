@@ -69,7 +69,8 @@ async function evaluate(fixture, expected, cli, timeoutMs) {
       if (name !== serverName) overrides.push(`mcp_servers.${name}.enabled=false`);
     }
   } catch (error) { if (error.code !== "ENOENT") throw error; }
-  const argv = [...cli.prefix, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--cd", fixture.harness,
+  const argv = [...cli.prefix, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "workspace-write", "--cd", fixture.harness,
+    "--add-dir", fixture.workspace,
     "--output-schema", schemaPath, "--output-last-message", answerPath, "-c", 'approval_policy="never"', ...overrides.flatMap((value) => ["-c", value]),
     // Explicit Skill activation is the first baseline; implicit activation is an independent case mode.
     `${process.argv.includes("--implicit-skill") ? "" : "$proofkit-test "}${expected.prompt}`];

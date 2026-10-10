@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
 
 const MAX_EVENT_BYTES = 16 * 1024 * 1024;
+const EXIT_PIPE_DRAIN_MS = 2_000;
+const STOP_REAP_MS = 7_000;
 
 /** A host access failure says nothing about ProofKit's or the model's test quality. */
 export function classifyHostBlocker(jsonl) {
@@ -41,25 +43,63 @@ export async function runHost(executable, args, cwd, timeoutMs, eventsPath) {
   let timedOut = false;
   let child;
   let stopping = false;
-  const stop = (reason) => {
-    if (stopping) return;
-    stopping = true;
-    stopReason = reason;
-    if (!child?.pid) return;
-    if (process.platform === "win32") {
-      const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-      killer.on("error", () => { try { child.kill(); } catch { /* already stopped */ } });
-      killer.on("exit", (code) => { if (code !== 0) try { child.kill(); } catch { /* already stopped */ } });
-      setTimeout(() => { if (child.exitCode === null) try { child.kill(); } catch { /* already stopped */ } }, 5_000).unref();
-    } else {
-      try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill(); } catch { /* already stopped */ } }
-      setTimeout(() => { if (child.exitCode === null) try { process.kill(-child.pid, "SIGKILL"); } catch { /* already stopped */ } }, 5_000).unref();
-    }
-  };
   const execution = await new Promise((resolveRun, reject) => {
     child = spawn(executable, args, { cwd, windowsHide: true, shell: false,
       detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+    let finished = false;
+    let settled = false;
+    let exitDrainTimer;
+    let stopReapTimer;
     const timer = setTimeout(() => { timedOut = true; stop("host-deadline-exceeded"); }, timeoutMs);
+    const settle = (error, result) => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error);
+      else resolveRun(result);
+    };
+    const finish = (error, code) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      clearTimeout(exitDrainTimer);
+      clearTimeout(stopReapTimer);
+      if (error) {
+        events.destroy();
+        settle(error);
+        return;
+      }
+      events.end(() => settle(null, { code, timedOut, stopReason, durationMs: Date.now() - started }));
+    };
+    const closePipes = () => {
+      child.stdout.destroy();
+      child.stderr.destroy();
+    };
+    const stop = (reason) => {
+      if (stopping) return;
+      stopping = true;
+      stopReason = reason;
+      if (child.pid) {
+        if (process.platform === "win32") {
+          const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+          killer.on("error", () => { try { child.kill(); } catch { /* already stopped */ } });
+          killer.on("exit", (code) => { if (code !== 0) try { child.kill(); } catch { /* already stopped */ } });
+          setTimeout(() => { if (child.exitCode === null) try { child.kill(); } catch { /* already stopped */ } }, 5_000).unref();
+        } else {
+          try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill(); } catch { /* already stopped */ } }
+          setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch { /* already stopped */ } }, 5_000).unref();
+        }
+      }
+      // A descendant can keep the host's stdout pipe open after the host exits.
+      // Bound the wait even when the process tree cannot be fully reaped.
+      stopReapTimer = setTimeout(() => {
+        if (child.exitCode === null) {
+          try { child.kill("SIGKILL"); } catch { /* already stopped */ }
+          child.unref();
+        }
+        closePipes();
+        finish(null, child.exitCode);
+      }, STOP_REAP_MS);
+    };
     child.stdout.on("data", (chunk) => {
       eventBytes += chunk.length;
       if (eventBytes > MAX_EVENT_BYTES) { stop("host-event-limit-exceeded"); return; }
@@ -78,16 +118,17 @@ export async function runHost(executable, args, cwd, timeoutMs, eventsPath) {
     });
     events.on("drain", () => child.stdout.resume());
     child.stderr.resume(); // Drain without persisting account/provider details.
-    let finished = false;
-    const finish = (error, code) => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      events.end(() => error ? reject(error) : resolveRun({ code, timedOut, stopReason, durationMs: Date.now() - started }));
-    };
+    child.once("exit", (code) => {
+      exitDrainTimer = setTimeout(() => { closePipes(); finish(null, code); }, EXIT_PIPE_DRAIN_MS);
+    });
     child.once("error", (error) => finish(error));
     child.once("close", (code) => finish(null, code));
-    events.once("error", (error) => { stop("host-event-write-failed"); reject(error); });
+    events.once("error", (error) => {
+      stop("host-event-write-failed");
+      closePipes();
+      if (finished) settle(error);
+      else finish(error);
+    });
   });
   const transcript = await readFile(eventsPath, "utf8");
   return { ...execution, transcript, blocker: classifyHostBlocker(transcript) ??
