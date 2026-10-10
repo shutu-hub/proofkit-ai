@@ -41,6 +41,7 @@ let uploaded = 0;
 let unrelatedReads = 0;
 const files = new Map();
 const idempotentUploads = new Map();
+const charges = [];
 const fixtureErrors = [];
 const server = createServer((request, response) => {
   void handleRequest(request, response).catch((error) => {
@@ -123,7 +124,8 @@ try {
   const defaultRun = await service.start({ charterPath: ".proofkit/charters/aihr-resume-upload.yml", adapter: surface });
   const defaultSummary = await service.wait(defaultRun.runId);
   assert.equal(defaultSummary.verdict, "passed", JSON.stringify(defaultSummary.findings));
-  assert.equal(defaultSummary.oracles.length, 1);
+  assert.equal(defaultSummary.oracles.length, 2);
+  assert.ok(defaultSummary.oracles.every((oracle) => oracle.passed === true));
   assert.equal(defaultSummary.steps[1].capabilityOutput.fileSha256, fixtureSha256);
   assert.ok(defaultSummary.artifacts.some((artifact) => artifact.endsWith("/preflight.json")), "AIHR preflight evidence is missing");
 
@@ -136,6 +138,7 @@ try {
   assert.ok(successSummary.steps.some((step) => step.action.kind === "click"));
   assert.equal(successSummary.assertions[0].passed, true);
   assert.equal(successSummary.oracles[0].passed, true);
+  assert.equal(successSummary.oracles[1].passed, true);
 
   // Seed a stale backend binding while the real UI still reports success.
   mode = "stale-binding";
@@ -148,7 +151,18 @@ try {
   assert.ok(failed.repairSuggestions.some((suggestion) => suggestion.evidence.some((item) => item.kind === "business")));
   const failedRunId = failed.observations.find((item) => item.kind === "surface.run").data.runId;
   assert.equal((await service.wait(failedRunId)).assertions[0].passed, true);
-  assert.equal(uploaded, 3);
+  mode = "billing-missing";
+  const missingCharge = await runMcpMission(mcpClient, "测试简历获取");
+  assert.equal(missingCharge.verdict, "failed");
+  assert.equal(missingCharge.firstFailure.kind, "business-oracle");
+  const missingChargeRunId = missingCharge.observations.find((item) => item.kind === "surface.run").data.runId;
+  const missingChargeSummary = await service.wait(missingChargeRunId);
+  assert.equal(missingChargeSummary.assertions[0].passed, true);
+  assert.equal(missingChargeSummary.oracles[0].passed, true);
+  assert.equal(missingChargeSummary.oracles[1].passed, false);
+  assert.ok(missingCharge.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"
+    && finding.evidence.some((item) => item.kind === "business" && item.path.endsWith("oracle-2-source.json"))));
+  assert.equal(uploaded, 4);
   assert.equal(unrelatedReads, 0);
   assert.deepEqual(fixtureErrors, []);
   for (const evidence of [...success.evidence, ...failed.evidence]) await readFile(evidence.path);
@@ -224,7 +238,7 @@ try {
   const cancelledReport = cancelled.mission.evidence.find((item) => item.kind === "report");
   assert.match(await readFile(cancelledReport.path, "utf8"), /cancelled/);
   assert.deepEqual(await readdir(root), ["package.json"]);
-  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, idempotencyMission: idempotencyMission.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "mcp-one-sentence-core", "mcp-evidence", "core-mission", "stale-binding-detection", "evidence-backed-replay-comparison", "idempotency-negative-case", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
+  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, missingChargeMission: missingCharge.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, idempotencyMission: idempotencyMission.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "mcp-one-sentence-core", "mcp-evidence", "core-mission", "stale-binding-detection", "billing-missing-detection", "evidence-backed-replay-comparison", "idempotency-negative-case", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
 } finally {
   await mcpClient?.close();
   await mcpServer?.close();
@@ -297,6 +311,8 @@ async function handleRequest(request, response) {
     } else {
       currentFile = { file_id: String(++sequence), run_id: collectionRunId, file_sha256: fixtureSha256, candidate_id: "902", source_platform: "boss", status: "accepted", extract_status: "done", parse_status: "matched" };
       files.set(currentFile.file_id, currentFile);
+      if (mode !== "billing-missing") charges.push({ id: String(++sequence), workflow_type: "communication_resume_screening",
+        workflow_run_id: collectionRunId, workflow_item_key: clientItemKey, points: 300 });
       if (useIdempotencyFixture) idempotentUploads.set(clientItemKey, currentFile);
       uploaded++;
       send({ ...currentFile, duplicate: false });
@@ -309,6 +325,15 @@ async function handleRequest(request, response) {
     send({ assessment_id: "903", current_resume_file_id: currentFile.file_id, job_id: "505", candidate_id: "902", status: "success", task_status: "success" });
   } else if (path === "/workflow-executions") {
     send({ items: [{ run_id: url.searchParams.get("run_id"), id: "904", screening_stage: "workflow_completion", candidate: { id: "902" }, job: { id: "505" }, status: "completed", record_type: "workflow_completion", screening_result: "passed" }], pagination: { page: 1, page_size: 100, total: 1 } });
+  } else if (path === "/billing/usage-charges") {
+    assert.ok(url.searchParams.get("start_date"));
+    assert.ok(url.searchParams.get("end_date"));
+    const filtered = charges.filter((charge) => charge.workflow_type === url.searchParams.get("workflow_type"));
+    const page = Number(url.searchParams.get("page"));
+    const pageSize = Number(url.searchParams.get("page_size"));
+    send({ page, page_size: pageSize, total: filtered.length,
+      total_points: filtered.reduce((sum, charge) => sum + charge.points, 0),
+      items: filtered.slice((page - 1) * pageSize, page * pageSize) });
   } else {
     if (path.startsWith("/boss-conversations/")) unrelatedReads++;
     response.writeHead(404, { "content-type": "application/json" });

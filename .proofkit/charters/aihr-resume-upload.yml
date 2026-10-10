@@ -41,6 +41,7 @@ actions:
 assertions: []
 oracles:
   - aihr.resumeCollectionPipeline
+  - aihr.billingUsage
 metadata:
   aihr:
     jobId: "$env:AIHR_PROOFKIT_JOB_ID"

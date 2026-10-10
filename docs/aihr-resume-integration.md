@@ -31,7 +31,7 @@ The ProofKit repository includes a reference AIHR integration at `.proofkit/inte
 | `aihr.readResumeCollectionRun` | read | run status, counts and machine error code |
 | `aihr.readResumeFile` | read | file ID/hash and processing statuses |
 | `aihr.readWorkflowUsage` | read | immutable workflow facts and stage/result counts |
-| `aihr.readBillingUsage` | read | billing usage total and exact workflow-run match count |
+| `aihr.readBillingUsage` | read | bounded date-scoped ledger scan, pagination completeness and current collection-run charges |
 
 Each capability declares an input schema, output schema, environment allowlist, timeout and evidence projection. The connector projects opaque business IDs and selected scalar facts, excluding resume text, contact details, cookies and authorization headers. Surface screenshots and snapshots can still retain visible page content, so use synthetic inputs. The factory receives ProofKit's schema runtime, so a project integration does not need a hidden `zod` dependency. Integration cleanup runs in reverse registration order after the adapter and project process close; a cleanup error prevents a green verdict.
 
@@ -59,6 +59,8 @@ If any one of these facts cannot be observed, the result is `inconclusive` or `b
 The current AIHR domain defines evaluation states `running/success/failed` and task states `pending/processing/retry_wait/success/failed/dead/cancelled`. When assessment completion is required, both `assessment.status=success` and `assessment.task_status=success` must be observed. `assessment_worker_service.go` persists the successful evaluation before completing usage recording and marking its task successful; accepting either state alone would report success while required worker work is retrying. A failed evaluation or a `failed/dead/cancelled` task is a failed observation. Pending, retrying or missing states remain inconclusive.
 
 The connector reads assessment detail rather than trusting green workflow/file summary fields. Job relation facts must identify the same file, job and candidate; required assessment facts must also include an assessment ID and the same file/job/candidate. Missing identities cannot pass. The wait Capability and independent Oracle share the acceptance rules but perform separate reads; their evidence retains the identity and status facts used for each conclusion in `oracle-N-source.json`.
+
+The default ordinary-upload Charter also selects `aihr.billingUsage`. After the current upload and pipeline have passed, this Oracle reads the actor-scoped `/billing/usage-charges` ledger over a date window around the Run, scans up to 20 pages, and requires exactly one 300-point `communication_resume_screening` charge for this collection run and uploaded `client_item_key`. A complete ledger with no charge, duplicate charges or wrong points fails. An unavailable reader, inconsistent or capped pagination, missing Run prerequisites or an unverified date window remains inconclusive. Evidence stores the key's SHA-256, charge count, amount, date window and scan status, without the raw key. The HTTP source is still a gateway read, so a real isolated deployment must verify its actor scope and worker chain before treating this as a release gate.
 
 ### Online-stage acceptance scope
 

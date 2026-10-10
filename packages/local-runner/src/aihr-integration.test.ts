@@ -114,6 +114,69 @@ describe("AIHR project integration", () => {
     }
   }
 
+  it.each([
+    { name: "aihr.readResumeCollectionRun", path: "/resume-collection/runs/900", input: { runId: "900" },
+      data: { run_id: 900, status: "completed", requested_count: 1 }, expected: { runId: "900", status: "completed" } },
+    { name: "aihr.readResumeFile", path: "/resume-collection/files/901", input: { fileId: "901" },
+      data: { file_id: 901, run_id: 900, extract_status: "done", parse_status: "matched" }, expected: { fileId: "901", extractStatus: "done" } },
+    { name: "aihr.readWorkflowUsage", path: "/workflow-executions", input: { runId: "900" },
+      data: { items: [{ id: 902, screening_stage: "workflow_completion", screening_result: "passed" }], pagination: { total: 1 } },
+      expected: { runId: "900", total: 1 } },
+    { name: "aihr.readBillingUsage", path: "/billing/usage-charges", input: { runId: "900", startDate: "2026-10-09", endDate: "2026-10-11" },
+      data: { items: [{ id: "1", workflow_run_id: "900", workflow_item_key: "proofkit:case", points: 300 }],
+        page: 1, page_size: 100, total: 1, total_points: 300 },
+      expected: { runId: "900", complete: true, matchedCount: 1, matchedPoints: 300 } },
+  ])("passes the Runner capability signal to $name gateway reads", async ({ name, path, input, data, expected }) => {
+    let requested = false;
+    await startPollingGateway((actual, response) => {
+      expect(actual).toBe(path);
+      requested = true;
+      send(response, data);
+    });
+    const read = await loadPipelineWait(name);
+    const output = await read.execute(read.inputSchema.parse(input), { runId: "read-fixture", signal: new AbortController().signal });
+    expect(requested).toBe(true);
+    expect(output).toMatchObject(expected);
+  });
+
+  it("scans later billing pages before reporting an exact collection-run charge", async () => {
+    const pages: number[] = [];
+    await startPollingGateway((path, response, url) => {
+      expect(path).toBe("/billing/usage-charges");
+      expect(url.searchParams.get("start_date")).toBe("2026-10-09");
+      expect(url.searchParams.get("end_date")).toBe("2026-10-11");
+      const page = Number(url.searchParams.get("page"));
+      pages.push(page);
+      const items = page === 1
+        ? Array.from({ length: 100 }, (_, index) => ({ id: String(index + 1), workflow_run_id: "899",
+          workflow_item_key: `unrelated-${index}`, points: 300 }))
+        : [{ id: "101", workflow_run_id: "900", workflow_item_key: "proofkit:fixture:upload-1", points: 300 }];
+      send(response, { page, page_size: 100, total: 101, total_points: 30300, items });
+    });
+    const read = await loadPipelineWait("aihr.readBillingUsage");
+    const output = await read.execute(read.inputSchema.parse({ runId: "900", startDate: "2026-10-09", endDate: "2026-10-11" }),
+      { runId: "billing-fixture", signal: new AbortController().signal });
+    expect(pages).toEqual([1, 2]);
+    expect(output).toMatchObject({ complete: true, pagesRead: 2, total: 101, matchedCount: 1, matchedPoints: 300,
+      itemKeys: ["proofkit:fixture:upload-1"] });
+    expect(read.evidence(output)).toMatchObject({ complete: true, matchedCount: 1, itemKeyCount: 1 });
+    expect(read.evidence(output)).not.toHaveProperty("itemKeys");
+  });
+
+  it("keeps billing absence unverified when the date window or page coverage is incomplete", async () => {
+    const read = await loadPipelineWait("aihr.readBillingUsage");
+    const noWindow = await read.execute(read.inputSchema.parse({ runId: "900" }),
+      { runId: "billing-no-window", signal: new AbortController().signal });
+    expect(noWindow).toMatchObject({ complete: false, reason: "date-window-unverified", matchedCount: null });
+    await startPollingGateway((_path, response) => send(response, {
+      page: 1, page_size: 1, total: 2, total_points: 600,
+      items: [{ id: "1", workflow_run_id: "899", workflow_item_key: "unrelated", points: 300 }],
+    }));
+    const capped = await read.execute(read.inputSchema.parse({ runId: "900", startDate: "2026-10-09", endDate: "2026-10-11", pageSize: 1, maxPages: 1 }),
+      { runId: "billing-capped", signal: new AbortController().signal });
+    expect(capped).toMatchObject({ complete: false, reason: "page-limit", pagesRead: 1, matchedCount: null, matchedPoints: null });
+  });
+
   it.each(pipelines)("bounds $name polling when the interval exceeds the whole deadline", async (pipeline) => {
     await startPollingGateway((_path, response) => send(response, pipeline.pending));
     const wait = await loadPipelineWait(pipeline.capability);
@@ -553,7 +616,7 @@ describe("AIHR project integration", () => {
     expect(gateway.requestPaths.filter((path) => path === "/workflow-executions")).toHaveLength(Math.min(completionPage, 20));
   });
 
-  it.each(["success", "relation-old-file"] as const)("executes the checked-in env-based Charter through Local Runner: %s", async (mode) => {
+  it.each(["success", "relation-old-file", "billing-missing", "billing-duplicate", "billing-wrong-price", "billing-reader-error"] as const)("executes the checked-in env-based Charter through Local Runner: %s", async (mode) => {
     const fixtureBytes = Buffer.from("%PDF-1.4 proofkit fixture\n", "utf8");
     const fixtureSha256 = createHash("sha256").update(fixtureBytes).digest("hex");
     const gateway = await startCollectionGatewayMock({ fixtureSha256, mode });
@@ -580,18 +643,28 @@ describe("AIHR project integration", () => {
     const started = await service.start({ charter: await loadCharter(source) });
     const summary = await service.wait(started.runId);
 
-    expect(summary.verdict).toBe(mode === "success" ? "passed" : "failed");
+    expect(summary.verdict).toBe(mode === "success" ? "passed" : mode === "billing-reader-error" ? "inconclusive" : "failed");
     expect(summary.steps).toHaveLength(3);
     expect(summary.steps.every((step) => step.status === "passed")).toBe(true);
-    expect(summary.oracles).toHaveLength(1);
-    expect(summary.oracles[0]).toMatchObject({ name: "aihr.resumeCollectionPipeline", passed: mode === "success" });
+    expect(summary.oracles).toHaveLength(2);
+    expect(summary.oracles[0]).toMatchObject({ name: "aihr.resumeCollectionPipeline", passed: mode !== "relation-old-file" });
+    expect(summary.oracles[1]).toMatchObject({ name: "aihr.billingUsage",
+      passed: mode === "success" ? true : mode === "relation-old-file" || mode === "billing-reader-error" ? null : false });
+    const billingFacts = JSON.parse((await readFile(join(root, ".proofkit", "runs", summary.runId,
+      "artifacts", "oracle-2-source.json"), "utf8")) as string);
+    expect(JSON.stringify(billingFacts)).not.toContain("proofkit:fixture:default-charter");
     expect(summary.oracles[0]?.sourceEvidenceArtifacts).toEqual([`${summary.runId}/artifacts/oracle-1-source.json`]);
     expect(summary.oracles[0]?.evidence).toEqual([`${summary.runId}/artifacts/oracle-1-source.json`, `${summary.runId}/artifacts/oracle-1.json`]);
     if (mode === "relation-old-file") {
       expect(summary.oracles[0]?.sourceLocations).toContain("services/resume-collection-service/internal/service/resume_post_processor.go");
     }
+    if (mode.startsWith("billing-") && mode !== "billing-reader-error") {
+      expect(summary.oracles[1]?.sourceLocations).toContain("services/billing-service/internal/service/billing_service.go");
+      expect(billingFacts).toMatchObject({ facts: [{ ledgerComplete: true, expectedPoints: 300 }] });
+    }
+    if (mode === "billing-reader-error") expect(billingFacts).toMatchObject({ facts: [{ ledgerReason: "reader-unavailable" }] });
     expect(summary.steps[1]?.capabilityOutput).toMatchObject({ collectionRunId: "900", fileSha256: fixtureSha256 });
-    expect(summary.steps[2]?.capabilityOutput).toMatchObject({ outcome: mode === "success" ? "passed" : "failed", jobId: "505" });
+    expect(summary.steps[2]?.capabilityOutput).toMatchObject({ outcome: mode === "relation-old-file" ? "failed" : "passed", jobId: "505" });
     expect(gateway.uploadBody).toMatch(/name="run_id"\r\n\r\n900\r\n/);
     expect(gateway.requestPaths.filter((path) => path.startsWith("/boss-conversations/"))).toEqual([]);
     expect(summary.artifacts.some((path) => path.includes("oracle-1"))).toBe(true);
@@ -762,10 +835,11 @@ async function createIntegrationProject(fixtureBytes?: Buffer): Promise<string> 
   return root;
 }
 
-async function startPollingGateway(handler: (path: string, response: ServerResponse) => void): Promise<void> {
+async function startPollingGateway(handler: (path: string, response: ServerResponse, url: URL) => void): Promise<void> {
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
-    handler(new URL(request.url ?? "/", "http://127.0.0.1").pathname.replace(/^\/api\/v1/, ""), response);
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    handler(url.pathname.replace(/^\/api\/v1/, ""), response, url);
   });
   servers.push(server);
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
@@ -900,6 +974,7 @@ async function startGatewayMock(mode: () => OnlineMode): Promise<ReturnType<type
 }
 
 type CollectionMode = "success" | "relation-old-file" | "assessment-old-file" | "extract-failed" | "not-found"
+  | "billing-missing" | "billing-duplicate" | "billing-wrong-price" | "billing-reader-error"
   | "assessment-retry" | "assessment-running" | "assessment-task-missing" | "assessment-dead" | "assessment-cancelled" | "assessment-failed";
 
 function completionFact() {
@@ -916,6 +991,7 @@ async function startCollectionGatewayMock(options: { fixtureSha256: string; mode
   let mode = options.mode ?? "success";
   let uploadContentType: string | undefined;
   let uploadBody = "";
+  let clientItemKey = "";
   const requestPaths: string[] = [];
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
@@ -930,6 +1006,7 @@ async function startCollectionGatewayMock(options: { fixtureSha256: string; mode
     if (request.method === "POST" && path === "/resume-collection/files") {
       uploadContentType = typeof request.headers["content-type"] === "string" ? request.headers["content-type"] : undefined;
       uploadBody = (await collectBody(request)).toString("latin1");
+      clientItemKey = uploadBody.match(/name="client_item_key"\r\n\r\n([^\r]*)\r\n/)?.[1] ?? "";
       const targetJobs = uploadBody.match(/name="target_job_ids"\r\n\r\n([^\r]*)\r\n/)?.[1];
       if (targetJobs !== undefined && (!/^\[[1-9]\d*(?:,[1-9]\d*){0,19}\]$/.test(targetJobs) || targetJobs.slice(1, -1).split(",").some((id) => BigInt(id) > 9223372036854775807n))) {
         return sendError(response, 400, "VALIDATION_ERROR", "target_job_ids must be a JSON int64 array");
@@ -956,6 +1033,19 @@ async function startCollectionGatewayMock(options: { fixtureSha256: string; mode
     if (request.method === "GET" && path === "/workflow-executions") {
       const page = Number(url.searchParams.get("page"));
       return send(response, options.workflowPage?.(page) ?? { items: [completionFact()], pagination: { page, page_size: 100, total: 1 } });
+    }
+    if (request.method === "GET" && path === "/billing/usage-charges") {
+      if (mode === "billing-reader-error") return sendError(response, 503, "UNAVAILABLE", "billing fixture unavailable");
+      const points = mode === "billing-wrong-price" ? 50 : 300;
+      const items = mode === "billing-missing" ? [] : [
+        { id: "1001", workflow_type: "communication_resume_screening", workflow_run_id: 900,
+          workflow_item_key: clientItemKey, points },
+        ...(mode === "billing-duplicate" ? [{ id: "1002", workflow_type: "communication_resume_screening",
+          workflow_run_id: 900, workflow_item_key: clientItemKey, points }] : []),
+      ];
+      return send(response, { page: Number(url.searchParams.get("page")),
+        page_size: Number(url.searchParams.get("page_size")), total: items.length,
+        total_points: items.reduce((sum, item) => sum + item.points, 0), items });
     }
     return sendError(response, 404, "NOT_FOUND", "collection fixture route not found");
   });

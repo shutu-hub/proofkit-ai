@@ -18,6 +18,7 @@ export function createIntegration({ z: injectedZ, workspaceRoot }) {
   // schema runtime when loading this factory.
   z = injectedZ;
   const state = new Map();
+  const billingRead = readBillingUsageCapability(state);
 
   return {
     name: "aihr-resume-workflows",
@@ -31,9 +32,10 @@ export function createIntegration({ z: injectedZ, workspaceRoot }) {
       readResumeRunCapability(),
       readResumeFileCapability(),
       readWorkflowUsageCapability(),
-      readBillingUsageCapability(),
+      billingRead,
     ],
     oracles: [createResumeCollectionPipelineOracle(state), createOnlineResumePipelineOracle(state), createResumeUploadIdempotencyOracle(state),
+      createBillingUsageOracle(state, billingRead),
       createManualCandidateIntakeOracle({ z, resolveEnv, positiveString, getOrNull, pollPipeline })],
     preflight: aihrPreflight,
     setup: async ({ runId }) => {
@@ -777,37 +779,145 @@ function readWorkflowUsageCapability() {
   );
 }
 
-function readBillingUsageCapability() {
-  return simpleReadCapability(
-    "aihr.readBillingUsage",
-    "Read immutable AIHR billing usage facts and correlate them to a workflow run.",
-    z.object({
+function readBillingUsageCapability(state) {
+  return {
+    name: "aihr.readBillingUsage",
+    description: "Read a bounded, date-scoped billing ledger across all pages; incomplete scans never prove a missing charge.",
+    sideEffect: "read",
+    environments: environment,
+    timeoutMs: 30_000,
+    inputSchema: z.object({
       runId: positiveIdInput(),
-      workflowType: z.string().min(1).optional(),
-      sourcePlatform: z.string().min(1).optional(),
+      workflowType: z.enum(["communication_resume_screening", "proactive_talent_screening"]).optional(),
+      sourcePlatform: z.enum(["boss", "liepin", "51job", "zhaopin"]).optional(),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       pageSize: z.number().int().min(1).max(100).default(100),
+      maxPages: z.number().int().min(1).max(20).default(20),
     }),
-    async (input, signal) => {
+    outputSchema: z.object({
+      runId: z.string(), complete: z.boolean(), reason: z.string().nullable(),
+      startDate: z.string().nullable(), endDate: z.string().nullable(),
+      pagesRead: z.number().int().nonnegative(), total: z.number().int().nonnegative().nullable(),
+      totalPoints: z.number().nullable(), matchedCount: z.number().int().nonnegative().nullable(),
+      matchedPoints: z.number().nullable(), itemKeys: z.array(z.string()),
+      charges: z.array(z.object({ itemKey: z.string(), points: z.number().int().nonnegative() })),
+    }),
+    async execute(input, { runId, signal }) {
       input = resolveEnv(input);
-      const params = new URLSearchParams({ page: "1", page_size: String(input.pageSize) });
-      if (input.workflowType) params.set("workflow_type", input.workflowType);
-      if (input.sourcePlatform) params.set("source_platform", input.sourcePlatform);
-      const response = await aihrFetch(`/billing/usage-charges?${params}`, { signal });
-      const data = response.data ?? {};
-      const items = Array.isArray(data.items) ? data.items : [];
-      const runId = asId(input.runId);
-      const matched = items.filter((item) => String(item.workflow_run_id ?? "") === runId);
-      return {
-        runId,
-        total: numberOrNull(data.total) ?? items.length,
-        totalPoints: numberOrNull(data.total_points) ?? 0,
-        matchedCount: matched.length,
-        matchedPoints: matched.reduce((sum, item) => sum + (numberOrNull(item.points) ?? 0), 0),
-        itemKeys: matched.map((item) => nullable(item.workflow_item_key)).filter(Boolean).slice(0, 100),
-      };
+      const collectionRunId = asId(input.runId);
+      const startedAt = state.get(runId)?.createdAt;
+      const startDate = input.startDate ?? (startedAt ? shiftUtcDate(startedAt, -1) : null);
+      const endDate = input.endDate ?? shiftUtcDate(new Date().toISOString(), 1);
+      const incomplete = (reason, pagesRead = 0, total = null, totalPoints = null) => ({
+        runId: collectionRunId, complete: false, reason, startDate, endDate, pagesRead, total, totalPoints,
+        matchedCount: null, matchedPoints: null, itemKeys: [], charges: [],
+      });
+      if (!startDate || startDate > endDate) return incomplete("date-window-unverified");
+      let total = null;
+      let totalPoints = null;
+      let seen = 0;
+      const ids = new Set();
+      const matched = [];
+      for (let page = 1; page <= input.maxPages; page += 1) {
+        signal?.throwIfAborted();
+        const params = new URLSearchParams({ page: String(page), page_size: String(input.pageSize),
+          start_date: startDate, end_date: endDate });
+        if (input.workflowType) params.set("workflow_type", input.workflowType);
+        if (input.sourcePlatform) params.set("source_platform", input.sourcePlatform);
+        const response = await aihrFetch(`/billing/usage-charges?${params}`, { signal });
+        const data = response.data ?? {};
+        if (!Number.isSafeInteger(data.page) || data.page !== page
+          || !Number.isSafeInteger(data.page_size) || data.page_size !== input.pageSize
+          || !Number.isSafeInteger(data.total) || data.total < 0
+          || !Array.isArray(data.items) || data.items.length > input.pageSize
+          || (total !== null && data.total !== total)) return incomplete("pagination-inconsistent", page, total, totalPoints);
+        total = data.total;
+        totalPoints = numberOrNull(data.total_points);
+        for (const item of data.items) {
+          const id = positiveString(item?.id);
+          if (!id || ids.has(id) || !positiveString(item.workflow_run_id)
+            || typeof item.workflow_item_key !== "string" || !item.workflow_item_key
+            || !Number.isSafeInteger(item.points) || item.points < 0
+            || (input.workflowType && item.workflow_type !== input.workflowType)) {
+            return incomplete("ledger-row-invalid", page, total, totalPoints);
+          }
+          ids.add(id);
+          if (positiveString(item.workflow_run_id) === collectionRunId) matched.push(item);
+        }
+        seen += data.items.length;
+        if (seen === total) return {
+          runId: collectionRunId, complete: true, reason: null, startDate, endDate,
+          pagesRead: page, total, totalPoints, matchedCount: matched.length,
+          matchedPoints: matched.reduce((sum, item) => sum + item.points, 0),
+          itemKeys: matched.map((item) => item.workflow_item_key),
+          charges: matched.map((item) => ({ itemKey: item.workflow_item_key, points: item.points })),
+        };
+        if (seen > total || data.items.length < input.pageSize) return incomplete("pagination-inconsistent", page, total, totalPoints);
+      }
+      return incomplete("page-limit", input.maxPages, total, totalPoints);
     },
-    (output) => ({ runId: output.runId, total: output.total, totalPoints: output.totalPoints, matchedCount: output.matchedCount, matchedPoints: output.matchedPoints, itemKeyCount: output.itemKeys.length }),
-  );
+    evidence: (output) => ({ runId: output.runId, complete: output.complete,
+      reason: output.reason, startDate: output.startDate, endDate: output.endDate,
+      pagesRead: output.pagesRead, total: output.total, totalPoints: output.totalPoints,
+      matchedCount: output.matchedCount, matchedPoints: output.matchedPoints,
+      itemKeyCount: output.itemKeys.length }),
+  };
+}
+
+function shiftUtcDate(timestamp, days) {
+  const date = new Date(timestamp);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function createBillingUsageOracle(state, billingRead) {
+  return {
+    name: "aihr.billingUsage",
+    async check({ runId, signal }) {
+      const remembered = state.get(runId) ?? {};
+      const collectionRunId = positiveString(remembered.collectionRunId);
+      const itemKey = remembered.uploadedFile?.clientItemKey;
+      const pipelinePassed = remembered.resumePipeline?.passed === true;
+      const facts = { collectionRunId, itemKeySha256: itemKey ? digest(itemKey) : null,
+        pipelinePassed, ledgerComplete: false, ledgerReason: null,
+        pagesRead: 0, total: null, exactChargeCount: null, exactPoints: null, expectedPoints: 300 };
+      if (!collectionRunId || !itemKey || !pipelinePassed) {
+        return { name: "aihr.billingUsage", passed: null,
+          message: "A successful current-run upload and pipeline observation are required before billing can be assessed.",
+          evidence: [JSON.stringify({ ...facts, ledgerReason: "current-run-prerequisite-missing" })], observedAt: new Date().toISOString() };
+      }
+      let scan;
+      try {
+        const input = billingRead.inputSchema.parse({ runId: collectionRunId, workflowType: "communication_resume_screening" });
+        scan = await billingRead.execute(input, { runId, signal });
+      } catch (error) {
+        signal?.throwIfAborted();
+        return { name: "aihr.billingUsage", passed: null,
+          message: "The tenant-scoped billing reader was unavailable; no charge conclusion is supported.",
+          evidence: [JSON.stringify({ ...facts, ledgerReason: "reader-unavailable", readerStatus: Number(error?.status) || null })],
+          observedAt: new Date().toISOString() };
+      }
+      if (!scan.complete) {
+        return { name: "aihr.billingUsage", passed: null,
+          message: "The bounded billing ledger scan was incomplete; a missing charge cannot be concluded.",
+          evidence: [JSON.stringify({ ...facts, ledgerReason: scan.reason, pagesRead: scan.pagesRead, total: scan.total })],
+          observedAt: new Date().toISOString() };
+      }
+      const exact = scan.charges.filter((charge) => charge.itemKey === itemKey);
+      const passed = exact.length === 1 && exact[0].points === 300;
+      const evidence = { ...facts, ledgerComplete: true, pagesRead: scan.pagesRead, total: scan.total,
+        startDate: scan.startDate, endDate: scan.endDate,
+        exactChargeCount: exact.length, exactPoints: exact.reduce((sum, charge) => sum + charge.points, 0) };
+      return { name: "aihr.billingUsage", passed,
+        message: passed ? "The current collection Run and upload key have exactly one 300-point billing charge."
+          : "The current collection Run and upload key do not have exactly one correctly priced billing charge.",
+        evidence: [JSON.stringify(evidence)],
+        ...(passed ? {} : { sourceLocations: ["services/billing-service/internal/service/billing_service.go",
+          "services/resume-collection-service/internal/service/workflow_execution_service.go"] }),
+        observedAt: new Date().toISOString() };
+    },
+  };
 }
 
 function createOnlineResumePipelineOracle(state) {
@@ -872,7 +982,8 @@ function createResumeUploadIdempotencyOracle(state) {
 }
 
 function simpleReadCapability(name, description, inputSchema, execute, evidence) {
-  return { name, description, sideEffect: "read", environments: environment, timeoutMs: 30_000, inputSchema, outputSchema: z.any(), execute, evidence };
+  return { name, description, sideEffect: "read", environments: environment, timeoutMs: 30_000,
+    inputSchema, outputSchema: z.any(), execute: (input, { signal }) => execute(input, signal), evidence };
 }
 
 async function pollOnlineResumePipeline(target, options) {
