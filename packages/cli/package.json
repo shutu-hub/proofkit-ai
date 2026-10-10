@@ -12,6 +12,7 @@
     "dev": "tsx src/main.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@proofkit/contracts": "workspace:*",
     "@proofkit/evidence": "workspace:*",
     "@proofkit/local-runner": "workspace:*",

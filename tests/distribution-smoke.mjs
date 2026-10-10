@@ -72,6 +72,18 @@ try {
   assert.equal(codexSetup.connection.serverName, onboarding.connection.serverName);
   assert.equal(codexSetup.skill.installation.status, "not-requested");
   assert.equal(codexSetup.connection.registration.command, "codex");
+  const checkedSetup = JSON.parse((await command(process.execPath, [...setupArgs, "--check-connection"], scratch)).stdout);
+  assert.equal(checkedSetup.connection.status, "not-checked");
+  assert.equal(checkedSetup.localConnection.status, "connected");
+  assert.equal(checkedSetup.localConnection.testVerdict, "not-asserted");
+  assert.equal(checkedSetup.localConnection.hostRegistration, "not-checked");
+  assert.equal(checkedSetup.localConnection.modelBehavior, "not-checked");
+  assert.equal(checkedSetup.localConnection.executionChecks, "not-run");
+  assert.equal(checkedSetup.localConnection.projectRoot, await realpath(source));
+  assert.equal(checkedSetup.localConnection.workspaceRoot, await realpath(workspace));
+  assert.equal(checkedSetup.localConnection.scope.routeCandidates, 2);
+  assert.equal((await readdir(join(workspace, ".proofkit"))).includes("missions"), false);
+  assert.equal((await readdir(join(workspace, ".proofkit"))).includes("runs"), false);
   const nativeConfig = JSON.parse(await readFile(onboarding.connection.configPath, "utf8"));
   const emittedServer = nativeConfig.mcpServers[onboarding.connection.serverName];
   assert.equal(emittedServer.type, "stdio");
@@ -208,7 +220,7 @@ try {
   assert.equal(workspaceFiles.includes("missions"), false);
   assert.equal(workspaceFiles.includes("runs"), false);
   assert.equal((await readdir(join(workspace, ".proofkit", "inspections"))).length, 2);
-  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-agent-skill-and-idempotent-setup", "codex-and-claude-native-config-export", "emitted-native-config-stdio-connection", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
+  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-agent-skill-and-idempotent-setup", "codex-and-claude-native-config-export", "emitted-native-config-stdio-connection", "installed-cli-local-connection-check", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
 } finally {
   if (environmentServer) {
     environmentServer.closeAllConnections();

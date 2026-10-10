@@ -252,6 +252,11 @@ Mission evidence now includes a bounded result projection and a static HTML/JSON
 The installed-package smoke also generates Codex/Claude native onboarding
 artifacts, installs and reuses the portable Skill in an isolated personal
 directory, and connects via the emitted JSON MCP launcher configuration.
+The CLI now optionally checks that emitted launcher with `agent setup
+--check-connection`: it lists required tools and verifies the project/workspace
+binding through `inspect_test_scope`, without creating a Mission or Run. It
+does not verify host registration or model behavior; connector registration
+code is still trusted and loaded on server startup.
 Source files remain unchanged and no Mission/Run is started by setup. This
 checks artifact delivery and stdio interoperability, not automatic discovery
 inside either host or effectiveness of natural-language testing.

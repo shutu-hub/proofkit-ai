@@ -38,6 +38,17 @@ Refresh the host's Skill discovery if required, then call `inspect_test_scope`
 through that host and check the source binding. A generated bundle reports
 `connection.status: not-checked` and `testVerdict: not-asserted`.
 
+Add `--check-connection` to the same setup command to launch the emitted local
+MCP server, list its required high-level tools, and call `inspect_test_scope`
+to verify the source/workspace binding. `--check-timeout-ms` bounds the whole
+check (default 30000, accepted 1000–60000). The separate `localConnection`
+result is `connected` or `blocked`; it always keeps `hostRegistration`,
+`modelBehavior` and `executionChecks` at `not-checked`/`not-run`, and the
+product verdict at `not-asserted`. This does not confirm that Codex, Claude
+Code or another host discovered the Skill or accepted the MCP configuration.
+The server loads trusted connector registration code during startup, so run
+this optional check only with a reviewed external workspace integration.
+
 The Skill preserves scope/platform/intensity, defaults to `core`, reuses
 eligible saved scenarios or submits a validated Charter, requires independent
 business evidence, follows one Mission through termination, and reports the
@@ -47,8 +58,9 @@ by being installed. Configure those in the external workspace, then verify a
 real workflow. Syntax and MCP connection tests do not establish model behavior.
 
 Setup validates the existing project/workspace binding, canonicalizes output
-paths, rejects source destinations and workspace path escapes, and never
-imports trusted connector code. The default is external even when the source
+paths, rejects source destinations and workspace path escapes, and does not
+import trusted connector code unless the optional connection check starts the
+generated server. The default is external even when the source
 has a legacy `.proofkit`. Identical exports/installations are reused; custom,
 modified, incomplete or redirected artifact trees cause a conflict without
 overwrite. Bundles are published from complete temporary directories. New

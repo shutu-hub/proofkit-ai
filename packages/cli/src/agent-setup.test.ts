@@ -6,6 +6,7 @@ import { parse } from "yaml";
 import { TestCharterSchema } from "@proofkit/contracts";
 import { resolveProjectContext } from "@proofkit/project";
 import { setupAgent, type AgentHarness } from "./agent-setup.js";
+import { checkAgentConnection } from "./agent-connection.js";
 import { createProgram } from "./main.js";
 
 const scratches: string[] = [];
@@ -86,6 +87,17 @@ describe("Agent onboarding", () => {
     await expect(setupAgent({ ...f, harness: "invented" as AgentHarness }, f)).rejects.toThrow("Harness must be");
     await expect(setupAgent({ ...f, harness: "codex" }, { serverPath: join(f.scratch, "missing.js") })).rejects.toThrow("entrypoint is missing");
     expect(await readdir(f.scratch)).not.toContain("external workspace");
+  });
+
+  it("reports a failed local launcher without claiming host registration or a product verdict", async () => {
+    const f = await fixture();
+    const setup = await setupAgent({ ...f, harness: "codex" }, f);
+    const checked = await checkAgentConnection(setup, 2_000);
+    expect(checked).toMatchObject({ status: "blocked", phase: "connect", issue: "local-launcher-unavailable",
+      testVerdict: "not-asserted", hostRegistration: "not-checked", modelBehavior: "not-checked", executionChecks: "not-run" });
+    expect(await readdir(f.root)).toEqual(["package.json"]);
+    expect(await readdir(join(f.workspaceRoot, ".proofkit"))).toEqual(["agents", "config.yaml", "integration.mjs"]);
+    await expect(checkAgentConnection(setup, 999)).rejects.toThrow("1000–60000");
   });
 
   it("changes immutable bundles on explicit write opt-in without overwriting the original config", async () => {

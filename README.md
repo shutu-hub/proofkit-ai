@@ -79,7 +79,12 @@ proofkit agent setup --harness codex --root /path/to/your/project --workspace /p
 
 The command returns an external bundle containing `proofkit-test/SKILL.md`, a Charter reference, a native `mcp.toml` or `mcp.json` fragment, and `setup.json`. `connection.registration` provides the host's registration command and argument array; run that command with those arguments, or merge the fragment through the host's supported MCP configuration workflow. Verify the host can call `inspect_test_scope` and confirm its `projectRoot` before testing. The Skill guides default `core` testing, independent business checks, evidence reporting and repair replay; it still relies on the host's reasoning. See [agent onboarding](docs/agent-integration.md#agent-onboarding) for discovery paths and limits.
 
-Setup always uses an external workspace, including projects with a legacy source-local `.proofkit`. It does not register MCP automatically, load connectors, start applications or assert product correctness. Optional Skill installation preserves custom content and reuses identical files. A generic MCP harness uses `--harness generic`; installing its Skill also requires `--skills-dir` pointing to its documented discovery directory.
+Add `--check-connection` to `agent setup` to launch the emitted MCP server,
+verify its high-level tools and check its source/workspace binding. The result
+appears under `localConnection`; host registration, model behavior and product
+testing remain explicitly unchecked.
+
+Setup always uses an external workspace, including projects with a legacy source-local `.proofkit`. By default it does not register MCP, load connectors, start applications or assert product correctness. `--check-connection` loads trusted connector registration code in the emitted local server, but still starts no application or test. Optional Skill installation preserves custom content and reuses identical files. A generic MCP harness uses `--harness generic`; installing its Skill also requires `--skills-dir` pointing to its documented discovery directory.
 
 `--root` identifies the tested source. For a new project, ProofKit writes its test files to `~/.proofkit/workspaces/<project-name>-<path-hash>/.proofkit/`. Add `--workspace /path/to/test-workspace` to any command to select an explicit workspace. An existing source project's `.proofkit` keeps its legacy layout unless you supply `--workspace`.
 

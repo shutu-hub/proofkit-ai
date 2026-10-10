@@ -10,6 +10,7 @@ import { IntentPlanner, loadCharter } from "@proofkit/planner";
 import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
 import { initProject, loadConfig, resolveProjectContext, resolveWithinWorkspace, scanProject } from "@proofkit/project";
 import { setupAgent, type AgentHarness } from "./agent-setup.js";
+import { checkAgentConnection } from "./agent-connection.js";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -26,10 +27,17 @@ export function createProgram(): Command {
     .option("--install-skill", "install the portable Skill in the host's personal discovery directory")
     .option("--skills-dir <path>", "explicit personal Skill directory; required for generic installation")
     .option("--allow-capability-writes", "emit operator opt-in for trusted test-environment write capabilities")
-    .action(async (options: RootOptions & { harness: AgentHarness; installSkill?: boolean; skillsDir?: string; allowCapabilityWrites?: boolean }) => {
-      console.log(JSON.stringify(await setupAgent({ root: options.root, workspaceRoot: options.workspace,
+    .option("--check-connection", "launch the emitted MCP server and check tools and project binding")
+    .option("--check-timeout-ms <milliseconds>", "total local connection deadline (1000-60000)", "30000")
+    .action(async (options: RootOptions & { harness: AgentHarness; installSkill?: boolean; skillsDir?: string; allowCapabilityWrites?: boolean; checkConnection?: boolean; checkTimeoutMs: string }) => {
+      const timeoutMs = Number(options.checkTimeoutMs);
+      if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000) throw new Error("Agent connection timeout must be 1000–60000 milliseconds");
+      const setup = await setupAgent({ root: options.root, workspaceRoot: options.workspace,
         harness: options.harness, installSkill: options.installSkill, skillsDir: options.skillsDir,
-        allowCapabilityWrites: options.allowCapabilityWrites }), null, 2));
+        allowCapabilityWrites: options.allowCapabilityWrites });
+      const localConnection = options.checkConnection ? await checkAgentConnection(setup, timeoutMs) : undefined;
+      console.log(JSON.stringify({ ...setup, ...(localConnection ? { localConnection } : {}) }, null, 2));
+      if (localConnection?.status === "blocked") process.exitCode = 1;
     });
 
   program.command("init")
