@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { createManualCandidateIntakeOracle } from "./aihr-manual-intake.mjs";
 let z;
 const positiveId = () => z.union([z.number().int().positive(), z.string().regex(/^[1-9][0-9]*$/)]);
 const positiveIdInput = () => z.union([z.number().int().positive(), z.string().min(1)]);
@@ -32,7 +33,8 @@ export function createIntegration({ z: injectedZ, workspaceRoot }) {
       readWorkflowUsageCapability(),
       readBillingUsageCapability(),
     ],
-    oracles: [createResumeCollectionPipelineOracle(state), createOnlineResumePipelineOracle(state), createResumeUploadIdempotencyOracle(state)],
+    oracles: [createResumeCollectionPipelineOracle(state), createOnlineResumePipelineOracle(state), createResumeUploadIdempotencyOracle(state),
+      createManualCandidateIntakeOracle({ z, resolveEnv, positiveString, getOrNull, pollPipeline })],
     preflight: aihrPreflight,
     setup: async ({ runId }) => {
       state.set(runId, { createdAt: new Date().toISOString() });
@@ -46,7 +48,10 @@ async function aihrPreflight({ charter, environment }) {
     .filter((action) => action.kind === "capability")
     .map((action) => action.name);
   const oracleNames = charter.oracles ?? [];
-  const usesAihrBusinessContract = actionNames.some((name) => name.startsWith("aihr."))
+  const manualIntake = oracleNames.includes("aihr.manualCandidateIntake") || charter.actions.some((action) =>
+    action.kind === "captureResponse" && action.response.method === "POST"
+      && new URL(action.response.url).pathname.endsWith("/resume-collection/candidate-intakes"));
+  const usesAihrBusinessContract = manualIntake || actionNames.some((name) => name.startsWith("aihr."))
     || oracleNames.some((name) => name.startsWith("aihr."));
   if (!usesAihrBusinessContract && charter.level === "quick") {
     return {
@@ -84,6 +89,15 @@ async function aihrPreflight({ charter, environment }) {
   const scopeValid = validTestScope(scope);
   const clientItemKey = env("AIHR_PROOFKIT_CLIENT_ITEM_KEY");
   if (!scopeValid) errors.push("AIHR_PROOFKIT_TEST_SCOPE must match proofkit:<scope>");
+  if (manualIntake) {
+    // This API has no client_item_key. Do not invent an idempotency guarantee.
+    for (const name of ["AIHR_PROOFKIT_ENTERPRISE_ID", "AIHR_PROOFKIT_WORKSPACE_ID", "AIHR_PROOFKIT_USER_ID"]) {
+      if (!env(name)) errors.push(`${name} is required for manual candidate intake`);
+    }
+    let jobId;
+    try { jobId = resolveEnv(charter.metadata?.aihrManual?.jobId); } catch { /* Report a configuration gap without environment values. */ }
+    if (!positiveString(jobId)) errors.push("metadata.aihrManual.jobId must identify the isolated target job");
+  }
   if (writeActions.length > 0) {
     if (!clientItemKey) errors.push("AIHR_PROOFKIT_CLIENT_ITEM_KEY is required for write capabilities");
     if (scopeValid && clientItemKey && !scopedClientItemKey(clientItemKey, scope)) errors.push("AIHR_PROOFKIT_CLIENT_ITEM_KEY must be namespaced by AIHR_PROOFKIT_TEST_SCOPE with a nonempty suffix");
@@ -119,6 +133,7 @@ async function aihrPreflight({ charter, environment }) {
       remoteEndpointOverride: env("AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT") === "true",
       integrationRequired: usesAihrBusinessContract,
       writeActionCount: writeActions.length,
+      manualIntake,
       testScopeConfigured: Boolean(scope),
       clientItemKeyNamespaced: Boolean(scopeValid && uploadKeyChecks.length > 0 && uploadKeyChecks.every(Boolean)),
     },

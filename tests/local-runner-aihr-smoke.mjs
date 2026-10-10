@@ -26,6 +26,7 @@ await writeFile(join(root, "package.json"), JSON.stringify({ name: "aihr-isolate
 await mkdir(join(workspaceRoot, ".proofkit", "fixtures"), { recursive: true });
 await mkdir(join(workspaceRoot, ".proofkit", "charters"));
 await copyFile(join(repoRoot, ".proofkit", "integration.mjs"), join(workspaceRoot, ".proofkit", "integration.mjs"));
+await copyFile(join(repoRoot, ".proofkit", "aihr-manual-intake.mjs"), join(workspaceRoot, ".proofkit", "aihr-manual-intake.mjs"));
 await copyFile(join(repoRoot, ".proofkit", "charters", "aihr-resume-upload.yml"), join(workspaceRoot, ".proofkit", "charters", "aihr-resume-upload.yml"));
 await copyFile(join(repoRoot, ".proofkit", "charters", "aihr-resume-upload-idempotency.yml"), join(workspaceRoot, ".proofkit", "charters", "aihr-resume-upload-idempotency.yml"));
 const fixture = Buffer.from("%PDF-1.4 isolated ProofKit gateway fixture\n", "utf8");

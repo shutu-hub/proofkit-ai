@@ -19,7 +19,7 @@ The important distinction is that an upload response is an acknowledgement, not 
 
 The project integration is loaded from `<workspaceRoot>/.proofkit/integration.mjs` (or the path configured by `integration.path`). The module is trusted local test-workspace code and is composed into the same Local Runner lifecycle used by CLI, MCP and CI. It can export capabilities, read-only oracles, and a setup hook that returns cleanup. The Runner supplies a cancellation signal and the configured total run deadline to every run.
 
-The ProofKit repository includes a reference AIHR integration at `.proofkit/integration.mjs`. It can be copied into an external workspace bound to the AIHR source project, so no ProofKit file is needed in the AIHR repository. It calls only gateway endpoints and keeps the domain-specific allowlist in the workspace-owned module. The current capabilities are:
+The ProofKit repository includes a reference AIHR integration at `.proofkit/integration.mjs`, with its sibling `.proofkit/aihr-manual-intake.mjs`. Copy both files to the external workspace's `.proofkit/` directory; the entry module imports the sibling even when a different AIHR Oracle is selected. No ProofKit file is needed in the AIHR repository. The connector calls only gateway endpoints and keeps the domain-specific allowlist in the workspace-owned module. The current capabilities are:
 
 | Capability | Side effect | Evidence returned |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ The ProofKit repository includes a reference AIHR integration at `.proofkit/inte
 | `aihr.readWorkflowUsage` | read | immutable workflow facts and stage/result counts |
 | `aihr.readBillingUsage` | read | billing usage total and exact workflow-run match count |
 
-Each capability declares an input schema, output schema, environment allowlist, timeout and evidence projection. Raw resume text, cookies, authorization headers and real candidate identifiers never enter the default ProofKit evidence directory. The factory receives ProofKit's schema runtime, so a project integration does not need a hidden `zod` dependency. Integration cleanup runs in reverse registration order after the adapter and project process close; a cleanup error prevents a green verdict.
+Each capability declares an input schema, output schema, environment allowlist, timeout and evidence projection. The connector projects opaque business IDs and selected scalar facts, excluding resume text, contact details, cookies and authorization headers. Surface screenshots and snapshots can still retain visible page content, so use synthetic inputs. The factory receives ProofKit's schema runtime, so a project integration does not need a hidden `zod` dependency. Integration cleanup runs in reverse registration order after the adapter and project process close; a cleanup error prevents a green verdict.
 
 Both pipeline wait capabilities use one monotonic deadline across polling intervals, HTTP requests and response bodies. `maxWaitMs` expiring returns `passed: null` and `terminal: false`; evidence and `observationCount` retain only fully completed observation rounds. A partially read file/relation/assessment round cannot supply a terminal verdict. User cancellation rejects with the original signal reason, including a non-Error reason, and releases the polling timer and listeners. Observed gateway errors still propagate as errors. These capabilities bound their own wait; the independent Oracle performs a separate read under the Runner's signal and total deadline.
 
@@ -70,17 +70,107 @@ AIHR legally replaces current relation and assessment file facts during attachme
 
 Use an isolated candidate/job and pause attachment advancement during online acceptance. A concurrent upload before the workflow exposes an attachment identity cannot yet be distinguished from an incorrect current-file binding by these latest-state endpoints. Billing idempotency and full lifecycle coverage remain separate acceptance obligations.
 
+### Manual candidate intake
+
+The separate `aihr.manualCandidateIntake` Oracle follows the existing manual
+entry flow: active-job validation, file save with `manual_upload`, candidate
+creation/version append, explicit job binding, optional talent-pool insertion,
+and forced extraction enqueue. It requires neither a collection run nor an
+online workflow. An enqueue error can return HTTP 503 after business objects
+have been created; this API provides no `client_item_key` contract, atomic
+rollback or proved zero-write retry guarantee.
+
+Use a single synthetic file with `setInputFiles`, then `captureResponse` for
+the exact POST `/api/v1/resume-collection/candidate-intakes`. Configure these
+response projections with `type: id`:
+
+| Capture field | JSON Pointer |
+| --- | --- |
+| `fileId` | `/data/resume_file_id` |
+| `candidateId` | `/data/candidate_id` |
+| `versionId` | `/data/resume_version_id` |
+| `jobId` | `/data/job_id` |
+| `relationId` | `/data/job_candidate_id` |
+
+For a Charter whose file selection and capture are its second and third
+actions, configure:
+
+```yaml
+oracles: [aihr.manualCandidateIntake]
+metadata:
+  aihrManual:
+    fileStepId: step-002
+    captureStepId: step-003
+    jobId: $env:AIHR_PROOFKIT_JOB_ID
+    maxWaitMs: 60000
+    pollIntervalMs: 1000
+```
+
+Actual page entry, controls and a positive assertion must be discovered from
+the running AIHR page; this metadata is not a ready-made live UI Charter.
+The Oracle binds the passed file step's SHA-256 to a passed, unique,
+action-window-associated POST response with status 200/201. It rejects missing
+or inconsistent action receipts before any business GET. Replays capture new
+submission IDs and preserve the original fixture identity.
+
+All five readers use captured identities, never IDs inferred from another
+reader's response:
+
+| Gateway resource | Required facts |
+| --- | --- |
+| `GET /resume-collection/files/:fileId` | file ID, SHA-256, `manual_upload`, candidate ID, extraction and parse state |
+| `GET /candidates/:candidateId` | candidate ID and `profile.current_resume_version_id` |
+| `GET /candidates/:candidateId/resume-versions` | exactly one captured version, file ID, SHA-256 and `is_current` |
+| `GET /jobs/:jobId/candidates/:candidateId` | relation ID, job/candidate IDs and current file/version |
+| `GET /assessments/jobs/:jobId/candidates/:candidateId` | assessment ID, job/candidate/file/relation IDs, evaluation and task state |
+
+Paths above are relative to the configured `/api/v1` gateway base. Candidate
+detail does not expose the current file or SHA; those come from the version
+reader. Success requires extraction `done`, parse `matched`, and both
+assessment `status` and `task_status` equal to `success`, with all identities
+and digests present and agreeing. While parsing is pending, an older
+assessment does not prove a defect. Missing identities, pending/retry states,
+gateway errors and incomplete observation rounds remain inconclusive. A
+reader's status or digest without its own identity cannot confirm a defect.
+
+AIHR `AppendResumeVersion` legally reuses the version ID for an equal SHA and
+preserves source history. A version's historical `source_channel=boss` can
+therefore be valid. It also updates the version's file binding: another
+upload can change the file without changing the version ID. A changed
+version file or current version ends this scope as inconclusive, rather than
+confirming an obsolete-file defect. An evidenced wrong digest remains a
+failure. The five reads are non-atomic; use an isolated candidate/job and
+prevent concurrent uploads. Latest-state APIs do not prove historical
+terminal state, complete business causality, billing or cleanup.
+
+The preflight requires `local`/`test`, a `proofkit:<scope>` test scope,
+enterprise/workspace/user actor headers and a positive target job ID. These
+are configuration checks, not proof of deployment isolation or valid
+credentials. A manual capture triggers preflight even at `quick`. The
+connector does not automatically delete business records; provisioning and
+cleanup must use the target environment's approved test-scope procedure.
+
+`pnpm test:smoke:manual-intake` uses the actual copied connector, real Chrome,
+an isolated Electron profile and an AIHR-shaped loopback fixture through MCP.
+Set `PROOFKIT_ELECTRON_PATH` to an installed Electron executable. Its 28
+Missions cover fresh IDs, eventual worker success, three seeded digest or
+relation defects with six repair replays, pending/retry/superseded states,
+same-SHA version rebinding and unavailable readers. It checks source
+immutability and unselected response fields. This validates the connector
+and execution contract; live AIHR UI, parsing workers and billing acceptance
+remain open.
+
 ## Adapter split
 
 The Web/Electron adapter owns platform interaction: navigation, session selection, opening an online resume, downloading or generating the artifact, upload initiation and visible progress. The AIHR integration owns business observation and test data cleanup. The Runner joins both streams through one `runId` and one evidence timeline.
 
-An AIHR integration may also be loaded for a surface-only quick check. When a quick Charter contains no AIHR Capability action and no AIHR business Oracle, the connector records a passed `preflight.json` with `integrationRequired: false` and does not require `AIHR_PROOFKIT_TEST_SCOPE` or a gateway endpoint. Core and release business Charters, and any Charter that names an AIHR Capability or Oracle, continue through the isolation and scope preflight before the surface is connected.
+An AIHR integration may also be loaded for a surface-only quick check. When a quick Charter contains no AIHR Capability action, AIHR business Oracle or manual intake capture, the connector records a passed `preflight.json` with `integrationRequired: false` and does not require `AIHR_PROOFKIT_TEST_SCOPE` or a gateway endpoint. Core and release business Charters, and any Charter that names an AIHR Capability/Oracle or captures manual intake, continue through the isolation and scope preflight before the surface is connected.
 
 This split lets the same integration be used from the CLI, MCP and CI. MCP must not receive a generic database or shell tool; it can call only the registered capability names with validated inputs. The default MCP profile starts no project command and accepts only loopback or configured test origins.
 
 ## Implementation order
 
-1. Run `proofkit init --root <AIHR-source> --workspace <external-test-workspace>`, then copy or adapt the reference `.proofkit/integration.mjs` in that external workspace.
+1. Run `proofkit init --root <AIHR-source> --workspace <external-test-workspace>`, then copy or adapt both `.proofkit/integration.mjs` and `.proofkit/aihr-manual-intake.mjs` in that external workspace.
 2. Use the ordinary upload Charter to validate `collection_run → file → extract → parse → candidate → job → assessment`.
 3. Add or refine read-only observers for billing and retry/idempotency facts against a dedicated test workspace.
 4. Add `seedTestCandidate` and `resetTestScope` only after the test workspace and cleanup contract are explicit.

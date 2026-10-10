@@ -754,6 +754,7 @@ async function createIntegrationProject(fixtureBytes?: Buffer): Promise<string> 
   await mkdir(join(root, ".proofkit"), { recursive: true });
   const source = resolve(dirname(fileURLToPath(import.meta.url)), "../../../.proofkit/integration.mjs");
   await copyFile(source, join(root, ".proofkit", "integration.mjs"));
+  await copyFile(resolve(dirname(source), "aihr-manual-intake.mjs"), join(root, ".proofkit", "aihr-manual-intake.mjs"));
   if (fixtureBytes) {
     await mkdir(join(root, ".proofkit", "fixtures"), { recursive: true });
     await writeFile(join(root, ".proofkit", "fixtures", "resume.pdf"), fixtureBytes);

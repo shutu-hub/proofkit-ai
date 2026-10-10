@@ -157,10 +157,16 @@ navigation-origin policy. Mobile capture is currently blocked.
 
 Replay preserves fixture input identity but captures a fresh business ID.
 For AIHR's manual intake, the verified POST is
-`/api/v1/resume-collection/candidate-intakes`, with response fields including
-`resume_file_id`, `candidate_id` and `job_id`. Its independent reader and
-terminal invariants must follow that actual flow; a manual intake must not be
-accepted by querying an unrelated online collection workflow.
+`/api/v1/resume-collection/candidate-intakes`, returning file, candidate,
+resume-version, job and relation IDs. The workspace-owned
+`aihr.manualCandidateIntake` Oracle binds all five captured IDs and the selected
+file digest to independent readers, then waits for parsing and assessment/task
+success. Copy both reference connector files to the external workspace.
+See [the manual intake contract](aihr-resume-integration.md#manual-candidate-intake)
+for exact field pointers, metadata, isolation checks and latest-state limitations.
+Discover the actual page actions and a positive assertion before submitting the
+Charter; a manual intake must not be accepted by querying an unrelated online
+collection workflow.
 
 For repair verification, replay the failed Mission after the application change. The new Mission stores `replayOfMissionId`; once it finishes, `get_mission_evidence` includes a comparison with the source Mission. `compare_missions` reads the same comparison directly. It requires a direct replay, the same project/workspace and saved Charter or suite scope, a confirmed baseline product finding linked to a materialized business source artifact, and a complete passing candidate with its own independent source facts. Primary, required replay, and declared negative Runs are paired by Charter, surface and run kind. A missing Run, changed scope, unmaterialized artifact or unfinished candidate is `inconclusive`; a repeated evidenced Oracle failure is `defect-reproduced`. `verified-in-scope` does not identify which source change fixed the symptom.
 

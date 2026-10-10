@@ -24,9 +24,14 @@ ProofKit 不复制 AIHR 业务代码，也不直接开放数据库、任意 SQL�
 
 ProofKit 的 `setInputFiles` 可以直接操作这类隐藏文件控件：将脱敏样本放在
 外部工作区 `.proofkit/fixtures/`，通过 `inspect_surface` 获取唯一定位线索，
-补齐表单、提交、正向 UI 断言和独立业务 Oracle。当前上传 smoke 已验证真实
-Web/Electron 文件传输与同输入回放，但尚未完成该 AIHR 页面实测，也尚未实现
-此手动录入场景专用的业务连接器。已有 capability 上传的环境变量样本路径
+补齐表单、提交、正向 UI 断言和独立业务 Oracle。手动录入专用
+`aihr.manualCandidateIntake` 已实现，通过本次提交的五个身份和文件 SHA-256
+核对文件、候选人、版本、岗位关系及评估 worker 终态。复制连接器时需同时复制
+`.proofkit/integration.mjs` 与 `.proofkit/aihr-manual-intake.mjs`。
+真实 Web/Electron 隔离样例已验证执行、缺陷注入与修复回放；真实 AIHR 页面与
+worker 验收尚未完成。同摘要版本可以合法复用 ID 并改绑文件，这种当前状态变化
+返回 `inconclusive`；缺失 reader 身份也不能确认缺陷。接口非原子且不能证明
+历史终态，必须隔离候选人/岗位并避免并发上传。已有 capability 上传的环境变量样本路径
 仍按该连接器契约使用，不与 `setInputFiles` 的工作区路径规则混用。
 
 ### 桌面端采集/上传
@@ -167,7 +172,7 @@ Set-Location $proofkitRoot
 pnpm --filter @proofkit/cli dev -- doctor --root $sourceRoot --workspace $testWorkspace
 ```
 
-`doctor` 已识别 AIHR 的 Web、Electron 和后端入口；外部工作区的连接器已成功加载，提供 9 个受控 capability 和 3 个业务 Oracle。三个参考 Charter 也已复制到外部工作区，但尚未登记为自然语言可执行目录用例。以上操作不启动 AIHR、不访问业务接口，也不修改 AIHR 源码。
+此前的外部工作区快照中，`doctor` 已识别 AIHR 的 Web、Electron 和后端入口，连接器已加载 9 个受控 capability 和 3 个业务 Oracle。当前参考连接器另增加了 `aihr.manualCandidateIntake`，共 4 个 Oracle；使用新版时需一起复制 `.proofkit/integration.mjs` 与 `.proofkit/aihr-manual-intake.mjs`，再重新运行 `doctor`。三个参考 Charter 尚未登记为自然语言可执行目录用例。上述静态检查不启动 AIHR、不访问业务接口，也不修改 AIHR 源码。
 
 真实业务验收还需要独立的 local/test 网关、异步 worker、脱敏 PDF、测试租户与账号，以及真实页面断言。先在 AIHR 仓库的终端启动隔离的桌面应用，并开放仅监听本机的 CDP 端口：
 
@@ -187,7 +192,9 @@ pnpm test
 
 脱敏 PDF 放在 `$testWorkspace\fixtures\proofkit-resume.pdf`；连接器把 `AIHR_PROOFKIT_FIXTURE_PATH` 解析到外部测试工作区，避免在 AIHR 源码中加入测试文件。当前普通上传 Charter 只定义网关 capability 和业务 Oracle，`assertions: []`。它可以作为连接器合约参考，却不能证明页面点击或 Electron 简历抓取成功。待真实页面路径与稳定断言核实后，应在外部工作区补充对应的 UI 动作/断言、登记 `core` Charter，再通过 MCP `run_test` 或 CLI Mission 执行。
 
-任何真实上传都会写入隔离测试环境。执行前需要把外部工作区的 `policies.sideEffects` 设置为 `allow`，Charter 继续声明 `sideEffectPolicy: allow`，并在 CLI 运行时显式传入 `--allow-capability-writes`；MCP 则由服务启动者设置 `PROOFKIT_ALLOW_CAPABILITY_WRITES=1`。连接器的 preflight 会解析当前 Charter 每个上传动作的实际幂等键并检查其属于 `AIHR_PROOFKIT_TEST_SCOPE`；上传 capability 在请求前再次校验，缺少变量或跨 scope 的键不会写入网关。只有 UI 断言和独立业务 Oracle 都有证据并通过，才可认定核心链路通过；Run 结果保存在 `$testWorkspace\.proofkit\runs\<runId>\`。
+真实上传应使用隔离测试环境。外部工作区的 `policies.sideEffects` 和 Charter 的 `sideEffectPolicy` 都需设置为 `allow`。通过 capability 上传时，CLI 还需 `--allow-capability-writes`，MCP 则由服务启动者设置 `PROOFKIT_ALLOW_CAPABILITY_WRITES=1`。连接器的 preflight 会解析这些上传 capability 的幂等键并检查其属于 `AIHR_PROOFKIT_TEST_SCOPE`；请求前再次校验，缺少变量或跨 scope 的键不会写入网关。
+
+手动录入使用页面 `setInputFiles` 与 `captureResponse`，其 API 没有 `client_item_key` 幂等契约，不能套用上述 capability 的重试保证。它需要独立的测试 scope、actor 和岗位配置，通过本次提交的五个身份核对业务结果。具体配置见 [手动录入契约](aihr-resume-integration.md#manual-candidate-intake)。只有 UI 断言和独立业务 Oracle 都有证据并通过，才可认定核心链路通过；Run 结果保存在 `$testWorkspace\.proofkit\runs\<runId>\`。
 
 ## 下一阶段
 
@@ -195,4 +202,4 @@ pnpm test
 2. 在真实隔离环境中验证 `collection_run → file → extract → parse → assessment`。
 3. 增加重试、重复提交、计费幂等和取消恢复场景。
 4. 在外部工作区登记经过验证的 Charter，让自然语言请求直接选中它，不向 AIHR 源码写入 ProofKit 文件。
-5. 继续改进基于代码/路由的测试建议，但所有写操作仍由 allowlist capability 承载。
+5. 继续改进基于代码/路由的测试建议，保持类型化动作、capability allowlist 和副作用权限校验。

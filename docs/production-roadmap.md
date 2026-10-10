@@ -129,10 +129,19 @@ response fields, and the source fixture is unchanged. This validates transport,
 identity, evidence and comparison, not live AIHR parsing or worker behavior.
 
 The actual AIHR manual-candidate intake POST returns file/candidate/version/job
-identities and can create business objects before a later enqueue failure.
-Its Oracle must follow that verified flow and its existing readers; it cannot
-require an unrelated online collection workflow. A live isolated acceptance
-Charter and terminal business connector for this path remain open.
+and relation identities and can create business objects before a later enqueue
+failure. Its workspace-owned `aihr.manualCandidateIntake` Oracle now follows
+those captured identities through the existing five readers, verifies file
+and version digests, and requires parsing plus assessment/task success. It
+does not require an online workflow or invent a client-item idempotency key.
+Missing reader identities, worker retries, gateway gaps and superseded current
+state remain inconclusive. Same-SHA version ID reuse can legally change the
+version's file, so that observation cannot confirm a product defect. The
+28-Mission real Chrome/Electron fixture smoke copies the actual connector,
+rejects three seeded digest/relation defects, verifies six direct repair
+replays and checks source immutability. A live isolated UI Charter, real worker
+acceptance, billing and cleanup remain open; non-atomic latest-state readers
+cannot prove historical terminal state or concurrent business causality.
 
 ## Phase 4: failure diagnosis and repair loop
 
