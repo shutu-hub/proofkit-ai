@@ -135,6 +135,12 @@ workflow 完成事实必须同时匹配 `run_id`、`candidate.id`、`job.id` 和
 
 ## 运行前提
 
+### 2026-10-10 本地只读验收检查
+
+对 `D:\code\Python\AIHR-Microservices` 与外部 `aihr-local-workspace` 执行环境检查时，`http://localhost:5174/` 返回 200，但 Windows 监听进程的代码路径属于 `D:/tmp/aihr-livekit-interview-voice`，因此 `source-binding` 和整体环境状态为 `blocked`；页面可达不能代替当前 checkout 的验收。首次显式 5 秒检查在冷进程查询时仅得到 `incomplete`，15 秒检查确认了不同 checkout；环境检查默认截止时间因此调整为 10 秒，再次使用默认值约 4.2 秒得到相同的 `blocked` 结论。检查只读取本地状态，未执行 AIHR 业务写入。
+
+同一外部工作区当前没有登记的 Charter 或 workflow inventory。聚焦 `resume` 的有界源码扫描显示 195 个路由候选、零个已映射，且 `inventory.truncated=true`；这不是全项目路由总数或业务覆盖率。真实核心测试需要先启动与所选源码一致的隔离 Web/Electron 和后端环境，核实页面控件及业务 reader，再把经过验证的 Charter 登记到外部工作区。当前不能把参考上传 Charter 的接口验证称为 Web/Electron 端到端通过。
+
 在隔离 test/local 环境设置：
 
 ```powershell

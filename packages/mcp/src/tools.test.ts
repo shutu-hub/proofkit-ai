@@ -82,7 +82,7 @@ describe("ProofKit MCP tools", () => {
     try {
       const response = await client.callTool({ name: "inspect_test_environment", arguments: {} });
       expect(JSON.parse(textContent(response))).toMatchObject({ status: "incomplete", testVerdict: "not-asserted" });
-      expect(runner.inspectEnvironment).toHaveBeenCalledWith({ surface: "web", timeoutMs: 5000 }, expect.any(AbortSignal));
+      expect(runner.inspectEnvironment).toHaveBeenCalledWith({ surface: "web", timeoutMs: 10000 }, expect.any(AbortSignal));
       expect((await client.callTool({ name: "inspect_test_environment", arguments: { timeoutMs: 15001 } })).isError).toBe(true);
       expect((await client.callTool({ name: "inspect_test_environment", arguments: { surface: "mobile" } })).isError).toBe(true);
       expect(runner.inspectEnvironment).toHaveBeenCalledTimes(1);

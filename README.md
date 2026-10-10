@@ -110,10 +110,10 @@ MCP clients use `inspect_test_scope` for the same view, then `inspect_surface` t
 Observe configured endpoints before attaching to a page:
 
 ```bash
-proofkit environment --root /path/to/your/project --surface electron --timeout-ms 5000
+proofkit environment --root /path/to/your/project --surface electron --timeout-ms 10000
 ```
 
-MCP uses `inspect_test_environment({ surface: "electron", timeoutMs: 5000 })`. Both paths use the same Local Runner and save a JSON artifact plus SHA-256 under the test workspace's `.proofkit/inspections/`. Checks share a total deadline of 100–15000 ms and probe at most eight declared backend health endpoints. The command returns exit code 0 for `checks-passed`, 1 for `blocked`, or 2 for `incomplete`. These are environment observations with `testVerdict: not-asserted`; inspect `notChecked` before moving on to page inspection and business testing. HTTP probes use GET, retain the status and endpoint without its query or fragment, do not follow redirects, and finish at response headers without retaining response bodies, headers or raw network errors. No app, browser or connector operation is started by the inspection; service creation still loads trusted connector registration code.
+MCP uses `inspect_test_environment({ surface: "electron", timeoutMs: 10000 })`. Both paths use the same Local Runner and save a JSON artifact plus SHA-256 under the test workspace's `.proofkit/inspections/`. Checks share a total deadline of 100–15000 ms (default 10000 ms) and probe at most eight declared backend health endpoints. The command returns exit code 0 for `checks-passed`, 1 for `blocked`, or 2 for `incomplete`. These are environment observations with `testVerdict: not-asserted`; inspect `notChecked` before moving on to page inspection and business testing. HTTP probes use GET, retain the status and endpoint without its query or fragment, do not follow redirects, and finish at response headers without retaining response bodies, headers or raw network errors. No app, browser or connector operation is started by the inspection; service creation still loads trusted connector registration code.
 
 Plan and review a test:
 

@@ -85,7 +85,7 @@ export function createProgram(): Command {
     .description("Observe configured HTTP endpoints and source association without starting the app or running a test")
     .option("--root <path>", "project root", ".")
     .option("--surface <surface>", "web or electron", "web")
-    .option("--timeout-ms <milliseconds>", "total observation deadline (100-15000)", "5000")
+    .option("--timeout-ms <milliseconds>", "total observation deadline (100-15000)", "10000")
     .action(async (options: RootOptions & { surface: string; timeoutMs: string }) => {
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       const inspection = await runner.inspectEnvironment({ surface: options.surface as "web" | "electron", timeoutMs: Number(options.timeoutMs) });

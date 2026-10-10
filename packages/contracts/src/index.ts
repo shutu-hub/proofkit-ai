@@ -315,7 +315,7 @@ export type HttpEndpointObservation = z.infer<typeof HttpEndpointObservationSche
 
 export const EnvironmentInspectionInputSchema = z.object({
   surface: z.enum(["web", "electron"]).default("web"),
-  timeoutMs: z.number().int().min(100).max(15_000).default(5_000),
+  timeoutMs: z.number().int().min(100).max(15_000).default(10_000),
 });
 export type EnvironmentInspectionInput = z.input<typeof EnvironmentInspectionInputSchema>;
 
