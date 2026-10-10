@@ -1,4 +1,4 @@
-import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionProofClassification, type MissionResult, type MissionRunResult, type Observation, type TaskNode, type TestMission, type WorkflowExecutionCoverage } from "@proofkit/contracts";
+import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, SourceStateSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionProofClassification, type MissionResult, type MissionRunResult, type Observation, type TaskNode, type TestMission, type WorkflowExecutionCoverage } from "@proofkit/contracts";
 import type { SuiteScopeSummary } from "./suite-verifier.js";
 
 type RunKind = MissionRunResult["runKind"];
@@ -75,6 +75,7 @@ export function projectMissionResult(mission: TestMission, options: {
     scope: {
       surfaces: mission.plan.executionProfile.surfaceMatrix,
       charterCount: mission.suite?.charters.length ?? (mission.charter ? 1 : 0),
+      sourceStability: missionSourceStability(mission),
       suiteId: mission.suite?.suiteId,
       uncoveredCharterIds: options.suiteScope?.uncoveredCharterIds ?? [],
       workflowInventory: mission.workflowInventoryInspection,
@@ -110,6 +111,15 @@ export function projectMissionResult(mission: TestMission, options: {
     comparison: options.comparison,
     comparisonUnavailable: options.comparisonUnavailable,
   });
+}
+
+function missionSourceStability(mission: TestMission): "stable" | "changed" | "unverified" {
+  const source = SourceStateSchema.safeParse([...mission.observations].reverse().find((item) => item.kind === "project.source-state")?.data);
+  const final = SourceStateSchema.safeParse([...mission.observations].reverse().find((item) => item.kind === "project.source-state-final")?.data);
+  if (!source.success || !final.success || !source.data.complete || !final.data.complete
+    || source.data.method !== "git" || final.data.method !== "git"
+    || !source.data.headSha || !final.data.headSha || !source.data.worktreeSha256 || !final.data.worktreeSha256) return "unverified";
+  return source.data.headSha === final.data.headSha && source.data.worktreeSha256 === final.data.worktreeSha256 ? "stable" : "changed";
 }
 
 function projectRun(mission: TestMission, task: TaskNode | undefined, observation: Observation | undefined,

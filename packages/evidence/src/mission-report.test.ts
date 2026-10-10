@@ -44,6 +44,27 @@ async function file(path: string, content = "fact"): Promise<string> {
 }
 
 describe("Mission report", () => {
+  it("downgrades a saved pass when the tested Git source changed during execution", async () => {
+    const workspace = await root();
+    const path = join(workspace, ".proofkit", "runs", "run-1", "artifacts", "fact.json");
+    await file(path);
+    const evidence = ref("run-1/artifacts/fact.json", createHash("sha256").update("fact").digest("hex"));
+    const input = result(workspace, [evidence]);
+    input.verdict = "passed";
+    input.proofClassification = explicitProof(true);
+    input.scope.sourceStability = "changed";
+    const snapshot = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(snapshot.result).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("source changed during this Mission") });
+    const markup = await readFile(snapshot.path, "utf8");
+    expect(markup).toContain("Saved pass · source changed during execution");
+    expect(markup).toContain("Git source stability during this Mission: changed");
+    input.verdict = "failed";
+    const failed = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(failed.result).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("source changed during this Mission") });
+  });
+
   it("writes escaped static snapshots without changing saved acceptance or original state", async () => {
     const workspace = await root();
     const missionPath = await file(join(workspace, ".proofkit", "missions", "mission-report.json"), "original Mission");

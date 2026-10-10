@@ -1428,6 +1428,8 @@ export const MissionResultSchema = z.object({
   scope: z.object({
     surfaces: z.array(MissionSurfaceSchema),
     charterCount: z.number().int().nonnegative(),
+    /** Compare complete Git fingerprints captured before and after this Mission. */
+    sourceStability: z.enum(["stable", "changed", "unverified"]).optional(),
     suiteId: CatalogIdSchema.optional(),
     uncoveredCharterIds: z.array(CatalogIdSchema),
     workflowInventory: WorkflowInventoryInspectionSchema.optional(),

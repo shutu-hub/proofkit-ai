@@ -131,6 +131,9 @@ export class MissionReportStore {
 export function auditMissionVerdict(result: MissionResult, integrity: MissionEvidenceIntegrity): Pick<MissionResult, "testVerdict" | "testVerdictReason"> {
   const saved = result.verdict ?? "not-asserted";
   if (saved !== "passed" && saved !== "failed") return { testVerdict: saved };
+  if (result.scope.sourceStability === "changed") {
+    return { testVerdict: "inconclusive", testVerdictReason: "The tested Git source changed during this Mission; rerun the same scope against a stable checkout before claiming current acceptance or a product defect." };
+  }
   const proof = result.proofClassification;
   if (saved === "passed" && result.level !== "quick"
     && (proof?.status !== "explicit" || !proof.requiredBusinessRuns
@@ -189,13 +192,16 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
       || result.proofClassification.findingsLinkedToFailingBusiness !== result.confirmedProductFindings);
   const evidenceUnverified = (result.verdict === "passed" || result.verdict === "failed")
     && result.testVerdict === "inconclusive" && !businessPassUnverified && !businessFailureUnverified;
-  const currentOutcomeLabel = businessPassUnverified ? "Saved pass · current business proof unverified"
+  const currentOutcomeLabel = (result.verdict === "passed" || result.verdict === "failed") && result.scope.sourceStability === "changed"
+    ? `Saved ${result.verdict === "passed" ? "pass" : "failure"} · source changed during execution`
+    : businessPassUnverified ? "Saved pass · current business proof unverified"
     : businessFailureUnverified ? "Saved failure · current business proof unverified"
       : evidenceUnverified ? `Saved ${result.verdict === "passed" ? "pass" : "failure"} · current evidence unverified` : outcomeLabel(outcome);
   const limits = [
     result.evidenceIntegrity ? `Current presented evidence integrity: ${result.evidenceIntegrity.status}; ${result.evidenceIntegrity.references.intact}/${result.evidenceIntegrity.references.total} reference(s) verified at ${result.evidenceIntegrity.checkedAt}. This does not change the saved acceptance verdict.` : undefined,
     result.acceptanceEvidenceIntegrity ? `Current Mission evidence integrity: ${result.acceptanceEvidenceIntegrity.status}; ${result.acceptanceEvidenceIntegrity.references.intact}/${result.acceptanceEvidenceIntegrity.references.total} saved reference(s) verified, ${result.acceptanceEvidenceIntegrity.references.omitted} beyond the audit limit. This does not prove whole-project coverage or application state after the Run.` : undefined,
     result.testVerdictReason,
+    result.scope.sourceStability ? `Git source stability during this Mission: ${result.scope.sourceStability}. This fingerprint excludes generated output and does not attest served bytes.` : undefined,
     proofUnverified ? `Current business proof classification is unverified: ${result.proofClassification!.legacyOracles} saved Oracle result(s) lack a verification kind, ${result.proofClassification!.unavailableRuns} Run(s) could not be read, and ${result.proofClassification!.omittedRuns} Run(s) exceeded the audit bound. Rerun affected scenarios before treating the saved business verdict or finding as current proof.` : undefined,
     result.proofClassification?.requiredBusinessRuns !== undefined ? `Required Run business proof: ${result.proofClassification.requiredRunsWithPassingBusiness ?? 0}/${result.proofClassification.requiredBusinessRuns} primary/replay Run(s) have a classified passing business Oracle.` : undefined,
     result.confirmedProductFindings ? `Confirmed product finding proof: ${result.proofClassification?.findingsLinkedToFailingBusiness ?? 0}/${result.confirmedProductFindings} finding(s) link to a classified failing business Oracle in the same Run.` : undefined,

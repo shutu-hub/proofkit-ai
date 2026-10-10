@@ -24,6 +24,20 @@ function observed(data: Record<string, unknown> = {}, charterId?: string): Obser
 }
 
 describe("Mission result projection", () => {
+  it("reports whether complete Git source fingerprints stayed stable during execution", async () => {
+    const mission = await fixture();
+    const source = (kind: string, digest: string) => ObservationSchema.parse({
+      observationId: kind, source: "planner", kind,
+      data: { method: "git", complete: true, headSha: "a".repeat(40), worktreeSha256: digest, capturedAt: now },
+      observedAt: now,
+    });
+    expect(projectMissionResult(mission, options).scope.sourceStability).toBe("unverified");
+    mission.observations = [source("project.source-state", "b".repeat(64)), source("project.source-state-final", "b".repeat(64))];
+    expect(projectMissionResult(mission, options).scope.sourceStability).toBe("stable");
+    mission.observations[1] = source("project.source-state-final", "c".repeat(64));
+    expect(projectMissionResult(mission, options).scope.sourceStability).toBe("changed");
+  });
+
   it("preserves the acceptance verdict even when every saved Run and task is green", async () => {
     const mission = await fixture();
     mission.plan.graph.tasks.forEach((task) => { task.status = "passed"; task.input.privateToken = "INPUT_SECRET"; task.output = "OUTPUT_SECRET"; });

@@ -66,6 +66,7 @@ describe("LocalRunnerService", () => {
     expect(completed.repairSuggestions[0]?.changes[0]).toContain("confirmed.ts");
     expect(completed.repairSuggestions[0]?.changes[0]).not.toContain("unverified.ts");
     const intact = await service.missionEvidence(completed.missionId);
+    expect(intact.sourceStability).toBe("unverified");
     expect(intact.diagnosticSupport).toMatchObject({
       diagnosis: { status: "supported" }, repairSuggestions: [{ status: "supported" }],
     });

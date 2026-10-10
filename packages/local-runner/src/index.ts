@@ -639,6 +639,7 @@ export class LocalRunnerService {
     diagnosis?: TestMission["diagnosis"];
     repairSuggestions: TestMission["repairSuggestions"];
     targetBindings: Array<{ runId: string; surface: string; binding: TargetBinding }>;
+    sourceStability: "stable" | "changed" | "unverified";
     sourceState?: SourceState;
     finalSourceState?: SourceState;
     comparison?: MissionComparison;
@@ -739,6 +740,7 @@ export class LocalRunnerService {
         const binding = TargetBindingSchema.safeParse(observation.data.targetBinding);
         return binding.success ? [{ runId: observation.data.runId, surface: observation.data.surface, binding: binding.data }] : [];
       }),
+      sourceStability: summary.scope.sourceStability ?? "unverified",
       ...(sourceState.success ? { sourceState: sourceState.data } : {}),
       ...(finalSourceState.success ? { finalSourceState: finalSourceState.data } : {}),
       ...(comparison ? { comparison } : {}),
