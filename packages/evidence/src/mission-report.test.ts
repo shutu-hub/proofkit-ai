@@ -21,6 +21,7 @@ async function root(): Promise<string> {
 function result(workspaceRoot: string, evidence: EvidenceRef[] = []): MissionResult {
   return MissionResultSchema.parse({ schemaVersion: "1", missionId: "mission-report", projectRoot: "/source", workspaceRoot, intent: "Test resume", status: "completed", running: false, verdict: "inconclusive", level: "core", revision: 7, updatedAt: now, generatedAt: now,
     scope: { surfaces: ["web"], charterCount: 1, uncoveredCharterIds: [] }, tasks: { total: 3, settled: 3, failed: 0, blocked: 0, skipped: 0 }, expectedRuns: 1, observedRuns: 1,
+    executionAudit: { status: "complete", expectedSlots: 1, matchedSlots: 1, unexpectedObservations: 0, issues: [], omittedIssues: 0 },
     runs: [{ title: "Resume", surface: "web", runKind: "primary", runId: "run-1", verdict: "passed", evidence, omittedEvidence: 0 }], omittedRunResults: 0, findings: [], omittedFindings: 0, confirmedProductFindings: 0, repairSuggestions: [], omittedRepairSuggestions: 0 });
 }
 
@@ -44,6 +45,17 @@ async function file(path: string, content = "fact"): Promise<string> {
 }
 
 describe("Mission report", () => {
+  it("does not accept a saved pass without a recomputed execution-slot audit", async () => {
+    const workspace = await root();
+    const input = result(workspace);
+    input.verdict = "passed";
+    input.proofClassification = explicitProof(true);
+    delete input.executionAudit;
+    const snapshot = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(snapshot.result).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("execution Runs") });
+  });
+
   it("downgrades a saved pass when the tested Git source changed during execution", async () => {
     const workspace = await root();
     const path = join(workspace, ".proofkit", "runs", "run-1", "artifacts", "fact.json");

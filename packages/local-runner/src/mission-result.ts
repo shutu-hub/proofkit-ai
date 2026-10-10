@@ -1,4 +1,4 @@
-import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, ReplayConsistencySchema, SourceStateSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionProofClassification, type MissionResult, type MissionRunResult, type MissionSurface, type Observation, type ReplayConsistency, type TaskNode, type TestMission, type WorkflowExecutionCoverage } from "@proofkit/contracts";
+import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, ReplayConsistencySchema, SourceStateSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionExecutionAudit, type MissionProofClassification, type MissionResult, type MissionRunResult, type MissionSurface, type Observation, type ReplayConsistency, type TaskNode, type TestMission, type WorkflowExecutionCoverage } from "@proofkit/contracts";
 import type { SuiteScopeSummary } from "./suite-verifier.js";
 
 type RunKind = MissionRunResult["runKind"];
@@ -18,6 +18,7 @@ export function projectMissionResult(mission: TestMission, options: {
   comparison?: MissionComparison;
   comparisonUnavailable?: string;
   proofClassification?: MissionProofClassification;
+  executionAudit?: MissionExecutionAudit;
 }): MissionResult {
   const observations = mission.observations.filter((item) => item.kind === "surface.run");
   const indexed = new Map<string, Observation[]>();
@@ -98,6 +99,7 @@ export function projectMissionResult(mission: TestMission, options: {
     },
     expectedRuns: surfaceTasks.length,
     observedRuns: observations.length,
+    executionAudit: options.executionAudit,
     runs: rows.slice(0, 200),
     omittedRunResults: Math.max(0, rows.length - 200),
     ...(mission.plan.executionProfile.requireReplay ? { replayConsistency: projectReplayConsistency(mission, surfaceTasks, rows, observations) } : {}),

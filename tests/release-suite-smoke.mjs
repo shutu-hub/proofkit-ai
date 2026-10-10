@@ -331,7 +331,42 @@ try {
   assert.equal(quickEvidence.proofClassification.businessOracles, 0);
   assert.ok(quickEvidence.suiteScope.routeCoverage.gaps.every((item) => item.kind !== "api" || item.status === "mapped-unobserved"));
   assert.equal((await captureSourceState(sourceRoot)).worktreeSha256, source.worktreeSha256);
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, singleReleaseMission: singleStarted.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "single-charter-release-continues-after-product-failure", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
+  const acceptedAgain = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } }));
+  assert.equal(acceptedAgain.testVerdict, "passed");
+  assert.equal(acceptedAgain.summary.executionAudit.status, "complete");
+  const savedMissionPath = join(workspaceRoot, ".proofkit", "missions", `${good.started.missionId}.json`);
+  const savedMissionBytes = await readFile(savedMissionPath, "utf8");
+  const wrongReplaySource = JSON.parse(savedMissionBytes);
+  const webReplayObservation = wrongReplaySource.observations.find((item) => item.kind === "surface.run"
+    && item.charterId === "resume" && item.data.surface === "web" && item.data.runKind === "replay");
+  assert.ok(webReplayObservation);
+  webReplayObservation.data.sourceRunId = "unrelated-run";
+  await writeFile(savedMissionPath, JSON.stringify(wrongReplaySource));
+  const wrongReplayEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } }));
+  assert.equal(wrongReplayEvidence.verdict, "passed");
+  assert.equal(wrongReplayEvidence.testVerdict, "inconclusive");
+  assert.ok(wrongReplayEvidence.summary.executionAudit.issues.some((issue) => issue.includes("replay source")));
+  assert.equal(JSON.parse(await readFile(join(dirname(wrongReplayEvidence.report), "summary.json"), "utf8")).testVerdict, "inconclusive");
+  const checkedWrongReplay = await promisify(execFile)(process.execPath, [join(repoRoot, "packages", "cli", "dist", "main.js"),
+    "mission", "check", good.started.missionId, "--root", sourceRoot, "--workspace", workspaceRoot], { timeout: 15_000 })
+    .then(({ stdout }) => ({ code: 0, stdout }), (error) => {
+      if (typeof error.code !== "number") throw error;
+      return { code: error.code, stdout: error.stdout ?? "" };
+    });
+  assert.equal(checkedWrongReplay.code, 2);
+  assert.equal(JSON.parse(checkedWrongReplay.stdout).testVerdict, "inconclusive");
+  const duplicateMission = JSON.parse(savedMissionBytes);
+  const primaryObservation = duplicateMission.observations.find((item) => item.kind === "surface.run"
+    && item.charterId === "resume" && item.data.surface === "web" && item.data.runKind === "primary");
+  assert.ok(primaryObservation);
+  duplicateMission.observations.push({ ...primaryObservation, observationId: `duplicate-${primaryObservation.observationId}` });
+  await writeFile(savedMissionPath, JSON.stringify(duplicateMission));
+  const duplicateEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } }));
+  assert.equal(duplicateEvidence.testVerdict, "inconclusive");
+  assert.ok(duplicateEvidence.summary.executionAudit.issues.some((issue) => issue.includes("expected one Run observation, found 2")));
+  await writeFile(savedMissionPath, savedMissionBytes);
+  assert.equal(payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } })).testVerdict, "passed");
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, singleReleaseMission: singleStarted.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "single-charter-release-continues-after-product-failure", "saved-run-slot-audit-rejects-wrong-replay-and-duplicate", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
   await quickClient?.close();
   await quickMcpServer?.close();

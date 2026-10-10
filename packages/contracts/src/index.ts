@@ -1433,6 +1433,17 @@ export const MissionProofClassificationSchema = z.object({
 });
 export type MissionProofClassification = z.infer<typeof MissionProofClassificationSchema>;
 
+/** Recomputed from the saved task graph and Run observations, without trusting the saved verdict. */
+export const MissionExecutionAuditSchema = z.object({
+  status: z.enum(["complete", "incomplete"]),
+  expectedSlots: z.number().int().nonnegative(),
+  matchedSlots: z.number().int().nonnegative(),
+  unexpectedObservations: z.number().int().nonnegative(),
+  issues: z.array(z.string().min(1)).max(20),
+  omittedIssues: z.number().int().nonnegative(),
+});
+export type MissionExecutionAudit = z.infer<typeof MissionExecutionAuditSchema>;
+
 export const MissionResultSchema = z.object({
   schemaVersion: z.literal("1"),
   missionId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
@@ -1479,6 +1490,7 @@ export const MissionResultSchema = z.object({
   }),
   expectedRuns: z.number().int().nonnegative(),
   observedRuns: z.number().int().nonnegative(),
+  executionAudit: MissionExecutionAuditSchema.optional(),
   runs: z.array(MissionRunResultSchema).max(200),
   omittedRunResults: z.number().int().nonnegative(),
   replayConsistency: ReplayConsistencySchema.optional(),

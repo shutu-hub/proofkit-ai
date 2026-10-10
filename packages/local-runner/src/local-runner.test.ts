@@ -436,7 +436,7 @@ describe("LocalRunnerService", () => {
         charter,
         steps: [],
         assertions: [{ assertion: charter.assertions[0]!, passed: true, message: `${adapter} ready`, evidence: [`release-run-${sequence}/after.json`] }],
-        oracles: [{ name: "fixture-terminal", passed: true, message: `${adapter} terminal`, evidence: [`release-run-${sequence}/oracle-source.json`, `release-run-${sequence}/oracle.json`], sourceEvidenceCount: 1, sourceEvidenceArtifacts: [`release-run-${sequence}/oracle-source.json`], observedAt: new Date().toISOString() }],
+        oracles: [{ name: "fixture-terminal", verificationKind: "business", passed: true, message: `${adapter} terminal`, evidence: [`release-run-${sequence}/oracle-source.json`, `release-run-${sequence}/oracle.json`], sourceEvidenceCount: 1, sourceEvidenceArtifacts: [`release-run-${sequence}/oracle-source.json`], observedAt: new Date().toISOString() }],
         artifacts: [`release-run-${sequence}/after.json`, `release-run-${sequence}/oracle-source.json`, `release-run-${sequence}/oracle.json`, `release-run-${sequence}/trace.json`],
         findings: [],
       };
@@ -475,6 +475,30 @@ describe("LocalRunnerService", () => {
     expect(completed.observations.filter((item) => item.kind === "surface.run" && item.data.runKind === "primary").map((item) => item.data.surface).sort()).toEqual(["electron", "web"]);
     expect(completed.observations.filter((item) => item.kind === "surface.run" && item.data.runKind === "replay").map((item) => item.data.surface).sort()).toEqual(["electron", "web"]);
     expect(completed.evidence.length).toBeGreaterThanOrEqual(3);
+    const accepted = await service.missionEvidence(created.missionId);
+    expect(accepted.summary.executionAudit).toMatchObject({ status: "complete", expectedSlots: 4, matchedSlots: 4 });
+
+    const missionPath = join(root, ".proofkit", "missions", `${created.missionId}.json`);
+    const saved = await readFile(missionPath, "utf8");
+    const wrongSource = JSON.parse(saved) as TestMission;
+    const webReplay = wrongSource.observations.find((item) => item.kind === "surface.run" && item.data.surface === "web" && item.data.runKind === "replay")!;
+    webReplay.data.sourceRunId = "another-run";
+    await writeFile(missionPath, JSON.stringify(wrongSource));
+    const mismatched = await service.missionEvidence(created.missionId);
+    expect(mismatched).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      summary: { executionAudit: { status: "incomplete" } } });
+    expect(mismatched.testVerdictReason).toContain("mismatched execution Runs");
+    expect(mismatched.summary.executionAudit?.issues).toEqual(expect.arrayContaining([expect.stringContaining("replay source")]));
+    expect(await readFile(mismatched.report!, "utf8")).toContain("Execution slot gap");
+
+    const duplicated = JSON.parse(saved) as TestMission;
+    const primary = duplicated.observations.find((item) => item.kind === "surface.run" && item.data.surface === "web" && item.data.runKind === "primary")!;
+    duplicated.observations.push({ ...primary, observationId: `duplicate-${primary.observationId}` });
+    await writeFile(missionPath, JSON.stringify(duplicated));
+    const ambiguous = await service.missionEvidence(created.missionId);
+    expect(ambiguous).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      summary: { executionAudit: { status: "incomplete", unexpectedObservations: 2 } } });
+    expect(ambiguous.summary.executionAudit?.issues).toEqual(expect.arrayContaining([expect.stringContaining("expected one Run observation, found 2")]));
   });
 
   it("requires business proof in every release replay, not just in the aggregate", async () => {
@@ -630,6 +654,16 @@ describe("LocalRunnerService", () => {
       surface: "web",
     });
     expect(completed.evidence.length).toBeGreaterThanOrEqual(2);
+    expect((await service.missionEvidence(created.missionId)).summary.executionAudit?.status).toBe("complete");
+    const missionPath = join(root, ".proofkit", "missions", `${created.missionId}.json`);
+    const mismatched = JSON.parse(await readFile(missionPath, "utf8")) as TestMission;
+    const negative = mismatched.observations.find((item) => item.kind === "surface.run" && item.data.runKind === "negative")!;
+    negative.data.outcomeMatched = false;
+    await writeFile(missionPath, JSON.stringify(mismatched));
+    const audited = await service.missionEvidence(created.missionId);
+    expect(audited).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      summary: { executionAudit: { status: "incomplete" } } });
+    expect(audited.summary.executionAudit?.issues).toEqual(expect.arrayContaining([expect.stringContaining("negative outcome")]));
   });
 
   it("returns an inconclusive mission when a declared negative run is missing", async () => {

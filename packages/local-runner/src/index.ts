@@ -25,6 +25,7 @@ import type { MissionResult } from "@proofkit/contracts";
 import { ResourceRecoveryService } from "./resource-recovery.js";
 import { captureRunEvidence } from "./run-evidence.js";
 import { auditMissionProofClassification } from "./mission-proof-classification.js";
+import { auditMissionExecution } from "./mission-execution-audit.js";
 import { acquireCdpTarget, acquireElectronPortFileScope, acquireExecutionScope, sharedTargetIdentity } from "./execution-scope.js";
 import { sourceBindingTarget } from "./source-binding-target.js";
 import { assertMissionSurfaceCoverage, selectMissionSurface } from "./mission-surface.js";
@@ -676,6 +677,7 @@ export class LocalRunnerService {
     const suiteScope = summarizeSuiteScope(mission, this.evidenceDir);
     const workflowExecution = summarizeWorkflowExecution(mission, suiteScope);
     const proofClassification = await auditMissionProofClassification(mission, (runId) => this.loadRunSummary(runId));
+    const executionAudit = auditMissionExecution(mission);
     const referencedRunIds = new Set(mission.observations.flatMap((item) => {
       const id = item.kind === "surface.run" ? item.data.runId
         : item.kind === "surface.inspected" ? item.data.inspectionId : undefined;
@@ -692,7 +694,7 @@ export class LocalRunnerService {
       ...mission.repairSuggestions.flatMap((suggestion) => suggestion.evidence),
     ];
     const acceptanceEvidenceIntegrity = await this.missionReports.inspectMissionEvidence(missionReferences, referencedRunIds);
-    let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, comparison, comparisonUnavailable, proofClassification }), acceptanceEvidenceIntegrity };
+    let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, comparison, comparisonUnavailable, proofClassification, executionAudit }), acceptanceEvidenceIntegrity };
     let report: string | undefined;
     let reportUnavailable: string | undefined;
     let evidenceIntegrity: MissionEvidenceIntegrity;
@@ -1047,6 +1049,9 @@ export class LocalRunnerService {
       const executionProfile = context.mission.plan.executionProfile;
       const expectedSurfaces = executionProfile.surfaceMatrix;
       const missing: string[] = [];
+      const executionAudit = auditMissionExecution(context.mission, false);
+      missing.push(...executionAudit.issues);
+      if (executionAudit.omittedIssues) missing.push(`还有 ${executionAudit.omittedIssues} 个 Run 匹配问题`);
       if (!hasPositiveSurfaceAssertion(context.mission.charter?.assertions ?? [])) missing.push("至少一个正向表面断言");
       for (const surface of expectedSurfaces) {
         for (const runKind of executionProfile.requireReplay ? ["primary", "replay"] as const : ["primary"] as const) {

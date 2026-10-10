@@ -131,6 +131,9 @@ export class MissionReportStore {
 export function auditMissionVerdict(result: MissionResult, integrity: MissionEvidenceIntegrity): Pick<MissionResult, "testVerdict" | "testVerdictReason"> {
   const saved = result.verdict ?? "not-asserted";
   if (saved !== "passed" && saved !== "failed") return { testVerdict: saved };
+  if (saved === "passed" && result.executionAudit?.status !== "complete") {
+    return { testVerdict: "inconclusive", testVerdictReason: "Saved Mission has missing, duplicated or mismatched execution Runs; rerun the declared scope before claiming acceptance." };
+  }
   if (result.scope.sourceStability === "changed") {
     return { testVerdict: "inconclusive", testVerdictReason: "The tested Git source changed during this Mission; rerun the same scope against a stable checkout before claiming current acceptance or a product defect." };
   }
@@ -176,6 +179,7 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
   const route = result.scope.routeCoverage;
   const workflowInventory = result.scope.workflowInventory;
   const workflowExecution = result.scope.workflowExecution;
+  const executionAudit = result.executionAudit;
   const unavailable = [...links.values()].filter((link) => !link.href).length;
   const unverified = [...new Map(collectEvidence(result).map((ref) => [evidenceKey(ref), ref])).values()].filter((ref) => !ref.sha256).length;
   const savedConfirmed = result.findings.filter((finding) => finding.category === "product" && finding.status === "confirmed");
@@ -201,6 +205,9 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
     result.evidenceIntegrity ? `Current presented evidence integrity: ${result.evidenceIntegrity.status}; ${result.evidenceIntegrity.references.intact}/${result.evidenceIntegrity.references.total} reference(s) verified at ${result.evidenceIntegrity.checkedAt}. This does not change the saved acceptance verdict.` : undefined,
     result.acceptanceEvidenceIntegrity ? `Current Mission evidence integrity: ${result.acceptanceEvidenceIntegrity.status}; ${result.acceptanceEvidenceIntegrity.references.intact}/${result.acceptanceEvidenceIntegrity.references.total} saved reference(s) verified, ${result.acceptanceEvidenceIntegrity.references.omitted} beyond the audit limit. This does not prove whole-project coverage or application state after the Run.` : undefined,
     result.testVerdictReason,
+    executionAudit ? `Execution slots: ${executionAudit.matchedSlots}/${executionAudit.expectedSlots} uniquely matched; ${executionAudit.unexpectedObservations} unexpected Run observation(s).` : undefined,
+    ...(executionAudit?.issues ?? []).map((issue) => `Execution slot gap: ${issue}`),
+    executionAudit?.omittedIssues ? `${executionAudit.omittedIssues} additional execution slot gaps are omitted from this report.` : undefined,
     result.scope.sourceStability ? `Git source stability during this Mission: ${result.scope.sourceStability}. This fingerprint excludes generated output and does not attest served bytes.` : undefined,
     proofUnverified ? `Current business proof classification is unverified: ${result.proofClassification!.legacyOracles} saved Oracle result(s) lack a verification kind, ${result.proofClassification!.unavailableRuns} Run(s) could not be read, and ${result.proofClassification!.omittedRuns} Run(s) exceeded the audit bound. Rerun affected scenarios before treating the saved business verdict or finding as current proof.` : undefined,
     result.proofClassification?.requiredBusinessRuns !== undefined ? `Required Run business proof: ${result.proofClassification.requiredRunsWithPassingBusiness ?? 0}/${result.proofClassification.requiredBusinessRuns} primary/replay Run(s) have a classified passing business Oracle.` : undefined,
