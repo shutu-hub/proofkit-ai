@@ -1337,6 +1337,17 @@ export const MissionEvidenceIntegritySchema = z.object({
     supported: z.number().int().nonnegative(),
     unsupportedFindingIds: z.array(z.string()).max(20),
   }),
+  diagnosticSupport: z.object({
+    diagnosis: z.object({
+      status: z.enum(["not-present", "supported", "unsupported"]),
+      reason: z.enum(["missing-evidence", "unavailable-evidence", "cross-run-evidence", "run-not-present", "unlinked-failure"]).optional(),
+    }),
+    repairSuggestions: z.array(z.object({
+      suggestionId: z.string().min(1),
+      status: z.enum(["supported", "unsupported"]),
+      reason: z.enum(["missing-evidence", "unavailable-evidence", "cross-run-evidence", "run-not-present", "unlinked-failure"]).optional(),
+    })).max(10),
+  }).optional(),
   comparison: z.enum(["not-present", "intact", "degraded"]),
   omittedEvidenceReferences: z.number().int().nonnegative(),
   omittedRunResults: z.number().int().nonnegative(),

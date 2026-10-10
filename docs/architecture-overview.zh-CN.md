@@ -111,4 +111,6 @@ Web/Electron 已有真实隔离样例验证，包含跨端回放、注入缺陷�
 
 Mission 紧凑结果页汇总结论、验收范围、场景与各端执行、首个失败、证据和修复回放比较。MCP `get_mission_evidence` 返回 `summary`、报告路径及当前 `evidenceIntegrity`：`intact`、`degraded`、`partial` 或 `no-evidence`，并列出已检查引用和可继续支持的可见产品问题数。它只覆盖有界展示结果；独立的 `acceptanceEvidenceIntegrity` 审计整个 Mission 保存的证据引用，最多检查 2048 条。结果页因展示上限为 `partial` 时，只要完整证据审计为 `intact`，仍可保留通过结论；完整审计损坏、缺失或超限则把历史通过降为 `inconclusive`。已保存的失败若声称确认产品缺陷，却缺少明确分类的业务证明或其引用证据已经失效，当前结论也降为 `inconclusive`；证据完好的普通测试失败仍为 `failed`。CLI `mission report` 生成同一静态快照；`summary.json`、MCP 和报告页面共用当前审计后的 `testVerdict`，同时保留历史 `verdict`。报告保留缺失运行、覆盖缺口及负向测试的预期结果，证据缺失、越界或摘要不符时显示不可用。完整证据审计不等于全项目覆盖证明；修复比较需要重新运行才能给出当前证明。
 
+当前 `evidenceIntegrity.diagnosticSupport` 对展示中的诊断和修复建议逐条核对证据文件、SHA-256、所属 Run，以及其与已保存失败边界或确认的产品问题是否关联。MCP 顶层也返回同一状态，JSON 与 HTML 明确区分历史 `proposed` 等状态和当前证据支持。跨 Run 拼接、缺失或篡改的文件、无证据及未关联失败的建议标为 `unsupported`；这不改写历史 Mission，也不将源码线索或建议升级为已验证修复。超过紧凑结果上限的建议仍只由完整 Mission 证据审计覆盖，需重新运行和比较才能证明修复有效。
+
 下一阶段重点是用真实业务完善项目知识与场景目录、测试数据隔离、业务终态观测、覆盖度量及 AI 规划评测。各阶段用可复现的验收结果推进，不把静态路由数量当业务覆盖率。

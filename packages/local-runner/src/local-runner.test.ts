@@ -65,6 +65,18 @@ describe("LocalRunnerService", () => {
     expect(completed.repairSuggestions[0]?.evidence[0]?.path).toContain("oracle-2-source.json");
     expect(completed.repairSuggestions[0]?.changes[0]).toContain("confirmed.ts");
     expect(completed.repairSuggestions[0]?.changes[0]).not.toContain("unverified.ts");
+    const intact = await service.missionEvidence(completed.missionId);
+    expect(intact.diagnosticSupport).toMatchObject({
+      diagnosis: { status: "supported" }, repairSuggestions: [{ status: "supported" }],
+    });
+    await writeFile(join(service.evidenceDir, source), "altered business evidence");
+    const changed = await service.missionEvidence(completed.missionId);
+    expect(changed).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
+      diagnosticSupport: { diagnosis: { status: "unsupported", reason: "unavailable-evidence" },
+        repairSuggestions: [{ status: "unsupported", reason: "unavailable-evidence" }] },
+      summary: { evidenceIntegrity: { diagnosticSupport: { diagnosis: { status: "unsupported" } } } },
+    });
+    expect(await readFile(changed.report!, "utf8")).toContain("Current proposal support: unsupported: cited evidence is missing, changed or unverifiable");
   });
 
   it("runs a mission through the existing deterministic run and keeps evidence references", async () => {

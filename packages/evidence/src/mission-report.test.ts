@@ -216,6 +216,53 @@ describe("Mission report", () => {
     expect(markup).toContain("cannot be independently confirmed from this report");
   });
 
+  it("audits saved diagnosis and proposal support against real files and their failure Run", async () => {
+    const workspace = await root();
+    const sourcePath = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "failure.json"), "wrong binding");
+    const otherPath = await file(join(workspace, ".proofkit", "runs", "run-2", "artifacts", "other.json"), "other fact");
+    const source = ref(sourcePath, createHash("sha256").update("wrong binding").digest("hex"));
+    const other = ref(otherPath, createHash("sha256").update("other fact").digest("hex"));
+    const input = result(workspace, [source]);
+    input.verdict = "failed";
+    input.proofClassification = explicitProof(false);
+    input.confirmedProductFindings = 1;
+    input.findings = [{ findingId: "binding", category: "product", status: "confirmed", severity: "high",
+      title: "Wrong binding", message: "Current candidate relation is wrong", evidence: [source], createdAt: now }];
+    input.diagnosis = { diagnosisId: "diagnosis-1", summary: "Inspect candidate relation", confidence: 0.8,
+      sourceLocations: [], evidence: [source], createdAt: now };
+    input.repairSuggestions = [{ suggestionId: "repair-1", title: "Repair candidate relation",
+      rationale: "The observed relation is wrong", changes: ["Trace the relation writer"], confidence: 0.4,
+      evidence: [source], status: "proposed" }];
+    const store = new MissionReportStore(workspace);
+    const intact = await store.writeReportSnapshot(input);
+    expect(intact.integrity.diagnosticSupport).toMatchObject({ diagnosis: { status: "supported" },
+      repairSuggestions: [{ suggestionId: "repair-1", status: "supported" }] });
+    expect(intact.result.testVerdict).toBe("failed");
+
+    input.runs.push({ title: "Other Run", surface: "web", runKind: "primary", runId: "run-2",
+      verdict: "passed", evidence: [other], omittedEvidence: 0 });
+    input.acceptanceEvidenceIntegrity = await store.inspectMissionEvidence([source, other], new Set(["run-1", "run-2"]));
+    input.repairSuggestions[0]!.evidence = [source, other];
+    const crossRun = await store.writeReportSnapshot(input);
+    expect(crossRun.integrity.diagnosticSupport?.repairSuggestions[0]).toMatchObject({ status: "unsupported", reason: "cross-run-evidence" });
+    expect(crossRun.result.testVerdict).toBe("failed");
+    expect(JSON.parse(await readFile(join(dirname(crossRun.path), "summary.json"), "utf8")))
+      .toMatchObject({ evidenceIntegrity: { diagnosticSupport: { repairSuggestions: [{ reason: "cross-run-evidence" }] } } });
+    expect(await readFile(crossRun.path, "utf8")).toContain("Current proposal support: unsupported: cites evidence from multiple Runs");
+
+    input.repairSuggestions[0]!.evidence = [other];
+    expect((await store.writeReportSnapshot(input)).integrity.diagnosticSupport?.repairSuggestions[0])
+      .toMatchObject({ status: "unsupported", reason: "unlinked-failure" });
+    input.repairSuggestions[0]!.evidence = [source];
+    await rm(sourcePath);
+    const missing = await store.writeReportSnapshot(input);
+    expect(missing.integrity.diagnosticSupport).toMatchObject({ diagnosis: { status: "unsupported", reason: "unavailable-evidence" },
+      repairSuggestions: [{ status: "unsupported", reason: "unavailable-evidence" }] });
+    expect(missing.result).toMatchObject({ verdict: "failed", testVerdict: "inconclusive" });
+    expect(await readFile(missing.path, "utf8")).toContain("Current diagnosis support: unsupported: cited evidence is missing, changed or unverifiable");
+    expect(input.repairSuggestions[0]!.status).toBe("proposed");
+  });
+
   it("requires classified business proof for a saved product finding but preserves an evidenced test failure", async () => {
     const workspace = await root();
     const path = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "failure.json"), "observed mismatch");

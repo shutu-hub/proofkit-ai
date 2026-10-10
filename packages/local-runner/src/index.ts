@@ -641,6 +641,7 @@ export class LocalRunnerService {
     comparison?: MissionComparison;
     comparisonUnavailable?: string;
     evidenceIntegrity: MissionEvidenceIntegrity;
+    diagnosticSupport: MissionEvidenceIntegrity["diagnosticSupport"];
     acceptanceEvidenceIntegrity: MissionAcceptanceIntegrity;
     proofClassification: MissionProofClassification;
     summary: MissionResult;
@@ -740,6 +741,7 @@ export class LocalRunnerService {
       ...(comparison ? { comparison } : {}),
       ...(comparisonUnavailable ? { comparisonUnavailable } : {}),
       evidenceIntegrity,
+      diagnosticSupport: evidenceIntegrity.diagnosticSupport,
       acceptanceEvidenceIntegrity,
       proofClassification,
       summary,
