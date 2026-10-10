@@ -106,9 +106,7 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
   const savedConfirmed = result.findings.filter((finding) => finding.category === "product" && finding.status === "confirmed");
   const currentlyVerified = savedConfirmed.filter((finding) => hasCompleteEvidence(finding.evidence, links)).length;
   const staleFindings = savedConfirmed.length - currentlyVerified;
-  const comparisonEvidenceUnavailable = result.comparison?.defects.some((defect) =>
-    !hasCompleteEvidence(defect.baselineEvidence, links, defect.baselineRunId)
-    || !defect.candidateRunId || !hasCompleteEvidence(defect.candidateEvidence, links, defect.candidateRunId)) ?? false;
+  const comparisonEvidenceUnavailable = comparisonEvidenceStatus(result, links) === "degraded";
   const limits = [
     result.evidenceIntegrity ? `Current presented evidence integrity: ${result.evidenceIntegrity.status}; ${result.evidenceIntegrity.references.intact}/${result.evidenceIntegrity.references.total} reference(s) verified at ${result.evidenceIntegrity.checkedAt}. This does not change the saved acceptance verdict.` : undefined,
     coverage?.requested === "project" ? "Whole-project workflow coverage has not been proven." : "Acceptance applies to the saved scenarios. Whole-project workflow coverage has not been measured.",
@@ -163,6 +161,20 @@ function hasCompleteEvidence(refs: EvidenceRef[], links: Map<string, EvidenceLin
   });
 }
 
+function comparisonEvidenceStatus(result: MissionResult, links: Map<string, EvidenceLink>): MissionEvidenceIntegrity["comparison"] {
+  const comparison = result.comparison;
+  if (!comparison) return "not-present";
+  const rowsValid = comparison.runs.every((run) =>
+    (!run.baselineEvidence.length || Boolean(run.baselineRunId) && hasCompleteEvidence(run.baselineEvidence, links, run.baselineRunId))
+    && (!run.candidateEvidence.length || Boolean(run.candidateRunId) && hasCompleteEvidence(run.candidateEvidence, links, run.candidateRunId)));
+  const defectsValid = comparison.defects.every((defect) =>
+    hasCompleteEvidence(defect.baselineEvidence, links, defect.baselineRunId)
+    && Boolean(defect.candidateRunId) && hasCompleteEvidence(defect.candidateEvidence, links, defect.candidateRunId));
+  if (!rowsValid || !defectsValid) return "degraded";
+  return comparison.runs.some((run) => run.baselineEvidence.length || run.candidateEvidence.length)
+    || comparison.defects.length ? "intact" : "not-present";
+}
+
 function referencedRunIds(result: MissionResult): Set<string> {
   const ids = new Set(result.runs.flatMap((run) => run.runId ? [run.runId] : []));
   for (const run of result.comparison?.runs ?? []) {
@@ -188,10 +200,7 @@ function summarizeIntegrity(result: MissionResult, links: Map<string, EvidenceLi
   const unavailable = refs.length - intact - legacy;
   const savedConfirmed = result.findings.filter((finding) => finding.category === "product" && finding.status === "confirmed");
   const unsupportedFindingIds = savedConfirmed.filter((finding) => !hasCompleteEvidence(finding.evidence, links)).map((finding) => finding.findingId);
-  const defects = result.comparison?.defects ?? [];
-  const comparison = defects.length === 0 ? "not-present" : defects.every((defect) =>
-    hasCompleteEvidence(defect.baselineEvidence, links, defect.baselineRunId)
-      && Boolean(defect.candidateRunId) && hasCompleteEvidence(defect.candidateEvidence, links, defect.candidateRunId)) ? "intact" : "degraded";
+  const comparison = comparisonEvidenceStatus(result, links);
   const omittedEvidenceReferences = result.runs.reduce((count, run) => count + run.omittedEvidence, 0);
   const omittedComparisonRuns = result.comparison?.omittedRuns ?? 0;
   const omittedComparisonDefects = result.comparison?.omittedDefects ?? 0;
@@ -224,6 +233,7 @@ function collectEvidence(result: MissionResult): EvidenceRef[] {
   return [...result.runs.flatMap((run) => run.evidence), ...(result.firstFailure?.evidence ?? []),
     ...result.findings.flatMap((finding) => finding.evidence), ...(result.diagnosis?.evidence ?? []),
     ...result.repairSuggestions.flatMap((suggestion) => suggestion.evidence),
+    ...(result.comparison?.runs.flatMap((run) => [...run.baselineEvidence, ...run.candidateEvidence]) ?? []),
     ...(result.comparison?.defects.flatMap((defect) => [...defect.baselineEvidence, ...defect.candidateEvidence]) ?? [])];
 }
 

@@ -151,10 +151,12 @@ describe("Mission report", () => {
     const baselinePath = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "baseline.json"), "baseline");
     const secondPath = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "relation.json"), "relation");
     const candidatePath = await file(join(workspace, ".proofkit", "runs", "run-2", "artifacts", "candidate.json"), "candidate");
+    const rowPath = await file(join(workspace, ".proofkit", "runs", "run-3", "artifacts", "row.json"), "row fact");
     const fact = (path: string, content: string) => ref(path, createHash("sha256").update(content).digest("hex"));
     const baseline = fact(baselinePath, "baseline");
     const relation = fact(secondPath, "relation");
     const candidate = fact(candidatePath, "candidate");
+    const rowFact = fact(rowPath, "row fact");
     const input = result(workspace, [baseline, relation]);
     input.verdict = "failed";
     input.confirmedProductFindings = 1;
@@ -164,7 +166,8 @@ describe("Mission report", () => {
       baselineMissionId: "baseline-mission", candidateMissionId: "candidate-mission",
       baselineScopeHash: "a".repeat(64), candidateScopeHash: "a".repeat(64), scopeMatched: true,
       sourceChange: "changed", candidateSourceStability: "stable", status: "verified-in-scope",
-      reason: "Saved comparison", gaps: [], runs: [], omittedRuns: 0,
+      reason: "Saved comparison", gaps: [], runs: [{ surface: "web", runKind: "primary", baselineRunId: "run-3",
+        baselineBusinessFacts: 1, candidateBusinessFacts: 0, baselineEvidence: [rowFact], candidateEvidence: [] }], omittedRuns: 0,
       defects: [{ surface: "web", oracleName: "relation", baselineRunId: "run-1", candidateRunId: "run-2",
         outcome: "not-reproduced", baselineEvidence: [baseline, relation], candidateEvidence: [candidate] }],
       omittedDefects: 0, comparedAt: now,
@@ -172,6 +175,7 @@ describe("Mission report", () => {
     const store = new MissionReportStore(workspace);
     const intact = await store.writeReportSnapshot(input);
     expect(intact.integrity).toMatchObject({ status: "intact", comparison: "intact",
+      references: { total: 4, intact: 4 },
       visibleConfirmedFindings: { supported: 1 } });
     expect(await readFile(intact.path, "utf8")).toContain('href="../../runs/run-2/artifacts/candidate.json"');
 
@@ -181,6 +185,16 @@ describe("Mission report", () => {
       references: { unavailable: 0 }, visibleConfirmedFindings: { supported: 1 } });
     expect(await readFile(misbound.path, "utf8")).toContain("Before: <span class=\"unavailable\"");
     input.comparison.defects[0]!.baselineEvidence = [baseline, relation];
+
+    input.comparison.runs[0]!.baselineEvidence = [candidate];
+    expect(await store.inspectIntegrity(input)).toMatchObject({ status: "degraded", comparison: "degraded",
+      references: { unavailable: 0 } });
+    input.comparison.runs[0]!.baselineEvidence = [rowFact];
+
+    await writeFile(rowPath, "changed row fact");
+    expect(await store.inspectIntegrity(input)).toMatchObject({ status: "degraded", comparison: "degraded",
+      references: { unavailable: 1 }, visibleConfirmedFindings: { supported: 1 } });
+    await writeFile(rowPath, "row fact");
 
     input.comparison.omittedRuns = 1;
     input.comparison.omittedDefects = 2;
@@ -192,7 +206,7 @@ describe("Mission report", () => {
     await writeFile(secondPath, "changed relation");
     const degraded = await store.writeReportSnapshot(input);
     expect(degraded.integrity).toMatchObject({ status: "degraded", comparison: "degraded",
-      references: { intact: 2, unavailable: 1 },
+      references: { intact: 3, unavailable: 1 },
       visibleConfirmedFindings: { supported: 0, unsupportedFindingIds: ["finding-1"] } });
     const markup = await readFile(degraded.path, "utf8");
     expect(markup).toContain("saved confirmed · evidence currently unverified");
