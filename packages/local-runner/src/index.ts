@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
-import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
+import { ElectronAdapter, MobileAdapter, WebAdapter, resolveElectronCdpUrl } from "@proofkit/adapters";
 import { auditMissionVerdict, createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofkit/evidence";
 import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
@@ -25,7 +25,7 @@ import type { MissionResult } from "@proofkit/contracts";
 import { ResourceRecoveryService } from "./resource-recovery.js";
 import { captureRunEvidence } from "./run-evidence.js";
 import { auditMissionProofClassification } from "./mission-proof-classification.js";
-import { acquireExecutionScope, sharedTargetIdentity } from "./execution-scope.js";
+import { acquireCdpTarget, acquireElectronPortFileScope, acquireExecutionScope, sharedTargetIdentity } from "./execution-scope.js";
 
 export { loadProjectIntegration } from "./integration.js";
 
@@ -1337,6 +1337,12 @@ export class LocalRunnerService {
     } : undefined;
     const integrationSetup = this.integration?.setup;
     const surface = input.adapter ?? "web";
+    const electronCdp = input.cdp ?? this.config.surfaces.electron?.cdpUrl;
+    const electronPortFile = input.devtoolsPortFile ?? this.config.surfaces.electron?.devtoolsActivePort
+      ?? process.env.PROOFKIT_ELECTRON_DEVTOOLS_PORT;
+    const resolveElectronPortFile = surface === "electron" && !electronCdp && electronPortFile
+      && !/^(https?|wss?):\/\//i.test(electronPortFile);
+    let preSetupCdpUrl: string | undefined;
     const targetUrl = charter.actions.find((action) => action.kind === "goto")?.url
       ?? input.url
       ?? (surface === "electron" ? this.config.surfaces.electron?.targetUrlPrefix : this.config.surfaces.web?.baseUrl);
@@ -1355,7 +1361,27 @@ export class LocalRunnerService {
       signal,
       timeoutMs: this.config.run.timeoutMs,
       runtimeQuality: this.config.policies.runtime,
-      executionLease: () => acquireExecutionScope(this.workspaceRoot, sharedTargetIdentity(surface, input, this.config)),
+      executionLease: async (leaseSignal) => {
+        const identity = sharedTargetIdentity(surface, input, this.config);
+        if (!resolveElectronPortFile || !identity) return acquireExecutionScope(this.workspaceRoot, identity);
+        const acquired = await acquireElectronPortFileScope(this.workspaceRoot, identity, electronPortFile, leaseSignal,
+          input.start === false || !this.config.project.start);
+        preSetupCdpUrl = acquired.cdpUrl;
+        return acquired.lease;
+      },
+      ...(resolveElectronPortFile ? { attachmentLease: async (leaseSignal: AbortSignal) => {
+        const cdpUrl = await resolveElectronCdpUrl({ devtoolsActivePortPath: electronPortFile }, leaseSignal);
+        if (!cdpUrl) throw new Error("Electron CDP endpoint is missing from its port file");
+        if (cdpUrl === preSetupCdpUrl) {
+          (adapter as ElectronAdapter).pinCdpUrl(cdpUrl);
+          return { release: async () => {} };
+        }
+        const lease = await acquireCdpTarget(cdpUrl);
+        if (!lease) return undefined;
+        try { (adapter as ElectronAdapter).pinCdpUrl(cdpUrl); }
+        catch (error) { await lease.release(); throw error; }
+        return lease;
+      } } : {}),
       ...(surface === "web" || surface === "electron" ? {
         targetBinding: (bindingSignal: AbortSignal) => inspectTargetBinding(this.root, targetUrl, bindingSignal),
         targetBindingPolicy: this.config.policies.targetBinding,
@@ -1459,7 +1485,11 @@ export class LocalRunnerService {
   private validateCdpEndpoint(input: LocalRunInput): void {
     if (!this.restrictWebOrigins) return;
     const cdp = input.cdp ?? (input.adapter === "electron" ? this.config.surfaces.electron?.cdpUrl : this.config.surfaces.web?.cdpUrl);
-    if (cdp && !isLoopback(new URL(cdp).hostname)) {
+    const portCandidate = input.adapter === "electron" && !cdp
+      ? input.devtoolsPortFile ?? this.config.surfaces.electron?.devtoolsActivePort ?? process.env.PROOFKIT_ELECTRON_DEVTOOLS_PORT
+      : undefined;
+    const endpoint = cdp ?? (portCandidate && /^(https?|wss?):\/\//i.test(portCandidate) ? portCandidate : undefined);
+    if (endpoint && !isLoopback(new URL(endpoint).hostname)) {
       throw new Error("CDP endpoint must use loopback in MCP runs");
     }
   }

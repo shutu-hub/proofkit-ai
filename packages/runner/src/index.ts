@@ -140,6 +140,8 @@ export type ExecutionOptions = {
   targetBindingRecheckAfterSetup?: boolean;
   /** Optional host-owned lease held across setup, surface actions and late cleanup. */
   executionLease?: (signal: AbortSignal) => Promise<LocalExecutionLease | undefined>;
+  /** Resolve a target created by setup, then hold its lease before adapter attachment. */
+  attachmentLease?: (signal: AbortSignal) => Promise<LocalExecutionLease | undefined>;
   /** Classify adapter runtime signals without conflating them with business truth. */
   runtimeQuality?: z.input<typeof RuntimeQualityPolicySchema>;
 };
@@ -159,6 +161,7 @@ export class ExecutionRunner {
   private readonly targetBindingPolicy: NonNullable<ExecutionOptions["targetBindingPolicy"]>;
   private readonly targetBindingRecheckAfterSetup: boolean;
   private readonly executionLease?: ExecutionOptions["executionLease"];
+  private readonly attachmentLease?: ExecutionOptions["attachmentLease"];
   private readonly signal?: AbortSignal;
   private readonly timeoutMs?: number;
   private readonly integration?: { name: string; version?: string };
@@ -191,6 +194,7 @@ export class ExecutionRunner {
     this.targetBindingPolicy = options.targetBindingPolicy ?? "block-different";
     this.targetBindingRecheckAfterSetup = options.targetBindingRecheckAfterSetup ?? false;
     this.executionLease = options.executionLease;
+    this.attachmentLease = options.attachmentLease;
     this.signal = options.signal;
     this.timeoutMs = options.timeoutMs;
     this.integration = options.integration ? { name: options.integration.name, version: options.integration.version } : undefined;
@@ -210,19 +214,20 @@ export class ExecutionRunner {
     const integrationLifecycle = new IntegrationLifecycle(runId, this.store, {
       projectRoot: this.projectRoot, workspaceRoot: this.workspaceRoot, integration: this.integration, environment: this.environment,
     });
-    let scopeLease: LocalExecutionLease | undefined;
+    const scopeLeases: LocalExecutionLease[] = [];
     const pendingAcquisitions = new Set<Promise<unknown>>();
     const trackAcquisition = (pending: Promise<unknown>) => {
       pendingAcquisitions.add(pending);
       void pending.then(() => pendingAcquisitions.delete(pending), () => pendingAcquisitions.delete(pending));
     };
     const releaseLeases = async () => {
-      const settled = await Promise.allSettled([scopeLease?.release(), lease.release()]);
+      const leases = [...scopeLeases].reverse();
+      const settled = await Promise.allSettled([...leases.map((scopeLease) => scopeLease.release()), lease.release()]);
       const failure = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
       if (failure) throw failure.reason;
     };
     try { return await this.executeRun(charter, runId, integrationLifecycle,
-      (acquired) => { scopeLease = acquired; }, trackAcquisition); }
+      (acquired) => { scopeLeases.push(acquired); }, trackAcquisition); }
     finally {
       if (integrationLifecycle.hasPendingCleanup || pendingAcquisitions.size > 0) {
         void Promise.allSettled([integrationLifecycle.whenCleanupSettles(), ...pendingAcquisitions]).then(releaseLeases).catch(() => {});
@@ -345,6 +350,18 @@ export class ExecutionRunner {
         throwIfAborted(signal);
       }
       if (this.targetBindingRecheckAfterSetup) await inspectAndRecordTarget("after-setup");
+      if (this.attachmentLease) {
+        let acquired: LocalExecutionLease | undefined;
+        try {
+          acquired = await withResourceAbort(this.attachmentLease(signal), signal, "Attachment target lease",
+            async (lateLease) => { await lateLease?.release(); }, trackAcquisition);
+        } catch (error) {
+          if (signal.aborted) throw abortReason(signal);
+          throw new BlockedError(`Attachment target lease could not be acquired: ${toError(error).message}`);
+        }
+        if (!acquired) throw new BlockedError("Another Run controls this configured attachment target; retry after it completes.");
+        retainLease(acquired);
+      }
       await withResourceAbort(this.adapter.connect(), signal, "Adapter connect", () => this.adapter.close(), trackAcquisition);
       throwIfAborted(signal);
       unsubscribe = await withResourceAbort(this.adapter.subscribeEvents((event) => {

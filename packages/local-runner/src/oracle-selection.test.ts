@@ -92,6 +92,15 @@ describe("Oracle registration and selection", () => {
     expect(WebAdapter.prototype.connect).not.toHaveBeenCalled();
   });
 
+  it("rejects a remote Electron port-file URL before connecting in MCP mode", async () => {
+    const root = await projectRoot();
+    const config = ProofkitConfigSchema.parse({ surfaces: { electron: { devtoolsActivePort: "ws://example.com:9222/devtools/browser/id" } } });
+    const service = new LocalRunnerService({ workspaceRoot: root, root, config, restrictWebOrigins: true });
+    const started = await service.start({ charter: charter([]), adapter: "electron" });
+    await expect(service.wait(started.runId)).rejects.toThrow("CDP endpoint must use loopback");
+    expect(WebAdapter.prototype.connect).not.toHaveBeenCalled();
+  });
+
   it("keeps a denied inline business reader inconclusive after a passing page assertion", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(403, { "content-type": "application/json" });

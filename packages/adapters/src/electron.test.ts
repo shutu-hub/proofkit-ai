@@ -28,6 +28,17 @@ describe("shared Electron endpoint resolution", () => {
     expect(await resolveElectronCdpUrl({ cdpUrl: "http://127.0.0.1:9222", devtoolsActivePortPath: path })).toBe("http://127.0.0.1:9222");
     expect(await resolveElectronCdpUrl({ devtoolsActivePortPath: path })).toBe("http://127.0.0.1:9223");
     expect(await resolveElectronCdpUrl({})).toBe("http://127.0.0.1:9224");
+    expect(await resolveElectronCdpUrl({ devtoolsActivePortPath: "ws://127.0.0.1:9225/devtools/browser/id" }))
+      .toBe("ws://127.0.0.1:9225/devtools/browser/id");
+  });
+  it("keeps the leased endpoint when the port file changes before attachment", async () => {
+    const path = await portFile("9222\n");
+    const adapter = new ElectronAdapter({ devtoolsActivePortPath: path });
+    adapter.pinCdpUrl("http://127.0.0.1:9222");
+    await writeFile(path, "invalid\n");
+    const connect = vi.spyOn(WebAdapter.prototype, "connect").mockResolvedValue();
+    await adapter.connect();
+    expect(connect).toHaveBeenCalledOnce();
   });
   it.each(["0\n", "65536\n", "invalid\n", "9".repeat(4097)])("rejects an invalid or oversized port file", async (content) => {
     await expect(resolveElectronCdpUrl({ devtoolsActivePortPath: await portFile(content) })).rejects.toThrow();

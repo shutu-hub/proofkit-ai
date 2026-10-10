@@ -1,5 +1,6 @@
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { resolveElectronCdpUrl } from "@proofkit/adapters";
 import { LocalExecutionOwnership, sha256, type LocalExecutionLease } from "@proofkit/evidence";
 import type { ProofkitConfig } from "@proofkit/contracts";
 import type { LocalAdapterName, LocalRunInput } from "./index.js";
@@ -20,6 +21,36 @@ export async function acquireExecutionScope(workspaceRoot: string, target: strin
     } };
   } catch (error) {
     await workspace.release();
+    throw error;
+  }
+}
+
+/** Coordinate port-file attachments with every other CDP attachment to the resolved endpoint. */
+export async function acquireCdpTarget(cdpUrl: string): Promise<LocalExecutionLease | undefined> {
+  return new LocalExecutionOwnership(TARGET_LEASE_ROOT, "target").acquire(sha256(`cdp:${endpointOrigin(cdpUrl)}`));
+}
+
+/** An existing port file can be resolved before setup; a newly started app is resolved after setup. */
+export async function acquireElectronPortFileScope(workspaceRoot: string, fileIdentity: string, portFile: string,
+  signal: AbortSignal, readExisting: boolean): Promise<{ lease: LocalExecutionLease | undefined; cdpUrl?: string }> {
+  const base = await acquireExecutionScope(workspaceRoot, fileIdentity);
+  if (!base || !readExisting) return { lease: base };
+  try {
+    let cdpUrl: string;
+    try { cdpUrl = (await resolveElectronCdpUrl({ devtoolsActivePortPath: portFile }, signal))!; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { lease: base };
+      throw error;
+    }
+    const endpoint = await acquireCdpTarget(cdpUrl);
+    if (!endpoint) throw new Error("Another Run controls this configured CDP target; retry after it completes.");
+    return { cdpUrl, lease: { release: async () => {
+      const settled = await Promise.allSettled([endpoint.release(), base.release()]);
+      const failure = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
+      if (failure) throw failure.reason;
+    } } };
+  } catch (error) {
+    await base.release();
     throw error;
   }
 }

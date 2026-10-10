@@ -17,11 +17,16 @@ export class ElectronAdapter extends WebAdapter {
     this.electronOptions = options;
   }
 
+  /** Use exactly the endpoint protected by the post-setup target lease. */
+  pinCdpUrl(cdpUrl: string): void {
+    this.electronOptions.cdpUrl = cdpUrl;
+    this.options.cdpUrl = cdpUrl;
+  }
+
   override async connect(): Promise<void> {
     const cdpUrl = await resolveElectronCdpUrl(this.electronOptions);
     if (!cdpUrl) throw new Error("Electron CDP endpoint is missing. Set --cdp or --devtools-port-file.");
-    this.electronOptions.cdpUrl = cdpUrl;
-    this.options.cdpUrl = cdpUrl;
+    this.pinCdpUrl(cdpUrl);
     await super.connect();
   }
 
@@ -36,7 +41,7 @@ export async function resolveElectronCdpUrl(options: Pick<ElectronAdapterOptions
   if (options.cdpUrl) return options.cdpUrl;
   const candidate = options.devtoolsActivePortPath ?? process.env.PROOFKIT_ELECTRON_DEVTOOLS_PORT;
   if (!candidate) return undefined;
-  if (/^https?:\/\//.test(candidate)) return candidate;
+  if (/^(https?|wss?):\/\//i.test(candidate)) return candidate;
   const handle = await open(resolve(candidate), "r");
   let source: string;
   try {

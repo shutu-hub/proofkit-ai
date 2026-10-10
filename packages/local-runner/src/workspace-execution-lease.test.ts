@@ -6,13 +6,15 @@ import { ProofkitConfigSchema, TestCharterSchema } from "@proofkit/contracts";
 import { LocalExecutionOwnership } from "@proofkit/evidence";
 import type { SurfaceAdapter } from "@proofkit/runner";
 import { LocalRunnerService } from "./index.js";
-import { sharedTargetIdentity } from "./execution-scope.js";
+import { acquireCdpTarget, sharedTargetIdentity } from "./execution-scope.js";
 
-const state = vi.hoisted(() => ({ connected: 0, holdFirst: true, entered: () => {},
+const state = vi.hoisted(() => ({ connected: 0, pinned: [] as string[], holdFirst: true, entered: () => {},
   release: Promise.resolve(), releaseFirst: () => {} }));
-vi.mock("@proofkit/adapters", () => {
+vi.mock("@proofkit/adapters", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@proofkit/adapters")>();
   class Adapter implements SurfaceAdapter {
     readonly name = "fixture";
+    pinCdpUrl(cdpUrl: string) { state.pinned.push(cdpUrl); }
     async connect() { state.connected++; }
     async discover() { return this.snapshot(); }
     async snapshot() { return { capturedAt: new Date().toISOString(), text: "ready", metadata: {} }; }
@@ -32,7 +34,7 @@ vi.mock("@proofkit/adapters", () => {
     async subscribeEvents() { return () => {}; }
     async close() { /* no-op */ }
   }
-  return { WebAdapter: Adapter, ElectronAdapter: Adapter, MobileAdapter: Adapter };
+  return { ...actual, WebAdapter: Adapter, ElectronAdapter: Adapter, MobileAdapter: Adapter };
 });
 
 const roots: string[] = [];
@@ -40,6 +42,7 @@ afterEach(async () => {
   state.releaseFirst();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   state.connected = 0;
+  state.pinned = [];
   state.holdFirst = true;
   state.entered = () => {};
   state.release = Promise.resolve();
@@ -154,4 +157,96 @@ it("normalizes loopback CDP aliases and scopes mobile targets to their WebDriver
   expect(sharedTargetIdentity("web", { url: "http://127.0.0.1:5173" }, config)).toBeUndefined();
   expect(sharedTargetIdentity("mobile", { mobileServer: "http://localhost:4723/wd/hub" }, config))
     .toBe(sharedTargetIdentity("mobile", { mobileServer: "http://127.0.0.1:4723/" }, config));
+});
+
+it("blocks different Electron port files pointing to the same CDP target", async () => {
+  const base = await mkdtemp(join(tmpdir(), "proofkit-electron-target-"));
+  roots.push(base);
+  const root = join(base, "source");
+  await mkdir(root);
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "electron-target-fixture" }));
+  const port = 30_000 + Math.floor(Math.random() * 20_000);
+  const firstFile = join(base, "first-port");
+  const secondFile = join(base, "second-port");
+  await Promise.all([writeFile(firstFile, `${port}\n`), writeFile(secondFile, `${port}\n`)]);
+  const config = (file: string) => ProofkitConfigSchema.parse({ surfaces: { electron: { devtoolsActivePort: file } } });
+  const first = new LocalRunnerService({ root, workspaceRoot: join(base, "one"), config: config(firstFile) });
+  const secondSetup = vi.fn(async () => () => {});
+  const second = new LocalRunnerService({ root, workspaceRoot: join(base, "two"), config: config(secondFile),
+    integration: { name: "blocked-setup", setup: secondSetup } });
+  const explicit = new LocalRunnerService({ root, workspaceRoot: join(base, "explicit"),
+    config: ProofkitConfigSchema.parse({ surfaces: { web: { cdpUrl: `http://localhost:${port}` } } }) });
+  const entered = new Promise<void>((resolve) => { state.entered = resolve; });
+  state.release = new Promise<void>((resolve) => { state.releaseFirst = resolve; });
+  const charter = TestCharterSchema.parse({ intent: "Check Electron port-file target isolation", level: "quick",
+    actions: [{ kind: "waitForText", text: "ready" }],
+    assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" });
+  try {
+    const active = await first.start({ charter, adapter: "electron" });
+    await entered;
+    const contender = await second.start({ charter, adapter: "electron" });
+    expect((await second.wait(contender.runId)).verdict).toBe("blocked");
+    const explicitContender = await explicit.start({ charter, adapter: "web" });
+    expect((await explicit.wait(explicitContender.runId)).verdict).toBe("blocked");
+    expect(state.connected).toBe(1);
+    expect(secondSetup).not.toHaveBeenCalled();
+    expect(state.pinned).toEqual([`http://127.0.0.1:${port}`]);
+    state.releaseFirst();
+    expect((await first.wait(active.runId)).verdict).toBe("passed");
+  } finally { state.releaseFirst(); }
+  const retry = await second.start({ charter, adapter: "electron" });
+  expect((await second.wait(retry.runId)).verdict).toBe("passed");
+  expect(state.pinned).toEqual([`http://127.0.0.1:${port}`, `http://127.0.0.1:${port}`]);
+}, 20_000);
+
+it("resolves a port file created by setup before attaching Electron", async () => {
+  const base = await mkdtemp(join(tmpdir(), "proofkit-electron-startup-"));
+  roots.push(base);
+  const root = join(base, "source");
+  await mkdir(root);
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "electron-startup-fixture" }));
+  const file = join(base, "started-port");
+  const port = 30_000 + Math.floor(Math.random() * 20_000);
+  const config = ProofkitConfigSchema.parse({ surfaces: { electron: { devtoolsActivePort: file } } });
+  const runner = new LocalRunnerService({ root, workspaceRoot: join(base, "workspace"), config, integration: {
+    name: "start-electron-fixture", setupPolicy: { sideEffect: "read", environments: ["test"], cleanupTimeoutMs: 1000 },
+    setup: async () => { await writeFile(file, `${port}\n`); return () => {}; },
+  } });
+  state.holdFirst = false;
+  const charter = TestCharterSchema.parse({ intent: "Check started Electron target", level: "quick",
+    actions: [{ kind: "waitForText", text: "ready" }],
+    assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" });
+  const started = await runner.start({ charter, adapter: "electron" });
+  expect((await runner.wait(started.runId)).verdict).toBe("passed");
+  expect(state.pinned).toEqual([`http://127.0.0.1:${port}`]);
+});
+
+it("pins a port changed by setup and releases both endpoint leases", async () => {
+  const base = await mkdtemp(join(tmpdir(), "proofkit-electron-rotation-"));
+  roots.push(base);
+  const root = join(base, "source");
+  await mkdir(root);
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "electron-rotation-fixture" }));
+  const file = join(base, "rotated-port");
+  const oldPort = 30_000 + Math.floor(Math.random() * 10_000);
+  const newPort = oldPort + 10_000;
+  await writeFile(file, `${oldPort}\n`);
+  const config = ProofkitConfigSchema.parse({ surfaces: { electron: { devtoolsActivePort: file } } });
+  const runner = new LocalRunnerService({ root, workspaceRoot: join(base, "workspace"), config, integration: {
+    name: "rotate-electron-fixture", setupPolicy: { sideEffect: "read", environments: ["test"], cleanupTimeoutMs: 1000 },
+    setup: async () => { await writeFile(file, `${newPort}\n`); return () => {}; },
+  } });
+  state.holdFirst = false;
+  const charter = TestCharterSchema.parse({ intent: "Check rotated Electron target", level: "quick",
+    actions: [{ kind: "waitForText", text: "ready" }],
+    assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" });
+  const started = await runner.start({ charter, adapter: "electron" });
+  expect((await runner.wait(started.runId)).verdict).toBe("passed");
+  expect(state.pinned).toEqual([`http://127.0.0.1:${newPort}`]);
+  const oldLease = await acquireCdpTarget(`http://127.0.0.1:${oldPort}`);
+  const newLease = await acquireCdpTarget(`http://127.0.0.1:${newPort}`);
+  try {
+    expect(oldLease).toBeDefined();
+    expect(newLease).toBeDefined();
+  } finally { await Promise.all([oldLease?.release(), newLease?.release()]); }
 });
