@@ -1,0 +1,75 @@
+name: ProofKit Action smoke
+
+on:
+  push:
+    paths:
+      - action.yml
+      - packages/**
+      - scripts/**
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/action-smoke.yml
+  pull_request:
+    paths:
+      - action.yml
+      - packages/**
+      - scripts/**
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/action-smoke.yml
+  workflow_dispatch:
+
+jobs:
+  action-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated source directory
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/proofkit-action-source"
+          printf '{"name":"proofkit-action-fixture","dependencies":{"vite":"*"}}\n' > "$RUNNER_TEMP/proofkit-action-source/package.json"
+      - name: Run the local Composite Action
+        id: proofkit
+        uses: ./
+        with:
+          project-root: ${{ runner.temp }}/proofkit-action-source
+          workspace-root: ${{ runner.temp }}/proofkit-action-workspace
+          intent: Verify the ProofKit Action fixture
+          level: quick
+          url: 'data:text/html,%3Ch1%3EProofKit%20Action%20ready%3C%2Fh1%3E'
+          expect-text: ProofKit Action ready
+      - name: Re-audit the saved Mission through the Action
+        id: recheck
+        uses: ./
+        with:
+          project-root: ${{ runner.temp }}/proofkit-action-source
+          workspace-root: ${{ runner.temp }}/proofkit-action-workspace
+          mission-id: ${{ steps.proofkit.outputs.mission-id }}
+          mode: check
+          install-browser: 'false'
+      - name: Verify both Action result contracts
+        shell: bash
+        env:
+          FIRST_MISSION_ID: ${{ steps.proofkit.outputs.mission-id }}
+          FIRST_VERDICT: ${{ steps.proofkit.outputs.test-verdict }}
+          FIRST_SUMMARY: ${{ steps.proofkit.outputs.summary-path }}
+          RECHECK_MISSION_ID: ${{ steps.recheck.outputs.mission-id }}
+          RECHECK_VERDICT: ${{ steps.recheck.outputs.test-verdict }}
+          RECHECK_SUMMARY: ${{ steps.recheck.outputs.summary-path }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFile } from 'node:fs/promises';
+          assert.ok(process.env.FIRST_MISSION_ID);
+          assert.equal(process.env.RECHECK_MISSION_ID, process.env.FIRST_MISSION_ID);
+          assert.equal(process.env.FIRST_VERDICT, 'passed');
+          assert.equal(process.env.RECHECK_VERDICT, 'passed');
+          for (const path of [process.env.FIRST_SUMMARY, process.env.RECHECK_SUMMARY]) {
+            assert.ok(path);
+            const result = JSON.parse(await readFile(path, 'utf8'));
+            assert.equal(result.schemaVersion, '1');
+            assert.equal(result.missionId, process.env.FIRST_MISSION_ID);
+            assert.equal(result.testVerdict, 'passed');
+          }
+          NODE

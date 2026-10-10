@@ -1,6 +1,6 @@
 # GitHub Action 接入
 
-根目录的 `action.yml` 是可复用的 Composite Action。它从该 Action 的源码版本构建 ProofKit，使用同一 CLI 创建、运行或复核 Mission，输出当前证据审计后的结论。发布到 GitHub 引用并在真实 runner 上验证前，以下配置是接入模板；本地回归已验证包装脚本和真实 Chrome 链路。
+根目录的 `action.yml` 是可复用的 Composite Action。它从该 Action 的源码版本构建 ProofKit，使用同一 CLI 创建、运行或复核 Mission，输出当前证据审计后的结论。仓库的 `.github/workflows/action-smoke.yml` 已安排在 GitHub runner 上通过 `uses: ./` 验证完整 Action；当前本地提交尚未推送，因此该工作流还没有执行证据。以下配置是接入模板；本地回归已验证包装脚本和真实 Chrome 链路。
 
 ## 运行场景
 

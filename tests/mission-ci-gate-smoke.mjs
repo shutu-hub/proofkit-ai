@@ -26,6 +26,11 @@ try {
   assert.equal(action.runs.steps.at(-1).env.PROOFKIT_ACTION_INTENT, "${{ inputs.intent }}");
   assert.equal(action.runs.steps.at(-1).env.PROOFKIT_ACTION_MISSION_ID, "${{ inputs.mission-id }}");
   assert.equal(action.outputs["test-verdict"].value, "${{ steps.gate.outputs.test-verdict }}");
+  const actionWorkflow = parseYaml(await readFile(resolve(".github/workflows/action-smoke.yml"), "utf8"));
+  const localActionSteps = actionWorkflow.jobs["action-smoke"].steps.filter((step) => step.uses === "./");
+  assert.equal(localActionSteps.length, 2);
+  assert.equal(localActionSteps[0].with.level, "quick");
+  assert.equal(localActionSteps[1].with.mode, "check");
   if (browserPath) assert.ok(existsSync(browserPath), `Browser not found: ${browserPath}`);
   await Promise.all([mkdir(source), mkdir(join(workspace, ".proofkit"), { recursive: true })]);
   await writeFile(join(source, "package.json"), JSON.stringify({ name: "ci-gate-fixture", dependencies: { vite: "*" } }));
@@ -108,6 +113,16 @@ try {
   assert.equal(JSON.parse(firstUse.stdout).testVerdict, "passed");
   assert.ok(existsSync(join(freshWorkspace, ".proofkit", "config.yaml")));
   assert.deepEqual(await readdir(source), ["package.json"]);
+  const inlineWorkspace = join(scratch, "inline-workspace");
+  const inlineRun = await actionCommand({
+    PROOFKIT_ACTION_WORKSPACE_ROOT: inlineWorkspace,
+    PROOFKIT_ACTION_INTENT: "Check inline fixture", PROOFKIT_ACTION_MODE: "run",
+    PROOFKIT_ACTION_LEVEL: "quick",
+    PROOFKIT_ACTION_URL: "data:text/html,%3Ch1%3EProofKit%20inline%20fixture%3C%2Fh1%3E",
+    PROOFKIT_ACTION_EXPECT_TEXT: "ProofKit inline fixture",
+  }, actionOutput, actionSummary);
+  assert.equal(inlineRun.code, 0, inlineRun.stderr || inlineRun.stdout);
+  assert.equal(JSON.parse(inlineRun.stdout).testVerdict, "passed");
   const coreWithoutOracle = await actionCommand({
     PROOFKIT_ACTION_WORKSPACE_ROOT: freshWorkspace,
     PROOFKIT_ACTION_INTENT: "Core flow without business proof", PROOFKIT_ACTION_MODE: "run",
