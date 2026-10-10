@@ -28,6 +28,7 @@ describe("ProofKit MCP tools", () => {
       "approve_test_plan",
       "start_mission",
       "get_mission_status",
+      "await_test_result",
       "get_mission_evidence",
       "cancel_mission",
       "replay_mission",
@@ -150,11 +151,12 @@ describe("ProofKit MCP tools", () => {
       },
       readiness: { ready: true, missing: [] },
       polling: {
+        waitTool: "await_test_result",
         statusTool: "get_mission_status",
         evidenceTool: "get_mission_evidence",
         terminalStatuses: ["completed", "failed", "blocked", "cancelled"],
       },
-      next: ["get_mission_status", "get_mission_evidence"],
+      next: ["await_test_result"],
     });
     expect(payload.taskSummary).toEqual([
       expect.objectContaining({ taskId: "reconnaissance", status: "passed" }),
@@ -163,6 +165,73 @@ describe("ProofKit MCP tools", () => {
 
     await client.close();
     await server.close();
+  });
+
+  it("waits for an existing Mission and returns an evidence-checked terminal summary without starting it", async () => {
+    const running = fixtureMission("running");
+    const completed = fixtureMission("completed");
+    const missionStatus = vi.fn()
+      .mockResolvedValueOnce({ mission: running, running: true })
+      .mockResolvedValue({ mission: completed, running: false });
+    const missionEvidence = vi.fn(async () => ({ missionId: "mission-test", status: "completed", running: false,
+      verdict: "passed", level: "core", summary: { missionId: "mission-test", verdict: "passed" },
+      evidenceIntegrity: { status: "intact" }, report: "C:/workspace/report.html" }));
+    const runner = { missionStatus, missionEvidence, startMission: vi.fn() } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "await_test_result", arguments: { missionId: "mission-test", timeoutMs: 1000 } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ state: "terminal", missionId: "mission-test",
+        status: "completed", verdict: "passed", evidenceIntegrity: { status: "intact" },
+        report: "C:/workspace/report.html", next: ["get_mission_evidence"] });
+      expect(missionStatus).toHaveBeenCalledTimes(2);
+      expect(missionEvidence).toHaveBeenCalledWith("mission-test");
+      expect(runner.startMission).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("reports an active Mission at the wait deadline and does not infer a product verdict", async () => {
+    const missionStatus = vi.fn(async () => ({ mission: fixtureMission("running"), running: true }));
+    const missionEvidence = vi.fn();
+    const runner = { missionStatus, missionEvidence, startMission: vi.fn() } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "await_test_result", arguments: { missionId: "mission-test", timeoutMs: 500 } });
+      const payload = JSON.parse(textContent(response));
+      expect(payload).toMatchObject({ state: "still-running", status: "running", running: true, next: ["await_test_result"] });
+      expect(payload.verdict).toBeUndefined();
+      expect(missionEvidence).not.toHaveBeenCalled();
+      expect(runner.startMission).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("returns a next action immediately when the Mission has no active owner", async () => {
+    const runner = { missionStatus: vi.fn(async () => ({ mission: fixtureMission("awaiting-approval"), running: false })),
+      missionEvidence: vi.fn(), startMission: vi.fn() } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "await_test_result", arguments: { missionId: "mission-test" } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ state: "needs-action", status: "awaiting-approval",
+        running: false, next: ["approve_test_plan", "start_mission"] });
+      expect(runner.missionEvidence).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("cancels only the wait when the MCP caller disconnects", async () => {
+    let observed!: () => void;
+    const firstStatus = new Promise<void>((resolve) => { observed = resolve; });
+    const runner = { missionStatus: vi.fn(async () => { observed(); return { mission: fixtureMission("running"), running: true }; }),
+      missionEvidence: vi.fn(), cancelMission: vi.fn(), startMission: vi.fn() } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const controller = new AbortController();
+      const pending = client.callTool({ name: "await_test_result", arguments: { missionId: "mission-test", timeoutMs: 20_000 } }, undefined, { signal: controller.signal });
+      const rejected = expect(pending).rejects.toThrow();
+      await firstStatus;
+      controller.abort(new Error("Stop waiting"));
+      await rejected;
+      expect(runner.cancelMission).not.toHaveBeenCalled();
+      expect(runner.startMission).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
   });
 
   it("accepts a release suite from one natural-language MCP call", async () => {

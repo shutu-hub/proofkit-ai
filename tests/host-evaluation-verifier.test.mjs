@@ -55,6 +55,17 @@ test("requires status and terminal evidence for the same saved Mission", async (
   await rejects(input, "same-mission-status-not-read");
   input.calls.pop(); await rejects(input, "terminal-evidence-not-read");
 });
+test("accepts a terminal bounded wait as the same-Mission status observation", async (t) => {
+  const input = await fixture(t);
+  input.calls[2] = { tool: "await_test_result", arguments: { missionId: input.answer.missionId },
+    result: { state: "terminal", missionId: input.answer.missionId, verdict: "passed" }, status: "completed" };
+  assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
+  input.calls[2].result.state = "still-running";
+  await rejects(input, "same-mission-status-not-read");
+  input.calls[2].result.state = "terminal";
+  input.calls[2].result.missionId = "another-mission";
+  await rejects(input, "same-mission-status-not-read");
+});
 test("rejects missing independent proof and product failure without business facts", async (t) => {
   const input = await fixture(t, "failed"); input.runs[0].oracles = []; input.missions[0].findings[0].evidence = [];
   await rejects(input, "independent-business-proof-missing"); await rejects(input, "seeded-defect-not-evidenced");

@@ -139,6 +139,15 @@ the host cancelled MCP calls. The benchmark now stops on that infrastructure
 blocker and leaves later cases unrun. It has not measured Codex adherence,
 implicit activation, false-pass rate or model cost on a completed Mission.
 
+The MCP `await_test_result` tool now waits up to 30 seconds on the saved Mission
+without starting or cancelling it. It returns a compact terminal summary and
+current evidence integrity, a still-running receipt, or a no-owner action. The
+portable Skill uses this path so the host does not have to infer completion from
+repeated full Mission reads. MCP unit tests and all six scripted real-Chrome
+host cases exercise it, including pass, seeded defect, pending business state,
+project coverage gap, quick level and inline Charter; model adherence remains
+unverified.
+
 The planning quality gate is covered by tests for missing structural proof, partial discovery versus declared acceptance, whole-project requests, legacy gates, replay and model-reported high confidence. It is a deterministic readiness signal, not a calibrated probability or a substitute for real surface and business evidence. Curated release suites retain their reviewed declared-case scope; the missing-negative-case gap applies to generated release Charters. The real Web/Electron fixture also verifies submitted core scenarios with more than 200 static routes, independent HTTP business facts and a whole-project readiness gate. These checks do not constitute live AIHR acceptance or a measured whole-project workflow inventory.
 
 The explicit release suite now snapshots multiple Charter IDs and its excluded catalog scope into one Mission. A two-workflow Web/Electron smoke drives the real MCP `run_test` path, performs eight primary/replay Runs per Mission, checks independent HTTP business facts, and detects a seeded resume-only defect while the other workflow stays green. This proves the configured suite slice, not automatic whole-project coverage or a live AIHR deployment.

@@ -164,6 +164,7 @@ process.exit(3);
   try {
     await withDeadline(binClient.connect(binTransport), 10_000, "Installed MCP binary connection");
     assert.ok((await binClient.listTools()).tools.some((tool) => tool.name === "run_test"));
+    assert.ok((await binClient.listTools()).tools.some((tool) => tool.name === "await_test_result"));
   } finally { await binClient.close(); }
   const transport = new StdioClientTransport({ command: emittedServer.command, args: emittedServer.args,
     env: { ...mcpEnv, ...emittedServer.env } });

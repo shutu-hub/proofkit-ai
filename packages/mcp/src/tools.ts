@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { setTimeout as delay } from "node:timers/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestMission } from "@proofkit/contracts";
 import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
@@ -126,6 +127,13 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     { missionId: z.string().min(1) },
     READ_ONLY_TOOL,
     async ({ missionId }) => result(await runner.missionStatus(missionId)),
+  );
+
+  server.tool(
+    "await_test_result",
+    "Wait briefly for an existing Mission without starting or replaying it. Return a compact, evidence-checked terminal result, a still-running receipt, or the action needed for a Mission that is not running. Cancelling this wait does not cancel the Mission.",
+    { missionId: z.string().min(1), timeoutMs: z.number().int().min(500).max(30_000).default(20_000) },
+    async ({ missionId, timeoutMs }, extra) => result(await awaitTestResult(runner, missionId, timeoutMs, extra.signal)),
   );
 
   server.tool(
@@ -263,6 +271,38 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 }
 
+async function awaitTestResult(runner: LocalRunnerService, missionId: string, timeoutMs: number, signal?: AbortSignal) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    signal?.throwIfAborted();
+    const current = await runner.missionStatus(missionId);
+    signal?.throwIfAborted();
+    let status = current.mission.status;
+    let running = current.running;
+    const terminal = ["completed", "failed", "blocked", "cancelled"].includes(status);
+    if (terminal && !running) {
+      const evidence = await runner.missionEvidence(missionId);
+      signal?.throwIfAborted();
+      if (!evidence.running && ["completed", "failed", "blocked", "cancelled"].includes(evidence.status)) {
+        return { state: "terminal" as const, missionId, status: evidence.status, verdict: evidence.verdict,
+          level: evidence.level, summary: evidence.summary, evidenceIntegrity: evidence.evidenceIntegrity,
+          firstFailure: evidence.firstFailure, report: evidence.report, reportUnavailable: evidence.reportUnavailable,
+          next: ["get_mission_evidence"] };
+      }
+      status = evidence.status;
+      running = evidence.running;
+    }
+    if (!running) {
+      return { state: "needs-action" as const, missionId, status, running: false,
+        next: status === "awaiting-approval" ? ["approve_test_plan", "start_mission"] : ["get_mission_status", "start_mission"] };
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { state: "still-running" as const, missionId, status,
+      running: true, next: ["await_test_result"] };
+    await delay(Math.min(500, remaining), undefined, signal ? { signal } : undefined);
+  }
+}
+
 function result(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
 }
@@ -298,7 +338,7 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
     : mission.status === "awaiting-approval"
     ? ["approve_test_plan"]
     : started.running || mission.status === "running"
-      ? ["get_mission_status", "get_mission_evidence"]
+      ? ["await_test_result"]
       : terminal.includes(mission.status)
         ? ["get_mission_evidence"]
         : ["start_mission", "get_mission_status"];
@@ -336,6 +376,7 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
         : "该测试级别不强制独立业务 Oracle。",
     },
     polling: {
+      waitTool: "await_test_result",
       statusTool: "get_mission_status",
       evidenceTool: "get_mission_evidence",
       intervalMs: 500,

@@ -48,7 +48,9 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   check(missions.length === 1, "unexpected-mission-restart");
   check(mission?.verdict === expected.verdict, "saved-verdict-does-not-match-case");
   check(["completed", "failed", "blocked", "cancelled"].includes(mission?.status), "mission-not-terminal");
-  const statusReads = successful.filter((call) => call.tool === "get_mission_status");
+  const statusReads = successful.filter((call) => call.tool === "get_mission_status"
+    || call.tool === "await_test_result" && call.result?.state === "terminal"
+      && call.result.missionId === answer.missionId && call.result.verdict === expected.verdict);
   check(statusReads.some((call) => call.arguments.missionId === answer.missionId), "same-mission-status-not-read");
   const evidenceReads = successful.filter((call) => call.tool === "get_mission_evidence" && call.arguments.missionId === answer.missionId);
   const observed = evidenceReads.at(-1)?.result;

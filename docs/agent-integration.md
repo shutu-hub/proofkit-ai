@@ -146,6 +146,7 @@ inspect_surface
 list_test_charters
 list_test_suites
 run_test
+await_test_result
 get_mission_status
 get_mission_evidence
 cancel_mission
@@ -163,7 +164,7 @@ compare_missions
 }
 ```
 
-The response contains `missionId`, the resolved level and the running status. The agent then polls the status until the mission reaches a terminal state and reads evidence once. For a review-first workflow, call `create_test_mission`, inspect the task graph, call `approve_test_plan`, and then call `start_mission`.
+The response contains `missionId`, the resolved level and the running status. The agent uses `await_test_result` with that ID until it receives a terminal summary, then reads detailed evidence once. For a review-first workflow, call `create_test_mission`, inspect the task graph, call `approve_test_plan`, and then call `start_mission`.
 
 For an unfamiliar project, first call `inspect_test_scope({ surface: "electron", level: "core" })`. It joins source-backed candidate entry points/routes, compatible saved Charter/Suite checks, registered business Oracles and capability input hints in one bounded response. `focus` optionally filters by a literal source-path, alias or registration substring; it does not understand a whole natural-language request. `limit` defaults to 20 and is capped at 50 details per section. Use total/matched/omitted counts and `inventory.truncated` to describe the actual inspected scope. Gin group prefixes are composed conservatively within each file; `inventory.routeDiagnostics` gives unresolved declaration locations and total/omitted counts, never guessed paths. Route `declared` status only means a catalog mapping exists; it can coexist with `planReady: false` and never proves execution.
 
@@ -380,6 +381,8 @@ charters:
 The final evidence gate is checked per primary run and required replay, not across pooled runs. An Oracle must return at least one sanitized observation fact; ProofKit's own Oracle result file does not count as that fact. A negative case cannot make an unverified main path green.
 
 If a one-sentence request has no suitable Charter and the planner cannot supply an assertion or required Oracle, `run_test` returns `readiness.ready=false` and does not start the surface. Its next-tool hints point to `inspect_test_scope`, `inspect_surface`, `plan_test` and `run_test`. The agent can inspect the gaps and call `run_test` again with a complete structured Charter. Readiness checks structural prerequisites; they do not prove the assertion is meaningful.
+
+After `run_test` starts, `await_test_result({ missionId })` observes the same Mission for up to 20 seconds by default (maximum 30 seconds). A terminal response includes the saved verdict, bounded summary, current presented-evidence integrity and report path; `still-running` means the agent should call it again with the same ID. `needs-action` means no execution owner is active and identifies the next tool. A wait deadline or MCP cancellation never starts, replays or cancels the Mission. Use `get_mission_evidence` for the detailed findings and evidence links after termination.
 
 ## What the agent receives
 

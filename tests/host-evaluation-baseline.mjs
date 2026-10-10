@@ -71,10 +71,15 @@ async function evaluate(fixture, expected) {
         summary: "The saved Mission lacks whole-project workflow coverage proof." };
     } else {
       if (!started.running) throw new Error(`Expected a started Mission: ${JSON.stringify(started.readiness)}`);
-      const status = await waitForMission(call, started.missionId);
+      const terminal = await waitForMission(call, started.missionId);
       const evidence = await call("get_mission_evidence", { missionId: started.missionId });
+      if (terminal.verdict !== evidence.summary?.verdict
+        || terminal.evidenceIntegrity?.status !== evidence.evidenceIntegrity?.status
+        || terminal.report !== evidence.report) {
+        throw new Error("Bounded wait result differs from the saved Mission evidence");
+      }
       const issues = (evidence.summary?.runs ?? []).flatMap((row) => row.issue ? [row.issue] : []);
-      if (status.mission?.firstFailure?.message) issues.push(status.mission.firstFailure.message);
+      if (terminal.firstFailure?.message) issues.push(terminal.firstFailure.message);
       answer = { missionId: started.missionId, verdict: evidence.summary?.verdict,
         level: started.level, coverage: started.planning?.coverage?.requested, surface: expected.surface,
         report: evidence.report, evidencePaths: (evidence.evidence ?? []).filter((item) => typeof item.path === "string").map((item) => item.path),
@@ -96,13 +101,13 @@ async function evaluate(fixture, expected) {
 
 async function waitForMission(call, missionId) {
   const deadline = Date.now() + 30_000;
-  let status;
+  let observation;
   while (Date.now() < deadline) {
-    status = await call("get_mission_status", { missionId });
-    if (!status.running) return status;
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    observation = await call("await_test_result", { missionId, timeoutMs: Math.max(500, Math.min(20_000, deadline - Date.now())) });
+    if (observation.state === "terminal") return observation;
+    if (observation.state === "needs-action") throw new Error(`Mission stopped without a terminal result: ${missionId}, status: ${observation.status}`);
   }
-  throw new Error(`Mission did not settle: ${missionId}, latest status: ${status?.mission?.status}`);
+  throw new Error(`Mission did not settle: ${missionId}, latest status: ${observation?.status}`);
 }
 async function records(directory) {
   try { return await Promise.all((await readdir(directory)).filter((path) => path.endsWith(".json"))

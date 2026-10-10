@@ -63,9 +63,12 @@ plus the selected catalog ID or validated Charter. Inspect readiness.missing,
 planning and next when it does not start. Correct supported plan gaps rather
 than forcing an evidence-deficient plan through approval.
 
-Keep the returned missionId. Poll get_mission_status for that same Mission
-while it is running, at a reasonable interval, and read get_mission_evidence
-after termination. Never restart merely because a status observation timed out.
+Keep the returned missionId. Call await_test_result for that same Mission. Its
+bounded wait returns a terminal summary with current evidence integrity, a
+still-running receipt, or a concrete next action if no owner is running. Repeat
+the wait for a still-running Mission; read get_mission_evidence after termination
+for detailed findings and links. Never restart merely because a wait timed out.
+Cancelling the wait does not cancel the Mission.
 Cancel with cancel_mission if the user requests a stop. Do not repeat a write
 scenario blindly after interruption; inspect saved status and resources first.
 inspect_run_resources is observational; recover_run_resources requires a
