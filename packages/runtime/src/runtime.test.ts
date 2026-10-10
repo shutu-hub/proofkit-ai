@@ -4,6 +4,54 @@ import { ProjectRuntime } from "./index.js";
 import { ProofkitConfigSchema } from "@proofkit/contracts";
 
 describe("ProjectRuntime", () => {
+  it("accepts the declared HTTP status without waiting for a streaming body", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(202);
+      response.write("still streaming");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind");
+    const events: string[] = [];
+    const runtime = new ProjectRuntime({
+      root: process.cwd(),
+      config: ProofkitConfigSchema.parse({ project: { health: [{ url: `http://127.0.0.1:${address.port}`, expectedStatus: 202 }], startupTimeoutMs: 1_000 } }),
+      onEvent: (event) => events.push(event.type),
+    });
+    try {
+      await runtime.start();
+      expect(events).toEqual(["health.ready"]);
+      expect(runtime.running).toBe(false);
+    } finally {
+      await runtime.stop();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("bounds stalled health headers by the remaining startup deadline", async () => {
+    const server = createServer(() => {});
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind");
+    const events: string[] = [];
+    const runtime = new ProjectRuntime({
+      root: process.cwd(),
+      config: ProofkitConfigSchema.parse({ project: { health: [`http://127.0.0.1:${address.port}`], startupTimeoutMs: 100 } }),
+      onEvent: (event) => events.push(event.type),
+    });
+    const started = performance.now();
+    try {
+      await expect(runtime.start()).rejects.toThrow("within 100ms");
+      expect(performance.now() - started).toBeLessThan(1_000);
+      expect(events).toEqual(["health.timeout"]);
+    } finally {
+      await runtime.stop();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("aborts an in-flight health request and stops polling", async () => {
     let requested!: () => void;
     const firstRequest = new Promise<void>((resolve) => { requested = resolve; });

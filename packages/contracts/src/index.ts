@@ -296,6 +296,44 @@ export const TargetBindingSchema = z.object({
 });
 export type TargetBinding = z.infer<typeof TargetBindingSchema>;
 
+export const HttpEndpointObservationSchema = z.object({
+  endpoint: z.string(),
+  status: z.enum(["reachable", "unexpected-status", "unreachable", "invalid"]),
+  expectedStatus: z.number().int().min(100).max(599),
+  observedStatus: z.number().int().min(100).max(599).optional(),
+  reason: z.enum(["invalid-url", "timeout", "network-error"]).optional(),
+  durationMs: z.number().nonnegative(),
+});
+export type HttpEndpointObservation = z.infer<typeof HttpEndpointObservationSchema>;
+
+export const EnvironmentInspectionInputSchema = z.object({
+  surface: z.enum(["web", "electron"]).default("web"),
+  timeoutMs: z.number().int().min(100).max(15_000).default(5_000),
+});
+export type EnvironmentInspectionInput = z.input<typeof EnvironmentInspectionInputSchema>;
+
+export const EnvironmentInspectionSchema = z.object({
+  inspectionId: z.string().regex(/^environment-[a-zA-Z0-9_-]+$/),
+  projectRoot: z.string(),
+  workspaceRoot: z.string(),
+  surface: z.enum(["web", "electron"]),
+  observedAt: z.string().datetime(),
+  durationMs: z.number().nonnegative(),
+  status: z.enum(["checks-passed", "blocked", "incomplete"]),
+  testVerdict: z.literal("not-asserted"),
+  checks: z.array(z.object({
+    id: z.string(),
+    kind: z.enum(["configuration", "http", "source-binding"]),
+    status: z.enum(["passed", "blocked", "unverified"]),
+    message: z.string(),
+    http: HttpEndpointObservationSchema.optional(),
+    targetBinding: TargetBindingSchema.optional(),
+  })).max(16),
+  omittedHealthChecks: z.number().int().nonnegative(),
+  notChecked: z.array(z.enum(["browser-session", "authentication", "fixtures", "integration-preflight", "business-terminal", "project-coverage"])),
+});
+export type EnvironmentInspection = z.infer<typeof EnvironmentInspectionSchema>;
+
 export const RunSummarySchema = z.object({
   runId: z.string(),
   projectRoot: z.string().min(1).optional(),

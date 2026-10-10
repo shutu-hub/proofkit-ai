@@ -49,6 +49,7 @@ The public installation boundary is a single `proofkit-ai` npm tarball with `pro
     integration.mjs             # optional trusted business connector
     charters/
     fixtures/                   # explicitly prepared file-input fixtures
+    inspections/<inspection-id>.json # endpoint observations; no product verdict
     missions/<mission-id>.json
     runs/<run-id>/
       run.json
@@ -209,6 +210,16 @@ A focused query rescans with retention priority instead of filtering an already 
 Route reconciliation is shared with release-suite coverage, but this entry point only reports static `declared`/`unmapped` status. It never reports observed coverage. Gin prefixes are composed only within a file; unresolved declarations carry diagnostic locations. Other extractors can include non-router literals and do not compose relative child routes. Only returned eligible plans are read and checked with the existing catalog/Suite validators. `planReady` means structural prerequisites passed; runtime endpoints, login, fixtures, preflight, capability input validation and business outcomes remain untested. Invalid YAML/schema errors omit rejected values and raw source snippets.
 
 Scope inspection returns `testVerdict: not-asserted` and `executionChecks: not-run`, creates no Mission or Run, invokes no setup/preflight/capability/Oracle, and connects to no surface. Service creation still loads trusted connector registration code; this is not a JavaScript sandbox. Capability `inputShape` is a bounded Zod-v3 structural hint, not JSON Schema or a second validator: default values and refinement/transform/preprocess callbacks are omitted, unsupported types and size limits mark the hint partial. It uses no model or additional schema-conversion dependency.
+
+### Environment inspection
+
+`inspect_test_environment` and `proofkit environment` delegate to the same Local Runner method before live surface attachment. It composes configuration checks, header-only HTTP probes from `runtime`, the shared Electron endpoint resolver from `adapters`, and listener/source association from `project`. It creates no Mission or Run and calls no app startup, surface attachment or connector execution hook. Creating the service still loads trusted connector registration code.
+
+Checks share one 100–15000 ms observation deadline (default 5000 ms). At most eight configured backend health endpoints are probed concurrently; omitted checks remain visible. The HTTP primitive issues GET, follows no redirect, closes the response at its headers and records only endpoint origin/path, expected/observed status, duration and bounded reason codes. It omits body, response headers, query, fragment and raw network errors, and rejects URL user information. The same primitive now powers application startup health polling, bounded by the remaining startup deadline. Health success proves the configured HTTP status only.
+
+Electron inspection and attachment share `resolveElectronCdpUrl`: explicit endpoint, configured DevToolsActivePort file, then the environment fallback. Port files must be regular files with at most 4096 bytes and a port in 1–65535. An HTTP CDP discovery check does not parse `/json/version` or establish a protocol session; WebSocket endpoints remain unverified pending `inspect_surface`. MCP health/CDP observations require loopback, while the configured Web surface follows its ordinary configured-origin policy.
+
+The result carries `testVerdict: not-asserted`, `checks-passed`/`blocked`/`incomplete`, and explicit unchecked browser session, authentication, fixtures, connector preflight, business terminal state and project coverage. A different listener checkout blocks under the existing target-binding policy; unsupported or ambiguous source association remains unverified. Caller cancellation propagates its original reason. On observation timeout, incomplete checks resolve as unverified and late results cannot modify the snapshot. The Local Runner saves the bounded JSON under workspace-owned `.proofkit/inspections/` and returns its SHA-256; CLI exit codes are 0/1/2 for the three statuses. This is a point-in-time readiness aid, never a product acceptance gate.
 
 ### Test Mission and Agent Loop
 

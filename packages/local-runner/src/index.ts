@@ -1,9 +1,11 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
-import { createRunId, EvidenceStore, MissionReportStore } from "@proofkit/evidence";
+import { createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofkit/evidence";
+import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
+import { inspectEnvironment } from "./environment.js";
 import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
@@ -208,6 +210,17 @@ export class LocalRunnerService {
         if (gaps.length) throw new Error(`Saved suite planning evidence gaps: ${gaps.join(", ")}`);
       },
     }, request);
+  }
+
+  async inspectEnvironment(input: EnvironmentInspectionInput = {}, signal?: AbortSignal): Promise<EnvironmentInspection & { artifact: { path: string; sha256: string } }> {
+    const inspection = await inspectEnvironment({ root: this.root, workspaceRoot: this.workspaceRoot, config: this.config, restrictWebOrigins: this.restrictWebOrigins }, input, `environment-${createRunId()}`, signal);
+    signal?.throwIfAborted();
+    const candidate = `.proofkit/inspections/${inspection.inspectionId}.json`;
+    await mkdir(dirname(resolveWithinWorkspace(this.workspaceRoot, candidate)), { recursive: true });
+    const path = resolveWithinWorkspace(this.workspaceRoot, candidate);
+    const content = `${JSON.stringify(inspection, null, 2)}\n`;
+    await writeFile(path, content, "utf8");
+    return { ...inspection, artifact: { path, sha256: sha256(content) } };
   }
 
   async inspectSurface(input: SurfaceInspectionInput = {}): Promise<SurfaceInspection> {

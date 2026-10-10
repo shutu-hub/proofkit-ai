@@ -1,0 +1,100 @@
+import { stat } from "node:fs/promises";
+import { EnvironmentInspectionInputSchema, EnvironmentInspectionSchema, type EnvironmentInspection, type EnvironmentInspectionInput, type ProofkitConfig } from "@proofkit/contracts";
+import { resolveElectronCdpUrl } from "@proofkit/adapters";
+import { inspectTargetBinding } from "@proofkit/project";
+import { probeHttpEndpoint } from "@proofkit/runtime";
+
+type Check = EnvironmentInspection["checks"][number];
+type Context = { root: string; workspaceRoot: string; config: ProofkitConfig; restrictWebOrigins: boolean };
+
+/** Observations only: never start an app, attach a browser, or invoke integration hooks. */
+export async function inspectEnvironment(context: Context, input: EnvironmentInspectionInput, inspectionId: string, signal?: AbortSignal): Promise<EnvironmentInspection> {
+  const { surface, timeoutMs } = EnvironmentInspectionInputSchema.parse(input);
+  signal?.throwIfAborted();
+  const started = performance.now();
+  const observedAt = new Date().toISOString();
+  const controller = new AbortController();
+  let timedOut = false;
+  const abort = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(() => { timedOut = true; controller.abort(new Error("Environment inspection deadline")); }, timeoutMs);
+  const config = context.config;
+  const checks: Check[] = [];
+  const tasks: Array<Promise<Check>> = [];
+  const omittedHealthChecks = Math.max(0, config.project.health.length - 8);
+  const bounded = (id: string, kind: Check["kind"], work: () => Promise<Check>) => {
+    const unavailable = (): Check => ({ id, kind, status: "unverified", message: "The check could not complete; no raw error was retained." });
+    tasks.push(new Promise<Check>((resolve) => {
+      const finish = (result: Check) => { controller.signal.removeEventListener("abort", interrupted); resolve(result); };
+      const interrupted = () => finish(unavailable());
+      if (controller.signal.aborted) { interrupted(); return; }
+      controller.signal.addEventListener("abort", interrupted, { once: true });
+      // Late read-only results are handled and never mutate the returned snapshot.
+      void work().then(finish, () => finish(unavailable()));
+    }));
+  };
+  const probe = (id: string, url: string, expectedStatus: number, localOnly: boolean) => {
+    bounded(id, "http", async () => {
+      let parsed: URL;
+      try { parsed = new URL(url); } catch { return { id, kind: "http", status: "blocked", message: "Configure a valid HTTP endpoint." }; }
+      if (localOnly && !isLoopback(parsed.hostname)) return { id, kind: "http", status: "blocked", message: "This MCP check requires a loopback endpoint." };
+      const http = await probeHttpEndpoint(url, expectedStatus, timeoutMs, controller.signal);
+      return { id, kind: "http", status: http.status === "reachable" ? "passed" : "blocked", message: http.status === "reachable" ? "Expected HTTP status observed; no body or protocol session was checked." : "The configured endpoint did not return its expected HTTP status.", http };
+    });
+  };
+  try {
+    const targetUrl = surface === "web" ? config.surfaces.web?.baseUrl : config.surfaces.electron?.targetUrlPrefix;
+    const web = config.surfaces.web;
+    const electron = config.surfaces.electron;
+    const hasConnection = surface === "web" ? Boolean(web?.baseUrl || web?.cdpUrl) : Boolean(electron?.cdpUrl || electron?.devtoolsActivePort || process.env.PROOFKIT_ELECTRON_DEVTOOLS_PORT);
+    checks.push({ id: "surface-configuration", kind: "configuration", status: hasConnection ? "passed" : "blocked", message: hasConnection ? "A surface connection is configured; attachment is checked separately by inspect_surface." : "Configure a Web baseUrl/CDP endpoint or an Electron CDP endpoint/DevToolsActivePort file." });
+    if (surface === "web" && !web?.cdpUrl && web?.executablePath) {
+      bounded("browser-executable", "configuration", async () => {
+        const exists = await stat(web.executablePath!).then((info) => info.isFile()).catch(() => false);
+        return { id: "browser-executable", kind: "configuration", status: exists ? "passed" : "blocked", message: exists ? "Configured executable file exists; browser launch was not attempted." : "The configured browser executable is not an accessible regular file." };
+      });
+    }
+    if (targetUrl && /^https?:\/\//i.test(targetUrl)) probe("surface-http", targetUrl, 200, false);
+    else if (targetUrl) checks.push({ id: "surface-http", kind: "configuration", status: "unverified", message: "This surface selector has no HTTP endpoint; use inspect_surface for the actual page." });
+    bounded("source-binding", "source-binding", async () => {
+      const targetBinding = await inspectTargetBinding(context.root, targetUrl, controller.signal);
+      return { id: "source-binding", kind: "source-binding", status: targetBinding.status === "matching-process-path" ? "passed" : targetBinding.status === "different-project" && config.policies.targetBinding === "block-different" ? "blocked" : "unverified", message: targetBinding.reason, targetBinding };
+    });
+    const cdpConfigured = surface === "electron" ? hasConnection : Boolean(web?.cdpUrl);
+    if (cdpConfigured) {
+      bounded("cdp-http", "http", async () => {
+        let cdpUrl: string | undefined;
+        try { cdpUrl = surface === "electron" ? await resolveElectronCdpUrl({ cdpUrl: electron?.cdpUrl, devtoolsActivePortPath: electron?.devtoolsActivePort }, controller.signal) : web?.cdpUrl; }
+        catch { controller.signal.throwIfAborted(); return { id: "cdp-http", kind: "http", status: "blocked", message: "The Electron CDP endpoint or DevToolsActivePort file could not be resolved." }; }
+        if (!cdpUrl) return { id: "cdp-http", kind: "http", status: "blocked", message: "The configured CDP endpoint could not be resolved." };
+        let parsed: URL;
+        try { parsed = new URL(cdpUrl); } catch { return { id: "cdp-http", kind: "http", status: "blocked", message: "Configure a valid CDP endpoint." }; }
+        if (context.restrictWebOrigins && !isLoopback(parsed.hostname)) return { id: "cdp-http", kind: "http", status: "blocked", message: "MCP CDP endpoints must use loopback." };
+        if (["ws:", "wss:"].includes(parsed.protocol)) return { id: "cdp-http", kind: "http", status: "unverified", message: "WebSocket CDP requires inspect_surface; this check opens no protocol session." };
+        // Preserve credentials for rejection, but never persist them or the query.
+        parsed.pathname = `${parsed.pathname.replace(/\/$/, "")}/json/version`;
+        const http = await probeHttpEndpoint(parsed.href, 200, timeoutMs, controller.signal);
+        return { id: "cdp-http", kind: "http", status: http.status === "reachable" ? "passed" : "blocked", message: "CDP discovery HTTP status only; protocol, page selection and login are not verified.", http };
+      });
+    }
+    for (const [index, check] of config.project.health.slice(0, 8).entries()) {
+      probe(`health-${index + 1}`, typeof check === "string" ? check : check.url, typeof check === "string" ? 200 : check.expectedStatus, context.restrictWebOrigins);
+    }
+    if (!config.project.health.length) checks.push({ id: "health-configuration", kind: "configuration", status: "unverified", message: "No backend health endpoints are declared; surface reachability cannot establish backend readiness." });
+    if (omittedHealthChecks) checks.push({ id: "health-limit", kind: "configuration", status: "unverified", message: "Only the first eight declared health endpoints were checked." });
+    checks.push(...await Promise.all(tasks));
+    signal?.throwIfAborted();
+    if (timedOut) checks.push({ id: "inspection-deadline", kind: "configuration", status: "unverified", message: "The total observation deadline expired; incomplete checks remain unverified." });
+    return EnvironmentInspectionSchema.parse({
+      inspectionId, projectRoot: context.root, workspaceRoot: context.workspaceRoot, surface, observedAt,
+      durationMs: performance.now() - started,
+      status: checks.some((check) => check.status === "blocked") ? "blocked" : checks.some((check) => check.status === "unverified") ? "incomplete" : "checks-passed",
+      testVerdict: "not-asserted", checks, omittedHealthChecks,
+      notChecked: ["browser-session", "authentication", "fixtures", "integration-preflight", "business-terminal", "project-coverage"],
+    });
+  } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
+}
+
+function isLoopback(hostname: string): boolean {
+  return ["localhost", "::1", "[::1]"].includes(hostname) || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+}

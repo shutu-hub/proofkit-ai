@@ -46,6 +46,18 @@ export function createProgram(): Command {
       if (!project.detected.web && !project.detected.electron) process.exitCode = 2;
     });
 
+  program.command("environment")
+    .description("Observe configured HTTP endpoints and source association without starting the app or running a test")
+    .option("--root <path>", "project root", ".")
+    .option("--surface <surface>", "web or electron", "web")
+    .option("--timeout-ms <milliseconds>", "total observation deadline (100-15000)", "5000")
+    .action(async (options: RootOptions & { surface: string; timeoutMs: string }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+      const inspection = await runner.inspectEnvironment({ surface: options.surface as "web" | "electron", timeoutMs: Number(options.timeoutMs) });
+      console.log(JSON.stringify(inspection, null, 2));
+      process.exitCode = inspection.status === "checks-passed" ? 0 : inspection.status === "blocked" ? 1 : 2;
+    });
+
   program.command("map")
     .description("Generate a project map for planning")
     .option("--root <path>", "project root", ".")

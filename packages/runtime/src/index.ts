@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { request } from "node:http";
-import { request as httpsRequest } from "node:https";
 import { once } from "node:events";
 import { resolve as resolveFs } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ProofkitConfig } from "@proofkit/contracts";
+import { probeHttpEndpoint } from "./http-probe.js";
+export { probeHttpEndpoint } from "./http-probe.js";
 
 export type RuntimeEvent = {
   type: "process.started" | "process.stdout" | "process.stderr" | "process.exited" | "health.ready" | "health.timeout";
@@ -87,35 +87,17 @@ export class ProjectRuntime {
     const normalized = checks.map((item) => typeof item === "string" ? { url: item, expectedStatus: 200 } : item);
     while (Date.now() < deadline) {
       signal?.throwIfAborted();
-      const results = await Promise.all(normalized.map((check) => probe(check.url, check.expectedStatus, signal)));
+      const results = await Promise.all(normalized.map((check) => probeHttpEndpoint(check.url, check.expectedStatus, Math.min(2_000, Math.max(1, deadline - Date.now())), signal)));
       signal?.throwIfAborted();
-      if (results.every(Boolean)) {
+      if (results.every((result) => result.status === "reachable")) {
         this.options.onEvent?.({ type: "health.ready", payload: { checks: normalized.map((check) => check.url) } });
         return;
       }
-      try { await delay(250, undefined, { signal }); }
+      try { await delay(Math.min(250, Math.max(1, deadline - Date.now())), undefined, { signal }); }
       catch (error) { signal?.throwIfAborted(); throw error; }
     }
     this.options.onEvent?.({ type: "health.timeout", payload: { checks: normalized.map((check) => check.url), timeoutMs: this.options.config.project.startupTimeoutMs } });
     throw new Error(`Project health checks did not pass within ${this.options.config.project.startupTimeoutMs}ms`);
-  }
-}
-
-async function probe(url: string, expectedStatus: number, signal?: AbortSignal): Promise<boolean> {
-  try {
-    const parsed = new URL(url);
-    const requestImpl = parsed.protocol === "https:" ? httpsRequest : request;
-    return await new Promise<boolean>((resolve) => {
-      const req = requestImpl(parsed, { method: "GET", timeout: 2_000, signal }, (response) => {
-        response.resume();
-        response.on("end", () => resolve(response.statusCode === expectedStatus));
-      });
-      req.on("timeout", () => { req.destroy(); resolve(false); });
-      req.on("error", () => resolve(false));
-      req.end();
-    });
-  } catch {
-    return false;
   }
 }
 

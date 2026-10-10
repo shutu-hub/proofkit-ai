@@ -19,6 +19,7 @@ describe("ProofKit MCP tools", () => {
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       "discover_project",
       "inspect_test_scope",
+      "inspect_test_environment",
       "inspect_surface",
       "list_test_charters",
       "list_test_suites",
@@ -46,6 +47,19 @@ describe("ProofKit MCP tools", () => {
 
     await client.close();
     await server.close();
+  });
+
+  it("exposes bounded configured environment observations independently of test planning", async () => {
+    const runner = { inspectEnvironment: vi.fn(async () => ({ status: "incomplete", testVerdict: "not-asserted", notChecked: ["business-terminal"] })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "inspect_test_environment", arguments: {} });
+      expect(JSON.parse(textContent(response))).toMatchObject({ status: "incomplete", testVerdict: "not-asserted" });
+      expect(runner.inspectEnvironment).toHaveBeenCalledWith({ surface: "web", timeoutMs: 5000 }, expect.any(AbortSignal));
+      expect((await client.callTool({ name: "inspect_test_environment", arguments: { timeoutMs: 15001 } })).isError).toBe(true);
+      expect((await client.callTool({ name: "inspect_test_environment", arguments: { surface: "mobile" } })).isError).toBe(true);
+      expect(runner.inspectEnvironment).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
   });
 
   it("returns a stable mission start contract for an AI client", async () => {

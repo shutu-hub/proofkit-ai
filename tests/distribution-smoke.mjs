@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -11,6 +13,7 @@ import { parse as parseYaml } from "yaml";
 const projectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const tempParent = await realpath(tmpdir());
 const scratch = await mkdtemp(join(tempParent, "proofkit-distribution-"));
+let environmentServer;
 try {
   const packDir = join(scratch, "pack");
   const installDir = join(scratch, "install");
@@ -62,6 +65,26 @@ try {
   assert.equal(cliPlan.planning.coverage.inventory, "bounded");
   assert.ok(cliPlan.planning.evidenceGaps.includes("project-workflow-coverage"));
 
+  environmentServer = createServer((_req, response) => {
+    response.writeHead(200, { "Set-Cookie": "private-session" });
+    response.end("private-response-body");
+  });
+  await new Promise((resolveServer) => environmentServer.listen(0, "127.0.0.1", resolveServer));
+  const environmentUrl = `http://127.0.0.1:${environmentServer.address().port}`;
+  const configPath = join(workspace, ".proofkit", "config.yaml");
+  const environmentConfig = parseYaml(await readFile(configPath, "utf8"));
+  environmentConfig.surfaces = { web: { baseUrl: environmentUrl } };
+  environmentConfig.project.health = [`${environmentUrl}/health?secret=private-query`];
+  await writeFile(configPath, JSON.stringify(environmentConfig));
+  const environmentCli = JSON.parse((await command(process.execPath, [cli, "environment", "--root", source, "--workspace", workspace], scratch, [2])).stdout);
+  // Deliberately outside Git: HTTP success cannot supply source association.
+  assert.equal(environmentCli.status, "incomplete");
+  assert.equal(environmentCli.testVerdict, "not-asserted");
+  assert.ok(environmentCli.checks.some((check) => check.id === "surface-http" && check.status === "passed"));
+  assert.ok(environmentCli.checks.some((check) => check.id === "source-binding" && check.status === "unverified"));
+  assert.doesNotMatch(JSON.stringify(environmentCli), /private-query|private-response-body|private-session/);
+  assert.equal(createHash("sha256").update(await readFile(environmentCli.artifact.path)).digest("hex"), environmentCli.artifact.sha256);
+
   assert.match(await readFile(mcp, "utf8"), /^#!\/usr\/bin\/env node/);
   const npmBin = await npmExecutable();
   const mcpEnv = { ...process.env, PROOFKIT_ROOT: source, PROOFKIT_WORKSPACE_ROOT: workspace };
@@ -77,6 +100,15 @@ try {
     const listed = await withDeadline(client.listTools(), 10_000, "MCP tool listing");
     assert.ok(listed.tools.some((tool) => tool.name === "inspect_surface"));
     assert.ok(listed.tools.some((tool) => tool.name === "inspect_test_scope"));
+    assert.ok(listed.tools.some((tool) => tool.name === "inspect_test_environment"));
+    const environmentResponse = await withDeadline(client.callTool({ name: "inspect_test_environment", arguments: {} }), 10_000, "Installed MCP environment inspection");
+    assert.equal(environmentResponse.isError, undefined);
+    const environment = JSON.parse(environmentResponse.content.find((item) => item.type === "text").text);
+    assert.equal(environment.status, "incomplete");
+    assert.equal(environment.testVerdict, "not-asserted");
+    assert.ok(environment.notChecked.includes("business-terminal"));
+    assert.doesNotMatch(JSON.stringify(environment), /private-query|private-response-body|private-session/);
+    assert.equal(createHash("sha256").update(await readFile(environment.artifact.path)).digest("hex"), environment.artifact.sha256);
     const runTest = listed.tools.find((tool) => tool.name === "run_test");
     assert.ok(runTest);
     assert.ok(runTest.inputSchema.properties?.charter);
@@ -133,8 +165,13 @@ try {
   const workspaceFiles = await readdir(join(workspace, ".proofkit"));
   assert.equal(workspaceFiles.includes("missions"), false);
   assert.equal(workspaceFiles.includes("runs"), false);
-  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-cli-scope", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "scope-source-and-workspace-unchanged"] }, null, 2));
+  assert.equal((await readdir(join(workspace, ".proofkit", "inspections"))).length, 2);
+  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
 } finally {
+  if (environmentServer) {
+    environmentServer.closeAllConnections();
+    await new Promise((resolveServer) => environmentServer.close(resolveServer));
+  }
   const safeRoot = resolve(scratch);
   if (!safeRoot.startsWith(resolve(tempParent) + sep) || !basename(safeRoot).startsWith("proofkit-distribution-")) {
     throw new Error("Distribution scratch directory escaped the temporary parent");
@@ -142,7 +179,7 @@ try {
   await rm(safeRoot, { recursive: true, force: true });
 }
 
-function command(executable, args, cwd) {
+function command(executable, args, cwd, acceptedExitCodes = [0]) {
   return new Promise((resolveCommand, rejectCommand) => {
     const child = spawn(executable, args, { cwd, windowsHide: true, shell: false });
     let stdout = "";
@@ -150,7 +187,7 @@ function command(executable, args, cwd) {
     child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
     child.once("error", rejectCommand);
-    child.once("close", (code) => code === 0
+    child.once("close", (code) => acceptedExitCodes.includes(code)
       ? resolveCommand({ stdout, stderr })
       : rejectCommand(new Error(`${executable} ${args[0]} exited ${code}: ${stderr || stdout}`)));
   });

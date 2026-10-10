@@ -15,6 +15,7 @@ See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for
 - Maps workspace manifests and common Web, Electron, and backend entry points.
 - Produces a bounded path-level test map with source/test counts, framework signals, conventional entry points, static route hints and an explicit truncation flag.
 - Gives host agents a read-only test scope view: source locations, level/surface-compatible plans, plan gaps, registered business checks and bounded capability input hints. Static declarations never count as executed coverage.
+- Checks configured Web/Electron HTTP endpoints, CDP discovery status and local source association before testing, with a bounded deadline and a hashed observation artifact. Login, samples and business readiness remain explicitly unchecked.
 - Prioritizes a literal scope focus before retaining bounded routes and entry points; eligible Charter aliases also prioritize their reviewed route targets. Partial scans remain explicit.
 - Matches one-sentence requests to curated, workspace-owned Charters by explicit aliases; ambiguous matches require a Charter ID, and missing assertions or business Oracles stop automatic execution.
 - Converts intent into a saved YAML Test Charter that can be reviewed and edited.
@@ -82,6 +83,14 @@ proofkit scope --root /path/to/your/project --focus resume
 Scope routes are static candidates. Gin group prefixes are composed within a file; unresolved declarations appear in `inventory.routeDiagnostics` with source locations. Other framework literals may need manual interpretation. Neither route mapping nor inspection proves a business result.
 
 MCP clients use `inspect_test_scope` for the same view, then `inspect_surface` to observe the live page and `run_test` to execute a validated Charter. Scope inspection defaults to `core`; it returns `not-asserted`, full scanned counts, omitted counts and the inventory's truncation flag. `planReady` checks saved plan structure and registered operations, not login, test data or runtime readiness. Capability input hints omit defaults and user callbacks; runtime Zod validation remains authoritative. Workspace connector registration is trusted code loaded by the service; scope inspection invokes none of its execution hooks.
+
+Observe configured endpoints before attaching to a page:
+
+```bash
+proofkit environment --root /path/to/your/project --surface electron --timeout-ms 5000
+```
+
+MCP uses `inspect_test_environment({ surface: "electron", timeoutMs: 5000 })`. Both paths use the same Local Runner and save a JSON artifact plus SHA-256 under the test workspace's `.proofkit/inspections/`. Checks share a total deadline of 100–15000 ms and probe at most eight declared backend health endpoints. The command returns exit code 0 for `checks-passed`, 1 for `blocked`, or 2 for `incomplete`. These are environment observations with `testVerdict: not-asserted`; inspect `notChecked` before moving on to page inspection and business testing. HTTP probes use GET, retain the status and endpoint without its query or fragment, do not follow redirects, and finish at response headers without retaining response bodies, headers or raw network errors. No app, browser or connector operation is started by the inspection; service creation still loads trusted connector registration code.
 
 Plan and review a test:
 

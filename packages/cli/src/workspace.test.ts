@@ -11,6 +11,24 @@ afterEach(async () => {
 });
 
 describe("CLI workspace onboarding", () => {
+  it("reports environment prerequisites and an external artifact without changing source", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-cli-environment-source-"));
+    const workspace = await mkdtemp(join(tmpdir(), "proofkit-cli-environment-workspace-"));
+    roots.push(root, workspace);
+    await writeFile(join(root, "package.json"), '{"name":"environment-source"}');
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitCode = process.exitCode;
+    try {
+      await createProgram().parseAsync(["node", "proofkit", "environment", "--root", root, "--workspace", workspace, "--surface", "electron"]);
+      const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(result).toMatchObject({ testVerdict: "not-asserted", status: "blocked", surface: "electron" });
+      expect(process.exitCode).toBe(1);
+      expect(JSON.parse(await readFile(result.artifact.path, "utf8")).inspectionId).toBe(result.inspectionId);
+      expect(await readdir(root)).toEqual(["package.json"]);
+      await expect(createProgram().parseAsync(["node", "proofkit", "environment", "--root", root, "--workspace", workspace, "--timeout-ms", "NaN"])).rejects.toThrow();
+    } finally { process.exitCode = exitCode; }
+  });
+
   it("returns bounded static scope with defaults and validates level, surface and limit inputs", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-cli-scope-source-"));
     const workspace = await mkdtemp(join(tmpdir(), "proofkit-cli-scope-workspace-"));
