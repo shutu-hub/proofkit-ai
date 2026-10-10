@@ -2,6 +2,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveElectronCdpUrl } from "@proofkit/adapters";
 import { LocalExecutionOwnership, sha256, type LocalExecutionLease } from "@proofkit/evidence";
+import { TargetLeaseConflictError } from "@proofkit/runner";
 import type { ProofkitConfig } from "@proofkit/contracts";
 import type { LocalAdapterName, LocalRunInput } from "./index.js";
 
@@ -13,7 +14,7 @@ export async function acquireExecutionScope(workspaceRoot: string, target: strin
   if (!workspace || !target) return workspace;
   try {
     const shared = await new LocalExecutionOwnership(TARGET_LEASE_ROOT, "target").acquire(sha256(target));
-    if (!shared) throw new Error("Another Run controls this configured CDP or WebDriver target; retry after it completes.");
+    if (!shared) throw new TargetLeaseConflictError("shared");
     return { release: async () => {
       const settled = await Promise.allSettled([shared.release(), workspace.release()]);
       const failure = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
@@ -43,7 +44,7 @@ export async function acquireElectronPortFileScope(workspaceRoot: string, fileId
       throw error;
     }
     const endpoint = await acquireCdpTarget(cdpUrl);
-    if (!endpoint) throw new Error("Another Run controls this configured CDP target; retry after it completes.");
+    if (!endpoint) throw new TargetLeaseConflictError("cdp");
     return { cdpUrl, lease: { release: async () => {
       const settled = await Promise.allSettled([endpoint.release(), base.release()]);
       const failure = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");

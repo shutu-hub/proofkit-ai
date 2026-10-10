@@ -1,7 +1,7 @@
 import { createRunId, EvidenceStore, LocalExecutionOwnership, type LocalExecutionLease } from "@proofkit/evidence";
 import { hasIncompleteIntegrationCleanup, OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, TargetBindingSchema, type IntegrationSetupPolicy, type RuntimeFinding } from "@proofkit/contracts";
 import { z } from "zod";
-import { inputFileFacts, resolveInputFiles, sameInputFileFacts, type InputFileFact, type SurfaceActionContext } from "./input-files.js";
+import { InputFileError, inputFileFacts, resolveInputFiles, sameInputFileFacts, type InputFileFact, type SurfaceActionContext } from "./input-files.js";
 import { IntegrationLifecycle, releaseLateIntegration, validateSetupPolicy, type IntegrationRecoveryContext, type IntegrationSetup, type IntegrationSetupEntry } from "./integration-lifecycle.js";
 export { IntegrationLifecycle } from "./integration-lifecycle.js";
 export type { IntegrationRecoveryContext } from "./integration-lifecycle.js";
@@ -109,6 +109,20 @@ export class CancelledError extends Error {
 
 export class RunTimeoutError extends Error {
   override readonly name = "RunTimeoutError";
+}
+
+/** A known local attachment conflict may be reported without using an arbitrary lease exception message. */
+export class TargetLeaseConflictError extends Error {
+  override readonly name = "TargetLeaseConflictError";
+  constructor(target: "shared" | "cdp") {
+    super(target === "cdp"
+      ? "Another Run controls this configured CDP target; retry after it completes."
+      : "Another Run controls this configured CDP or WebDriver target; retry after it completes.");
+  }
+}
+
+class RunnerOperationError extends Error {
+  override readonly name = "RunnerOperationError";
 }
 
 /** Missing or ambiguous observation is not proof of a product defect. */
@@ -276,7 +290,8 @@ export class ExecutionRunner {
     let executionError: Error | undefined;
     let surfaceAttached = false;
     let unsubscribe: () => void | Promise<void> = () => {};
-    const pendingEvents: Promise<void>[] = [];
+    let pendingEvents = Promise.resolve();
+    let eventEvidenceFailed = false;
     const inspectAndRecordTarget = async (phase: "before-setup" | "after-setup" | "after-run"): Promise<TargetBinding | undefined> => {
       if (!this.targetBinding) return undefined;
       const binding = TargetBindingSchema.parse(await withAbort(this.targetBinding(signal), signal, "Target binding inspection"));
@@ -325,7 +340,7 @@ export class ExecutionRunner {
           }), signal, "Integration preflight"));
         } catch (error) {
           if (signal.aborted) throw abortReason(signal);
-          throw new BlockedError(`Integration preflight error: ${toError(error).message}`);
+          throw new BlockedError("Integration preflight failed before it returned a verified result; inspect trusted local diagnostics.");
         }
         const artifact = await this.store.writeJson(runId, "preflight", result);
         summary.artifacts.push(artifact);
@@ -339,7 +354,8 @@ export class ExecutionRunner {
             async (lateLease) => { await lateLease?.release(); }, trackAcquisition);
         } catch (error) {
           if (signal.aborted) throw abortReason(signal);
-          throw new BlockedError(`Workspace execution lease could not be acquired: ${toError(error).message}`);
+          if (error instanceof TargetLeaseConflictError) throw new BlockedError(error.message);
+          throw new BlockedError("Workspace execution lease could not be acquired; inspect trusted local diagnostics.");
         }
         if (!acquired) throw new BlockedError("Another Run is active in this test workspace; retry after it completes.");
         retainLease(acquired);
@@ -369,7 +385,7 @@ export class ExecutionRunner {
             async (lateLease) => { await lateLease?.release(); }, trackAcquisition);
         } catch (error) {
           if (signal.aborted) throw abortReason(signal);
-          throw new BlockedError(`Attachment target lease could not be acquired: ${toError(error).message}`);
+          throw new BlockedError("Attachment target lease could not be acquired; inspect trusted local diagnostics.");
         }
         if (!acquired) throw new BlockedError("Another Run controls this configured attachment target; retry after it completes.");
         retainLease(acquired);
@@ -378,7 +394,9 @@ export class ExecutionRunner {
       surfaceAttached = true;
       throwIfAborted(signal);
       unsubscribe = await withResourceAbort(this.adapter.subscribeEvents((event) => {
-        pendingEvents.push(this.recordAdapterEvent(runId, event, summary));
+        pendingEvents = pendingEvents.then(() => this.recordAdapterEvent(runId, event, summary)).catch(() => {
+          eventEvidenceFailed = true;
+        });
       }), signal, "Adapter event subscription", async (release) => { await release(); }, trackAcquisition);
       throwIfAborted(signal);
       for (const [index, action] of charter.actions.entries()) {
@@ -404,7 +422,8 @@ export class ExecutionRunner {
                 actionContext.inputFiles = await withAbort(resolveInputFiles(this.workspaceRoot, action.files, signal), signal, `${stepId} fixture read`);
               } catch (error) {
                 if (signal.aborted) throw error;
-                throw new BlockedError(toError(error).message);
+                throw new BlockedError(error instanceof InputFileError
+                  ? error.message : "File fixture could not be read; inspect the external test workspace.");
               }
               const files = inputFileFacts(actionContext.inputFiles!);
               step.inputFiles = files;
@@ -419,16 +438,7 @@ export class ExecutionRunner {
                 step.replayInputMatched = true;
               }
             }
-            let receipt: ActionReceipt;
-            try {
-              receipt = await withAbort(this.adapter.act(runtimeAction, actionContext), signal, `${stepId} action`);
-            } catch (error) {
-              if (signal.aborted) throw error;
-              if (action.kind === "fill" && typeof action.value !== "string" && runtimeAction.kind === "fill" && typeof runtimeAction.value === "string") {
-                throw new Error(toError(error).message.replaceAll(runtimeAction.value, "[REDACTED_FILL_VALUE]"));
-              }
-              throw error;
-            }
+            const receipt = await withAbort(this.adapter.act(runtimeAction, actionContext), signal, `${stepId} action`);
             if (action.kind === "captureResponse") {
               const result = ResponseObservationSchema.safeParse(receipt.metadata.response);
               if (!result.success || result.data.name !== action.name || result.data.url !== new URL(action.response.url).href
@@ -457,11 +467,11 @@ export class ExecutionRunner {
               if (screenshot) step.artifacts.push(await this.store.writeBuffer(runId, `${stepId}.png`, screenshot));
             } catch (error) {
               if (signal.aborted) throw abortReason(signal);
-              summary.findings.push(`${stepId}: screenshot unavailable (${toError(error).message})`);
+              summary.findings.push(`${stepId}: screenshot unavailable; inspect trusted local diagnostics.`);
             }
           }
         } catch (error) {
-          const cause = toError(error);
+          const cause = safeRunError(error);
           step.status = cause instanceof BlockedError ? "blocked" : "failed";
           step.error = cause.message;
           if (cause instanceof InconclusiveError) step.artifacts.push(await this.store.writeJson(runId, `${stepId}-response-gap`, { code: cause.code, message: cause.message }));
@@ -487,14 +497,14 @@ export class ExecutionRunner {
             proof.push(await this.store.writeJson(runId, `${label}-snapshot`, snapshot));
           } catch (error) {
             if (signal.aborted) throw abortReason(signal);
-            summary.findings.push(`${label}: contemporaneous snapshot unavailable (${toError(error).message})`);
+            summary.findings.push(`${label}: contemporaneous snapshot unavailable; inspect trusted local diagnostics.`);
           }
           try {
             const screenshot = await withAbort(this.adapter.capture(`${label}.png`), signal, `Assertion ${index + 1} capture`);
             if (screenshot) proof.push(await this.store.writeBuffer(runId, `${label}.png`, screenshot));
           } catch (error) {
             if (signal.aborted) throw abortReason(signal);
-            summary.findings.push(`${label}: contemporaneous screenshot unavailable (${toError(error).message})`);
+            summary.findings.push(`${label}: contemporaneous screenshot unavailable; inspect trusted local diagnostics.`);
           }
           // Adapter-supplied paths may refer to an earlier step. Only artifacts
           // captured by this Runner after this assertion can confirm its result.
@@ -537,7 +547,7 @@ export class ExecutionRunner {
         }
       }
     } catch (error) {
-      executionError = toError(error);
+      executionError = safeRunError(error);
       summary.findings.push(executionError.message);
     } finally {
       // Check before closing the surface even when an assertion or Oracle
@@ -562,9 +572,13 @@ export class ExecutionRunner {
           }
         }
       }
-      try { await unsubscribe(); } catch (error) { executionError ??= toError(error); summary.findings.push(`unsubscribe failed: ${toError(error).message}`); }
-      try { await this.adapter.close(); } catch (error) { executionError ??= toError(error); summary.findings.push(`adapter close failed: ${toError(error).message}`); }
-      await Promise.all(pendingEvents);
+      try { await unsubscribe(); } catch (error) { executionError ??= safeRunError(error); summary.findings.push("Adapter event subscription cleanup failed; inspect trusted local diagnostics."); }
+      try { await this.adapter.close(); } catch (error) { executionError ??= safeRunError(error); summary.findings.push("Adapter close failed; inspect trusted local diagnostics."); }
+      await pendingEvents;
+      if (eventEvidenceFailed) {
+        summary.findings.push("Adapter runtime event evidence could not be saved; inspect trusted local diagnostics.");
+        executionError ??= new InconclusiveError("runtime-evidence-unavailable", "Adapter runtime event evidence is incomplete.");
+      }
       if ((summary.runtimeFindings ?? []).length > 0) {
         const artifact = await this.store.writeJson(runId, "runtime-findings", summary.runtimeFindings ?? []);
         summary.artifacts.push(artifact);
@@ -576,7 +590,7 @@ export class ExecutionRunner {
       } catch (error) {
         summary.integrationCleanup = { status: "unverified", declaredResources: 0, verifiedResources: 0 };
         summary.findings.push("Integration cleanup evidence could not be saved; resources may still be active.");
-        executionError ??= toError(error);
+        executionError ??= safeRunError(error);
       }
       if (signal.aborted) {
         executionError = abortReason(signal);
@@ -824,8 +838,10 @@ function preflightResult(value: IntegrationPreflightResult): IntegrationPrefligh
   }).parse(value);
 }
 
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+function safeRunError(error: unknown): Error {
+  if (error instanceof BlockedError || error instanceof CancelledError || error instanceof RunTimeoutError
+    || error instanceof InconclusiveError || error instanceof RunnerOperationError) return error;
+  return new RunnerOperationError("Run operation failed without a verified result; inspect trusted local diagnostics.");
 }
 
 function assertFillEnvironment(actions: readonly Action[]): void {
@@ -887,8 +903,8 @@ async function withAbort<T>(promise: Promise<T>, signal: AbortSignal, label: str
     ]);
   } catch (error) {
     if (signal.aborted) throw abortReason(signal);
-    if (error instanceof InconclusiveError) throw error;
-    throw new Error(`${label} failed: ${toError(error).message}`);
+    if (error instanceof InconclusiveError || error instanceof InputFileError) throw error;
+    throw new RunnerOperationError(`${label} failed without a verified result; inspect trusted local diagnostics.`);
   } finally {
     if (onAbort) signal.removeEventListener("abort", onAbort);
   }
@@ -922,7 +938,8 @@ async function withResourceAbort<T>(promise: Promise<T>, signal: AbortSignal, la
   } catch (error) {
     if (graceExpired) throw error;
     if (signal.aborted) throw abortReason(signal);
-    throw new Error(`${label} failed: ${toError(error).message}`);
+    if (error instanceof TargetLeaseConflictError) throw error;
+    throw new RunnerOperationError(`${label} failed without a verified result; inspect trusted local diagnostics.`);
   } finally {
     if (timer) clearTimeout(timer);
     if (onAbort) signal.removeEventListener("abort", onAbort);

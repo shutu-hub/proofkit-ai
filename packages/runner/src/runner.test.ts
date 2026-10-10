@@ -108,9 +108,10 @@ describe("ExecutionRunner", () => {
     const envName = "PROOFKIT_TEST_FILL_ERROR";
     const previous = process.env[envName];
     const secret = "error-runtime-secret";
+    const privateErrorText = "candidate-email=private@example.invalid token=secret-credential";
     process.env[envName] = secret;
     const adapter = new FakeAdapter();
-    adapter.act = async () => { throw new Error(`Adapter failed while handling ${secret}`); };
+    adapter.act = async () => { throw new Error(`Adapter failed while handling ${secret}: ${privateErrorText}`); };
     try {
       const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
         intent: "check error evidence", level: "quick", mode: "deterministic", preconditions: [],
@@ -118,13 +119,56 @@ describe("ExecutionRunner", () => {
         assertions: [], sideEffectPolicy: "allow", metadata: {},
       }, "fill-env-error");
       expect(summary.verdict).toBe("failed");
-      expect(summary.steps[0]?.error).toContain("[REDACTED_FILL_VALUE]");
-      expect(JSON.stringify(summary)).not.toContain(secret);
-      expect(await readFile(join(root, "fill-env-error", "events.jsonl"), "utf8")).not.toContain(secret);
+      expect(summary.steps[0]?.error).toContain("step-001 action failed without a verified result");
+      const persisted = JSON.stringify(summary)
+        + await readFile(join(root, "fill-env-error", "events.jsonl"), "utf8")
+        + await readFile(join(root, "fill-env-error", "run.json"), "utf8");
+      expect(persisted).not.toContain(secret);
+      expect(persisted).not.toContain(privateErrorText);
     } finally {
       if (previous === undefined) delete process.env[envName];
       else process.env[envName] = previous;
     }
+  });
+
+  it("keeps preflight exception text out of Run evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-preflight-error-"));
+    const privateErrorText = "candidate-email=private@example.invalid token=secret-credential";
+    const summary = await new ExecutionRunner(new FakeAdapter(), {
+      evidenceDir: root,
+      preflight: async () => { throw new Error(`Preflight reader failed: ${privateErrorText}`); },
+    }).run({ intent: "check isolated environment", level: "quick", mode: "deterministic",
+      preconditions: [], actions: [{ kind: "observe" }], assertions: [],
+      sideEffectPolicy: "deny", metadata: {},
+    }, "preflight-error-run");
+    expect(summary.verdict).toBe("blocked");
+    expect(summary.findings).toContain("Integration preflight failed before it returned a verified result; inspect trusted local diagnostics.");
+    const persisted = JSON.stringify(summary)
+      + await readFile(join(root, "preflight-error-run", "events.jsonl"), "utf8")
+      + await readFile(join(root, "preflight-error-run", "run.json"), "utf8")
+      + await readFile(join(root, "preflight-error-run", "report.html"), "utf8");
+    expect(persisted).not.toContain(privateErrorText);
+  });
+
+  it("keeps capture and close exception text out of Run evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-adapter-error-"));
+    const privateErrorText = "candidate-email=private@example.invalid token=secret-credential";
+    const adapter = new FakeAdapter();
+    adapter.capture = async () => { throw new Error(`Capture failed: ${privateErrorText}`); };
+    adapter.close = async () => { throw new Error(`Close failed: ${privateErrorText}`); };
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
+      intent: "check capture failure", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "allow", metadata: {},
+    }, "adapter-error-run");
+    expect(summary.verdict).toBe("failed");
+    expect(summary.findings).toContain("Adapter close failed; inspect trusted local diagnostics.");
+    expect(summary.findings.some((item) => item.includes("screenshot unavailable"))).toBe(true);
+    const persisted = JSON.stringify(summary)
+      + await readFile(join(root, "adapter-error-run", "events.jsonl"), "utf8")
+      + await readFile(join(root, "adapter-error-run", "run.json"), "utf8")
+      + await readFile(join(root, "adapter-error-run", "report.html"), "utf8");
+    expect(persisted).not.toContain(privateErrorText);
   });
 
   it("preserves cancellation while a fill action uses a runtime environment value", async () => {
@@ -281,7 +325,7 @@ describe("ExecutionRunner", () => {
         sideEffectPolicy: "allow", metadata: {} }, `target-assertion-${name}`);
       expect(checksAtClose).toBe(2);
       expect(summary).toMatchObject({ verdict: expectedVerdict, targetContinuity: expectedContinuity });
-      expect(summary.findings).toContain("Assertion 1 failed: Assertion adapter failed");
+      expect(summary.findings).toContain("Assertion 1 failed without a verified result; inspect trusted local diagnostics.");
       expect(summary.artifacts).toContain(`target-assertion-${name}/artifacts/target-binding-after-run.json`);
       const report = await readFile(join(root, `target-assertion-${name}`, "report.html"), "utf8");
       expect(report).toContain(`Continuity: ${expectedContinuity}`);
