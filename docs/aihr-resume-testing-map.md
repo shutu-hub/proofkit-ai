@@ -69,9 +69,13 @@ ProofKit 当前 `captureResponse` 只接纳所连接页面主 frame、动作时�
 参考 Charter 另声明一次可选 `clickIfVisible`：若风险确认按钮在有界时间内唯一可见，
 就在同一请求监听期间点击，否则跳过，并把分支写入响应证据。真实按钮定位和弹窗时序
 仍要通过隔离 CDP 核验；弹窗迟到、多个匹配按钮或没有新请求都不能判通过。
-AIHR 网关请求由 shell renderer 的 backend bridge 发起；能否在实际连接的 Electron 页面
-观察到 `POST /resume-collection/runs`，以及它是否发生在合理的动作窗口内，必须先用
-隔离 CDP 运行核实。不能从源码直接认定该捕获可用，也不能把连接器自己创建的 run
+AIHR 网关请求由 shell renderer 的 backend bridge 发起。当前源码中 `ShellHome.vue`
+初始化该 bridge，Garfish 将 `micro-resume-collection` 挂到同一 shell 页面内的
+`#micro-app-stage`，且配置 `sandbox: false`；这提示按钮和网关请求可能同属一个
+Playwright Page 的主 frame，但不能证明实际 CDP 目标选择或请求事件可见。能否观察到
+`POST /resume-collection/runs`，以及它是否发生在合理的动作窗口内，仍须先用隔离 CDP
+运行核实。未核实前不扩大 `captureResponse` 到其他页面，避免把无关请求绑定到点击。
+不能从源码直接认定该捕获可用，也不能把连接器自己创建的 run
 冒充“立即运行”产生的 run。若使用公开列表的前后差集关联本次 run，测试工作空间须独占、
 自动调度须停止，并要求仅出现一个符合来源与时间的新增 run；零个或多个均为
 `inconclusive`。即使唯一，仍需该 run 下新文件与独立业务 reader 的一致身份，
