@@ -20,9 +20,10 @@ let electron;
 const web = createServer((request, response) => {
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   const path = new URL(request.url, "http://127.0.0.1").pathname;
-  if (["/delayed", "/diagnostics", "/never"].includes(path)) {
+  if (["/delayed", "/diagnostics", "/auth-blocked", "/never"].includes(path)) {
     response.end(`<!doctype html><title>Delayed inspection fixture</title><div id="app"></div><script>
       ${path === "/diagnostics" ? "setTimeout(()=>{for(let i=0;i<15;i++)console.error('runtime diagnostic '+i+' qa@example.com');},450);" : ""}
+      ${path === "/auth-blocked" ? "setTimeout(()=>console.error('AuthRequiredError: test session expired'),450);" : ""}
       ${path === "/never" ? "" : "setTimeout(()=>{document.querySelector('#app').innerHTML='<h1>Delayed controls ready</h1><button id=ready>Continue</button>';},1200);"}
     </script>`);
     return;
@@ -108,6 +109,16 @@ try {
   assert.equal(diagnostics.runtimeFindingsOmitted, 5);
   assert.ok(diagnostics.runtimeFindings.every((finding) => finding.evidence.length > 0));
   assert.equal(JSON.stringify(diagnostics.runtimeFindings).includes("qa@example.com"), false);
+  const blockedRunner = new LocalRunnerService({ root: source, workspaceRoot, config: { ...runner.config,
+    policies: { ...runner.config.policies, runtime: { ...runner.config.policies.runtime,
+      blockConsolePatterns: ["AuthRequiredError"] } } } });
+  const blocked = await blockedRunner.inspectSurface({ url: `${origin}/auth-blocked`, readyWhen });
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.readiness.status, "observed", "a later environment blocker cannot erase an observed readiness condition");
+  assert.equal(blocked.testVerdict, "not-asserted");
+  assert.ok(blocked.snapshot.text.includes("Delayed controls ready"));
+  const blockedRun = JSON.parse(await readFile(join(workspaceRoot, ".proofkit/runs", blocked.inspectionId, "run.json"), "utf8"));
+  assert.deepEqual(blockedRun.steps.map((step) => step.status), ["passed", "passed"]);
   const beforeInvalid = await readdir(join(workspaceRoot, ".proofkit/runs"));
   await assert.rejects(runner.inspectSurface({ readyWhen: { text: " ", timeoutMs: 100 } }));
   await assert.rejects(runner.inspectSurface({ readyWhen: { text: "ready", timeoutMs: 15001 } }));
@@ -203,7 +214,7 @@ try {
   assert.deepEqual(await readdir(source), ["package.json"]);
   console.log(JSON.stringify({ inspectionId: inspection.inspectionId, controls: inspection.snapshot.controls.length,
     selector: details.selector, electronReadiness: process.env.PROOFKIT_ELECTRON_PATH ? "verified" : "not-run",
-    verified: ["mcp-inspect-surface", "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
+    verified: ["mcp-inspect-surface", "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
 } finally {
   if (electron && electron.exitCode === null) {
     const exited = new Promise((done) => electron.once("exit", done));

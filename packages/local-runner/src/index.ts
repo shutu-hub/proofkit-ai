@@ -281,7 +281,7 @@ export class LocalRunnerService {
       const observation = summary.steps.find((step) => step.action.kind === "observe");
       const observed = observation?.status === "passed" ? observation.afterSnapshot : undefined;
       const stopped = summary.verdict === "blocked" || summary.verdict === "cancelled" ? summary.verdict : undefined;
-      const readinessObserved = Boolean(!stopped && observed && summary.steps.find((step) => step.action.kind === "waitForText")?.status === "passed");
+      const readinessObserved = Boolean(observed && summary.steps.find((step) => step.action.kind === "waitForText")?.status === "passed");
       const runtimeFindings = summary.runtimeFindings ?? [];
       return {
         inspectionId: summary.runId,

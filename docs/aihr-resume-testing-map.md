@@ -212,6 +212,33 @@ routes 和 upstreams 数量，不含提交 SHA 或镜像 digest，不能用它�
 此前只读排查发现本机 18080 被另一份 checkout 的进程占用，不可把该端口的响应当作 test gateway 证据。
 上述部署观察均为环境事实，不是当前源码的产品验收。
 
+### 2026-10-11 当前检出只读 Web 验证
+
+在当前 `dc781c3763933d3062d4b3bd33491e38c2a82a44` 检出启动独立的
+`micro-resume-collection` Vite 服务，绑定 `127.0.0.1:5274`，将
+`VITE_API_BASE_URL` 指向不可用的本机 `127.0.0.1:9`，避免访问另一份检出或真实业务网关。
+`proofkit environment` 观察到页面 HTTP 200，监听进程路径属于当前检出；由于未配置
+后端健康端点，整体状态仍是 `incomplete`、`testVerdict: not-asserted`。
+
+`proofkit inspect --ready-text 'BOSS直聘 简历获取'` 保存了真实 Chrome 页面快照：标题、
+“立即运行”和“任务进度”可见，同时页面显示“页面配置加载失败”，控制台有
+`AuthRequiredError`。已登记的只读 Charter `aihr-resume-ui-quick` 经完整 Mission
+`mission-968b871a-58e` 执行，Run `20261010221235-407194e3` 的 5 个页面断言中
+4 个通过，错误文案的不可见断言失败。最终 `testVerdict: blocked`，首个失败归于
+测试环境，确认的产品缺陷数为 0；24 条 Mission 证据引用完整。报告保存在外部工作区
+`.proofkit/aihr-local-workspace/.proofkit/missions/mission-968b871a-58e/report.html`。
+这次运行未点击“立即运行”或写入业务数据；临时 Vite 进程已停止，AIHR 工作树未改变。
+
+这次首次页面侦察把已观察到的文字标为 `readiness: unverified`，原因是之后的环境阻断
+覆盖了准备状态投影。修正后对同一当前检出重新执行只读页面侦察，检查
+`20261010221919-fb9bf793` 返回 `readiness: observed`、整体 `status: blocked`、
+`testVerdict: not-asserted`，仍有配置失败文案和环境信号。历史 Run 证据未改写。
+
+这个结果验证了当前检出的页面观察、源码进程关联、负向 UI 断言与环境阻断报告链路，
+不证明已登录的桌面端、网关、异步 worker 或简历业务终态。下一次 `core` 验收仍需
+同一源码对应的隔离 Web/Electron 目标、真实测试身份、脱敏简历、独立业务 Oracle
+及清理安排；当前工作树有其他任务的未提交修改，`sourceStability` 仍为 `unverified`。
+
 ## 隔离业务验收的接入配置
 
 在隔离 test/local 环境设置：

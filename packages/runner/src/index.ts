@@ -121,6 +121,19 @@ export class TargetLeaseConflictError extends Error {
   }
 }
 
+/** Stable selector diagnostics contain only counts or control kind, never locator text. */
+export class AmbiguousSurfaceTargetError extends Error {
+  override readonly name = "AmbiguousSurfaceTargetError";
+  constructor(count: number) {
+    super(`Action selector matched ${Number.isSafeInteger(count) && count >= 0 ? count : "multiple"} elements; refine the test selector.`);
+  }
+}
+
+export class InvalidFileInputControlError extends Error {
+  override readonly name = "InvalidFileInputControlError";
+  constructor() { super("Selected control is not an input[type=file]."); }
+}
+
 class RunnerOperationError extends Error {
   override readonly name = "RunnerOperationError";
 }
@@ -840,7 +853,8 @@ function preflightResult(value: IntegrationPreflightResult): IntegrationPrefligh
 
 function safeRunError(error: unknown): Error {
   if (error instanceof BlockedError || error instanceof CancelledError || error instanceof RunTimeoutError
-    || error instanceof InconclusiveError || error instanceof RunnerOperationError) return error;
+    || error instanceof InconclusiveError || error instanceof RunnerOperationError
+    || error instanceof AmbiguousSurfaceTargetError || error instanceof InvalidFileInputControlError) return error;
   return new RunnerOperationError("Run operation failed without a verified result; inspect trusted local diagnostics.");
 }
 
@@ -903,7 +917,8 @@ async function withAbort<T>(promise: Promise<T>, signal: AbortSignal, label: str
     ]);
   } catch (error) {
     if (signal.aborted) throw abortReason(signal);
-    if (error instanceof InconclusiveError || error instanceof InputFileError) throw error;
+    if (error instanceof InconclusiveError || error instanceof InputFileError
+      || error instanceof AmbiguousSurfaceTargetError || error instanceof InvalidFileInputControlError) throw error;
     throw new RunnerOperationError(`${label} failed without a verified result; inspect trusted local diagnostics.`);
   } finally {
     if (onAbort) signal.removeEventListener("abort", onAbort);

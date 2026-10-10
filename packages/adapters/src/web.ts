@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Browser, BrowserContext, Locator, Page, Request, Response } from "playwright-core";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceControl, SurfaceSnapshot } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceAdapter, SurfaceActionContext } from "@proofkit/runner";
-import { InconclusiveError } from "@proofkit/runner";
+import { AmbiguousSurfaceTargetError, InconclusiveError, InvalidFileInputControlError } from "@proofkit/runner";
 import { captureActionResponse } from "./response-capture.js";
 import { projectSurfaceUrl, sanitizeSurfaceText } from "./surface-sanitize.js";
 
@@ -209,7 +209,7 @@ export class WebAdapter implements SurfaceAdapter {
         // Upload libraries commonly hide the native input behind a styled button.
         const input = await uniqueActionLocator(page, action.selector, "attached");
         const isFileInput = await input.evaluate((element) => element instanceof HTMLInputElement && element.type === "file");
-        if (!isFileInput) throw new Error("File selection requires an input[type=file] element");
+        if (!isFileInput) throw new InvalidFileInputControlError();
         await input.setInputFiles(files.map(({ name, mimeType, buffer }) => ({ name, mimeType, buffer })));
         break;
       }
@@ -349,7 +349,7 @@ async function uniqueActionLocator(page: Page, selector: string, state: "visible
   const locator = page.locator(selector);
   await locator.first().waitFor({ state, timeout });
   const count = await locator.count();
-  if (count !== 1) throw new Error(`Action selector matched ${count} elements: ${sanitizeSurfaceText(selector, 120)}`);
+  if (count !== 1) throw new AmbiguousSurfaceTargetError(count);
   return locator;
 }
 
