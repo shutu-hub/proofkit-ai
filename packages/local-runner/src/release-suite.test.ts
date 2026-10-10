@@ -164,6 +164,8 @@ describe("explicit release suites", () => {
       .rejects.toThrow("Test coverage conflict");
     const moduleMission = await service.createMission({ intent: "完整测试简历模块", surface: "web", coverage: "declared", charterId: "resume" });
     expect(moduleMission.plan.planning?.coverage).toMatchObject({ requested: "declared", source: "explicit" });
+    const narrowedMission = await service.createMission({ intent: "不要测试整个项目，只测试简历模块", surface: "web", coverage: "declared", charterId: "resume" });
+    expect(narrowedMission.plan.planning?.coverage).toMatchObject({ requested: "declared", source: "explicit" });
   });
 
   it("measures frozen project workflow checks from verified suite Runs without claiming whole-project acceptance", async () => {

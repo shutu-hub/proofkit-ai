@@ -15,6 +15,27 @@ describe("planning coverage", () => {
     expect(assessPlanningCoverage(intent, map).requested).toBe("declared");
   });
 
+  it.each([
+    "不要测试整个项目，只测试简历模块",
+    "不需要测试全项目，仅测简历获取",
+    "只测试整个项目中的简历获取功能",
+    "测试整个项目的简历模块",
+    "do not test the whole project, only the resume workflow",
+    "test the resume workflow within the whole project",
+  ])("does not turn a narrowed request into whole-project acceptance: %s", (intent) => {
+    expect(assessPlanningCoverage(intent, map, "declared")).toMatchObject({ requested: "declared", source: "explicit" });
+    expect(assessPlanningCoverage(intent, map).requested).toBe("declared");
+  });
+
+  it.each([
+    "测试整个项目，不是只测简历模块",
+    "不要测试整个项目，但要测试所有功能",
+    "test the entire application, not just the resume workflow",
+  ])("retains a positive whole-project clause: %s", (intent) => {
+    expect(assessPlanningCoverage(intent, map).requested).toBe("project");
+    expect(() => assessPlanningCoverage(intent, map, "declared")).toThrow("Test coverage conflict");
+  });
+
   it("rejects an explicit scope that narrows a whole-project request", () => {
     expect(() => assessPlanningCoverage("测试整个项目", map, "declared"))
       .toThrow("intent requests whole-project acceptance but supplied coverage is declared");

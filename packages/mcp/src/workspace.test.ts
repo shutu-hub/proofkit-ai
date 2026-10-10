@@ -146,6 +146,11 @@ describe("MCP external workspace", () => {
         expect(narrowed.isError).toBe(true);
         expect(JSON.stringify(narrowed.content)).toContain("Test coverage conflict");
       }
+      const narrowed = payload(await client.callTool({ name: "run_test", arguments: {
+        intent: "不要测试整个项目，只测试简历模块", charter, coverage: "declared", autoApprove: false,
+      } }));
+      expect(narrowed.planning.coverage).toMatchObject({ requested: "declared", source: "explicit" });
+      expect(narrowed.running).toBe(false);
       await client.callTool({ name: "start_mission", arguments: { missionId: whole.missionId, approve: true } });
       const incomplete = await waitForMission(client, whole.missionId);
       expect(incomplete.mission.verdict).toBe("inconclusive");

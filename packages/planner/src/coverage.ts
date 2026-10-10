@@ -1,10 +1,28 @@
 import { normalizePlanningQuality, PlanningCoverageSchema, PlanningQualitySchema, TestCoverageSchema, type PlanningCoverage, type PlanningQuality, type ProjectMap, type TestCoverage } from "@proofkit/contracts";
 
+const WHOLE_PROJECT_SCOPE = /整个项目|全项目|整个产品|所有功能|全部功能|所有业务流程|全部业务流程|\b(?:whole|entire)\s+(?:project|application|product)\b|\ball\s+(?:features|workflows)\b/g;
+const SCOPE_CLAUSE = /[，,。.!?;；\n]/;
+
+/** Only a positive whole-project phrase can expand or conflict with the requested scope. */
+function requestsWholeProject(intent: string): boolean {
+  const normalized = intent.normalize("NFKC").toLowerCase();
+  for (const match of normalized.matchAll(WHOLE_PROJECT_SCOPE)) {
+    const before = normalized.slice(0, match.index);
+    const clause = before.split(SCOPE_CLAUSE).at(-1)?.trimEnd() ?? "";
+    const after = normalized.slice(match.index + match[0].length);
+    if (/(?:不(?:需要|要|用|是|再)?|无需|无须|并非)(?:\s*(?:测试|测|检查|验证|验收|覆盖|回归))?\s*$/.test(clause)) continue;
+    if (/(?:\bnot|\bdon't|\bdo\s+not|\bexclude)\s+(?:(?:to\s+)?(?:test|check|verify|cover)\s+)?(?:the)?\s*$/.test(clause)) continue;
+    if (/\b(?:in|within)\s+(?:the)?\s*$/.test(clause)) continue;
+    if (/^(?:的|中|里|内)(?:的)?(?!所有|全部|全体)[^，,。.!?;；\n]{1,24}?(?:模块|功能|页面|链路|流程|接口|服务)/.test(after)) continue;
+    return true;
+  }
+  return false;
+}
+
 /** Resolve from the host request, never from provider-authored planning metadata. */
 export function assessPlanningCoverage(intent: string, projectMap?: ProjectMap, requested?: TestCoverage): PlanningCoverage {
   const explicit = requested === undefined ? undefined : TestCoverageSchema.parse(requested);
-  const normalized = intent.normalize("NFKC").toLowerCase();
-  const projectRequest = /整个项目|全项目|整个产品|所有功能|全部功能|所有业务流程|全部业务流程|\b(?:whole|entire)\s+(?:project|application|product)\b|\ball\s+(?:features|workflows)\b/.test(normalized);
+  const projectRequest = requestsWholeProject(intent);
   if (projectRequest && explicit === "declared") {
     throw new Error("Test coverage conflict: intent requests whole-project acceptance but supplied coverage is declared; align the request and coverage selection");
   }
