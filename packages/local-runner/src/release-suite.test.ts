@@ -368,7 +368,7 @@ describe("workflow inventory Missions", () => {
   it("runs a core project graph with different Charters on Web and Electron", async () => {
     const service = await createWorkflowService("core");
     const harness = stubRuns(service);
-    const mission = await service.createMission({ intent: "测试整个项目", surface: "web" });
+    const mission = await service.createMission({ intent: "测试整个项目 Web 和 Electron 核心链路" });
     expect(mission.suite).toMatchObject({ origin: "workflow-inventory", level: "core", surfaces: ["web", "electron"] });
     expect(mission.plan.generatedBy).toBe("deterministic-workflow-planner-v1");
     expect(mission.plan.planning?.source).toBe("workflow-inventory");

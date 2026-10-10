@@ -27,6 +27,7 @@ import { captureRunEvidence } from "./run-evidence.js";
 import { auditMissionProofClassification } from "./mission-proof-classification.js";
 import { acquireCdpTarget, acquireElectronPortFileScope, acquireExecutionScope, sharedTargetIdentity } from "./execution-scope.js";
 import { sourceBindingTarget } from "./source-binding-target.js";
+import { assertMissionSurfaceCoverage, selectMissionSurface } from "./mission-surface.js";
 
 export { loadProjectIntegration } from "./integration.js";
 
@@ -312,8 +313,8 @@ export class LocalRunnerService {
   }
 
   async createMission(input: MissionCreateOptions): Promise<TestMission> {
-    const surface = input.surface ?? input.adapter ?? "web";
-    if (surface === "api") throw new Error(`Mission surface is not enabled by the local runner: ${surface}`);
+    if (input.surface === "api") throw new Error(`Mission surface is not enabled by the local runner: ${input.surface}`);
+    const surface = selectMissionSurface(input.intent, input.surface ?? input.adapter);
     if (input.charter && input.charterId) throw new Error("Supply either a Charter or charterId, not both");
     if (input.suiteId && (input.charter || input.charterId)) throw new Error("Supply either suiteId or a Charter, not both");
     const catalogLevel = input.charterId ? this.config.charters.find((entry) => entry.id === input.charterId)?.level : undefined;
@@ -352,6 +353,7 @@ export class LocalRunnerService {
       ? selectCatalogCharter(this.config.charters, { intent: input.intent, level: levelSelection.resolved, surface, charterId: input.charterId }) : undefined);
     if (projectSuite || selectedSuite) {
       const suite = projectSuite ?? await this.loadSuite(selectedSuite!.entry);
+      assertMissionSurfaceCoverage(input.intent, suiteChecks(suite).map((check) => check.surface));
       suite.charters = suite.charters.map((item) => ({ ...item,
         charter: TestCharterSchema.parse({ ...item.charter, planning: withPlanningCoverage(item.charter.planning, coverage) }),
       }));
@@ -424,6 +426,7 @@ export class LocalRunnerService {
     });
     if (selected) this.validateCatalogCharter(selected.entry.id, normalizedCharter, surface);
     else if (input.charter && this.restrictWebOrigins) this.validateMissionCharterSafety("Submitted Charter", normalizedCharter, surface);
+    assertMissionSurfaceCoverage(input.intent, requiredCatalogSurfaces(levelSelection.resolved, surface));
     if (input.policy?.sideEffectPolicy && input.policy.sideEffectPolicy !== normalizedCharter.sideEffectPolicy) {
       throw new Error("Mission policy side effects must match the selected Charter");
     }

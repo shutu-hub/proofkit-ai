@@ -61,14 +61,14 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "create_test_mission",
-    "Create a reviewable AI test mission from natural language, a catalog ID, or an agent-submitted structured Charter. The tested project is not modified.",
+    "Create a reviewable AI test mission from natural language, a catalog ID, or an agent-submitted structured Charter. When surface is omitted, an unambiguous platform in the intent is used. The tested project is not modified.",
     {
       intent: z.string().min(1),
       charter: TestCharterSchema.optional(),
       charterId: z.string().min(1).optional(),
       suiteId: z.string().min(1).optional(),
       coverage: TestCoverageSchema.optional().describe("declared limits acceptance to the saved scenarios; project requires whole-project workflow coverage proof"),
-      surface: z.enum(["web", "electron", "mobile"]).default("web"),
+      surface: z.enum(["web", "electron", "mobile"]).optional(),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
       oracleNames: z.array(z.string().min(1)).optional(),
@@ -81,7 +81,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "run_test",
-    "Run a natural-language ProofKit test mission at the requested intensity. Supply a structured Charter when no catalog entry covers the requested workflow. Poll status and evidence for the final result.",
+    "Run a natural-language ProofKit test mission at the requested intensity. When surface is omitted, an unambiguous platform in the intent is used. Supply a structured Charter when no catalog entry covers the requested workflow. Poll status and evidence for the final result.",
     {
       intent: z.string().min(1),
       charter: TestCharterSchema.optional(),
@@ -89,7 +89,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       suiteId: z.string().min(1).optional(),
       coverage: TestCoverageSchema.optional().describe("declared limits acceptance to the saved scenarios; project requires whole-project workflow coverage proof"),
       level: z.enum(["quick", "core", "release"]).optional(),
-      surface: z.enum(["web", "electron", "mobile"]).default("web"),
+      surface: z.enum(["web", "electron", "mobile"]).optional(),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
       oracleNames: z.array(z.string().min(1)).optional(),

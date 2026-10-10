@@ -260,7 +260,7 @@ export function createProgram(): Command {
   mission.command("create <intent>")
     .description("Create a reviewable mission plan from a natural-language intent")
     .option("--root <path>", "project root", ".")
-    .option("--surface <surface>", "web, electron or mobile", "web")
+    .option("--surface <surface>", "web, electron or mobile; inferred from an unambiguous intent when omitted")
     .option("--charter <path>", "load a Charter from the test workspace")
     .option("--charter-id <id>", "select a curated test by catalog ID")
     .option("--suite-id <id>", "select an explicit release suite by ID")
@@ -280,7 +280,7 @@ export function createProgram(): Command {
         charterId: options.charterId,
         suiteId: options.suiteId,
         coverage: options.coverage as TestCoverage | undefined,
-        surface: options.surface as LocalAdapterName,
+        surface: options.surface as LocalAdapterName | undefined,
         url: options.url,
         expect: options.expect,
         oracleNames: options.oracle.length ? options.oracle : undefined,
@@ -474,7 +474,7 @@ type PlanCommandOptions = RootOptions & {
 };
 
 type MissionCreateCommandOptions = PlanCommandOptions & {
-  surface: string;
+  surface?: string;
   charter?: string;
   charterId?: string;
   suiteId?: string;

@@ -45,6 +45,7 @@ describe("ProofKit MCP tools", () => {
     expect(listed.tools.some((tool) => tool.name.includes("shell"))).toBe(false);
     const runTest = listed.tools.find((tool) => tool.name === "run_test");
     expect(runTest?.inputSchema).toMatchObject({ properties: { level: { enum: ["quick", "core", "release"] } } });
+    expect(runTest?.inputSchema.properties?.surface).not.toHaveProperty("default");
     const scope = listed.tools.find((tool) => tool.name === "inspect_test_scope");
     expect(scope?.inputSchema).toMatchObject({ properties: { level: { default: "core" }, limit: { maximum: 50 } } });
     for (const name of ["discover_project", "inspect_test_scope", "list_test_charters", "list_test_suites", "get_mission_status"]) {
@@ -163,6 +164,7 @@ describe("ProofKit MCP tools", () => {
       expect.objectContaining({ taskId: "reconnaissance", status: "passed" }),
       expect.objectContaining({ taskId: "execute-charter", status: "running" }),
     ]);
+    expect(runner.createMission).toHaveBeenCalledWith(expect.objectContaining({ surface: undefined }));
 
     await client.close();
     await server.close();
