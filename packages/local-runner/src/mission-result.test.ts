@@ -77,7 +77,7 @@ describe("Mission result projection", () => {
 
   it("pairs suite runs by Charter, surface and kind rather than observation order", async () => {
     const mission = await fixture("release");
-    const suite = { suiteId: "critical", level: "release" as const, surfaces: ["web", "electron"] as Array<"web" | "electron">, charters: ["resume", "login"].map((charterId) => ({ charterId, charter: { ...mission.charter!, intent: `Test ${charterId}`, negativeCases: [] } })), uncoveredCharterIds: [] };
+    const suite = { suiteId: "critical", origin: "catalog" as const, level: "release" as const, surfaces: ["web", "electron"] as Array<"web" | "electron">, charters: ["resume", "login"].map((charterId) => ({ charterId, charter: { ...mission.charter!, intent: `Test ${charterId}`, negativeCases: [] } })), uncoveredCharterIds: [] };
     mission.suite = suite;
     delete mission.charter;
     mission.plan = await new DeterministicMissionPlanner().plan({ intent: mission.intent, projectRoot: "/source", surface: "web", policy: mission.policy, suite });

@@ -164,7 +164,7 @@ export const PlanningCoverageSchema = z.object({
 export type PlanningCoverage = z.infer<typeof PlanningCoverageSchema>;
 
 export const PlanningQualitySchema = z.object({
-  source: z.enum(["catalog", "deterministic", "model", "submitted"]).default("deterministic"),
+  source: z.enum(["catalog", "workflow-inventory", "deterministic", "model", "submitted"]).default("deterministic"),
   confidence: z.number().min(0).max(1).default(0),
   assumptions: z.array(z.string().min(1)).default([]),
   missingInputs: z.array(z.string().min(1)).default([]),
@@ -696,21 +696,41 @@ export type WorkflowExecutionCoverage = z.infer<typeof WorkflowExecutionCoverage
 
 export const TestSuiteSchema = z.object({
   suiteId: CatalogIdSchema,
-  level: z.literal("release"),
+  origin: z.enum(["catalog", "workflow-inventory"]).default("catalog"),
+  level: z.enum(["core", "release"]),
   surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1),
-  charters: z.array(z.object({ charterId: CatalogIdSchema, charter: TestCharterSchema, routeTargets: z.array(RouteCoverageTargetSchema).optional() })).min(2),
+  charters: z.array(z.object({
+    charterId: CatalogIdSchema,
+    charter: TestCharterSchema,
+    /** Omitted for a catalog suite: every Charter runs on every suite surface. */
+    surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1).optional(),
+    routeTargets: z.array(RouteCoverageTargetSchema).optional(),
+  })).min(1),
   uncoveredCharterIds: z.array(CatalogIdSchema).default([]),
 }).superRefine((suite, ctx) => {
   if (new Set(suite.charters.map((item) => item.charterId)).size !== suite.charters.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charters"], message: "Suite Charter IDs must be unique" });
   if (new Set(suite.surfaces).size !== suite.surfaces.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "Suite surfaces must be unique" });
-  if ((suite.surfaces.includes("web") || suite.surfaces.includes("electron")) && !(suite.surfaces.includes("web") && suite.surfaces.includes("electron"))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "A release suite with Web or Electron must include both surfaces" });
+  if (suite.origin === "catalog" && suite.level !== "release") ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["level"], message: "Catalog suites require release level" });
+  if (suite.origin === "catalog" && suite.charters.length < 2) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charters"], message: "Catalog suites require at least two Charters" });
+  if (suite.origin === "catalog" && (suite.surfaces.includes("web") || suite.surfaces.includes("electron")) && !(suite.surfaces.includes("web") && suite.surfaces.includes("electron"))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "A release suite with Web or Electron must include both surfaces" });
   if (new Set(suite.uncoveredCharterIds).size !== suite.uncoveredCharterIds.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["uncoveredCharterIds"], message: "Uncovered Charter IDs must be unique" });
   if (suite.uncoveredCharterIds.some((id) => suite.charters.some((item) => item.charterId === id))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["uncoveredCharterIds"], message: "Included Charters cannot be uncovered" });
   for (const [index, item] of suite.charters.entries()) {
     if (item.charter.level !== suite.level) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charters", index, "charter", "level"], message: "Suite Charter level must match the suite" });
+    if (suite.origin === "catalog" && item.surfaces) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charters", index, "surfaces"], message: "Catalog suites use the complete surface matrix" });
+    if (suite.origin === "workflow-inventory" && !item.surfaces) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charters", index, "surfaces"], message: "Workflow suites require explicit Charter surfaces" });
+    if (item.surfaces && (new Set(item.surfaces).size !== item.surfaces.length || item.surfaces.some((surface) => !suite.surfaces.includes(surface)))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charters", index, "surfaces"], message: "Charter surfaces must be unique and within the suite matrix" });
+    }
+  }
+  if (suite.origin === "workflow-inventory" && suite.surfaces.some((surface) => !suite.charters.some((item) => (item.surfaces ?? []).includes(surface)))) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "Every project surface requires a Charter" });
   }
 });
 export type TestSuite = z.infer<typeof TestSuiteSchema>;
+export function suiteChecks(suite: TestSuite): Array<{ charterId: string; charter: TestCharter; surface: "web" | "electron" | "mobile" }> {
+  return suite.charters.flatMap(({ charterId, charter, surfaces }) => (surfaces ?? suite.surfaces).map((surface) => ({ charterId, charter, surface })));
+}
 
 export const TestScopeInputSchema = z.object({
   level: TestLevelSchema.default("core"),

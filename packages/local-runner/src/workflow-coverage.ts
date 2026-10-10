@@ -38,6 +38,7 @@ export function summarizeWorkflowExecution(mission: TestMission, suiteScope?: Su
     "The inventory's completeness and reviewer identity are not independently verified.",
     ...(!inventory ? ["No valid frozen workflow inventory is available for this Mission."] : []),
     ...(!suiteScope ? ["No verified multi-Charter suite result is available; single-Charter Runs cannot establish the declared project matrix."] : []),
+    ...(suiteScope?.uncoveredCharterIds.length ? [`${suiteScope.uncoveredCharterIds.length} registered Charters are outside the executed workflow inventory.`] : []),
     ...(sourceBinding !== "matching" ? ["The source fingerprint did not match at both the start and end of the Mission."] : []),
     ...(inspection?.exclusionCount ? ["The inventory has explicitly excluded workflows."] : []),
     ...(inspection?.issues.filter((item) => item !== "workflow-inventory-completeness-unverified") ?? []),

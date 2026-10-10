@@ -12,6 +12,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ProofkitConfigSchema, TestCharterSchema } from "../packages/contracts/dist/index.js";
 import { createProofkitMcp } from "../packages/mcp/dist/server.js";
+import { captureSourceState } from "../packages/project/dist/index.js";
 
 // Real Playwright Web and Electron/CDP runs against an isolated two-workflow fixture.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -101,7 +102,8 @@ try {
   const config = ProofkitConfigSchema.parse({
     project: { root: sourceRoot },
     surfaces,
-    policies: { environment: "test", sideEffects: "allow" },
+    // This fixture server runs in the smoke process, outside the synthetic source checkout.
+    policies: { environment: "test", sideEffects: "allow", targetBinding: "record" },
     run: { timeoutMs: 15_000 },
     charters: ["resume", "login"].map((flow) => ({ id: flow, path: `.proofkit/charters/${flow}.yml`, aliases: [flow], level: "release", surfaces: ["web", "electron"], routeTargets: [
       { kind: "web", path: `/${flow}`, source: "apps/web/src/router.ts" },
@@ -205,7 +207,36 @@ try {
   assert.equal(await readFile(routeFile, "utf8"), routeSource);
   assert.equal(await readFile(apiRouteFile, "utf8"), apiRouteSource);
   assert.equal(await readFile(extraRouteFile, "utf8"), extraRouteSource);
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
+
+  const git = promisify(execFile);
+  await git("git", ["init", "-q"], { cwd: sourceRoot });
+  await git("git", ["-c", "core.autocrlf=false", "add", "."], { cwd: sourceRoot });
+  await git("git", ["-c", "user.name=ProofKit", "-c", "user.email=proofkit@example.invalid", "commit", "-qm", "fixture"], { cwd: sourceRoot });
+  const source = await captureSourceState(sourceRoot);
+  assert.ok(source.complete && source.headSha && source.worktreeSha256);
+  await writeFile(join(workspaceRoot, ".proofkit", "workflows.yaml"), JSON.stringify({
+    schemaVersion: 1, source: { headSha: source.headSha, worktreeSha256: source.worktreeSha256 },
+    review: { by: "fixture", at: new Date().toISOString(), method: "Declared the two fixture workflows" },
+    workflows: [
+      { id: "resume-flow", title: "Resume", sourcePaths: ["apps/web/src/router.ts"], checks: [{ charterId: "resume", surfaces: ["web"] }], surfaces: ["web"] },
+      { id: "login-flow", title: "Login", sourcePaths: ["apps/web/src/router.ts"], checks: [{ charterId: "login", surfaces: ["electron"] }], surfaces: ["electron"] },
+    ], exclusions: [],
+  }));
+  const directProject = payload(await client.callTool({ name: "run_test", arguments: { intent: "测试整个项目上线", level: "release" } }));
+  assert.equal(directProject.suiteId, "project-workflows");
+  assert.equal(directProject.readiness.ready, true);
+  assert.ok(directProject.readiness.acceptanceGaps.includes("project-workflow-coverage"));
+  assert.deepEqual(directProject.taskSummary.filter((task) => task.tool === "surface.run-charter").map((task) => task.charterId), ["resume", "login"]);
+  const directStatus = await waitForMission(client, directProject.missionId);
+  assert.equal(directStatus.mission.verdict, "inconclusive");
+  const directEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: directProject.missionId } }));
+  assert.deepEqual(directEvidence.suiteScope.results.map((item) => `${item.charterId}/${item.surface}`), ["resume/web", "login/electron"]);
+  assert.ok(directEvidence.suiteScope.results.every((item) => item.verdict === "passed" && item.replay.sourceRunId === item.primary.runId));
+  assert.deepEqual({ status: directEvidence.workflowExecution.status, required: directEvidence.workflowExecution.requiredChecks,
+    evidenced: directEvidence.workflowExecution.evidencedChecks, source: directEvidence.workflowExecution.sourceBinding },
+  { status: "all-declared-evidenced", required: 2, evidenced: 2, source: "matching" });
+  assert.equal((await captureSourceState(sourceRoot)).worktreeSha256, source.worktreeSha256);
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
   await client?.close();
   await mcpServer?.close();

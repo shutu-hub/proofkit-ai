@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import {
   MissionComparisonSchema,
   SourceStateSchema,
+  suiteChecks,
   type EvidenceRef,
   type MissionComparison,
   type MissionComparisonDefect,
@@ -254,14 +255,16 @@ function canonical(value: unknown): string {
 }
 
 function slotsFor(mission: TestMission): Slot[] {
-  const charters = mission.suite?.charters.map((item) => ({ charterId: item.charterId, charter: item.charter }))
-    ?? (mission.charter ? [{ charterId: typeof mission.charter.metadata.catalogId === "string" ? mission.charter.metadata.catalogId : undefined, charter: mission.charter }] : []);
-  const surfaces = mission.plan.executionProfile.surfaceMatrix as Surface[];
-  return charters.flatMap(({ charterId, charter }) => surfaces.flatMap((surface): Slot[] => [
+  const checks = mission.suite ? suiteChecks(mission.suite)
+    : mission.charter ? (mission.plan.executionProfile.surfaceMatrix as Surface[]).map((surface) => ({
+      charterId: typeof mission.charter!.metadata.catalogId === "string" ? mission.charter!.metadata.catalogId : undefined,
+      charter: mission.charter!, surface,
+    })) : [];
+  return checks.flatMap(({ charterId, charter, surface }): Slot[] => [
     { charterId, charter, surface, runKind: "primary" },
     ...(mission.plan.executionProfile.requireReplay ? [{ charterId, charter, surface, runKind: "replay" as const }] : []),
     ...(charter.negativeCases ?? []).map((item) => ({ charterId, charter, surface, runKind: "negative" as const, negativeCaseId: item.caseId, expectedVerdict: item.expectedVerdict ?? "passed" })),
-  ]));
+  ]);
 }
 
 function slotKey(slot: Pick<Slot, "charterId" | "surface" | "runKind" | "negativeCaseId">): string {

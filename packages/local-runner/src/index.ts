@@ -7,7 +7,7 @@ import { createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofki
 import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
-import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict } from "@proofkit/contracts";
+import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowInventory, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
@@ -316,23 +316,34 @@ export class LocalRunnerService {
     if (input.charter && hasAdHocOptions) throw new Error("A submitted Charter cannot be combined with ad-hoc planning options");
     if (input.charterId && hasAdHocOptions) throw new Error("charterId cannot be combined with ad-hoc planning options");
     if (input.suiteId && hasAdHocOptions) throw new Error("suiteId cannot be combined with ad-hoc planning options");
-    const selectedSuite = input.charter || input.charterId || (hasAdHocOptions && !input.suiteId)
+    const projectRequested = assessPlanningCoverage(input.intent, undefined, input.coverage).requested === "project";
+    const selectedSuite = input.charter || input.charterId || (hasAdHocOptions && !input.suiteId) || (projectRequested && !input.suiteId)
       ? undefined
       : selectCatalogSuite(this.config.suites, { intent: input.intent, level: levelSelection.resolved, surface, suiteId: input.suiteId });
-    if (selectedSuite && !input.suiteId) {
-      const competingCharter = selectCatalogCharter(this.config.charters, { intent: input.intent, level: levelSelection.resolved, surface });
-      if (competingCharter) throw new Error(`Intent matches suite ${selectedSuite.entry.id} and Charter ${competingCharter.entry.id}; specify suiteId or charterId`);
-    }
-    const selected = input.charter || selectedSuite ? undefined : !hasAdHocOptions || input.charterId
+    const preliminarySelected = input.charter || selectedSuite || (projectRequested && !input.charterId) ? undefined : !hasAdHocOptions || input.charterId
       ? selectCatalogCharter(this.config.charters, { intent: input.intent, level: levelSelection.resolved, surface, charterId: input.charterId })
       : undefined;
-    const projectMap = input.charter || selected || selectedSuite ? await this.discover() : undefined;
+    const projectMap = projectRequested || input.charter || preliminarySelected || selectedSuite ? await this.discover() : undefined;
     const coverage = assessPlanningCoverage(input.intent, projectMap, input.coverage);
     const workflowInventory = coverage.requested === "project"
       ? await inspectWorkflowInventory(this.root, this.workspaceRoot, this.config)
       : undefined;
-    if (selectedSuite) {
-      const suite = await this.loadSuite(selectedSuite.entry);
+    const inspection = workflowInventory?.inspection;
+    const inventory = workflowInventory?.inventory;
+    const projectSuite = levelSelection.resolved !== "quick" && !input.suiteId && !input.charter && !input.charterId && !hasAdHocOptions && inventory
+      && inspection?.status === "loaded" && inspection.sourceMatch === "matching"
+      && inspection.missingCharterIds.length === 0 && inspection.uncoveredSurfaces.length === 0 && inspection.missingSourcePaths.length === 0
+      && inventory.workflows.flatMap(workflowChecks).every(({ charterId }) => this.config.charters.some((entry) => entry.id === charterId && entry.level === levelSelection.resolved))
+      ? await this.loadWorkflowSuite(inventory, levelSelection.resolved)
+      : undefined;
+    if (selectedSuite && !input.suiteId && !projectSuite) {
+      const competingCharter = selectCatalogCharter(this.config.charters, { intent: input.intent, level: levelSelection.resolved, surface });
+      if (competingCharter) throw new Error(`Intent matches suite ${selectedSuite.entry.id} and Charter ${competingCharter.entry.id}; specify suiteId or charterId`);
+    }
+    const selected = projectSuite ? undefined : preliminarySelected ?? (projectRequested && !selectedSuite && !hasAdHocOptions
+      ? selectCatalogCharter(this.config.charters, { intent: input.intent, level: levelSelection.resolved, surface, charterId: input.charterId }) : undefined);
+    if (projectSuite || selectedSuite) {
+      const suite = projectSuite ?? await this.loadSuite(selectedSuite!.entry);
       suite.charters = suite.charters.map((item) => ({ ...item,
         charter: TestCharterSchema.parse({ ...item.charter, planning: withPlanningCoverage(item.charter.planning, coverage) }),
       }));
@@ -341,19 +352,19 @@ export class LocalRunnerService {
       if (input.policy?.sideEffectPolicy && input.policy.sideEffectPolicy !== sideEffectPolicy) {
         throw new Error("Mission policy side effects must match the selected suite");
       }
-      const expectedRuns = suite.charters.reduce((count, item) => count + suite.surfaces.length * (2 + (item.charter.negativeCases?.length ?? 0)), 0);
+      const expectedRuns = suiteChecks(suite).reduce((count, item) => count + (suite.level === "release" ? 2 : 1) + (item.charter.negativeCases?.length ?? 0), 0);
       const timeoutMs = input.policy?.timeoutMs ?? Math.min(3_600_000, Math.max(300_000, expectedRuns * this.config.run.timeoutMs));
       await this.ensureWorkspace();
       return this.missionAgent.create({
         intent: input.intent,
         projectRoot: this.root,
         workspaceRoot: this.workspaceRoot,
-        surface,
+        surface: suite.surfaces.includes(surface) ? surface : suite.surfaces[0]!,
         suite,
         workflowInventory: workflowInventory?.inventory,
         workflowInventoryInspection: workflowInventory?.inspection,
         levelSelection,
-        policy: { ...input.policy, level: "release", sideEffectPolicy, timeoutMs },
+        policy: { ...input.policy, level: suite.level, sideEffectPolicy, timeoutMs },
       });
     }
     let charter: TestCharter;
@@ -440,6 +451,35 @@ export class LocalRunnerService {
     const included = new Set(entry.charterIds);
     const uncoveredCharterIds = this.config.charters.filter((item) => item.level === "release" && !included.has(item.id)).map((item) => item.id);
     return TestSuiteSchema.parse({ suiteId: entry.id, level: entry.level, surfaces: entry.surfaces, charters, uncoveredCharterIds });
+  }
+
+  private async loadWorkflowSuite(inventory: WorkflowInventory, level: "core" | "release"): Promise<TestSuite> {
+    const catalog = new Map(this.config.charters.map((entry) => [entry.id, entry]));
+    const surfacesByCharter = new Map<string, Set<LocalAdapterName>>();
+    for (const workflow of inventory.workflows) {
+      for (const check of workflowChecks(workflow)) {
+        const surfaces = surfacesByCharter.get(check.charterId) ?? new Set<LocalAdapterName>();
+        for (const surface of check.surfaces) surfaces.add(surface);
+        surfacesByCharter.set(check.charterId, surfaces);
+      }
+    }
+    const charters: TestSuite["charters"] = [];
+    for (const [charterId, surfaces] of surfacesByCharter) {
+      const entry = catalog.get(charterId);
+      if (!entry || entry.level !== level) throw new Error(`Workflow Charter ${charterId} is not registered at ${level} level`);
+      const saved = await loadCharter(resolveWithinWorkspace(this.workspaceRoot, entry.path));
+      if (saved.level !== level) throw new Error(`Workflow Charter ${charterId} has a mismatched saved level`);
+      const charter = TestCharterSchema.parse({ ...saved, metadata: { ...saved.metadata, catalogId: charterId, suiteId: "project-workflows" } });
+      for (const surface of surfaces) this.validateCatalogCharter(charterId, charter, surface);
+      charters.push({ charterId, charter, surfaces: [...surfaces], routeTargets: entry.routeTargets ?? [] });
+    }
+    const included = new Set(surfacesByCharter.keys());
+    const uncoveredCharterIds = this.config.charters.filter((entry) => entry.level === level && !included.has(entry.id)).map((entry) => entry.id);
+    return TestSuiteSchema.parse({
+      suiteId: "project-workflows", origin: "workflow-inventory", level,
+      surfaces: [...new Set(inventory.workflows.flatMap((workflow) => workflow.surfaces))],
+      charters, uncoveredCharterIds,
+    });
   }
 
   private validateCatalogCharter(id: string, charter: TestCharter, surface: LocalAdapterName): void {

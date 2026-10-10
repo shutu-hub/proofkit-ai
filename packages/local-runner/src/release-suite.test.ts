@@ -1,10 +1,12 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProofkitConfigSchema, TestCharterSchema, type RunSummary, type TestCharter, type Verdict } from "@proofkit/contracts";
+import { captureSourceState } from "@proofkit/project";
 import { LocalRunnerService, type LocalAdapterName } from "./index.js";
-import { verifySuiteMission } from "./suite-verifier.js";
+import { summarizeSuiteScope, verifySuiteMission } from "./suite-verifier.js";
 
 const roots: string[] = [];
 
@@ -262,6 +264,82 @@ describe("explicit release suites", () => {
     expect(selected.suite?.suiteId).toBe("release-critical");
   });
 });
+
+describe("workflow inventory Missions", () => {
+  it("runs a core project graph with different Charters on Web and Electron", async () => {
+    const service = await createWorkflowService("core");
+    const harness = stubRuns(service);
+    const mission = await service.createMission({ intent: "测试整个项目", surface: "web" });
+    expect(mission.suite).toMatchObject({ origin: "workflow-inventory", level: "core", surfaces: ["web", "electron"] });
+    expect(mission.plan.generatedBy).toBe("deterministic-workflow-planner-v1");
+    expect(mission.plan.planning?.source).toBe("workflow-inventory");
+    expect(mission.plan.executionProfile.requireReplay).toBe(false);
+    expect(mission.plan.graph.tasks.filter((task) => task.tool === "surface.run-charter")
+      .map((task) => `${task.charterId}/${task.input.adapter}`)).toEqual(["resume/web", "login/electron"]);
+    expect(mission.plan.graph.tasks.some((task) => task.tool === "surface.replay-charter")).toBe(false);
+
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    const evidence = await service.missionEvidence(mission.missionId);
+    expect(harness.started.map((item) => `${item.charterId}/${item.surface}`)).toEqual(["resume/web", "login/electron", "resume/web", "login/electron"]);
+    expect(harness.replayed).toHaveLength(0);
+    expect(evidence.suiteScope?.results.map((item) => `${item.charterId}/${item.surface}`)).toEqual(["resume/web", "login/electron"]);
+    expect(evidence.suiteScope?.results.every((item) => item.verdict === "passed" && !item.replay)).toBe(true);
+    expect(evidence.workflowExecution).toMatchObject({ status: "all-declared-evidenced", requiredChecks: 2, evidencedChecks: 2, sourceBinding: "matching" });
+    expect(completed.verdict).toBe("inconclusive");
+    expect(completed.plan.planning?.evidenceGaps).toContain("project-workflow-coverage");
+    const unscheduled = structuredClone(completed);
+    unscheduled.plan.graph.tasks.find((task) => task.taskId === "execute-resume-web")!.status = "skipped";
+    expect(summarizeSuiteScope(unscheduled, service.evidenceDir)?.results[0]).toMatchObject({
+      verdict: "inconclusive", missing: expect.arrayContaining(["primary task did not pass"]),
+    });
+  });
+
+  it("replays only declared Charter and platform pairs at release intensity", async () => {
+    const service = await createWorkflowService("release");
+    const harness = stubRuns(service);
+    const mission = await service.createMission({ intent: "测试整个项目上线", surface: "web", level: "release" });
+    expect(mission.suite?.origin).toBe("workflow-inventory");
+    expect(mission.plan.graph.tasks.filter((task) => task.tool === "surface.replay-charter")
+      .map((task) => `${task.charterId}/${task.input.adapter}`)).toEqual(["resume/web", "login/electron"]);
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    const evidence = await service.missionEvidence(mission.missionId);
+    expect(harness.started).toHaveLength(4);
+    expect(harness.replayed.map((item) => `${item.charterId}/${item.surface}`)).toEqual(["resume/web", "login/electron"]);
+    expect(evidence.suiteScope?.results).toHaveLength(2);
+    expect(evidence.suiteScope?.results.every((item) => item.verdict === "passed" && item.replay?.sourceRunId === item.primary?.runId)).toBe(true);
+    expect(evidence.workflowExecution).toMatchObject({ status: "all-declared-evidenced", requiredChecks: 2, evidencedChecks: 2, sourceBinding: "matching" });
+    expect(completed.verdict).toBe("inconclusive");
+  });
+});
+
+async function createWorkflowService(level: "core" | "release"): Promise<LocalRunnerService> {
+  const service = await createSuiteService();
+  for (const entry of service.config.charters.filter((item) => item.id === "resume" || item.id === "login")) {
+    entry.level = level;
+    entry.surfaces = [entry.id === "resume" ? "web" : "electron"];
+    const path = join(service.workspaceRoot, entry.path);
+    const charter = TestCharterSchema.parse(JSON.parse(await readFile(path, "utf8")));
+    await writeFile(path, JSON.stringify({ ...charter, level }));
+  }
+  execFileSync("git", ["-C", service.root, "init", "-q"]);
+  execFileSync("git", ["-C", service.root, "-c", "core.autocrlf=false", "add", "."]);
+  execFileSync("git", ["-C", service.root, "-c", "user.name=ProofKit", "-c", "user.email=proofkit@example.invalid", "commit", "-qm", "fixture"]);
+  const source = await captureSourceState(service.root);
+  if (!source.complete || !source.headSha || !source.worktreeSha256) throw new Error("Fixture source fingerprint is incomplete");
+  await writeFile(join(service.workspaceRoot, ".proofkit", "workflows.yaml"), JSON.stringify({
+    schemaVersion: 1, source: { headSha: source.headSha, worktreeSha256: source.worktreeSha256 },
+    review: { by: "fixture", at: new Date().toISOString(), method: "Declared the two fixture workflows" },
+    workflows: [
+      { id: "resume-flow", title: "Resume", sourcePaths: ["apps/web/src/router.ts"],
+        checks: [{ charterId: "resume", surfaces: ["web"] }], surfaces: ["web"] },
+      { id: "login-flow", title: "Login", sourcePaths: ["apps/web/src/router.ts"],
+        checks: [{ charterId: "login", surfaces: ["electron"] }], surfaces: ["electron"] },
+    ], exclusions: [],
+  }));
+  return service;
+}
 
 async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[]; loginOracle?: boolean } = {}): Promise<LocalRunnerService> {
   const root = await mkdtemp(join(tmpdir(), "proofkit-suite-source-"));

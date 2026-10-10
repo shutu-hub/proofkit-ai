@@ -18,6 +18,7 @@ import {
   TaskNodeSchema,
   TestMissionSchema,
   ToolCallSchema,
+  suiteChecks,
   type Finding,
   type AgentStep,
   type Diagnosis,
@@ -228,23 +229,24 @@ export class DeterministicMissionPlanner implements MissionPlanner {
   }
 
   private planSuite(input: MissionPlanInput, suite: TestSuite): MissionPlan {
-    if (input.policy.level !== "release") throw new Error("A test suite requires the release level");
+    if (input.policy.level !== suite.level) throw new Error("Mission level must match the test suite");
     if (!suite.surfaces.includes(input.surface as typeof suite.surfaces[number])) throw new Error("The selected surface is not in the test suite");
     const now = new Date().toISOString();
-    const negativeCases = suite.charters.flatMap(({ charter }) => charter.negativeCases ?? []);
+    const checks = suiteChecks(suite);
+    const negativeCases = checks.flatMap(({ charter }) => charter.negativeCases ?? []);
     const profile = MissionExecutionProfileSchema.parse({
       surfaceMatrix: suite.surfaces,
       suiteId: suite.suiteId,
       charterIds: suite.charters.map((item) => item.charterId),
       collectAllResults: true,
-      negativeCases: ["权限边界", "无效输入", "重试与恢复", "重复提交与幂等"],
+      negativeCases: suite.level === "core" ? ["关键权限或输入边界"] : ["权限边界", "无效输入", "重试与恢复", "重复提交与幂等"],
       declaredNegativeCases: negativeCases.map((item) => item.caseId),
       requireBusinessOracle: true,
-      requireReplay: true,
+      requireReplay: suite.level === "release",
       requireNegativeCases: negativeCases.length > 0,
-      minimumEvidence: 3,
+      minimumEvidence: suite.level === "core" ? 2 : 3,
     });
-    const primaryTasks = suite.charters.flatMap(({ charterId, charter }) => suite.surfaces.map((surface) => TaskNodeSchema.parse({
+    const primaryTasks = checks.map(({ charterId, charter, surface }) => TaskNodeSchema.parse({
       taskId: `execute-${charterId}-${surface}`,
       charterId,
       title: `${charterId} · ${surface} 主运行`,
@@ -253,8 +255,8 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       input: { charterId, adapter: surface },
       dependsOn: ["reconnaissance"],
       maxAttempts: 1,
-    })));
-    const replayTasks = suite.charters.flatMap(({ charterId }) => suite.surfaces.map((surface) => TaskNodeSchema.parse({
+    }));
+    const replayTasks = profile.requireReplay ? checks.map(({ charterId, surface }) => TaskNodeSchema.parse({
       taskId: `replay-${charterId}-${surface}`,
       charterId,
       title: `${charterId} · ${surface} 回放`,
@@ -264,8 +266,8 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       dependsOn: [`execute-${charterId}-${surface}`],
       dependencyMode: "settled",
       maxAttempts: 1,
-    })));
-    const negativeTasks = suite.charters.flatMap(({ charterId, charter }) => suite.surfaces.flatMap((surface) => (charter.negativeCases ?? []).map((negativeCase) => TaskNodeSchema.parse({
+    })) : [];
+    const negativeTasks = checks.flatMap(({ charterId, charter, surface }) => (charter.negativeCases ?? []).map((negativeCase) => TaskNodeSchema.parse({
       taskId: `negative-${charterId}-${surface}-${negativeCase.caseId}`,
       charterId,
       title: `${charterId} · ${surface} 负向场景：${negativeCase.title}`,
@@ -275,7 +277,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       dependsOn: [`execute-${charterId}-${surface}`],
       dependencyMode: "settled",
       maxAttempts: 1,
-    }))));
+    })));
     const tasks: TaskNode[] = [
       TaskNodeSchema.parse({ taskId: "reconnaissance", title: "熟悉项目和运行表面", objective: "确认项目入口和当前可观察表面。", tool: "project.discover", input: {}, maxAttempts: 1 }),
       ...primaryTasks,
@@ -287,7 +289,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
         objective: "独立校验每个 Charter、表面和运行类型的业务结果。",
         tool: "mission.verify",
         input: {},
-        dependsOn: [...replayTasks, ...negativeTasks].map((task) => task.taskId),
+        dependsOn: [...(profile.requireReplay ? replayTasks : primaryTasks), ...negativeTasks].map((task) => task.taskId),
         dependencyMode: "settled",
         maxAttempts: 1,
       }),
@@ -295,11 +297,11 @@ export class DeterministicMissionPlanner implements MissionPlanner {
     return MissionPlanSchema.parse({
       planId: `plan-${randomUUID().slice(0, 12)}`,
       version: "1",
-      generatedBy: "deterministic-suite-planner-v1",
+      generatedBy: suite.origin === "workflow-inventory" ? "deterministic-workflow-planner-v1" : "deterministic-suite-planner-v1",
       graph: { tasks, terminalTaskIds: ["verify-result"] },
       successCriteria: ["逐流程主运行和回放完成", "每个流程及表面有独立业务事实", "明确报告未通过和未覆盖范围"],
-      planning: planningQuality(input, "catalog"),
-      level: "release",
+      planning: planningQuality(input, suite.origin === "workflow-inventory" ? "workflow-inventory" : "catalog"),
+      level: suite.level,
       executionProfile: profile,
       assumptions: [`suite=${suite.suiteId}`, `environment=${input.policy.environment}`, `surfaces=${suite.surfaces.join(",")}`],
       createdAt: now,

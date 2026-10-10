@@ -172,7 +172,7 @@ describe("ProofKit MCP tools", () => {
     mission.policy.level = "release";
     mission.plan.level = "release";
     mission.plan.executionProfile = { ...mission.plan.executionProfile, suiteId: "release-critical", charterIds: ["resume", "login"], surfaceMatrix: ["web", "electron"], collectAllResults: true, requireReplay: true };
-    mission.suite = { suiteId: "release-critical", level: "release", surfaces: ["web", "electron"], charters: [{ charterId: "resume", charter }, { charterId: "login", charter: { ...charter, intent: "test login" } }], uncoveredCharterIds: [] };
+    mission.suite = { suiteId: "release-critical", origin: "catalog", level: "release", surfaces: ["web", "electron"], charters: [{ charterId: "resume", charter }, { charterId: "login", charter: { ...charter, intent: "test login" } }], uncoveredCharterIds: [] };
     mission.charter = undefined;
     const runner = {
       config: { surfaces: {} },
@@ -201,7 +201,7 @@ describe("ProofKit MCP tools", () => {
     mission.policy.level = "release";
     mission.plan.level = "release";
     mission.plan.executionProfile = { ...mission.plan.executionProfile, suiteId: "critical", charterIds: ["resume", "login"], surfaceMatrix: ["web", "electron"], collectAllResults: true, requireReplay: true };
-    mission.suite = { suiteId: "critical", level: "release", surfaces: ["web", "electron"], charters: [{ charterId: "resume", charter }, { charterId: "login", charter }], uncoveredCharterIds: [] };
+    mission.suite = { suiteId: "critical", origin: "catalog", level: "release", surfaces: ["web", "electron"], charters: [{ charterId: "resume", charter }, { charterId: "login", charter }], uncoveredCharterIds: [] };
     mission.charter = undefined;
     mission.plan.planning = { source: "catalog", confidence: 0, assumptions: [], missingInputs: [], evidenceGaps: ["project-workflow-coverage", "project-map-truncated"],
       coverage: { requested: "project", source: "inferred", reason: "whole project", inventory: "partial", workflowCoverage: "unmeasured", gaps: ["project-map-truncated", "project-workflow-coverage"] } };

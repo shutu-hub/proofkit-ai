@@ -1,4 +1,4 @@
-import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, ProjectMapSchema, RouteCoverageTargetSchema, type Observation, type RouteCoverageTarget, type TestMission, type Verdict } from "@proofkit/contracts";
+import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, ProjectMapSchema, RouteCoverageTargetSchema, suiteChecks, type Observation, type RouteCoverageTarget, type TestMission, type Verdict } from "@proofkit/contracts";
 import type { MissionToolResult } from "@proofkit/agent";
 import { reconcileRouteDeclarations } from "@proofkit/project";
 import { hasCompleteCleanupEvidence } from "./cleanup-evidence.js";
@@ -45,9 +45,22 @@ export function summarizeSuiteScope(mission: TestMission, evidenceDir?: string):
   if (!suite) return undefined;
   const includedCharterIds = suite.charters.map((item) => item.charterId);
   const observations = mission.observations.filter((item) => item.kind === "surface.run");
-  const results = suite.charters.flatMap(({ charterId, charter }) => suite.surfaces.map((surface): SuiteSurfaceResult => {
+  const requireReplay = suite.level === "release";
+  const results = suiteChecks(suite).map(({ charterId, charter, surface }): SuiteSurfaceResult => {
     const missing: string[] = [];
     if (!hasPositiveSurfaceAssertion(charter.assertions)) missing.push("positive surface assertion");
+    if (mission.plan.executionProfile.requireReplay !== requireReplay) missing.push("replay policy differs from suite level");
+    const scheduledTask = (tool: string, negativeCaseId?: string) => mission.plan.graph.tasks.find((task) => task.tool === tool
+      && task.charterId === charterId && task.input.charterId === charterId && task.input.adapter === surface
+      && (negativeCaseId === undefined || (typeof task.input.negativeCase === "object" && task.input.negativeCase !== null
+        && (task.input.negativeCase as { caseId?: unknown }).caseId === negativeCaseId)));
+    const requireTask = (tool: string, label: string, negativeCaseId?: string) => {
+      const task = scheduledTask(tool, negativeCaseId);
+      if (!task) missing.push(`${label} task was not scheduled`);
+      else if (task.status !== "passed") missing.push(`${label} task did not pass`);
+    };
+    requireTask("surface.run-charter", "primary");
+    if (requireReplay) requireTask("surface.replay-charter", "replay");
     let failed = false;
     let blocked = false;
     let inconclusive = false;
@@ -82,10 +95,11 @@ export function summarizeSuiteScope(mission: TestMission, evidenceDir?: string):
       return fact;
     };
     const primary = inspect("primary");
-    const replay = inspect("replay");
+    const replay = requireReplay ? inspect("replay") : undefined;
     if (primary && replay && replay.sourceRunId !== primary.runId) missing.push("replay source does not match primary run");
     const negativeCases: RunFact[] = [];
     for (const declared of charter.negativeCases ?? []) {
+      requireTask("surface.run-negative-charter", `negative ${declared.caseId}`, declared.caseId);
       const matches = matching("negative", declared.caseId);
       if (matches.length !== 1) {
         missing.push(`negative ${declared.caseId} ${matches.length === 0 ? "run" : "has duplicate observations"}`);
@@ -107,7 +121,7 @@ export function summarizeSuiteScope(mission: TestMission, evidenceDir?: string):
     }
     const verdict: Verdict = failed ? "failed" : blocked ? "blocked" : missing.length > 0 || inconclusive ? "inconclusive" : "passed";
     return { charterId, surface, verdict, primary, replay, negativeCases, missing };
-  }));
+  });
   return {
     suiteId: suite.suiteId,
     includedCharterIds,
@@ -129,16 +143,18 @@ function summarizeRouteCoverage(mission: TestMission, results: SuiteSurfaceResul
   let observedCandidates = 0;
   for (const { candidate: route, charterIds, runtimeSourceAmbiguous: ambiguousRuntimePath } of routes) {
     if (charterIds.length > 0) mappedCandidates++;
-    const observed = !ambiguousRuntimePath && charterIds.some((charterId) =>
-      mission.suite!.surfaces.every((surface) => {
+    const observed = !ambiguousRuntimePath && charterIds.some((charterId) => {
+      const charter = mission.suite!.charters.find((item) => item.charterId === charterId);
+      return (charter?.surfaces ?? mission.suite!.surfaces).every((surface) => {
         const result = results.find((item) => item.charterId === charterId && item.surface === surface);
         const matched = (fact: RunFact | undefined) => route.kind === "web"
           ? fact?.matchedRoutePaths.includes(route.path)
           : route.method !== undefined && fact?.matchedApiTargets.some((target) => target.path === route.path && target.method === route.method);
         return result?.verdict === "passed"
           && matched(result.primary)
-          && matched(result.replay);
-      }));
+          && (mission.suite!.level !== "release" || matched(result.replay));
+      });
+    });
     if (observed) {
       observedCandidates++;
     } else {
@@ -193,7 +209,7 @@ export function verifySuiteMission(mission: TestMission, evidenceDir?: string): 
         severity: "high",
         category: "test",
         status: "confirmed",
-        title: "Release suite evidence is incomplete",
+        title: "Mission scenario evidence is incomplete",
         message,
         evidence: mission.evidence.slice(0, 4),
         createdAt: observedAt,
