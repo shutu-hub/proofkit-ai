@@ -1,6 +1,8 @@
 import { createServer } from "node:http";
 import { strict as assert } from "node:assert";
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { analyzeRun } from "../packages/agent/dist/index.js";
 import { WebAdapter } from "../packages/adapters/dist/index.js";
 import { pollHttpOracle } from "../packages/oracles/dist/index.js";
 import { planIntent } from "../packages/planner/dist/index.js";
@@ -73,5 +75,13 @@ const failing = await new ExecutionRunner(new WebAdapter({ executablePath: "C:\\
 });
 assert.equal(failing.verdict, "failed", JSON.stringify(failing, null, 2));
 assert.equal(failing.assertions[1]?.passed, false);
+const assertionPath = `${failing.runId}/artifacts/assertion-002-snapshot.json`;
+assert.ok(failing.assertions[1].evidence.includes(assertionPath));
+assert.ok(JSON.parse(await readFile(resolve(".proofkit/smoke-runs", assertionPath), "utf8")).text.includes("Page configuration failed"));
+const analysis = analyzeRun({ summary: failing, evidence: [{ evidenceId: `${failing.runId}:${assertionPath}`, kind: "snapshot",
+  path: resolve(".proofkit/smoke-runs", assertionPath), capturedAt: failing.endedAt }] });
+assert.equal(analysis.finding?.status, "confirmed");
+assert.equal(analysis.finding?.category, "product");
+assert.deepEqual(analysis.finding?.evidence.map((item) => item.path), [resolve(".proofkit/smoke-runs", assertionPath)]);
 console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, artifacts: summary.artifacts.length }, null, 2));
 server.close();

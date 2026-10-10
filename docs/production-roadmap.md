@@ -54,6 +54,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
   write policy, and intact event/artifact provenance. Recovery evidence is
   separate from the original Run verdict.
 - Keep Agent tool failures as suspected test findings until an independent product oracle confirms a defect.
+- Save contemporaneous snapshot/screenshot evidence for each page assertion and leave a result inconclusive when neither observation can be saved. Failure analysis no longer borrows an earlier step artifact to confirm an assertion defect.
 - Classify selected browser runtime signals with evidence links and explicit `record`, `fail` or `ignore` policy; reject invalid URL filters instead of silently widening the monitored scope.
 - Select a unique CDP application page for Web/Electron attachment; reject ambiguous windows instead of running a Charter in an arbitrary renderer.
 - Inspect Windows loopback listeners before Web/Electron actions and block an evidenced different Git checkout by default. Retain matching or unverified process-path status in Run/Mission evidence without claiming served-byte attestation.
@@ -220,6 +221,8 @@ cannot prove historical terminal state or concurrent business causality.
 - Re-run the affected charter after a code change and compare before/after evidence.
 
 **Current evidence:** direct Mission replay provenance and a read-only `MissionComparison` now pair saved Run scope and independent business source artifacts. AIHR loopback Web/Electron smokes and a two-workflow release suite inject a business defect, restore the fixture, replay through MCP, and receive `verified-in-scope`; missing facts, changed scope and incomplete negative/replay slots are inconclusive. This demonstrates test-scope repair verification against fixtures, not causal proof of a source edit or live AIHR remediation. Source-location diagnosis and validated repair proposals still need broader seeded-defect and real-workspace evidence.
+
+Real Chrome and Electron smoke cases now make a visible page assertion fail, then confirm the Finding only from the failed assertion's own saved snapshot. The release suite checks that all eight primary/replay Runs link their assertion-time snapshots through the Run report. Missing assertion observation stays inconclusive; these fixtures do not prove that every assertion or source-location hint is semantically correct.
 
 Mission discovery and final verification now record bounded Git source fingerprints. A comparison shows whether the source changed between runs and refuses repair verification when the candidate source changed during its own run. The current AIHR checkout is capturable without copying its diff or file contents into evidence. Live AIHR execution remains pending until an isolated gateway, CDP session, test credentials and fixture are available.
 

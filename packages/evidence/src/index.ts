@@ -132,7 +132,7 @@ export class EvidenceStore {
     const verdict = summary.verdict ?? "inconclusive";
     const links = (items: string[]) => items.filter((item) => item.startsWith(`${summary.runId}/artifacts/`) || item === `${summary.runId}/events.jsonl` || item === `${summary.runId}/run.json`).map((item) => `<a href="${escapeHtml(item.slice(summary.runId.length + 1))}">${escapeHtml(item.split("/").at(-1) ?? "evidence")}</a>`).join(" ");
     const rows = summary.steps.map((step) => `<tr><td>${escapeHtml(step.stepId)}</td><td>${escapeHtml(step.action.kind)}</td><td>${escapeHtml(step.status)}</td><td>${links(step.artifacts)}</td><td>${escapeHtml(step.error ?? "")}</td></tr>`).join("");
-    const assertions = summary.assertions.map((item) => `<li class="${item.passed ? "pass" : "fail"}">${escapeHtml(item.message)}</li>`).join("");
+    const assertions = summary.assertions.map((item) => `<li class="${item.passed ? "pass" : "fail"}">${escapeHtml(item.message)} ${links(item.evidence)}</li>`).join("");
     const oracles = summary.oracles.map((item) => `<li class="${item.passed === true ? "pass" : item.passed === false ? "fail" : "meta"}">${escapeHtml(item.name)}: ${escapeHtml(item.message)} ${links(item.evidence)}</li>`).join("");
     const runtimeFindings = (summary.runtimeFindings ?? []).map((finding) => `<tr><td>${escapeHtml(finding.kind)}</td><td>${escapeHtml(finding.severity)}</td><td>${escapeHtml(finding.status)}</td><td>${escapeHtml(finding.message)}</td><td>${escapeHtml(finding.url ?? "")}${finding.statusCode === undefined ? "" : ` (${finding.statusCode})`}${finding.consoleLevel ? ` [${escapeHtml(finding.consoleLevel)}]` : ""}</td><td>${links(finding.evidence)}</td></tr>`).join("");
     const html = `<!doctype html>

@@ -86,6 +86,7 @@ describe("MCP external workspace", () => {
     let server: McpServer | undefined;
     try {
       vi.spyOn(WebAdapter.prototype, "connect").mockResolvedValue();
+      vi.spyOn(WebAdapter.prototype, "snapshot").mockResolvedValue({ capturedAt: new Date().toISOString(), text: "ready", metadata: {} });
       vi.spyOn(WebAdapter.prototype, "subscribeEvents").mockResolvedValue(() => {});
       vi.spyOn(WebAdapter.prototype, "close").mockResolvedValue();
       vi.spyOn(WebAdapter.prototype, "assert").mockImplementation(async (assertion) => ({ assertion, passed: true, message: "ready", evidence: [] }));
@@ -143,6 +144,7 @@ describe("MCP external workspace", () => {
     let server: McpServer | undefined;
     try {
       vi.spyOn(WebAdapter.prototype, "connect").mockResolvedValue();
+      vi.spyOn(WebAdapter.prototype, "snapshot").mockResolvedValue({ capturedAt: new Date().toISOString(), text: "ready", metadata: {} });
       vi.spyOn(WebAdapter.prototype, "subscribeEvents").mockResolvedValue(() => {});
       vi.spyOn(WebAdapter.prototype, "close").mockResolvedValue();
       vi.spyOn(WebAdapter.prototype, "assert").mockImplementation(async (assertion) => ({ assertion, passed: true, message: "ready", evidence: [] }));

@@ -12,6 +12,7 @@ beforeEach(() => {
   // Keep browser mechanics out of these registry tests. Local Runner,
   // ExecutionRunner, evidence persistence and integration cleanup are real.
   vi.spyOn(WebAdapter.prototype, "connect").mockResolvedValue();
+  vi.spyOn(WebAdapter.prototype, "snapshot").mockResolvedValue({ capturedAt: new Date().toISOString(), text: "ready", metadata: {} });
   vi.spyOn(WebAdapter.prototype, "subscribeEvents").mockResolvedValue(() => {});
   vi.spyOn(WebAdapter.prototype, "assert").mockImplementation(async (assertion) => ({ assertion, passed: true, message: "fixture ready", evidence: [] }));
   vi.spyOn(WebAdapter.prototype, "close").mockResolvedValue();

@@ -1,9 +1,10 @@
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { analyzeRun } from "../packages/agent/dist/index.js";
 import { ElectronAdapter } from "../packages/adapters/dist/index.js";
 import { pollHttpOracle } from "../packages/oracles/dist/index.js";
 import { planIntent } from "../packages/planner/dist/index.js";
@@ -62,6 +63,20 @@ try {
   const summary = await new ExecutionRunner(adapter, { evidenceDir: ".proofkit/electron-runs", oracles: [oracle] }).run(charter);
   assert.equal(summary.verdict, "passed", JSON.stringify(summary, null, 2));
   assert.equal(summary.oracles[0]?.passed, true, JSON.stringify(summary, null, 2));
+  const failing = await new ExecutionRunner(new ElectronAdapter({ devtoolsActivePortPath: portFile }), { evidenceDir: ".proofkit/electron-runs" }).run({
+    intent: "Detect a visible desktop state", level: "quick", mode: "deterministic", preconditions: [],
+    actions: [{ kind: "observe" }],
+    assertions: [{ kind: "text-visible", text: "Resume desktop" }, { kind: "text-not-visible", text: "Resume ready" }],
+    sideEffectPolicy: "deny", metadata: {},
+  });
+  assert.equal(failing.verdict, "failed");
+  const assertionPath = `${failing.runId}/artifacts/assertion-002-snapshot.json`;
+  assert.ok(failing.assertions[1].evidence.includes(assertionPath));
+  assert.ok(JSON.parse(await readFile(resolve(".proofkit/electron-runs", assertionPath), "utf8")).text.includes("Resume ready"));
+  const analysis = analyzeRun({ summary: failing, evidence: [{ evidenceId: `${failing.runId}:${assertionPath}`, kind: "snapshot",
+    path: resolve(".proofkit/electron-runs", assertionPath), capturedAt: failing.endedAt }] });
+  assert.equal(analysis.finding?.status, "confirmed");
+  assert.equal(analysis.finding?.category, "product");
   console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, artifacts: summary.artifacts.length }, null, 2));
 } finally {
   child.kill();

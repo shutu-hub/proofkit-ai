@@ -414,7 +414,34 @@ describe("ExecutionRunner", () => {
     const summary = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root }).run(charter, "run-test");
     expect(summary.verdict).toBe("passed");
     expect(summary.steps).toHaveLength(2);
+    expect(summary.assertions[0]?.evidence).toEqual(["run-test/artifacts/assertion-001-snapshot.json"]);
+    expect(summary.artifacts).toContain("run-test/artifacts/assertion-001-snapshot.json");
+    expect(await readFile(join(root, "run-test", "artifacts", "assertion-001-snapshot.json"), "utf8")).toContain("Ready");
+    expect(await readFile(join(root, "run-test", "report.html"), "utf8")).toContain('href="artifacts/assertion-001-snapshot.json"');
     expect(await readFile(join(root, "run-test", "events.jsonl"), "utf8")).toContain("run.completed");
+  });
+
+  it("keeps a failed assertion inconclusive when only an earlier step has evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-assertion-gap-"));
+    class LostAssertionEvidenceAdapter extends FakeAdapter {
+      private snapshots = 0;
+      override async snapshot(): Promise<SurfaceSnapshot> {
+        if (++this.snapshots > 2) throw new Error("page detached before assertion observation");
+        return super.snapshot();
+      }
+      override async assert(assertion: Assertion): Promise<AssertionResult> {
+        return { assertion, passed: false, message: "not visible", evidence: ["assertion-gap/artifacts/step-001-after.json"] };
+      }
+    }
+    const summary = await new ExecutionRunner(new LostAssertionEvidenceAdapter(), { evidenceDir: root }).run({
+      intent: "check current page", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "observe" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "deny", metadata: {},
+    }, "assertion-gap");
+    expect(summary.steps[0]?.artifacts).toContain("assertion-gap/artifacts/step-001-after.json");
+    expect(summary.assertions[0]?.evidence).toEqual([]);
+    expect(summary.verdict).toBe("inconclusive");
+    expect(summary.findings).toContainEqual(expect.stringContaining("no contemporaneous saved observation"));
   });
 
   it("records runtime signals without changing a passing business run", async () => {

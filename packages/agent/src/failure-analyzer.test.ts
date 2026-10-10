@@ -194,15 +194,36 @@ describe("analyzeRun", () => {
   });
 
   it("confirms an assertion failure when the assertion points to evidence", () => {
+    const path = "run-fixture/artifacts/assertion-001-snapshot.json";
     const result = analyzeRun({
       summary: summary({
-        assertions: [{ assertion: { kind: "text-visible", text: "Resume ready" }, passed: false, message: "text missing", evidence: ["run-fixture/after.json"] }],
+        assertions: [{ assertion: { kind: "text-visible", text: "Resume ready" }, passed: false, message: "text missing", evidence: [path] }],
       }),
-      evidence: [evidence("run-fixture/after.json")],
+      evidence: [evidence(path)],
     });
 
     expect(result.boundary?.kind).toBe("assertion");
     expect(result.finding?.status).toBe("confirmed");
     expect(result.finding?.category).toBe("product");
+  });
+
+  it("does not confirm a failed assertion from an earlier successful step's snapshot", () => {
+    const path = "run-fixture/artifacts/step-001-after.json";
+    const result = analyzeRun({ summary: summary({
+      steps: [{ stepId: "step-001", action: { kind: "observe" }, status: "passed", artifacts: [path] }],
+      assertions: [{ assertion: { kind: "text-visible", text: "Resume ready" }, passed: false, message: "text missing", evidence: [] }],
+    }), evidence: [evidence(path)] });
+    expect(result.boundary?.kind).toBe("assertion");
+    expect(result.finding).toMatchObject({ category: "unknown", status: "unverified", evidence: [] });
+    expect(result.diagnosis).toBeUndefined();
+    expect(result.repairSuggestion).toBeUndefined();
+  });
+
+  it("rejects a stale step artifact even if the assertion claims it as evidence", () => {
+    const path = "run-fixture/artifacts/step-001-after.json";
+    const result = analyzeRun({ summary: summary({
+      assertions: [{ assertion: { kind: "text-visible", text: "Resume ready" }, passed: false, message: "text missing", evidence: [path] }],
+    }), evidence: [evidence(path)] });
+    expect(result.finding).toMatchObject({ category: "unknown", status: "unverified", evidence: [] });
   });
 });

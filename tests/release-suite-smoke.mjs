@@ -126,6 +126,15 @@ try {
   assert.ok(good.evidence.suiteScope.routeCoverage.gaps.some((item) => item.path === "/settings" && item.status === "unmapped"));
   const goodRunIds = good.evidence.suiteScope.results.flatMap((item) => [item.primary.runId, item.replay.runId]);
   assert.equal(new Set(goodRunIds).size, 8);
+  for (const runId of goodRunIds) {
+    const runRoot = join(workspaceRoot, ".proofkit", "runs", runId);
+    const run = JSON.parse(await readFile(join(runRoot, "run.json"), "utf8"));
+    const path = `${runId}/artifacts/assertion-001-snapshot.json`;
+    assert.deepEqual(run.assertions[0].evidence.filter((item) => item.endsWith(".json")), [path]);
+    const snapshot = JSON.parse(await readFile(join(runRoot, "artifacts", "assertion-001-snapshot.json"), "utf8"));
+    assert.ok(snapshot.text.includes(run.assertions[0].assertion.text));
+    assert.ok((await readFile(join(runRoot, "report.html"), "utf8")).includes('href="artifacts/assertion-001-snapshot.json"'));
+  }
   assert.ok(good.evidence.evidence.some((item) => item.kind === "network"));
   for (const item of good.evidence.evidence.filter((evidence) => ["business", "report", "network"].includes(evidence.kind))) await readFile(item.path);
 
@@ -236,7 +245,7 @@ try {
     evidenced: directEvidence.workflowExecution.evidencedChecks, source: directEvidence.workflowExecution.sourceBinding },
   { status: "all-declared-evidenced", required: 2, evidenced: 2, source: "matching" });
   assert.equal((await captureSourceState(sourceRoot)).worktreeSha256, source.worktreeSha256);
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
   await client?.close();
   await mcpServer?.close();

@@ -74,6 +74,8 @@ Runner 在执行页面步骤前原子保存资源登记日志。若进程退出�
 
 结果分为 `passed`、`failed`、`blocked`、`cancelled`、`inconclusive`。产品缺陷需有证据支持；登录、环境或覆盖缺口按实际原因报告。修复比较只确认原缺陷在相同测试范围内未再复现。
 
+Runner 会在每条页面断言执行后立即保存页面快照，并尽力保存截图，把这些文件直接关联到该断言。断言观察文件均无法保存时，该次页面检查为 `inconclusive`；诊断器不会拿此前成功步骤的快照补作缺陷证据。截图或快照只记录断言附近的页面状态，仍需结合断言语义和业务 Oracle 判断影响。
+
 ## 接入与技术栈
 
 用户侧安装单个 `proofkit-ai` 包，提供 `proofkit` 和 `proofkit-mcp` 命令。源码开发采用 Node.js 22+、TypeScript、pnpm、Zod、Playwright Core 和 MCP SDK；计划使用 YAML，任务与证据使用本地 JSON/JSONL。npm tarball 已可独立安装，注册表发布尚未完成。

@@ -416,8 +416,28 @@ export class ExecutionRunner {
         for (const [index, assertion] of charter.assertions.entries()) {
           throwIfAborted(signal);
           const result = await withAbort(this.adapter.assert(assertion), signal, `Assertion ${index + 1}`);
-          summary.assertions.push(result);
-          await this.emit({ runId, timestamp: new Date().toISOString(), type: "assertion.completed", payload: { index, ...result } });
+          const label = `assertion-${String(index + 1).padStart(3, "0")}`;
+          const proof: string[] = [];
+          try {
+            const snapshot = await withAbort(this.adapter.snapshot(), signal, `Assertion ${index + 1} snapshot`);
+            proof.push(await this.store.writeJson(runId, `${label}-snapshot`, snapshot));
+          } catch (error) {
+            if (signal.aborted) throw abortReason(signal);
+            summary.findings.push(`${label}: contemporaneous snapshot unavailable (${toError(error).message})`);
+          }
+          try {
+            const screenshot = await withAbort(this.adapter.capture(`${label}.png`), signal, `Assertion ${index + 1} capture`);
+            if (screenshot) proof.push(await this.store.writeBuffer(runId, `${label}.png`, screenshot));
+          } catch (error) {
+            if (signal.aborted) throw abortReason(signal);
+            summary.findings.push(`${label}: contemporaneous screenshot unavailable (${toError(error).message})`);
+          }
+          // Adapter-supplied paths may refer to an earlier step. Only artifacts
+          // captured by this Runner after this assertion can confirm its result.
+          const recordedResult: AssertionResult = { ...result, evidence: proof };
+          summary.assertions.push(recordedResult);
+          summary.artifacts.push(...proof);
+          await this.emit({ runId, timestamp: new Date().toISOString(), type: "assertion.completed", payload: { index, ...recordedResult } });
         }
         for (const oracle of this.oracles) {
           throwIfAborted(signal);
@@ -468,9 +488,9 @@ export class ExecutionRunner {
       ? executionError instanceof BlockedError ? "blocked" : executionError instanceof CancelledError || executionError instanceof RunTimeoutError ? "cancelled" : executionError instanceof InconclusiveError ? "inconclusive" : "failed"
       : charter.assertions.length === 0 && this.oracles.length === 0
         ? "inconclusive"
-        : summary.assertions.some((result) => !result.passed) || summary.oracles.some((result) => result.passed === false)
+        : summary.assertions.some((result) => !result.passed && result.evidence.length > 0) || summary.oracles.some((result) => result.passed === false)
           ? "failed"
-          : summary.oracles.some((result) => result.passed === null) ? "inconclusive" : "passed";
+          : summary.assertions.some((result) => result.evidence.length === 0) || summary.oracles.some((result) => result.passed === null) ? "inconclusive" : "passed";
     summary.runtimeHealth = this.runtimeQuality.mode === "ignore" && (summary.runtimeFindings ?? []).length === 0
       ? "ignored"
       : (summary.runtimeFindings ?? []).length > 0 ? "failed" : "passed";
@@ -488,6 +508,8 @@ export class ExecutionRunner {
     if (summary.verdict === "inconclusive") summary.findings.push(
       executionError instanceof InconclusiveError ? executionError.message : charter.assertions.length === 0 && this.oracles.length === 0
         ? "No executable assertion or business oracle was declared."
+        : summary.assertions.some((result) => result.evidence.length === 0)
+          ? "A surface assertion has no contemporaneous saved observation; its result cannot establish product correctness."
         : "A business oracle did not observe a terminal state within its deadline.",
     );
     summary.status = "completed";

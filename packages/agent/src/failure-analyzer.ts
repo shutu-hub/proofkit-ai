@@ -106,9 +106,10 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
     };
   }
 
-  const failedAssertion = summary.assertions.find((assertion) => !assertion.passed);
+  const failedAssertionIndex = summary.assertions.findIndex((assertion) => !assertion.passed);
+  const failedAssertion = summary.assertions[failedAssertionIndex];
   if (failedAssertion) {
-    const assertionEvidence = evidenceForAssertion(summary, evidence, failedAssertion.evidence);
+    const assertionEvidence = evidenceForAssertion(summary, evidence, failedAssertion.evidence, failedAssertionIndex);
     const boundary = FailureBoundarySchema.parse({
       kind: "assertion",
       message: failedAssertion.message,
@@ -273,11 +274,10 @@ function createRepairSuggestion(summary: RunSummary, boundary: FailureBoundary, 
   };
 }
 
-function evidenceForAssertion(summary: RunSummary, evidence: EvidenceRef[], assertionEvidence: string[]): EvidenceRef[] {
-  const direct = evidenceForPaths(evidence, assertionEvidence, summary.runId);
-  if (direct.length > 0) return direct;
-  const lastStep = [...summary.steps].reverse().find((step) => step.status === "passed" && step.artifacts.length > 0);
-  return lastStep ? evidenceForPaths(evidence, lastStep.artifacts, summary.runId).slice(0, 4) : [];
+function evidenceForAssertion(summary: RunSummary, evidence: EvidenceRef[], assertionEvidence: string[], index: number): EvidenceRef[] {
+  const label = `assertion-${String(index + 1).padStart(3, "0")}`;
+  const allowed = new Set([`${summary.runId}/artifacts/${label}-snapshot.json`, `${summary.runId}/artifacts/${label}.png`]);
+  return evidenceForPaths(evidence, assertionEvidence.filter((path) => allowed.has(path.replaceAll("\\", "/"))), summary.runId);
 }
 
 function evidenceForPaths(evidence: EvidenceRef[], paths: string[], runId: string): EvidenceRef[] {
