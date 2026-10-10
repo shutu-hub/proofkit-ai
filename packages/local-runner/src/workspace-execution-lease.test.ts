@@ -2,10 +2,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { TestCharterSchema } from "@proofkit/contracts";
+import { ProofkitConfigSchema, TestCharterSchema } from "@proofkit/contracts";
 import { LocalExecutionOwnership } from "@proofkit/evidence";
 import type { SurfaceAdapter } from "@proofkit/runner";
 import { LocalRunnerService } from "./index.js";
+import { sharedTargetIdentity } from "./execution-scope.js";
 
 const state = vi.hoisted(() => ({ connected: 0, holdFirst: true, entered: () => {},
   release: Promise.resolve(), releaseFirst: () => {} }));
@@ -112,3 +113,45 @@ it("retains the workspace lease while a timed-out cleanup is still active", asyn
   const next = await second.start({ charter, adapter: "electron" });
   expect((await second.wait(next.runId)).verdict).toBe("passed");
 }, 20_000);
+
+it("blocks separate workspaces that attach to the same CDP endpoint", async () => {
+  const base = await mkdtemp(join(tmpdir(), "proofkit-target-lease-"));
+  roots.push(base);
+  const root = join(base, "source");
+  await mkdir(root);
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "target-lease-fixture" }));
+  const port = 30_000 + Math.floor(Math.random() * 20_000);
+  const config = (cdpUrl: string) => ProofkitConfigSchema.parse({ surfaces: { web: { cdpUrl } } });
+  const first = new LocalRunnerService({ root, workspaceRoot: join(base, "one"), config: config(`http://localhost:${port}/json/version`) });
+  const second = new LocalRunnerService({ root, workspaceRoot: join(base, "two"), config: config(`ws://127.0.0.1:${port}/devtools/browser/id`) });
+  const independent = new LocalRunnerService({ root, workspaceRoot: join(base, "three"), config: config(`http://127.0.0.1:${port + 1}`) });
+  const entered = new Promise<void>((resolve) => { state.entered = resolve; });
+  state.release = new Promise<void>((resolve) => { state.releaseFirst = resolve; });
+  const charter = TestCharterSchema.parse({ intent: "Check shared CDP target isolation", level: "quick",
+    actions: [{ kind: "waitForText", text: "ready" }],
+    assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" });
+  try {
+    const active = await first.start({ charter, adapter: "web" });
+    await entered;
+    const contender = await second.start({ charter, adapter: "web" });
+    const blocked = await second.wait(contender.runId);
+    expect(blocked.verdict).toBe("blocked");
+    expect(blocked.findings.join(" ")).toContain("configured CDP or WebDriver target");
+    expect(state.connected).toBe(1);
+    const otherTarget = await independent.start({ charter, adapter: "web" });
+    expect((await independent.wait(otherTarget.runId)).verdict).toBe("passed");
+    state.releaseFirst();
+    expect((await first.wait(active.runId)).verdict).toBe("passed");
+  } finally { state.releaseFirst(); }
+  const retry = await second.start({ charter, adapter: "web" });
+  expect((await second.wait(retry.runId)).verdict).toBe("passed");
+}, 20_000);
+
+it("normalizes loopback CDP aliases and scopes mobile targets to their WebDriver server", () => {
+  const config = ProofkitConfigSchema.parse({});
+  expect(sharedTargetIdentity("web", { cdp: "http://localhost:9222/json/version" }, config))
+    .toBe(sharedTargetIdentity("electron", { cdp: "ws://127.0.0.1:9222/devtools/browser/id" }, config));
+  expect(sharedTargetIdentity("web", { url: "http://127.0.0.1:5173" }, config)).toBeUndefined();
+  expect(sharedTargetIdentity("mobile", { mobileServer: "http://localhost:4723/wd/hub" }, config))
+    .toBe(sharedTargetIdentity("mobile", { mobileServer: "http://127.0.0.1:4723/" }, config));
+});

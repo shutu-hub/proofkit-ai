@@ -10,7 +10,7 @@ export type LocalExecutionLease = { release(): Promise<void> };
 
 /** A process-owned socket is released by the OS even if Node exits without cleanup. */
 export class LocalExecutionOwnership {
-  constructor(private readonly rootDir: string, private readonly namespace: "mission" | "run" | "workspace" = "mission") {}
+  constructor(private readonly rootDir: string, private readonly namespace: "mission" | "run" | "workspace" | "target" = "mission") {}
 
   async acquire(missionId: string, onCancel?: (reason: string) => void): Promise<LocalExecutionLease | undefined> {
     const { endpoint, key } = await this.address(missionId);

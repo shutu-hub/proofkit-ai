@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
-import { auditMissionVerdict, createRunId, EvidenceStore, LocalExecutionOwnership, MissionReportStore, sha256 } from "@proofkit/evidence";
+import { auditMissionVerdict, createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofkit/evidence";
 import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
@@ -25,6 +25,7 @@ import type { MissionResult } from "@proofkit/contracts";
 import { ResourceRecoveryService } from "./resource-recovery.js";
 import { captureRunEvidence } from "./run-evidence.js";
 import { auditMissionProofClassification } from "./mission-proof-classification.js";
+import { acquireExecutionScope, sharedTargetIdentity } from "./execution-scope.js";
 
 export { loadProjectIntegration } from "./integration.js";
 
@@ -1354,7 +1355,7 @@ export class LocalRunnerService {
       signal,
       timeoutMs: this.config.run.timeoutMs,
       runtimeQuality: this.config.policies.runtime,
-      executionLease: () => new LocalExecutionOwnership(this.workspaceRoot, "workspace").acquire("exclusive"),
+      executionLease: () => acquireExecutionScope(this.workspaceRoot, sharedTargetIdentity(surface, input, this.config)),
       ...(surface === "web" || surface === "electron" ? {
         targetBinding: (bindingSignal: AbortSignal) => inspectTargetBinding(this.root, targetUrl, bindingSignal),
         targetBindingPolicy: this.config.policies.targetBinding,
