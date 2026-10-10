@@ -141,8 +141,11 @@ describe("MCP external workspace", () => {
       const missingOracle = payload(await client.callTool({ name: "run_test", arguments: { intent: charter.intent, charter: { ...charter, oracles: [] } } }));
       expect(missingOracle).toMatchObject({ running: false, readiness: { ready: false }, planning: { evidenceGaps: ["business-oracle"] } });
       expect(vi.mocked(WebAdapter.prototype.connect).mock.calls).toHaveLength(connections);
-      const narrowed = payload(await client.callTool({ name: "create_test_mission", arguments: { intent: "测试整个项目", charter, coverage: "declared" } }));
-      expect(narrowed.plan.planning).toMatchObject({ evidenceGaps: [], coverage: { requested: "declared", source: "explicit", inventory: "partial" } });
+      for (const name of ["create_test_mission", "run_test", "plan_test"]) {
+        const narrowed = await client.callTool({ name, arguments: { intent: "测试整个项目", charter, coverage: "declared" } });
+        expect(narrowed.isError).toBe(true);
+        expect(JSON.stringify(narrowed.content)).toContain("Test coverage conflict");
+      }
       await client.callTool({ name: "start_mission", arguments: { missionId: whole.missionId, approve: true } });
       const incomplete = await waitForMission(client, whole.missionId);
       expect(incomplete.mission.verdict).toBe("inconclusive");

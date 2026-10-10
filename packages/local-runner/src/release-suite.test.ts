@@ -156,6 +156,16 @@ describe("explicit release suites", () => {
     expect(await readFile(routePath, "utf8")).toBe(routeSource);
   });
 
+  it("rejects a caller scope that silently narrows whole-project acceptance", async () => {
+    const service = await createSuiteService();
+    await expect(service.createMission({ intent: "测试整个项目", surface: "web", coverage: "declared", suiteId: "release-critical" }))
+      .rejects.toThrow("Test coverage conflict");
+    await expect(service.createMission({ intent: "测试整个项目", surface: "web", coverage: "declared", charterId: "resume" }))
+      .rejects.toThrow("Test coverage conflict");
+    const moduleMission = await service.createMission({ intent: "完整测试简历模块", surface: "web", coverage: "declared", charterId: "resume" });
+    expect(moduleMission.plan.planning?.coverage).toMatchObject({ requested: "declared", source: "explicit" });
+  });
+
   it("measures frozen project workflow checks from verified suite Runs without claiming whole-project acceptance", async () => {
     const service = await createSuiteService();
     await writeFile(join(service.workspaceRoot, ".proofkit", "workflows.yaml"), JSON.stringify({

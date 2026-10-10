@@ -15,11 +15,11 @@ describe("planning coverage", () => {
     expect(assessPlanningCoverage(intent, map).requested).toBe("declared");
   });
 
-  it("honors an explicit scope and records the narrowing instead of hiding it", () => {
-    const coverage = assessPlanningCoverage("测试整个项目", { ...map, inventory: { ...map.inventory, truncated: true } }, "declared");
-    expect(coverage).toMatchObject({ requested: "declared", source: "explicit", inventory: "partial" });
-    expect(coverage.gaps).toContain("project-map-truncated");
-    expect(planningCoverageRequirements(coverage).evidenceGaps).toEqual([]);
+  it("rejects an explicit scope that narrows a whole-project request", () => {
+    expect(() => assessPlanningCoverage("测试整个项目", map, "declared"))
+      .toThrow("intent requests whole-project acceptance but supplied coverage is declared");
+    expect(assessPlanningCoverage("完整测试简历模块", map, "declared")).toMatchObject({ requested: "declared", source: "explicit" });
+    expect(assessPlanningCoverage("测试简历模块", map, "project")).toMatchObject({ requested: "project", source: "explicit" });
     expect(() => assessPlanningCoverage("test", map, "everything" as never)).toThrow();
   });
 

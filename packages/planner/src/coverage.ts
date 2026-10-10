@@ -5,6 +5,9 @@ export function assessPlanningCoverage(intent: string, projectMap?: ProjectMap, 
   const explicit = requested === undefined ? undefined : TestCoverageSchema.parse(requested);
   const normalized = intent.normalize("NFKC").toLowerCase();
   const projectRequest = /整个项目|全项目|整个产品|所有功能|全部功能|所有业务流程|全部业务流程|\b(?:whole|entire)\s+(?:project|application|product)\b|\ball\s+(?:features|workflows)\b/.test(normalized);
+  if (projectRequest && explicit === "declared") {
+    throw new Error("Test coverage conflict: intent requests whole-project acceptance but supplied coverage is declared; align the request and coverage selection");
+  }
   return PlanningCoverageSchema.parse({
     requested: explicit ?? (projectRequest ? "project" : "declared"),
     source: explicit ? "explicit" : projectRequest ? "inferred" : "default",
