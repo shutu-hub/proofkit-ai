@@ -177,7 +177,8 @@ function createResumeRunCapability(state) {
       const data = response.data ?? {};
       const result = { runId: asId(data.run_id), sourceChannel: String(data.source_channel ?? input.sourceChannel), status: String(data.status ?? "pending") };
       const current = state.get(runId) ?? {};
-      state.set(runId, { ...current, collectionRunId: result.runId, sourceChannel: result.sourceChannel });
+      state.set(runId, { ...current, createdCollectionRunId: result.runId,
+        collectionRunId: result.runId, sourceChannel: result.sourceChannel });
       return result;
     },
     evidence: (output) => ({
@@ -234,7 +235,8 @@ function createResumeFileUploadCapability(state, workspaceRoot) {
       const form = new FormData();
       form.append("file", new Blob([fixture.bytes], { type: fixture.contentType }), input.originalFilename ?? fixture.filename);
       const collectionRunId = input.runId ?? state.get(runId)?.collectionRunId;
-      if (collectionRunId !== undefined) form.append("run_id", asId(collectionRunId));
+      const requestedRunId = collectionRunId === undefined ? null : asId(collectionRunId);
+      if (requestedRunId) form.append("run_id", requestedRunId);
       form.append("source_channel", input.sourceChannel);
       form.append("original_filename", input.originalFilename ?? fixture.filename);
       // AIHR decodes []int64, so quoted IDs are invalid. Decimal literals keep
@@ -266,7 +268,8 @@ function createResumeFileUploadCapability(state, workspaceRoot) {
       };
       const current = state.get(runId) ?? {};
       const uploadHistory = [...(current.uploadHistory ?? []), result];
-      state.set(runId, { ...current, collectionRunId: result.runId ?? current.collectionRunId, uploadedFile: result, uploadHistory, fixtureSha256: fixture.sha256, sourceChannel: result.sourceChannel });
+      state.set(runId, { ...current, collectionRunId: requestedRunId ?? result.runId ?? current.collectionRunId,
+        uploadedFile: result, uploadHistory, fixtureSha256: fixture.sha256, sourceChannel: result.sourceChannel });
       return result;
     },
     evidence: (output) => ({
@@ -460,21 +463,28 @@ function createResumeCollectionPipelineOracle(state) {
       const requireCandidateBinding = configuration.requireCandidateBinding !== false;
       const requireAssessmentSuccess = configuration.requireAssessmentSuccess !== false;
       const requireWorkflowUsage = configuration.requireWorkflowUsage === true;
-      const passed = evaluateResumePipeline(result, {
+      const uploadResponseRunId = positiveString(remembered.uploadedFile?.runId);
+      const passedFromReader = evaluateResumePipeline(result, {
         collectionRunId: target.collectionRunId,
         jobId: target.jobId,
         requireCandidateBinding,
         requireAssessmentSuccess,
         requireWorkflowUsage,
       });
-      const facts = resumePipelineEvidence({ ...result, passed, outcome: passed === true ? "passed" : passed === false ? "failed" : "inconclusive" });
+      const responseRunMismatch = Boolean(uploadResponseRunId && target.collectionRunId
+        && uploadResponseRunId !== target.collectionRunId);
+      const passed = responseRunMismatch ? false : passedFromReader;
+      const facts = { ...resumePipelineEvidence({ ...result, passed,
+        outcome: passed === true ? "passed" : passed === false ? "failed" : "inconclusive" }),
+        expectedCollectionRunId: target.collectionRunId, uploadResponseRunId, responseRunMismatch };
       return {
         name: "aihr.resumeCollectionPipeline",
         passed,
         message: passed === true
           ? "AIHR PDF upload facts belong to the requested run and reached the required terminal state."
           : passed === false
-            ? `AIHR PDF upload reached a confirmed failure: extract=${result.extractStatus ?? "unknown"}, parse=${result.parseStatus ?? "unknown"}.`
+            ? responseRunMismatch ? "AIHR upload response bound the file to a different collection Run."
+              : `AIHR PDF upload reached a confirmed failure: extract=${result.extractStatus ?? "unknown"}, parse=${result.parseStatus ?? "unknown"}.`
             : "AIHR PDF upload evidence is incomplete or still pending; no product failure is confirmed.",
         evidence: [JSON.stringify(facts)],
         ...(passed === false ? { sourceLocations: ["services/resume-collection-service/internal/service/resume_post_processor.go"] } : {}),
@@ -879,14 +889,16 @@ function createBillingUsageOracle(state, billingRead) {
     async check({ runId, signal }) {
       const remembered = state.get(runId) ?? {};
       const collectionRunId = positiveString(remembered.collectionRunId);
+      const createdCollectionRunId = positiveString(remembered.createdCollectionRunId);
       const itemKey = remembered.uploadedFile?.clientItemKey;
       const pipelinePassed = remembered.resumePipeline?.passed === true;
-      const facts = { collectionRunId, itemKeySha256: itemKey ? digest(itemKey) : null,
+      const facts = { collectionRunId, createdCollectionRunId, itemKeySha256: itemKey ? digest(itemKey) : null,
         pipelinePassed, ledgerComplete: false, ledgerReason: null,
         pagesRead: 0, total: null, runChargeCount: null, exactChargeCount: null,
         unexpectedChargeCount: null, exactPoints: null,
         expectedWorkflowType: "communication_resume_screening", expectedPoints: 300 };
-      if (!collectionRunId || !itemKey || !pipelinePassed) {
+      if (!collectionRunId || !createdCollectionRunId || collectionRunId !== createdCollectionRunId
+        || !itemKey || !pipelinePassed) {
         return { name: "aihr.billingUsage", passed: null,
           message: "A successful current-run upload and pipeline observation are required before billing can be assessed.",
           evidence: [JSON.stringify({ ...facts, ledgerReason: "current-run-prerequisite-missing" })], observedAt: new Date().toISOString() };

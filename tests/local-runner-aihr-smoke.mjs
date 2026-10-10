@@ -172,7 +172,16 @@ try {
   assert.equal(extraChargeSummary.oracles[1].passed, false);
   assert.ok(extraCharge.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"
     && finding.evidence.some((item) => item.kind === "business" && item.path.endsWith("oracle-2-source.json"))));
-  assert.equal(uploaded, 5);
+  mode = "upload-wrong-run";
+  const wrongRun = await runMcpMission(mcpClient, "测试简历获取");
+  assert.equal(wrongRun.verdict, "failed");
+  const wrongRunId = wrongRun.observations.find((item) => item.kind === "surface.run").data.runId;
+  const wrongRunSummary = await service.wait(wrongRunId);
+  assert.equal(wrongRunSummary.assertions[0].passed, true);
+  assert.equal(wrongRunSummary.oracles[0].passed, false);
+  assert.ok(wrongRun.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"
+    && finding.evidence.some((item) => item.kind === "business" && item.path.endsWith("oracle-1-source.json"))));
+  assert.equal(uploaded, 6);
   assert.equal(unrelatedReads, 0);
   assert.deepEqual(fixtureErrors, []);
   for (const evidence of [...success.evidence, ...failed.evidence]) await readFile(evidence.path);
@@ -248,7 +257,7 @@ try {
   const cancelledReport = cancelled.mission.evidence.find((item) => item.kind === "report");
   assert.match(await readFile(cancelledReport.path, "utf8"), /cancelled/);
   assert.deepEqual(await readdir(root), ["package.json"]);
-  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, missingChargeMission: missingCharge.missionId, extraChargeMission: extraCharge.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, idempotencyMission: idempotencyMission.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "mcp-one-sentence-core", "mcp-evidence", "core-mission", "stale-binding-detection", "billing-missing-detection", "billing-extra-type-detection", "evidence-backed-replay-comparison", "idempotency-negative-case", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
+  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, missingChargeMission: missingCharge.missionId, extraChargeMission: extraCharge.missionId, wrongRunMission: wrongRun.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, idempotencyMission: idempotencyMission.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "mcp-one-sentence-core", "mcp-evidence", "core-mission", "stale-binding-detection", "billing-missing-detection", "billing-extra-type-detection", "upload-run-binding-detection", "evidence-backed-replay-comparison", "idempotency-negative-case", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
 } finally {
   await mcpClient?.close();
   await mcpServer?.close();
@@ -319,10 +328,11 @@ async function handleRequest(request, response) {
       currentFile = idempotentUploads.get(clientItemKey);
       send({ ...currentFile, duplicate: true });
     } else {
-      currentFile = { file_id: String(++sequence), run_id: collectionRunId, file_sha256: fixtureSha256, candidate_id: "902", source_platform: "boss", status: "accepted", extract_status: "done", parse_status: "matched" };
+      currentFile = { file_id: String(++sequence), run_id: mode === "upload-wrong-run" ? "999999" : collectionRunId,
+        file_sha256: fixtureSha256, candidate_id: "902", source_platform: "boss", status: "accepted", extract_status: "done", parse_status: "matched" };
       files.set(currentFile.file_id, currentFile);
       if (mode !== "billing-missing") charges.push({ id: String(++sequence), workflow_type: "communication_resume_screening",
-        workflow_run_id: collectionRunId, workflow_item_key: clientItemKey, points: 300 });
+        workflow_run_id: currentFile.run_id, workflow_item_key: clientItemKey, points: 300 });
       if (mode === "billing-extra-type") charges.push({ id: String(++sequence), workflow_type: "proactive_talent_screening",
         workflow_run_id: collectionRunId, workflow_item_key: `${clientItemKey}:unexpected`, points: 50 });
       if (useIdempotencyFixture) idempotentUploads.set(clientItemKey, currentFile);

@@ -616,8 +616,9 @@ describe("AIHR project integration", () => {
     expect(gateway.requestPaths.filter((path) => path === "/workflow-executions")).toHaveLength(Math.min(completionPage, 20));
   });
 
-  it.each(["success", "relation-old-file", "billing-missing", "billing-duplicate", "billing-wrong-price",
-    "billing-extra-item", "billing-extra-type", "billing-reader-error"] as const)("executes the checked-in env-based Charter through Local Runner: %s", async (mode) => {
+  it.each(["success", "relation-old-file", "upload-wrong-run", "upload-response-wrong-run",
+    "billing-missing", "billing-duplicate", "billing-wrong-price", "billing-extra-item",
+    "billing-extra-type", "billing-reader-error"] as const)("executes the checked-in env-based Charter through Local Runner: %s", async (mode) => {
     const fixtureBytes = Buffer.from("%PDF-1.4 proofkit fixture\n", "utf8");
     const fixtureSha256 = createHash("sha256").update(fixtureBytes).digest("hex");
     const gateway = await startCollectionGatewayMock({ fixtureSha256, mode });
@@ -648,9 +649,11 @@ describe("AIHR project integration", () => {
     expect(summary.steps).toHaveLength(3);
     expect(summary.steps.every((step) => step.status === "passed")).toBe(true);
     expect(summary.oracles).toHaveLength(2);
-    expect(summary.oracles[0]).toMatchObject({ name: "aihr.resumeCollectionPipeline", passed: mode !== "relation-old-file" });
+    expect(summary.oracles[0]).toMatchObject({ name: "aihr.resumeCollectionPipeline",
+      passed: !["relation-old-file", "upload-wrong-run", "upload-response-wrong-run"].includes(mode) });
     expect(summary.oracles[1]).toMatchObject({ name: "aihr.billingUsage",
-      passed: mode === "success" ? true : mode === "relation-old-file" || mode === "billing-reader-error" ? null : false });
+      passed: mode === "success" || mode === "upload-response-wrong-run" ? true
+        : ["relation-old-file", "upload-wrong-run", "billing-reader-error"].includes(mode) ? null : false });
     const billingFacts = JSON.parse((await readFile(join(root, ".proofkit", "runs", summary.runId,
       "artifacts", "oracle-2-source.json"), "utf8")) as string);
     expect(JSON.stringify(billingFacts)).not.toContain("proofkit:fixture:default-charter");
@@ -658,6 +661,14 @@ describe("AIHR project integration", () => {
     expect(summary.oracles[0]?.evidence).toEqual([`${summary.runId}/artifacts/oracle-1-source.json`, `${summary.runId}/artifacts/oracle-1.json`]);
     if (mode === "relation-old-file") {
       expect(summary.oracles[0]?.sourceLocations).toContain("services/resume-collection-service/internal/service/resume_post_processor.go");
+    }
+    if (mode === "upload-wrong-run" || mode === "upload-response-wrong-run") {
+      const pipelineFacts = JSON.parse((await readFile(join(root, ".proofkit", "runs", summary.runId,
+        "artifacts", "oracle-1-source.json"), "utf8")) as string);
+      expect(pipelineFacts).toMatchObject({ facts: [{ expectedCollectionRunId: "900",
+        uploadResponseRunId: "999", responseRunMismatch: true,
+        fileRunId: mode === "upload-wrong-run" ? "999" : "900" }] });
+      expect(summary.steps[1]?.capabilityOutput).toMatchObject({ collectionRunId: "999" });
     }
     if (mode.startsWith("billing-") && mode !== "billing-reader-error") {
       expect(summary.oracles[1]?.sourceLocations).toContain("services/billing-service/internal/service/billing_service.go");
@@ -668,8 +679,9 @@ describe("AIHR project integration", () => {
         exactChargeCount: 1, unexpectedChargeCount: 1 }] });
     }
     if (mode === "billing-reader-error") expect(billingFacts).toMatchObject({ facts: [{ ledgerReason: "reader-unavailable" }] });
-    expect(summary.steps[1]?.capabilityOutput).toMatchObject({ collectionRunId: "900", fileSha256: fixtureSha256 });
-    expect(summary.steps[2]?.capabilityOutput).toMatchObject({ outcome: mode === "relation-old-file" ? "failed" : "passed", jobId: "505" });
+    expect(summary.steps[1]?.capabilityOutput).toMatchObject({ fileSha256: fixtureSha256 });
+    expect(summary.steps[2]?.capabilityOutput).toMatchObject({
+      outcome: mode === "relation-old-file" || mode === "upload-wrong-run" ? "failed" : "passed", jobId: "505" });
     expect(gateway.uploadBody).toMatch(/name="run_id"\r\n\r\n900\r\n/);
     expect(gateway.requestPaths.filter((path) => path.startsWith("/boss-conversations/"))).toEqual([]);
     expect(summary.artifacts.some((path) => path.includes("oracle-1"))).toBe(true);
@@ -979,6 +991,7 @@ async function startGatewayMock(mode: () => OnlineMode): Promise<ReturnType<type
 }
 
 type CollectionMode = "success" | "relation-old-file" | "assessment-old-file" | "extract-failed" | "not-found"
+  | "upload-wrong-run" | "upload-response-wrong-run"
   | "billing-missing" | "billing-duplicate" | "billing-wrong-price" | "billing-extra-item"
   | "billing-extra-type" | "billing-reader-error"
   | "assessment-retry" | "assessment-running" | "assessment-task-missing" | "assessment-dead" | "assessment-cancelled" | "assessment-failed";
@@ -1017,13 +1030,16 @@ async function startCollectionGatewayMock(options: { fixtureSha256: string; mode
       if (targetJobs !== undefined && (!/^\[[1-9]\d*(?:,[1-9]\d*){0,19}\]$/.test(targetJobs) || targetJobs.slice(1, -1).split(",").some((id) => BigInt(id) > 9223372036854775807n))) {
         return sendError(response, 400, "VALIDATION_ERROR", "target_job_ids must be a JSON int64 array");
       }
-      return send(response, { file_id: 901, run_id: 900, file_sha256: options.fixtureSha256, source_platform: "boss", status: "accepted", duplicate: false });
+      return send(response, { file_id: 901,
+        run_id: mode === "upload-wrong-run" || mode === "upload-response-wrong-run" ? 999 : 900,
+        file_sha256: options.fixtureSha256, source_platform: "boss", status: "accepted", duplicate: false });
     }
     if (request.method === "GET" && path === "/resume-collection/files/901") {
       if (mode === "not-found") return sendError(response, 404, "NOT_FOUND", "file is still pending");
       return send(response, mode === "extract-failed"
         ? { file_id: 901, run_id: 900, file_sha256: options.fixtureSha256, extract_status: "failed", parse_status: "failed", error_code: "EXTRACT_FAILED" }
-        : { file_id: 901, run_id: 900, file_sha256: options.fixtureSha256, extract_status: "done", parse_status: "matched", candidate_id: 902 });
+        : { file_id: 901, run_id: mode === "upload-wrong-run" ? 999 : 900,
+          file_sha256: options.fixtureSha256, extract_status: "done", parse_status: "matched", candidate_id: 902 });
     }
     if (request.method === "GET" && path === "/jobs/505/candidates/902") {
       return send(response, { candidate_summary: { current_resume_file_id: mode === "relation-old-file" ? 777 : 901, job_id: 505, candidate_id: 902, stage: "screening" } });
