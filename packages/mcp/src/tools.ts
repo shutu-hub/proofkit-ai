@@ -122,7 +122,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "get_mission_status",
-    "Read mission status, task graph, verdict, findings, and evidence references.",
+    "Read saved mission status, task graph and verdict. Call get_mission_evidence before claiming a finding or repair is currently supported by intact files.",
     { missionId: z.string().min(1) },
     READ_ONLY_TOOL,
     async ({ missionId }) => result(await runner.missionStatus(missionId)),
@@ -130,7 +130,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "get_mission_evidence",
-    "Read traceable Mission evidence, a bounded result summary and its local HTML report path. Report generation does not execute tests or change the saved verdict.",
+    "Read traceable Mission evidence, current presented-evidence integrity, a bounded result summary and its local HTML report path. Report generation does not execute tests or change the saved verdict.",
     { missionId: z.string().min(1) },
     async ({ missionId }) => result(await runner.missionEvidence(missionId)),
   );

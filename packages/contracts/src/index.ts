@@ -1314,6 +1314,30 @@ export const MissionRunResultSchema = z.object({
 });
 export type MissionRunResult = z.infer<typeof MissionRunResultSchema>;
 
+/** Current readability of the bounded Mission presentation, separate from its saved acceptance verdict. */
+export const MissionEvidenceIntegritySchema = z.object({
+  status: z.enum(["intact", "degraded", "partial", "no-evidence"]),
+  scope: z.literal("presented-result"),
+  checkedAt: z.string().datetime(),
+  references: z.object({
+    total: z.number().int().nonnegative(),
+    intact: z.number().int().nonnegative(),
+    unavailable: z.number().int().nonnegative(),
+    legacy: z.number().int().nonnegative(),
+  }),
+  visibleConfirmedFindings: z.object({
+    saved: z.number().int().nonnegative(),
+    supported: z.number().int().nonnegative(),
+    unsupportedFindingIds: z.array(z.string()).max(20),
+  }),
+  comparison: z.enum(["not-present", "intact", "degraded"]),
+  omittedEvidenceReferences: z.number().int().nonnegative(),
+  omittedRunResults: z.number().int().nonnegative(),
+  omittedFindings: z.number().int().nonnegative(),
+  omittedRepairSuggestions: z.number().int().nonnegative(),
+});
+export type MissionEvidenceIntegrity = z.infer<typeof MissionEvidenceIntegritySchema>;
+
 export const MissionResultSchema = z.object({
   schemaVersion: z.literal("1"),
   missionId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
@@ -1360,6 +1384,7 @@ export const MissionResultSchema = z.object({
   findings: z.array(FindingSchema).max(20),
   omittedFindings: z.number().int().nonnegative(),
   confirmedProductFindings: z.number().int().nonnegative(),
+  evidenceIntegrity: MissionEvidenceIntegritySchema.optional(),
   firstFailure: FailureBoundarySchema.optional(),
   diagnosis: DiagnosisSchema.optional(),
   repairSuggestions: z.array(RepairSuggestionSchema).max(10),

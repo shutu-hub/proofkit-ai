@@ -7,7 +7,7 @@ import { createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofki
 import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
-import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
+import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionComparison, type MissionEvidenceIntegrity, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowInventory, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
@@ -637,6 +637,7 @@ export class LocalRunnerService {
     finalSourceState?: SourceState;
     comparison?: MissionComparison;
     comparisonUnavailable?: string;
+    evidenceIntegrity: MissionEvidenceIntegrity;
     summary: MissionResult;
     report?: string;
     reportUnavailable?: string;
@@ -656,15 +657,21 @@ export class LocalRunnerService {
     const running = await this.missionAgent.isRunning(mission.missionId);
     const suiteScope = summarizeSuiteScope(mission, this.evidenceDir);
     const workflowExecution = summarizeWorkflowExecution(mission, suiteScope);
-    const summary = projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, comparison, comparisonUnavailable });
+    let summary = projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, comparison, comparisonUnavailable });
     let report: string | undefined;
     let reportUnavailable: string | undefined;
+    let evidenceIntegrity: MissionEvidenceIntegrity;
     try {
-      report = await this.missionReports.writeReport(summary);
+      const snapshot = await this.missionReports.writeReportSnapshot(summary);
+      report = snapshot.path;
+      summary = snapshot.result;
+      evidenceIntegrity = snapshot.integrity;
     } catch {
       // Evidence remains readable when the workspace is read-only or a report
       // path escapes its ownership boundary. Rendering never changes a verdict.
       reportUnavailable = "The Mission report could not be written inside this test workspace.";
+      evidenceIntegrity = await this.missionReports.inspectIntegrity(summary);
+      summary = { ...summary, evidenceIntegrity };
     }
     return {
       missionId: mission.missionId,
@@ -706,6 +713,7 @@ export class LocalRunnerService {
       ...(finalSourceState.success ? { finalSourceState: finalSourceState.data } : {}),
       ...(comparison ? { comparison } : {}),
       ...(comparisonUnavailable ? { comparisonUnavailable } : {}),
+      evidenceIntegrity,
       summary,
       ...(report ? { report } : {}),
       ...(reportUnavailable ? { reportUnavailable } : {}),

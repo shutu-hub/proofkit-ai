@@ -188,7 +188,7 @@ Then run the same Charter with `--adapter mobile`. Mobile selectors may use `acc
 
 Relative Charter and output paths resolve against the selected test workspace. Runs are stored under `<workspaceRoot>/.proofkit/runs/<run-id>/` by default. Each run contains `run.json`, `events.jsonl`, artifacts, and `report.html`.
 
-For a Mission, `get_mission_evidence` returns `summary` and a `report` path. CLI users can generate the same result:
+For a Mission, `get_mission_evidence` returns `summary`, current `evidenceIntegrity` for the bounded presentation, and a `report` path. Inspect integrity before repeating a saved bug or repair claim. CLI users can generate the same result:
 
 ```bash
 proofkit mission report <mission-id> --root /path/to/source --workspace /path/to/test-workspace

@@ -80,6 +80,12 @@ plus any missing acceptance obligations. Distinguish failed business facts from
 blocked access/environment, cancelled work and inconclusive evidence. A console
 error alone is not a confirmed product defect. Cite evidence for a diagnosis;
 inspect the relevant source before proposing a change.
+Check get_mission_evidence.evidenceIntegrity.status before presenting a saved
+confirmed finding or repair as currently supported. "degraded" means one or
+more presented references or confirmed findings lack verifiable bytes;
+"partial" means the bounded result omitted some rows, findings or references;
+"no-evidence" cannot support a product claim. The saved verdict is historical,
+and "intact" covers only the presented references, not all project workflows.
 
 For an authorized fix, use replay_mission on the original Mission with the
 same scope and fixture bytes, then compare_missions after the replay finishes.

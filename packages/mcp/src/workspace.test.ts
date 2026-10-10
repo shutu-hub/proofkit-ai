@@ -114,6 +114,18 @@ describe("MCP external workspace", () => {
       expect(final.mission.verdict).toBe("passed");
       const evidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
       expect(evidence.evidence).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "business" })]));
+      const omittedEvidenceReferences = evidence.summary.runs.reduce((count: number, run: { omittedEvidence: number }) => count + run.omittedEvidence, 0);
+      expect(evidence.evidenceIntegrity).toMatchObject({
+        status: omittedEvidenceReferences ? "partial" : "intact",
+        scope: "presented-result",
+        omittedEvidenceReferences,
+      });
+      const sourceFact = evidence.evidence.find((ref: { kind: string }) => ref.kind === "business");
+      await writeFile(sourceFact.path, "changed after the saved Mission result");
+      const changed = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
+      expect(changed.verdict).toBe("passed");
+      expect(changed.evidenceIntegrity).toMatchObject({ status: "degraded", references: { unavailable: 1 } });
+      expect(changed.summary.evidenceIntegrity).toEqual(changed.evidenceIntegrity);
       expect(evidence.planning.coverage).toEqual(started.planning.coverage);
       const connections = vi.mocked(WebAdapter.prototype.connect).mock.calls.length;
       const whole = payload(await client.callTool({ name: "run_test", arguments: { intent: "测试整个项目", charter } }));

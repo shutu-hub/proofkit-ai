@@ -177,6 +177,7 @@ describe("Agent onboarding", () => {
       "--workspace", f.workspaceRoot, "--install-skill", "--skills-dir", f.userHome]);
     const result = JSON.parse(String(log.mock.calls[0]?.[0]));
     const skill = await readFile(join(result.skill.path, "SKILL.md"), "utf8");
+    expect(skill).toContain("get_mission_evidence.evidenceIntegrity.status");
     const frontmatter = parse(skill.split("---")[1]!);
     expect(frontmatter.name).toBe("proofkit-test");
     const reference = await readFile(join(result.skill.path, "references", "charter-authoring.md"), "utf8");

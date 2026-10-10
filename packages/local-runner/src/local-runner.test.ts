@@ -93,6 +93,8 @@ describe("LocalRunnerService", () => {
     const unavailable = await service.missionEvidence(created.missionId);
     expect(unavailable.report).toBeUndefined();
     expect(unavailable.reportUnavailable).toContain("could not be written");
+    expect(unavailable.evidenceIntegrity).toBeDefined();
+    expect(unavailable.summary.evidenceIntegrity).toEqual(unavailable.evidenceIntegrity);
     expect(unavailable.verdict).toBe("passed");
     expect(unavailable.summary.verdict).toBe("passed");
     expect(unavailable.evidence).toEqual(evidence.evidence);

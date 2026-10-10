@@ -55,7 +55,8 @@ describe("Mission report", () => {
     expect(markup).toContain("Workflow coverage: not recorded");
     expect(markup).toContain("revision 7");
     expect(markup).toContain("does not refresh");
-    expect(JSON.parse(await readFile(join(dirname(report), "summary.json"), "utf8"))).toEqual(input);
+    expect(JSON.parse(await readFile(join(dirname(report), "summary.json"), "utf8"))).toMatchObject({ ...input,
+      evidenceIntegrity: { status: "no-evidence", scope: "presented-result", references: { total: 0, intact: 0 } } });
     expect(await readFile(missionPath, "utf8")).toBe("original Mission");
     expect(JSON.stringify(input)).toBe(before);
   });
@@ -73,6 +74,21 @@ describe("Mission report", () => {
     expect(markup).toContain("Registered scenarios outside this Mission matrix: billing");
     expect(markup).toContain("Missing test requirements");
     expect(markup).toContain('id="outcome">Passed');
+  });
+
+  it("marks bounded results partial when run evidence or results were omitted", async () => {
+    const workspace = await root();
+    const input = result(workspace);
+    input.runs[0]!.omittedEvidence = 2;
+    input.omittedRunResults = 1;
+    const snapshot = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(snapshot.integrity).toMatchObject({
+      status: "partial", omittedEvidenceReferences: 2, omittedRunResults: 1,
+      references: { total: 0, intact: 0 },
+    });
+    expect(JSON.parse(await readFile(join(dirname(snapshot.path), "summary.json"), "utf8"))).toMatchObject({
+      evidenceIntegrity: { status: "partial", omittedEvidenceReferences: 2 },
+    });
   });
 
   it("encodes valid evidence paths and rejects missing, external, remote and unrelated files", async () => {
@@ -115,9 +131,16 @@ describe("Mission report", () => {
     input.findings = [{ findingId: "finding-1", category: "product", status: "confirmed", severity: "high",
       title: "Wrong binding", message: "Candidate relation is wrong", evidence: [evidence], createdAt: now }];
     const store = new MissionReportStore(workspace);
-    expect(await readFile(await store.writeReport(input), "utf8")).toContain("1 / 1 visible saved confirmed product finding(s) have available evidence");
+    const before = await store.writeReportSnapshot(input);
+    expect(before.integrity).toMatchObject({ status: "intact", references: { total: 1, intact: 1, unavailable: 0, legacy: 0 },
+      visibleConfirmedFindings: { saved: 1, supported: 1, unsupportedFindingIds: [] } });
+    expect(await readFile(before.path, "utf8")).toContain("1 / 1 visible saved confirmed product finding(s) have available evidence");
     await writeFile(path, "changed binding");
-    const markup = await readFile(await store.writeReport(input), "utf8");
+    const current = await store.writeReportSnapshot(input);
+    expect(current.integrity).toMatchObject({ status: "degraded", references: { total: 1, intact: 0, unavailable: 1, legacy: 0 },
+      visibleConfirmedFindings: { saved: 1, supported: 0, unsupportedFindingIds: ["finding-1"] } });
+    expect(await store.inspectIntegrity(input)).toMatchObject({ status: "degraded", visibleConfirmedFindings: { supported: 0 } });
+    const markup = await readFile(current.path, "utf8");
     expect(markup).toContain("saved confirmed · evidence currently unverified");
     expect(markup).toContain("0 / 1 visible saved confirmed product finding(s) have available evidence");
     expect(markup).toContain("cannot be independently confirmed from this report");
@@ -146,6 +169,8 @@ describe("Mission report", () => {
     expect(markup).toContain("Business fact integrity unverified");
     expect(markup).toContain("1 lack a saved digest");
     expect(markup).not.toContain('href="../../runs/run-1/artifacts/legacy.json"');
+    const integrity = await new MissionReportStore(workspace).inspectIntegrity(result(workspace, [ref(path)]));
+    expect(integrity).toMatchObject({ status: "degraded", references: { total: 1, intact: 0, unavailable: 0, legacy: 1 } });
   });
 
   it("refuses redirected report directories before creating files outside the workspace", async () => {
