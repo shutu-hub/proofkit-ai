@@ -118,6 +118,23 @@ describe("AIHR desktop acquisition independent oracle", () => {
     expect(JSON.stringify(observed)).not.toContain(privateMarker);
   });
 
+  it("keeps a failed or canceled collection Run decisive without unrelated file-list reads", async () => {
+    delete responses["/resume-collection/files"];
+    (responses["/resume-collection/runs/701"] as Record<string, unknown>).status = "failed";
+    const failed = await oracle.check(context());
+    expect(failed.passed).toBe(false);
+    expect(failed.sourceLocations).toContain("services/resume-collection-service/internal/service/run_service.go");
+    expect(paths).toEqual(["/resume-collection/runs/701"]);
+
+    paths = [];
+    (responses["/resume-collection/runs/701"] as Record<string, unknown>).status = "canceled";
+    const canceled = await oracle.check(context());
+    expect(canceled.passed).toBe(null);
+    expect(canceled.message).toContain("canceled");
+    expect(JSON.parse(canceled.evidence[0]!)).toMatchObject({ observationCount: 1, facts: { run: { status: "canceled" } } });
+    expect(paths).toEqual(["/resume-collection/runs/701"]);
+  });
+
   it("cannot borrow a historical Run or accept a forged capture step", async () => {
     const missing = context();
     missing.steps[0]!.response!.fields.collectionRunId = "1";

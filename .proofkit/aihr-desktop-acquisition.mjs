@@ -55,7 +55,8 @@ export function createDesktopResumeAcquisitionOracle({ z, resolveEnv, positiveSt
     const runFacts = { id: positiveString(run.run_id), sourceChannel: typeof run.source_channel === "string" ? run.source_channel : null,
       status: typeof run.status === "string" ? run.status : null, errorCode: typeof run.error_code === "string" ? run.error_code : null };
     const facts = { run: runFacts, list: { total: null, itemCount: 0, fileIds: [] }, files: [] };
-    if (runFacts.id !== target.runId || runFacts.sourceChannel !== target.sourceChannel) return facts;
+    if (runFacts.id !== target.runId || runFacts.sourceChannel !== target.sourceChannel
+      || runFacts.status === "failed" || runFacts.status === "canceled") return facts;
     const response = await aihrFetch(`/resume-collection/files?run_id=${encodeURIComponent(target.runId)}&page=1&page_size=20`, { signal });
     const listing = response.data ?? {};
     const items = Array.isArray(listing.items) ? listing.items : [];
@@ -78,6 +79,7 @@ export function createDesktopResumeAcquisitionOracle({ z, resolveEnv, positiveSt
     if (run.sourceChannel && run.sourceChannel !== target.sourceChannel) return { passed: false, reason: "independent run source mismatch", boundary: "services/resume-collection-service/internal/service/run_service.go" };
     if (!run.id || !run.sourceChannel || !run.status) return { passed: null, reason: "independent run facts incomplete" };
     if (run.status === "failed") return { passed: false, reason: "captured collection run failed", boundary: "services/resume-collection-service/internal/service/run_service.go" };
+    if (run.status === "canceled") return { passed: null, reason: "captured collection run was canceled" };
     if (run.status !== "completed") return { passed: null, reason: "captured collection run has not completed" };
     if (facts.list.total !== target.expectedFileCount || facts.list.itemCount !== target.expectedFileCount
       || facts.files.length !== target.expectedFileCount) return { passed: null, reason: "run file count or bounded listing is incomplete" };
@@ -113,7 +115,8 @@ export function createDesktopResumeAcquisitionOracle({ z, resolveEnv, positiveSt
       let observed;
       try {
         observed = await pollPipeline({ signal, maxWaitMs: config.maxWaitMs, pollIntervalMs: config.pollIntervalMs,
-          initial: null, observe: (sharedSignal) => observe(target, sharedSignal), evaluate: (facts) => evaluate(facts, target).passed });
+          initial: null, observe: (sharedSignal) => observe(target, sharedSignal), evaluate: (facts) => evaluate(facts, target).passed,
+          stop: (facts) => facts.run.status === "canceled" });
       } catch (error) {
         signal?.throwIfAborted();
         return result(null, "gateway observation unavailable", { target, httpStatus: Number.isInteger(error?.status) ? error.status : null });

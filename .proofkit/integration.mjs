@@ -26,7 +26,7 @@ export function createIntegration({ z: injectedZ, workspaceRoot }) {
 
   return {
     name: "aihr-resume-workflows",
-    version: "0.2.1",
+    version: "0.2.2",
     capabilities: [
       createResumeRunCapability(state),
       createResumeFileUploadCapability(state, workspaceRoot),
