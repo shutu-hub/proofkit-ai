@@ -261,6 +261,70 @@ describe("ExecutionRunner", () => {
     expect(unavailable.findings).toContain("Target listener could not be checked after this Run.");
   });
 
+  it("rechecks the listener before surface cleanup when an assertion throws", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-target-assertion-error-"));
+    for (const [name, finalPid, expectedVerdict, expectedContinuity] of [
+      ["stable", 12, "failed", "stable"],
+      ["replaced", 13, "inconclusive", "changed"],
+    ] as const) {
+      let checks = 0;
+      let checksAtClose = 0;
+      const adapter = new FakeAdapter();
+      adapter.assert = async () => { throw new Error("Assertion adapter failed"); };
+      adapter.close = async () => { checksAtClose = checks; };
+      const summary = await new ExecutionRunner(adapter, { evidenceDir: root, targetBinding: async () => ({
+        status: "matching-process-path", method: "windows-listener-process", expectedProjectRoot: "D:/code/AIHR",
+        observedProjectRoot: "D:/code/AIHR", targetOrigin: "http://localhost:5174",
+        processId: ++checks === 1 ? 12 : finalPid, reason: "Observed listener", observedAt: new Date().toISOString(),
+      }) }).run({ intent: "Check target after assertion error", level: "core", mode: "deterministic", preconditions: [],
+        actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+        sideEffectPolicy: "allow", metadata: {} }, `target-assertion-${name}`);
+      expect(checksAtClose).toBe(2);
+      expect(summary).toMatchObject({ verdict: expectedVerdict, targetContinuity: expectedContinuity });
+      expect(summary.findings).toContain("Assertion 1 failed: Assertion adapter failed");
+      expect(summary.artifacts).toContain(`target-assertion-${name}/artifacts/target-binding-after-run.json`);
+      const report = await readFile(join(root, `target-assertion-${name}`, "report.html"), "utf8");
+      expect(report).toContain(`Continuity: ${expectedContinuity}`);
+      expect(report).toContain('href="artifacts/target-binding-after-run.json"');
+    }
+  });
+
+  it("does not pass a Run whose final listener probe reaches the Run deadline", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-target-probe-timeout-"));
+    let checks = 0;
+    const summary = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root, timeoutMs: 50,
+      targetBinding: async () => {
+        if (++checks === 2) return new Promise(() => {});
+        return { status: "matching-process-path" as const, method: "windows-listener-process" as const,
+          expectedProjectRoot: "D:/code/AIHR", observedProjectRoot: "D:/code/AIHR",
+          targetOrigin: "http://localhost:5174", processId: 12,
+          reason: "Observed listener", observedAt: new Date().toISOString() };
+      },
+    }).run({ intent: "Check target until deadline", level: "core", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "allow", metadata: {} }, "target-probe-timeout");
+    expect(checks).toBe(2);
+    expect(summary).toMatchObject({ verdict: "cancelled", targetContinuity: "unverified" });
+  });
+
+  it("keeps a changed target inconclusive even when runtime policy would fail a console signal", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-target-runtime-priority-"));
+    let checks = 0;
+    const adapter = new EventAdapter([{ type: "console", payload: {
+      level: "error", text: "Renderer error", url: "http://fixture/",
+    } }]);
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root, runtimeQuality: { mode: "fail" },
+      targetBinding: async () => ({ status: "matching-process-path", method: "windows-listener-process",
+        expectedProjectRoot: "D:/code/AIHR", observedProjectRoot: "D:/code/AIHR",
+        targetOrigin: "http://localhost:5174", processId: ++checks === 1 ? 12 : 13,
+        reason: "Observed listener", observedAt: new Date().toISOString() }),
+    }).run({ intent: "Check renderer against one target", level: "core", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "allow", metadata: {} }, "target-runtime-priority");
+    expect(summary).toMatchObject({ verdict: "inconclusive", targetContinuity: "changed", runtimeHealth: "failed" });
+    expect(summary.runtimeFindings).toHaveLength(1);
+  });
+
   it("can record a different checkout without blocking an explicitly scoped diagnostic run", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-target-record-"));
     const summary = await new ExecutionRunner(new FakeAdapter(), {

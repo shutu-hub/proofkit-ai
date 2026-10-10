@@ -274,6 +274,7 @@ export class ExecutionRunner {
     }, this.timeoutMs);
     const signal = controller.signal;
     let executionError: Error | undefined;
+    let surfaceAttached = false;
     let unsubscribe: () => void | Promise<void> = () => {};
     const pendingEvents: Promise<void>[] = [];
     const inspectAndRecordTarget = async (phase: "before-setup" | "after-setup" | "after-run"): Promise<TargetBinding | undefined> => {
@@ -374,6 +375,7 @@ export class ExecutionRunner {
         retainLease(acquired);
       }
       await withResourceAbort(this.adapter.connect(), signal, "Adapter connect", () => this.adapter.close(), trackAcquisition);
+      surfaceAttached = true;
       throwIfAborted(signal);
       unsubscribe = await withResourceAbort(this.adapter.subscribeEvents((event) => {
         pendingEvents.push(this.recordAdapterEvent(runId, event, summary));
@@ -534,26 +536,32 @@ export class ExecutionRunner {
           await this.emit({ runId, timestamp: new Date().toISOString(), type: "oracle.completed", payload: recordedResult });
         }
       }
-      // A known listener can be replaced while a long business Oracle waits.
-      // Keep quick checks short; core/release acceptance requires the same PID
-      // at the end when a unique local owner was established before actions.
-      if (charter.level !== "quick" && summary.targetBinding?.processId) {
-        let finalBinding: TargetBinding | undefined;
-        try { finalBinding = await inspectAndRecordTarget("after-run"); }
-        catch (error) {
-          if (signal.aborted) throw abortReason(signal);
-          summary.targetContinuity = "unverified";
-          throw new InconclusiveError("target-continuity-unavailable", "Target listener could not be checked after this Run.");
-        }
-        summary.targetContinuity = compareTargetContinuity(summary.targetBinding, finalBinding);
-        if (summary.targetContinuity !== "stable") {
-          throw new InconclusiveError("target-continuity-unverified", "Target listener changed or could not be verified after this Run.");
-        }
-      }
     } catch (error) {
       executionError = toError(error);
       summary.findings.push(executionError.message);
     } finally {
+      // Check before closing the surface even when an assertion or Oracle
+      // threw. A changed target cannot support a claimed product failure.
+      if (surfaceAttached && charter.level !== "quick" && summary.targetBinding?.processId) {
+        if (signal.aborted) summary.targetContinuity = "unverified";
+        else {
+          try {
+            summary.targetContinuity = compareTargetContinuity(summary.targetBinding, await inspectAndRecordTarget("after-run"));
+            if (summary.targetContinuity !== "stable") {
+              const gap = new InconclusiveError("target-continuity-unverified", "Target listener changed or could not be verified after this Run.");
+              summary.findings.push(gap.message);
+              if (mayReplaceWithContinuityGap(executionError)) executionError = gap;
+            }
+          } catch {
+            summary.targetContinuity = "unverified";
+            if (!signal.aborted) {
+              const gap = new InconclusiveError("target-continuity-unavailable", "Target listener could not be checked after this Run.");
+              summary.findings.push(gap.message);
+              if (mayReplaceWithContinuityGap(executionError)) executionError = gap;
+            }
+          }
+        }
+      }
       try { await unsubscribe(); } catch (error) { executionError ??= toError(error); summary.findings.push(`unsubscribe failed: ${toError(error).message}`); }
       try { await this.adapter.close(); } catch (error) { executionError ??= toError(error); summary.findings.push(`adapter close failed: ${toError(error).message}`); }
       await Promise.all(pendingEvents);
@@ -569,6 +577,10 @@ export class ExecutionRunner {
         summary.integrationCleanup = { status: "unverified", declaredResources: 0, verifiedResources: 0 };
         summary.findings.push("Integration cleanup evidence could not be saved; resources may still be active.");
         executionError ??= toError(error);
+      }
+      if (signal.aborted) {
+        executionError = abortReason(signal);
+        if (!summary.findings.includes(executionError.message)) summary.findings.push(executionError.message);
       }
       if (timeout) clearTimeout(timeout);
       detachSignal();
@@ -587,8 +599,11 @@ export class ExecutionRunner {
     const environmentBlocked = (summary.runtimeFindings ?? []).some((finding) => finding.category === "environment" && finding.status === "confirmed" && finding.affectsVerdict);
     const independentBusinessFailure = summary.oracles.some((oracle) => oracle.verificationKind !== "http-contract"
       && oracle.passed === false && (oracle.sourceEvidenceCount ?? 0) > 0);
+    const targetContinuityGap = summary.targetContinuity === "changed" || summary.targetContinuity === "unverified";
     summary.verdict = environmentBlocked && !independentBusinessFailure
       ? "blocked"
+      : targetContinuityGap && baseVerdict !== "blocked" && baseVerdict !== "cancelled"
+      ? "inconclusive"
       : this.runtimeQuality.mode === "fail"
       && (summary.runtimeFindings ?? []).length > 0
       && (baseVerdict === "passed" || baseVerdict === "inconclusive")
@@ -834,6 +849,11 @@ function compareTargetContinuity(before: TargetBinding, after?: TargetBinding): 
   return before.processId === after.processId && before.status === after.status
     && before.targetOrigin === after.targetOrigin && root(before.observedProjectRoot) === root(after.observedProjectRoot)
     ? "stable" : "changed";
+}
+
+function mayReplaceWithContinuityGap(error?: Error): boolean {
+  return !error || !(error instanceof BlockedError || error instanceof CancelledError
+    || error instanceof RunTimeoutError || error instanceof InconclusiveError);
 }
 
 function throwIfAborted(signal: AbortSignal): void {
