@@ -465,6 +465,7 @@ export class ExecutionRunner {
         for (const [index, assertion] of charter.assertions.entries()) {
           throwIfAborted(signal);
           const result = await withAbort(this.adapter.assert(assertion), signal, `Assertion ${index + 1}`);
+          const recordedAt = new Date().toISOString();
           const label = `assertion-${String(index + 1).padStart(3, "0")}`;
           const proof: string[] = [];
           try {
@@ -483,7 +484,7 @@ export class ExecutionRunner {
           }
           // Adapter-supplied paths may refer to an earlier step. Only artifacts
           // captured by this Runner after this assertion can confirm its result.
-          const recordedResult: AssertionResult = { ...result, evidence: proof };
+          const recordedResult: AssertionResult = { ...result, evidence: proof, recordedAt };
           summary.assertions.push(recordedResult);
           summary.artifacts.push(...proof);
           await this.emit({ runId, timestamp: new Date().toISOString(), type: "assertion.completed", payload: { index, ...recordedResult } });
@@ -491,9 +492,10 @@ export class ExecutionRunner {
         for (const oracle of this.oracles) {
           throwIfAborted(signal);
           const parsedResult = OracleResultSchema.parse(await withAbort(oracle.check({ runId, charter, steps: summary.steps, assertions: summary.assertions, signal }), signal, `Oracle ${oracle.name}`));
+          const recordedAt = new Date().toISOString();
           // Older project connectors omit the field. Persist an explicit kind
           // for every new Run while keeping their existing business semantics.
-          const result: OracleResult = { ...parsedResult, verificationKind: parsedResult.verificationKind ?? "business" };
+          const result: OracleResult = { ...parsedResult, verificationKind: parsedResult.verificationKind ?? "business", recordedAt };
           if (result.name !== oracle.name) throw new Error(`Oracle ${oracle.name} returned a result for ${result.name}`);
           const sourceFacts = result.evidence.filter((item) => item.trim().length > 0).map((item) => {
             try { return JSON.parse(item) as unknown; } catch { return item; }

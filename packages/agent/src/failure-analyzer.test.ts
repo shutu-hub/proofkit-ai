@@ -64,6 +64,44 @@ describe("analyzeRun", () => {
     expect(result.repairSuggestion?.status).toBe("proposed");
   });
 
+  it("keeps an earlier UI mismatch as first failure while diagnosing a later evidenced business defect", () => {
+    const snapshot = "run-fixture/artifacts/assertion-001-snapshot.json";
+    const source = "run-fixture/artifacts/oracle-1-source.json";
+    const result = analyzeRun({
+      summary: summary({
+        assertions: [{ assertion: { kind: "text-visible", text: "Submitted" }, passed: false,
+          message: "Submitted was not visible", evidence: [snapshot], recordedAt: "2026-10-08T00:00:01.000Z" }],
+        oracles: [{ name: "resume-terminal", passed: false, message: "wrong job binding", evidence: [source],
+          sourceEvidenceCount: 1, sourceEvidenceArtifacts: [source],
+          observedAt: capturedAt, recordedAt: "2026-10-08T00:00:02.000Z" }],
+      }),
+      evidence: [evidence(snapshot), evidence(source, "business")],
+    });
+    expect(result.boundary).toMatchObject({ kind: "assertion", observedAt: "2026-10-08T00:00:01.000Z",
+      evidence: [expect.objectContaining({ path: snapshot })] });
+    expect(result.finding).toMatchObject({ category: "product", status: "confirmed",
+      evidence: [expect.objectContaining({ path: source })] });
+    expect(result.diagnosis?.evidence).toEqual([evidence(source, "business")]);
+    expect(result.repairSuggestion?.evidence).toEqual([evidence(source, "business")]);
+  });
+
+  it("retains the first Oracle gap but uses a later independently evidenced failure for the product Finding", () => {
+    const source = "run-fixture/artifacts/oracle-2-source.json";
+    const result = analyzeRun({
+      summary: summary({ oracles: [
+        { name: "unproven-reader", passed: false, message: "reader claimed failure", evidence: [],
+          recordedAt: "2026-10-08T00:00:01.000Z" },
+        { name: "binding-reader", passed: false, message: "wrong candidate relation", evidence: [source],
+          sourceEvidenceCount: 1, sourceEvidenceArtifacts: [source], recordedAt: "2026-10-08T00:00:02.000Z" },
+      ] }), evidence: [evidence(source, "business")],
+    });
+    expect(result.boundary).toMatchObject({ kind: "business-oracle", oracleName: "unproven-reader",
+      observedAt: "2026-10-08T00:00:01.000Z", evidence: [] });
+    expect(result.finding).toMatchObject({ category: "product", status: "confirmed",
+      title: "Business oracle failed: binding-reader", evidence: [expect.objectContaining({ path: source })] });
+    expect(result.diagnosis?.evidence).toEqual([evidence(source, "business")]);
+  });
+
   it("uses only caller-verified source hints without treating them as causal proof", () => {
     const result = analyzeRun({
       summary: summary({

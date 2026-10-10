@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
+import { analyzeRun, selectEvidencedBusinessFailure, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter, resolveElectronCdpUrl } from "@proofkit/adapters";
 import { auditMissionVerdict, createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofkit/evidence";
 import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
@@ -885,7 +885,7 @@ export class LocalRunnerService {
       // the raw run verdict in the observation and report the normalized
       // scenario verdict to the Mission Agent.
       const expectedFailureOutcome = runKind === "negative" && expectedVerdict !== undefined && expectedVerdict !== "passed";
-      const failedOracle = summary.oracles.find((oracle) => oracle.verificationKind !== "http-contract" && oracle.passed === false);
+      const failedOracle = selectEvidencedBusinessFailure(summary, evidence);
       const verifiedSourceLocations = expectedFailureOutcome || outcomeMatched === true || !failedOracle
         ? [] : await verifySourceLocationHints(this.root, failedOracle.sourceLocations ?? []);
       const analysis = expectedFailureOutcome ? {} : outcomeMatched === true ? {} : analyzeRun({ summary, evidence, verifiedSourceLocations });

@@ -424,6 +424,7 @@ describe("ExecutionRunner", () => {
     expect(summary.verdict).toBe("passed");
     expect(summary.steps).toHaveLength(2);
     expect(summary.assertions[0]?.evidence).toEqual(["run-test/artifacts/assertion-001-snapshot.json"]);
+    expect(summary.assertions[0]?.recordedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(summary.artifacts).toContain("run-test/artifacts/assertion-001-snapshot.json");
     expect(await readFile(join(root, "run-test", "artifacts", "assertion-001-snapshot.json"), "utf8")).toContain("Ready");
     expect(await readFile(join(root, "run-test", "report.html"), "utf8")).toContain('href="artifacts/assertion-001-snapshot.json"');
@@ -638,6 +639,7 @@ describe("ExecutionRunner", () => {
 
     const oracle = summary.oracles[0]!;
     expect(oracle.verificationKind).toBe("business");
+    expect(oracle.recordedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(oracle.sourceEvidenceCount).toBe(1);
     expect(oracle.sourceEvidenceArtifacts).toEqual(["facts-run/artifacts/oracle-1-source.json"]);
     expect(oracle.evidence).toEqual(["facts-run/artifacts/oracle-1-source.json", "facts-run/artifacts/oracle-1.json"]);

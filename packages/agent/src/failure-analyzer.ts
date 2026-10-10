@@ -65,17 +65,20 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
     };
   }
 
-  const failedOracle = summary.oracles.find((oracle) => oracle.verificationKind !== "http-contract" && oracle.passed === false);
+  // The first observed mismatch and the first supported product Finding
+  // serve different purposes. Runner execution order is steps -> assertions
+  // -> Oracles; an earlier UI failure must not be relabelled as a later Oracle.
+  const firstObservedFailure = earliestRunFailure(summary, evidence);
+  const failedOracle = selectEvidencedBusinessFailure(summary, evidence)
+    ?? summary.oracles.find((oracle) => oracle.verificationKind !== "http-contract" && oracle.passed === false);
   if (failedOracle) {
-    const oracleEvidence = failedOracle.sourceEvidenceCount && failedOracle.sourceEvidenceArtifacts?.length
-      ? evidenceForPaths(evidence.filter((item) => item.kind === "business"), failedOracle.sourceEvidenceArtifacts, summary.runId)
-      : [];
+    const oracleEvidence = businessSourceEvidence(summary, evidence, failedOracle);
     const boundary = FailureBoundarySchema.parse({
       kind: "business-oracle",
       oracleName: failedOracle.name,
       message: failedOracle.message,
       evidence: oracleEvidence,
-      observedAt: failedOracle.observedAt ?? summary.endedAt ?? summary.startedAt,
+      observedAt: failedOracle.recordedAt ?? failedOracle.observedAt ?? summary.endedAt ?? summary.startedAt,
     });
     if (oracleEvidence.length > 0) {
       const finding = FindingSchema.parse({
@@ -89,10 +92,11 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
         createdAt: boundary.observedAt,
       });
       const diagnosis = createDiagnosis(summary, boundary, finding, input.verifiedSourceLocations);
-      return { boundary, finding, diagnosis, repairSuggestion: createRepairSuggestion(summary, boundary, diagnosis) };
+      return { boundary: firstObservedFailure ?? boundary, finding, diagnosis,
+        repairSuggestion: createRepairSuggestion(summary, boundary, diagnosis) };
     }
     return {
-      boundary,
+      boundary: firstObservedFailure ?? boundary,
       finding: FindingSchema.parse({
         findingId: `finding-${summary.runId}-oracle-${safeId(failedOracle.name)}`,
         severity: "medium",
@@ -109,7 +113,7 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
   const failedHttpContract = summary.oracles.find((oracle) => oracle.verificationKind === "http-contract" && oracle.passed === false);
   if (failedHttpContract) {
     const contractEvidence = evidenceForPaths(evidence, failedHttpContract.sourceEvidenceArtifacts ?? [], summary.runId);
-    const observedAt = failedHttpContract.observedAt ?? summary.endedAt ?? summary.startedAt;
+    const observedAt = failedHttpContract.recordedAt ?? failedHttpContract.observedAt ?? summary.endedAt ?? summary.startedAt;
     const boundary = FailureBoundarySchema.parse({
       kind: "evidence",
       message: failedHttpContract.message,
@@ -117,7 +121,7 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
       observedAt,
     });
     return {
-      boundary,
+      boundary: firstObservedFailure ?? boundary,
       finding: FindingSchema.parse({
         findingId: `finding-${summary.runId}-http-contract-${safeId(failedHttpContract.name)}`,
         severity: "medium",
@@ -135,11 +139,9 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
   const failedAssertion = summary.assertions[failedAssertionIndex];
   if (failedAssertion) {
     const assertionEvidence = evidenceForAssertion(summary, evidence, failedAssertion.evidence, failedAssertionIndex);
-    const boundary = FailureBoundarySchema.parse({
-      kind: "assertion",
-      message: failedAssertion.message,
-      evidence: assertionEvidence,
-      observedAt: summary.endedAt ?? summary.startedAt,
+    const boundary = firstObservedFailure ?? FailureBoundarySchema.parse({
+      kind: "assertion", message: failedAssertion.message, evidence: assertionEvidence,
+      observedAt: failedAssertion.recordedAt ?? summary.endedAt ?? summary.startedAt,
     });
     const confirmed = assertionEvidence.length > 0;
     return {
@@ -261,6 +263,41 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
       createdAt: boundary.observedAt,
     }),
   };
+}
+
+/** Select the first failed business Oracle whose own source facts survived evidence capture. */
+export function selectEvidencedBusinessFailure(summary: RunSummary, evidence: EvidenceRef[]): RunSummary["oracles"][number] | undefined {
+  return summary.oracles.find((oracle) => oracle.verificationKind !== "http-contract" && oracle.passed === false
+    && businessSourceEvidence(summary, evidence, oracle).length > 0);
+}
+
+function businessSourceEvidence(summary: RunSummary, evidence: EvidenceRef[], oracle: RunSummary["oracles"][number]): EvidenceRef[] {
+  return oracle.sourceEvidenceCount && oracle.sourceEvidenceArtifacts?.length
+    ? evidenceForPaths(evidence.filter((item) => item.kind === "business"), oracle.sourceEvidenceArtifacts, summary.runId)
+    : [];
+}
+
+/** Execution order is authoritative; connector-supplied observedAt is not. */
+function earliestRunFailure(summary: RunSummary, evidence: EvidenceRef[]): FailureBoundary | undefined {
+  const index = summary.assertions.findIndex((assertion) => !assertion.passed);
+  const assertion = summary.assertions[index];
+  if (assertion) return FailureBoundarySchema.parse({
+    kind: "assertion", message: assertion.message,
+    evidence: evidenceForAssertion(summary, evidence, assertion.evidence, index),
+    observedAt: assertion.recordedAt ?? summary.endedAt ?? summary.startedAt,
+  });
+  const oracle = summary.oracles.find((item) => item.passed === false);
+  if (!oracle) return undefined;
+  const contract = oracle.verificationKind === "http-contract";
+  return FailureBoundarySchema.parse({
+    kind: contract ? "evidence" : "business-oracle",
+    ...(contract ? {} : { oracleName: oracle.name }),
+    message: oracle.message,
+    evidence: contract
+      ? evidenceForPaths(evidence, oracle.sourceEvidenceArtifacts ?? [], summary.runId)
+      : businessSourceEvidence(summary, evidence, oracle),
+    observedAt: oracle.recordedAt ?? oracle.observedAt ?? summary.endedAt ?? summary.startedAt,
+  });
 }
 
 function createDiagnosis(summary: RunSummary, boundary: FailureBoundary, finding: Finding | undefined, verifiedSourceLocations: string[] = []): Diagnosis {

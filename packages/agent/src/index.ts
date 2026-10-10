@@ -37,7 +37,7 @@ import {
   type ToolCall,
   type Verdict,
 } from "@proofkit/contracts";
-export { analyzeRun, type FailureAnalysis, type FailureAnalyzerInput } from "./failure-analyzer.js";
+export { analyzeRun, selectEvidencedBusinessFailure, type FailureAnalysis, type FailureAnalyzerInput } from "./failure-analyzer.js";
 
 export type MissionToolResult = {
   output?: unknown;

@@ -237,6 +237,8 @@ export const AssertionResultSchema = z.object({
   passed: z.boolean(),
   message: z.string(),
   evidence: z.array(z.string()).default([]),
+  /** Runner-owned time when this assertion result was received. */
+  recordedAt: z.string().datetime().optional(),
 });
 export type AssertionResult = z.infer<typeof AssertionResultSchema>;
 
@@ -254,6 +256,8 @@ export const OracleResultSchema = z.object({
   /** Unverified repository path hints from a project integration; they are not root-cause evidence. */
   sourceLocations: z.array(z.string().min(1)).optional(),
   observedAt: z.string().optional(),
+  /** Runner-owned time when this Oracle result was received. */
+  recordedAt: z.string().datetime().optional(),
 });
 export type OracleResult = z.infer<typeof OracleResultSchema>;
 

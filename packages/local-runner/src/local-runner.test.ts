@@ -17,6 +17,56 @@ afterEach(async () => {
 });
 
 describe("LocalRunnerService", () => {
+  it("reports the first UI boundary and the later evidenced business defect separately", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-first-boundary-"));
+    roots.push(root);
+    const runId = "first-boundary-run";
+    const snapshot = `${runId}/artifacts/assertion-001-snapshot.json`;
+    const source = `${runId}/artifacts/oracle-2-source.json`;
+    const report = `${runId}/artifacts/oracle-2.json`;
+    await writeFile(join(root, "unverified.ts"), "export const unrelated = true;\n");
+    await writeFile(join(root, "confirmed.ts"), "export const binding = true;\n");
+    const charter: TestCharter = { intent: "verify current resume", level: "core", mode: "deterministic",
+      preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "Submitted" }],
+      oracles: ["unproven-reader", "binding-reader"], sideEffectPolicy: "deny", metadata: {} };
+    const service = new LocalRunnerService({ workspaceRoot: root, root,
+      oracles: ["unproven-reader", "binding-reader"].map((name) => ({ name,
+        check: async () => ({ name, passed: null, message: "not used by stubbed Run", evidence: [] }) })) });
+    const summary: RunSummary = {
+      runId, startedAt: "2026-10-08T00:00:00.000Z", endedAt: "2026-10-08T00:00:04.000Z",
+      status: "completed", verdict: "failed", charter, steps: [],
+      assertions: [{ assertion: charter.assertions[0]!, passed: false, message: "Submitted was not visible",
+        evidence: [snapshot], recordedAt: "2026-10-08T00:00:01.000Z" }],
+      oracles: [
+        { name: "unproven-reader", verificationKind: "business", passed: false,
+          message: "reader failed without facts", evidence: [], sourceLocations: ["unverified.ts"],
+          recordedAt: "2026-10-08T00:00:02.000Z" },
+        { name: "binding-reader", verificationKind: "business", passed: false,
+          message: "wrong candidate binding", evidence: [source, report], sourceEvidenceCount: 1,
+          sourceEvidenceArtifacts: [source], sourceLocations: ["confirmed.ts"],
+          recordedAt: "2026-10-08T00:00:03.000Z" },
+      ], artifacts: [snapshot, source, report], findings: [],
+    };
+    service.start = async () => ({ runId, status: "completed", verdict: "failed", summary });
+    service.wait = async () => summary;
+    installMockRunEvidence(service);
+
+    const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
+    await service.startMission(created.missionId, { approve: true });
+    const completed = await service.waitMission(created.missionId);
+    expect(completed.firstFailure).toMatchObject({ kind: "assertion",
+      observedAt: "2026-10-08T00:00:01.000Z" });
+    expect(completed.firstFailure?.evidence[0]?.path).toContain("assertion-001-snapshot.json");
+    expect(completed.findings).toContainEqual(expect.objectContaining({ category: "product", status: "confirmed",
+      title: "Business oracle failed: binding-reader" }));
+    expect(completed.findings.find((item) => item.category === "product")?.evidence[0]?.path).toContain("oracle-2-source.json");
+    expect(completed.diagnosis?.evidence[0]?.path).toContain("oracle-2-source.json");
+    expect(completed.diagnosis?.sourceLocations).toEqual(["confirmed.ts"]);
+    expect(completed.repairSuggestions[0]?.evidence[0]?.path).toContain("oracle-2-source.json");
+    expect(completed.repairSuggestions[0]?.changes[0]).toContain("confirmed.ts");
+    expect(completed.repairSuggestions[0]?.changes[0]).not.toContain("unverified.ts");
+  });
+
   it("runs a mission through the existing deterministic run and keeps evidence references", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mission-run-"));
     roots.push(root);
