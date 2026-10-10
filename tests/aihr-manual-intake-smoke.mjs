@@ -115,7 +115,7 @@ await new Promise((done) => http.listen(0, "127.0.0.1", done));
 const baseUrl = `http://127.0.0.1:${http.address().port}`;
 const env = { AIHR_PROOFKIT_API_BASE_URL: `${baseUrl}/api/v1`, AIHR_PROOFKIT_TEST_SCOPE: "proofkit:manual-smoke",
   AIHR_PROOFKIT_ENTERPRISE_ID: "1", AIHR_PROOFKIT_WORKSPACE_ID: "2", AIHR_PROOFKIT_USER_ID: "3",
-  AIHR_PROOFKIT_JOB_ID: jobId, AIHR_PROOFKIT_ACCESS_TOKEN: undefined, AIHR_PROOFKIT_CLIENT_ITEM_KEY: undefined };
+  AIHR_PROOFKIT_JOB_ID: jobId, AIHR_PROOFKIT_ACCESS_TOKEN: "fixture-token", AIHR_PROOFKIT_CLIENT_ITEM_KEY: undefined };
 const previousEnv = new Map(Object.keys(env).map((key) => [key, process.env[key]]));
 for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 let electron, profile, server, client;

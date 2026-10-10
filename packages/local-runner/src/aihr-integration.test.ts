@@ -836,6 +836,66 @@ describe("AIHR project integration", () => {
     });
     expect(result.message).toContain("quick Charter");
   });
+
+  it("blocks an interactive quick Charter without isolated actor credentials", async () => {
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const preflight = service.integration?.preflight;
+    if (!preflight) throw new Error("AIHR integration preflight is missing");
+    process.env.AIHR_PROOFKIT_TEST_SCOPE = "proofkit:ui-click";
+    delete process.env.AIHR_PROOFKIT_ACCESS_TOKEN;
+    delete process.env.AIHR_PROOFKIT_ENTERPRISE_ID;
+    delete process.env.AIHR_PROOFKIT_WORKSPACE_ID;
+    delete process.env.AIHR_PROOFKIT_USER_ID;
+    const charter = TestCharterSchema.parse({
+      intent: "click AIHR resume acquisition",
+      level: "quick",
+      actions: [{ kind: "click", selector: "text=立即运行" }],
+      assertions: [{ kind: "text-visible", text: "任务进度" }],
+      sideEffectPolicy: "allow",
+    });
+    const result = await preflight({
+      runId: "ui-click-preflight-run", environment: "test", charter,
+      signal: new AbortController().signal,
+    });
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("AIHR_PROOFKIT_ACCESS_TOKEN");
+    expect(result.message).toContain("AIHR_PROOFKIT_WORKSPACE_ID");
+    expect(result.evidence).toMatchObject({ integrationRequired: true, interactiveSurfaceActionCount: 1,
+      credentialConfigured: false, actorConfigured: false });
+    const connect = vi.spyOn(WebAdapter.prototype, "connect").mockRejectedValue(new Error("must not connect"));
+    const started = await service.start({ charter });
+    const summary = await service.wait(started.runId);
+    expect(summary.verdict).toBe("blocked");
+    expect(summary.findings.join(" ")).toContain("AIHR_PROOFKIT_ACCESS_TOKEN");
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("requires a scoped actor before a core UI business Oracle", async () => {
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const preflight = service.integration?.preflight;
+    if (!preflight) throw new Error("AIHR integration preflight is missing");
+    process.env.AIHR_PROOFKIT_TEST_SCOPE = "proofkit:ui-core";
+    process.env.AIHR_PROOFKIT_ACCESS_TOKEN = "fixture-token";
+    process.env.AIHR_PROOFKIT_ENTERPRISE_ID = "1";
+    process.env.AIHR_PROOFKIT_WORKSPACE_ID = "2";
+    delete process.env.AIHR_PROOFKIT_USER_ID;
+    const result = await preflight({
+      runId: "ui-core-preflight-run",
+      environment: "test",
+      charter: TestCharterSchema.parse({
+        intent: "verify acquisition after a UI click",
+        level: "core",
+        actions: [{ kind: "click", selector: "text=立即运行" }],
+        assertions: [{ kind: "text-visible", text: "任务进度" }],
+        oracles: ["aihr.resumeCollectionPipeline"],
+        sideEffectPolicy: "allow",
+      }),
+      signal: new AbortController().signal,
+    });
+    expect(result.passed).toBe(false);
+    expect(result.message).toContain("AIHR_PROOFKIT_USER_ID");
+    expect(result.evidence).toMatchObject({ credentialConfigured: true, actorConfigured: false });
+  });
 });
 
 async function createIntegrationProject(fixtureBytes?: Buffer): Promise<string> {

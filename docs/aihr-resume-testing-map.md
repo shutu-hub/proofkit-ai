@@ -260,6 +260,8 @@ pnpm test
 
 真实上传应使用隔离测试环境。外部工作区的 `policies.sideEffects` 和 Charter 的 `sideEffectPolicy` 都需设置为 `allow`。通过 capability 上传时，CLI 还需 `--allow-capability-writes`，MCP 则由服务启动者设置 `PROOFKIT_ALLOW_CAPABILITY_WRITES=1`。连接器的 preflight 会解析这些上传 capability 的幂等键并检查其属于 `AIHR_PROOFKIT_TEST_SCOPE`；请求前再次校验，缺少变量或跨 scope 的键不会写入网关。
 
+对于 UI 点击、填表、按键、选择文件或响应捕获，preflight 也会在连接页面前要求配置测试 scope、访问令牌及企业/工作空间/用户 actor；这些值的存在不证明它们属于隔离环境，仍须核对目标部署与测试身份。纯只读 `quick` 页面侦察无需这些业务凭据。
+
 手动录入使用页面 `setInputFiles` 与 `captureResponse`，其 API 没有 `client_item_key` 幂等契约，不能套用上述 capability 的重试保证。它需要独立的测试 scope、actor 和岗位配置，通过本次提交的五个身份核对业务结果。具体配置见 [手动录入契约](aihr-resume-integration.md#manual-candidate-intake)。只有 UI 断言和独立业务 Oracle 都有证据并通过，才可认定核心链路通过；Run 结果保存在 `$testWorkspace\.proofkit\runs\<runId>\`。
 
 ## 下一阶段

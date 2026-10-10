@@ -27,7 +27,7 @@ let oracle: BusinessOracle;
 beforeEach(async () => {
   for (const key of envKeys) { previous.set(key, process.env[key]); delete process.env[key]; }
   Object.assign(process.env, { AIHR_PROOFKIT_TEST_SCOPE: "proofkit:manual", AIHR_PROOFKIT_ENTERPRISE_ID: "1",
-    AIHR_PROOFKIT_WORKSPACE_ID: "2", AIHR_PROOFKIT_USER_ID: "3" });
+    AIHR_PROOFKIT_WORKSPACE_ID: "2", AIHR_PROOFKIT_USER_ID: "3", AIHR_PROOFKIT_ACCESS_TOKEN: "fixture-token" });
   paths = []; handler = undefined;
   responses = {
     "/resume-collection/files/901": { file_id: "901", file_sha256: hash, source_platform: { source_channel: "manual_upload" },

@@ -148,7 +148,7 @@ prevent concurrent uploads. Latest-state APIs do not prove historical
 terminal state, complete business causality, billing or cleanup.
 
 The preflight requires `local`/`test`, a `proofkit:<scope>` test scope,
-enterprise/workspace/user actor headers and a positive target job ID. These
+a configured access token, enterprise/workspace/user actor headers and a positive target job ID. These
 are configuration checks, not proof of deployment isolation or valid
 credentials. A manual capture triggers preflight even at `quick`. The
 connector does not automatically delete business records; provisioning and
@@ -168,7 +168,7 @@ remain open.
 
 The Web/Electron adapter owns platform interaction: navigation, session selection, opening an online resume, downloading or generating the artifact, upload initiation and visible progress. The AIHR integration owns business observation and test data cleanup. The Runner joins both streams through one `runId` and one evidence timeline.
 
-An AIHR integration may also be loaded for a surface-only quick check. When a quick Charter contains no AIHR Capability action, AIHR business Oracle or manual intake capture, the connector records a passed `preflight.json` with `integrationRequired: false` and does not require `AIHR_PROOFKIT_TEST_SCOPE` or a gateway endpoint. Core and release business Charters, and any Charter that names an AIHR Capability/Oracle or captures manual intake, continue through the isolation and scope preflight before the surface is connected.
+An AIHR integration may also be loaded for a read-only surface quick check. When a `quick` Charter has `sideEffectPolicy: deny` and contains no AIHR Capability, business Oracle or interactive page action, the connector records a passed `preflight.json` with `integrationRequired: false` and does not require `AIHR_PROOFKIT_TEST_SCOPE` or a gateway endpoint. A click, fill, press, file selection or response-capture trigger, as well as any AIHR Capability or Oracle, requires the configured test scope, token and actor headers before the surface is connected. The preflight checks their presence, not token validity, tenant isolation or deployment provenance.
 
 This split lets the same integration be used from the CLI, MCP and CI. MCP must not receive a generic database or shell tool; it can call only the registered capability names with validated inputs. The default MCP profile starts no project command and accepts only loopback or configured test origins.
 

@@ -53,9 +53,11 @@ async function aihrPreflight({ charter, environment }) {
   const manualIntake = oracleNames.includes("aihr.manualCandidateIntake") || charter.actions.some((action) =>
     action.kind === "captureResponse" && action.response.method === "POST"
       && new URL(action.response.url).pathname.endsWith("/resume-collection/candidate-intakes"));
+  const interactiveSurfaceActions = charter.actions.filter((action) =>
+    ["click", "fill", "press", "setInputFiles", "captureResponse"].includes(action.kind));
   const usesAihrBusinessContract = manualIntake || actionNames.some((name) => name.startsWith("aihr."))
-    || oracleNames.some((name) => name.startsWith("aihr."));
-  if (!usesAihrBusinessContract && charter.level === "quick") {
+    || oracleNames.some((name) => name.startsWith("aihr.")) || interactiveSurfaceActions.length > 0;
+  if (!usesAihrBusinessContract && charter.level === "quick" && charter.sideEffectPolicy === "deny") {
     return {
       passed: true,
       message: "AIHR business preflight skipped: this quick Charter uses only surface assertions.",
@@ -85,17 +87,21 @@ async function aihrPreflight({ charter, environment }) {
   if (!loopback && env("AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT") !== "true") {
     errors.push("remote AIHR endpoints require AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT=true");
   }
-  if (!["test", "local"].includes(environment)) errors.push(`AIHR write tests require test or local environment, received ${environment}`);
+  if (!["test", "local"].includes(environment)) errors.push(`AIHR business or interactive tests require test or local environment, received ${environment}`);
 
   const scope = env("AIHR_PROOFKIT_TEST_SCOPE");
   const scopeValid = validTestScope(scope);
   const clientItemKey = env("AIHR_PROOFKIT_CLIENT_ITEM_KEY");
   if (!scopeValid) errors.push("AIHR_PROOFKIT_TEST_SCOPE must match proofkit:<scope>");
+  const credentialConfigured = Boolean(env("AIHR_PROOFKIT_ACCESS_TOKEN"));
+  if (!credentialConfigured) errors.push("AIHR_PROOFKIT_ACCESS_TOKEN is required for business or interactive tests");
+  const actorNames = ["AIHR_PROOFKIT_ENTERPRISE_ID", "AIHR_PROOFKIT_WORKSPACE_ID", "AIHR_PROOFKIT_USER_ID"];
+  const actorConfigured = actorNames.every((name) => Boolean(env(name)));
+  for (const name of actorNames) {
+    if (!env(name)) errors.push(`${name} is required for business or interactive tests`);
+  }
   if (manualIntake) {
     // This API has no client_item_key. Do not invent an idempotency guarantee.
-    for (const name of ["AIHR_PROOFKIT_ENTERPRISE_ID", "AIHR_PROOFKIT_WORKSPACE_ID", "AIHR_PROOFKIT_USER_ID"]) {
-      if (!env(name)) errors.push(`${name} is required for manual candidate intake`);
-    }
     let jobId;
     try { jobId = resolveEnv(charter.metadata?.aihrManual?.jobId); } catch { /* Report a configuration gap without environment values. */ }
     if (!positiveString(jobId)) errors.push("metadata.aihrManual.jobId must identify the isolated target job");
@@ -103,9 +109,6 @@ async function aihrPreflight({ charter, environment }) {
   if (writeActions.length > 0) {
     if (!clientItemKey) errors.push("AIHR_PROOFKIT_CLIENT_ITEM_KEY is required for write capabilities");
     if (scopeValid && clientItemKey && !scopedClientItemKey(clientItemKey, scope)) errors.push("AIHR_PROOFKIT_CLIENT_ITEM_KEY must be namespaced by AIHR_PROOFKIT_TEST_SCOPE with a nonempty suffix");
-    for (const name of ["AIHR_PROOFKIT_ENTERPRISE_ID", "AIHR_PROOFKIT_WORKSPACE_ID", "AIHR_PROOFKIT_USER_ID"]) {
-      if (!env(name)) errors.push(`${name} is required for write capabilities`);
-    }
   }
   const uploadKeyChecks = [];
   for (const [index, action] of charter.actions.entries()) {
@@ -136,7 +139,10 @@ async function aihrPreflight({ charter, environment }) {
       integrationRequired: usesAihrBusinessContract,
       writeActionCount: writeActions.length,
       manualIntake,
+      interactiveSurfaceActionCount: interactiveSurfaceActions.length,
       testScopeConfigured: Boolean(scope),
+      credentialConfigured,
+      actorConfigured,
       clientItemKeyNamespaced: Boolean(scopeValid && uploadKeyChecks.length > 0 && uploadKeyChecks.every(Boolean)),
     },
   };
