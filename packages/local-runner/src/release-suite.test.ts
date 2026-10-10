@@ -201,6 +201,30 @@ describe("explicit release suites", () => {
     expect(coverage2?.gaps).toContainEqual(expect.objectContaining({ path: "/resume", status: "mapped-unobserved", charterIds: ["resume"] }));
   });
 
+  it("does not count a same-path visit on a foreign site as the tested Web route", async () => {
+    const service = await createSuiteService();
+    stubRuns(service, { wrongVisitedOrigin: "resume/electron/replay" });
+    const mission = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    await service.startMission(mission.missionId, { approve: true });
+    await service.waitMission(mission.missionId);
+    const coverage = (await service.missionEvidence(mission.missionId)).suiteScope?.routeCoverage;
+    expect(coverage).toMatchObject({ mappedCandidates: 2, observedCandidates: 1 });
+    expect(coverage?.gaps).toContainEqual(expect.objectContaining({ path: "/resume", status: "mapped-unobserved",
+      reason: "No matching page visit on the configured HTTP target origin in every required run" }));
+  });
+
+  it("leaves Web route observation unverified when the Run has no target origin", async () => {
+    const service = await createSuiteService();
+    stubRuns(service, { missingTargetBinding: "resume/electron/replay" });
+    const mission = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
+    await service.startMission(mission.missionId, { approve: true });
+    await service.waitMission(mission.missionId);
+    const coverage = (await service.missionEvidence(mission.missionId)).suiteScope?.routeCoverage;
+    expect(coverage).toMatchObject({ mappedCandidates: 2, observedCandidates: 1 });
+    expect(coverage?.gaps).toContainEqual(expect.objectContaining({ path: "/resume", status: "mapped-unobserved",
+      reason: "No matching page visit on the configured HTTP target origin in every required run" }));
+  });
+
   it("reports stale and ambiguous route mappings without increasing covered counts", async () => {
     const service = await createSuiteService();
     service.config.charters[0]!.routeTargets = [{ kind: "web", path: "/unknown" }, { kind: "web", path: "/shared" }];
@@ -436,7 +460,7 @@ async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[];
   return LocalRunnerService.create({ root, workspaceRoot });
 }
 
-function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-response" } = {}) {
+function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; wrongVisitedOrigin?: string; missingTargetBinding?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-response" } = {}) {
   installMockRunEvidence(service);
   const summaries = new Map<string, RunSummary>();
   const started: Array<{ charterId: string; surface: LocalAdapterName; negativeCaseId?: string }> = [];
@@ -448,6 +472,7 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     const failed = options.failedPrimary === `${charterId}/${surface}` && kind !== "negative";
     const missing = options.missingBusinessFact === `${charterId}/${surface}/${kind}`;
     const visited = options.missingVisitedPath !== `${charterId}/${surface}/${kind}`;
+    const visitOrigin = options.wrongVisitedOrigin === `${charterId}/${surface}/${kind}` ? "http://127.0.0.1:9999" : "http://127.0.0.1:8765";
     const verdict: Verdict = failed ? "failed" : "passed";
     const now = new Date().toISOString();
     const oracleArtifact = `${runId}/oracle.json`;
@@ -458,12 +483,16 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
       steps: kind === "negative" ? [] : [{
         stepId: "step-001", action: { kind: "observe" }, status: "passed", artifacts: [],
         beforeSnapshot: { capturedAt: now, url: "http://127.0.0.1:8765/", metadata: {} },
-        afterSnapshot: { capturedAt: now, url: `http://127.0.0.1:8765/${visited ? options.dynamicResume && charterId === "resume" ? "resumes/private-candidate-123" : charterId : ""}`, metadata: {} },
+        afterSnapshot: { capturedAt: now, url: `${visitOrigin}/${visited ? options.dynamicResume && charterId === "resume" ? "resumes/private-candidate-123" : charterId : ""}`, metadata: {} },
       }],
       assertions: kind === "negative" ? [] : [{ assertion: charter.assertions[0]!, passed: true, message: "visible", evidence: [`${runId}/snapshot.json`] }],
       oracles: charter.oracles?.length ? [{ name: `${charterId}-oracle`, verificationKind: "business", passed: !failed, message: failed ? "business state is wrong" : "business state is done", evidence: missing ? [oracleArtifact] : [sourceArtifact, oracleArtifact], sourceEvidenceCount: missing ? 0 : 1, sourceEvidenceArtifacts: missing ? [] : [sourceArtifact], observedAt: now }] : [],
       artifacts: [`${runId}/snapshot.json`, ...(charter.oracles?.length ? [...(missing ? [] : [sourceArtifact]), oracleArtifact] : [])],
       findings: [],
+      ...(options.missingTargetBinding === `${charterId}/${surface}/${kind}` ? {} : { targetBinding: {
+        status: "unverified" as const, method: "unavailable" as const, expectedProjectRoot: service.root,
+        targetOrigin: "http://127.0.0.1:8765", reason: "Fixture target origin", observedAt: now,
+      } }),
     };
     summaries.set(runId, summary);
     return summary;

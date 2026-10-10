@@ -1555,14 +1555,26 @@ function numberValue(value: unknown): number {
 
 /** Persist only declared route patterns; concrete URL paths may contain private IDs. */
 function matchedWebRouteTargets(summary: RunSummary, targets: RouteCoverageTarget[]): string[] {
+  // A route-shaped URL on an unrelated site is not evidence that the tested
+  // application served that route. Target binding records the configured HTTP
+  // origin even when process-path association itself is unavailable.
+  const targetOrigin = summary.targetBinding?.targetOrigin;
+  if (!targetOrigin) return [];
+  let approvedOrigin: string;
+  try {
+    const target = new URL(targetOrigin);
+    if (target.protocol !== "http:" && target.protocol !== "https:") return [];
+    approvedOrigin = target.origin;
+  } catch { return []; }
   const paths = new Set<string>();
   for (const step of summary.steps) {
     for (const value of [step.beforeSnapshot?.url, step.receipt?.urlBefore, step.receipt?.urlAfter, step.afterSnapshot?.url]) {
       if (!value) continue;
       try {
         const url = new URL(value);
+        if (url.origin !== approvedOrigin) continue;
         if (url.hash.startsWith("#/")) paths.add(url.hash.slice(1).split(/[?#]/, 1)[0]!);
-        else if (url.protocol === "http:" || url.protocol === "https:") paths.add(url.pathname);
+        else paths.add(url.pathname);
       } catch { /* A malformed adapter URL is not route coverage evidence. */ }
     }
   }
