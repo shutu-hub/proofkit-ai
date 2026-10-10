@@ -50,7 +50,7 @@ describe("analyzeRun", () => {
     expect(result.repairSuggestion?.status).toBe("proposed");
   });
 
-  it("carries trusted Oracle source hints into the diagnosis and repair proposal", () => {
+  it("uses only caller-verified source hints without treating them as causal proof", () => {
     const result = analyzeRun({
       summary: summary({
         oracles: [{
@@ -65,12 +65,29 @@ describe("analyzeRun", () => {
         }],
       }),
       evidence: [evidence("run-fixture/artifacts/oracle-1-source.json", "business"), evidence("run-fixture/artifacts/oracle-1.json", "report")],
+      verifiedSourceLocations: ["services/resume-collection-service/internal/service/resume_post_processor.go"],
     });
 
     expect(result.diagnosis?.sourceLocations).toEqual([
       "services/resume-collection-service/internal/service/resume_post_processor.go",
     ]);
     expect(result.repairSuggestion?.changes[0]).toContain("resume_post_processor.go");
+    expect(result.repairSuggestion?.changes[0]).toContain("source hints");
+    expect(result.diagnosis?.confidence).toBe(0.82);
+    expect(result.repairSuggestion?.confidence).toBeLessThan(result.diagnosis!.confidence);
+  });
+
+  it("does not promote unchecked Oracle paths into a diagnosis", () => {
+    const sourcePath = "services/resume-collection-service/internal/service/resume_post_processor.go";
+    const result = analyzeRun({
+      summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "stale binding",
+        evidence: ["run-fixture/artifacts/oracle-1-source.json"], sourceEvidenceCount: 1,
+        sourceEvidenceArtifacts: ["run-fixture/artifacts/oracle-1-source.json"], sourceLocations: [sourcePath] }] }),
+      evidence: [evidence("run-fixture/artifacts/oracle-1-source.json", "business")],
+    });
+    expect(result.finding).toMatchObject({ category: "product", status: "confirmed" });
+    expect(result.diagnosis?.sourceLocations).toEqual([]);
+    expect(result.repairSuggestion?.rationale).toContain("source-level cause is unverified");
   });
 
   it("keeps an oracle failure unverified when evidence is missing", () => {

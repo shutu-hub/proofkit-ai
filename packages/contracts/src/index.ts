@@ -249,7 +249,7 @@ export const OracleResultSchema = z.object({
   sourceEvidenceCount: z.number().int().nonnegative().optional(),
   /** Run-scoped artifacts containing the Oracle's observed source facts, separate from its verdict report. */
   sourceEvidenceArtifacts: z.array(z.string()).optional(),
-  /** Optional repository hints supplied by a trusted project integration. */
+  /** Unverified repository path hints from a project integration; they are not root-cause evidence. */
   sourceLocations: z.array(z.string().min(1)).optional(),
   observedAt: z.string().optional(),
 });

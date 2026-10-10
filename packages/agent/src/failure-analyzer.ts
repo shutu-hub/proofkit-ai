@@ -5,7 +5,6 @@ import {
   type EvidenceRef,
   type FailureBoundary,
   type Finding,
-  type Observation,
   type RepairSuggestion,
   type RunSummary,
 } from "@proofkit/contracts";
@@ -20,7 +19,8 @@ export type FailureAnalysis = {
 export type FailureAnalyzerInput = {
   summary: RunSummary;
   evidence: EvidenceRef[];
-  observations?: Observation[];
+  /** Repository-relative file hints checked against the selected source root by the caller. */
+  verifiedSourceLocations?: string[];
 };
 
 /**
@@ -88,7 +88,7 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
         evidence: oracleEvidence,
         createdAt: boundary.observedAt,
       });
-      const diagnosis = createDiagnosis(summary, boundary, finding, input.observations, failedOracle.sourceLocations);
+      const diagnosis = createDiagnosis(summary, boundary, finding, input.verifiedSourceLocations);
       return { boundary, finding, diagnosis, repairSuggestion: createRepairSuggestion(summary, boundary, diagnosis) };
     }
     return {
@@ -131,7 +131,7 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
       }),
       ...(confirmed
         ? (() => {
-            const diagnosis = createDiagnosis(summary, boundary, undefined, input.observations);
+            const diagnosis = createDiagnosis(summary, boundary, undefined, input.verifiedSourceLocations);
             return { diagnosis, repairSuggestion: createRepairSuggestion(summary, boundary, diagnosis) };
           })()
         : {}),
@@ -236,20 +236,17 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
   };
 }
 
-function createDiagnosis(summary: RunSummary, boundary: FailureBoundary, finding: Finding | undefined, observations: Observation[] | undefined, oracleSourceLocations: string[] = []): Diagnosis {
-  const observedSourceLocations = observations?.flatMap((observation) => {
-    const values = observation.data.sourceLocations;
-    return Array.isArray(values) ? values.filter((value): value is string => typeof value === "string" && value.length > 0) : [];
-  }) ?? [];
-  const sourceLocations = [...new Set([...oracleSourceLocations, ...observedSourceLocations])];
+function createDiagnosis(summary: RunSummary, boundary: FailureBoundary, finding: Finding | undefined, verifiedSourceLocations: string[] = []): Diagnosis {
+  const sourceLocations = [...new Set(verifiedSourceLocations)];
   return {
     diagnosisId: `diagnosis-${summary.runId}`,
     summary: finding
       ? `${finding.title}: ${boundary.message}`
       : `A surface assertion failed: ${boundary.message}`,
-    confidence: sourceLocations.length > 0 ? 0.92 : 0.82,
-    likelyOwner: sourceLocations.length > 0 ? "project implementation" : "surface or business workflow",
-    sourceLocations: [...new Set(sourceLocations)],
+    // This scores the observed failure boundary, not a source-level root cause.
+    confidence: 0.82,
+    likelyOwner: "surface or business workflow",
+    sourceLocations,
     evidence: boundary.evidence,
     createdAt: boundary.observedAt,
   };
@@ -257,18 +254,18 @@ function createDiagnosis(summary: RunSummary, boundary: FailureBoundary, finding
 
 function createRepairSuggestion(summary: RunSummary, boundary: FailureBoundary, diagnosis: Diagnosis): RepairSuggestion {
   const owner = diagnosis.sourceLocations.length > 0
-    ? `Inspect ${diagnosis.sourceLocations.join(", ")} first.`
-    : "Trace the implementation boundary named by the linked business or surface evidence.";
+    ? `Trace the failing boundary and inspect ${diagnosis.sourceLocations.join(", ")} as source hints; file existence does not establish cause.`
+    : "Trace the implementation boundary named by the linked business or surface evidence; the source-level cause is unverified.";
   return {
     suggestionId: `repair-${summary.runId}`,
     title: "Repair the failing product boundary and add a regression check",
-    rationale: `${owner} The proposed change is based on the confirmed evidence attached to the diagnosis; it must be replayed before being marked verified.`,
+    rationale: `${owner} The linked evidence establishes the observed failure, not the code change needed to fix it. Replay the mission after any repair.`,
     changes: [
       owner,
-      "Correct the state transition or response that violates the observed success criterion.",
+      "Identify and correct the cause of the observed state or response mismatch.",
       "Add a deterministic regression assertion for the same boundary and replay the mission.",
     ],
-    confidence: diagnosis.confidence,
+    confidence: 0.45,
     evidence: boundary.evidence,
     status: "proposed",
   };
