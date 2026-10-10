@@ -17,6 +17,10 @@ export async function auditMissionProofClassification(
   const omittedRuns = Math.max(0, validIds.length - inspected.length);
   let checkedRuns = 0;
   let classifiedOracles = 0;
+  let businessOracles = 0;
+  let passedBusinessOracles = 0;
+  let failedBusinessOracles = 0;
+  let httpContractOracles = 0;
   let legacyOracles = 0;
   let unavailableRuns = invalidRuns;
   const legacyRunIds: string[] = [];
@@ -29,6 +33,13 @@ export async function auditMissionProofClassification(
       for (const oracle of run.oracles) {
         if (oracle.verificationKind === "business" || oracle.verificationKind === "http-contract") {
           classifiedOracles++;
+          if (oracle.verificationKind === "business") {
+            businessOracles++;
+            if (oracle.passed) passedBusinessOracles++;
+            else failedBusinessOracles++;
+          } else {
+            httpContractOracles++;
+          }
         } else {
           legacyOracles++;
           if (legacyRunIds.length < MAX_VISIBLE_RUN_IDS && !legacyRunIds.includes(id)) legacyRunIds.push(id);
@@ -44,6 +55,10 @@ export async function auditMissionProofClassification(
       : classifiedOracles ? "explicit" : "not-applicable",
     checkedRuns,
     classifiedOracles,
+    businessOracles,
+    passedBusinessOracles,
+    failedBusinessOracles,
+    httpContractOracles,
     legacyOracles,
     unavailableRuns,
     omittedRuns,

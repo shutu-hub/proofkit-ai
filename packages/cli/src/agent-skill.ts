@@ -114,6 +114,9 @@ Mission evidence is degraded, absent or beyond the audit limit, testVerdict is i
 testVerdictReason explains the rerun needed. Do not report the saved pass as a
 current acceptance result. A compact partial report can retain a pass only when
 the full Mission evidence audit is intact.
+For a saved failure, do not claim a current product defect when its cited
+evidence is missing, changed or lacks an explicitly classified failing business Oracle.
+In that case testVerdict is inconclusive while verdict remains historical.
 
 For an authorized fix, use replay_mission on the original Mission with the
 same scope and fixture bytes, then compare_missions after the replay finishes.

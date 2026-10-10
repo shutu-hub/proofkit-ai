@@ -55,6 +55,7 @@ Runner 在执行页面步骤前原子保存资源登记日志。若进程退出�
 一次性 HTTP 业务检查读不到接口、超时、响应过大，或收到非预期的 401/403/429 时保持 `inconclusive`；这些情况不能证明产品业务缺陷。明确声明期望 401/403 的负向用例仍可通过。证据只保留响应状态与摘要或有限原因，不保存原始错误与响应正文。
 
 一次性 HTTP 检查仅返回 200、但没有业务谓词时，只能证明接口可达，结果为 `inconclusive`；即使显式期望 200 也不能替代业务终态检查。CLI `--oracle-url` 与 MCP `start_run.oracleUrl` 属于这种观察入口。核心模块验收应使用带业务谓词的 Oracle、配置的终态 Oracle 或工作区连接器；显式期望 4xx/5xx 的负向状态检查仍可验证其声明的 HTTP 契约。新 Run 的 Oracle 结果用 `verificationKind` 区分 `business` 与 `http-contract`；后者的状态与摘要仍保留为证据，但不计入 Mission 的业务 Oracle、业务事实或修复证明，也不会单独确认业务产品缺陷。历史 Mission `verdict` 不会被改写；`proofClassification: unverified` 标出未分类的旧 Oracle 或读不到的 Run。已保存的核心/上线测试通过若缺少明确分类，或已保存的通过结果有损坏、缺失证据，高层 MCP 的 `testVerdict` 会给出 `inconclusive` 和原因，提示重新执行。
+历史审计分别统计通过与失败的业务 Oracle 及 HTTP 契约检查；仅有“已分类”的状态不构成业务证明。核心/上线测试的当前通过至少需要一次已分类且通过的业务检查；当前确认产品缺陷至少需要一次已分类且失败的业务检查，并须核对该问题引用的证据。
 
 文件上传使用 `setInputFiles`，引用外部工作区的 `.proofkit/fixtures/<file>`，一次可选择 1–10 个文件、总量不超过 20 MiB。Web/Electron 共用执行器，支持唯一的隐藏文件控件；场景与工作区都需允许副作用。上传动作只保存文件名、大小、SHA-256、MIME 等输入事实，业务成功仍需独立 Oracle。样本在上传步骤读取，因此前置页面动作可能已执行；页面回显也可能进入截图或快照，应使用脱敏样本。
 
@@ -104,6 +105,6 @@ Mission 采集 Run 证据时，业务事实、断言快照等 artifact 必须同
 
 Web/Electron 已有真实隔离样例验证，包含跨端回放、注入缺陷、业务来源证据和结果比较。AIHR 普通上传、在线采集和手动录入均有连接器参考；手动录入用本次响应的身份和文件摘要核对五个业务 reader，缺失身份、重试或合法版本改绑保持证据不足。真实部署的简历业务验收仍待完成。移动端已有 W3C/Appium 适配器，真实设备尚未验收。
 
-Mission 紧凑结果页汇总结论、验收范围、场景与各端执行、首个失败、证据和修复回放比较。MCP `get_mission_evidence` 返回 `summary`、报告路径及当前 `evidenceIntegrity`：`intact`、`degraded`、`partial` 或 `no-evidence`，并列出已检查引用和可继续支持的可见产品问题数。它只覆盖有界展示结果；独立的 `acceptanceEvidenceIntegrity` 审计整个 Mission 保存的证据引用，最多检查 2048 条。结果页因展示上限为 `partial` 时，只要完整证据审计为 `intact`，仍可保留通过结论；完整审计损坏、缺失或超限则把历史通过降为 `inconclusive`。CLI `mission report` 生成同一静态快照；`summary.json`、MCP 和报告页面共用当前审计后的 `testVerdict`，同时保留历史 `verdict`。报告保留缺失运行、覆盖缺口及负向测试的预期结果，证据缺失、越界或摘要不符时显示不可用；保存为“已确认”的问题若失去可验证证据，会明确显示当前不能独立确认。完整证据审计不等于全项目覆盖证明；修复比较需要重新运行才能给出当前证明。
+Mission 紧凑结果页汇总结论、验收范围、场景与各端执行、首个失败、证据和修复回放比较。MCP `get_mission_evidence` 返回 `summary`、报告路径及当前 `evidenceIntegrity`：`intact`、`degraded`、`partial` 或 `no-evidence`，并列出已检查引用和可继续支持的可见产品问题数。它只覆盖有界展示结果；独立的 `acceptanceEvidenceIntegrity` 审计整个 Mission 保存的证据引用，最多检查 2048 条。结果页因展示上限为 `partial` 时，只要完整证据审计为 `intact`，仍可保留通过结论；完整审计损坏、缺失或超限则把历史通过降为 `inconclusive`。已保存的失败若声称确认产品缺陷，却缺少明确分类的业务证明或其引用证据已经失效，当前结论也降为 `inconclusive`；证据完好的普通测试失败仍为 `failed`。CLI `mission report` 生成同一静态快照；`summary.json`、MCP 和报告页面共用当前审计后的 `testVerdict`，同时保留历史 `verdict`。报告保留缺失运行、覆盖缺口及负向测试的预期结果，证据缺失、越界或摘要不符时显示不可用。完整证据审计不等于全项目覆盖证明；修复比较需要重新运行才能给出当前证明。
 
 下一阶段重点是用真实业务完善项目知识与场景目录、测试数据隔离、业务终态观测、覆盖度量及 AI 规划评测。各阶段用可复现的验收结果推进，不把静态路由数量当业务覆盖率。

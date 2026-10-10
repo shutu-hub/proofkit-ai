@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { createHostFixture, hostCases } from "./host-evaluation-fixture.mjs";
@@ -61,9 +61,10 @@ async function evaluate(fixture, expected) {
         : JSON.parse(await readFile(join(fixture.workspace, ".proofkit", "charters", "resume-core.yml"), "utf8"));
     }
     const started = await call("run_test", input);
+    if (started.testVerdict !== "not-asserted") throw new Error("Mission start receipt claimed an unaudited product outcome");
     if (expected.coverage === "project") {
       const status = await call("get_mission_status", { missionId: started.missionId });
-      if (started.running || started.readiness?.ready || status.mission?.verdict === "passed") {
+      if (started.running || started.readiness?.ready || status.mission?.verdict === "passed" || status.testVerdict !== "not-asserted") {
         throw new Error("Project coverage gap unexpectedly became executable or passed");
       }
       answer = { missionId: started.missionId, verdict: "not-asserted",
@@ -74,17 +75,27 @@ async function evaluate(fixture, expected) {
       if (!started.running) throw new Error(`Expected a started Mission: ${JSON.stringify(started.readiness)}`);
       const terminal = await waitForMission(call, started.missionId);
       const evidence = await call("get_mission_evidence", { missionId: started.missionId });
+      const savedSummary = JSON.parse(await readFile(join(dirname(evidence.report), "summary.json"), "utf8"));
       if (terminal.verdict !== evidence.summary?.verdict
+        || terminal.testVerdict !== evidence.testVerdict
+        || evidence.summary?.testVerdict !== evidence.testVerdict
+        || savedSummary.testVerdict !== evidence.testVerdict
+        || savedSummary.verdict !== evidence.verdict
+        || savedSummary.acceptanceEvidenceIntegrity?.status !== evidence.acceptanceEvidenceIntegrity?.status
+        || terminal.acceptanceEvidenceIntegrity?.status !== evidence.acceptanceEvidenceIntegrity?.status
         || terminal.evidenceIntegrity?.status !== evidence.evidenceIntegrity?.status
         || terminal.report !== evidence.report) {
-        throw new Error("Bounded wait result differs from the saved Mission evidence");
+        throw new Error("Bounded wait result differs from the audited Mission evidence");
+      }
+      if (evidence.testVerdict !== expected.verdict) {
+        throw new Error(`Current audited verdict ${evidence.testVerdict} differs from expected ${expected.verdict}`);
       }
       const issues = (evidence.summary?.runs ?? []).flatMap((row) => row.issue ? [row.issue] : []);
       if (terminal.firstFailure?.message) issues.push(terminal.firstFailure.message);
-      answer = { missionId: started.missionId, verdict: evidence.summary?.verdict,
+      answer = { missionId: started.missionId, verdict: evidence.testVerdict,
         level: started.level, coverage: started.planning?.coverage?.requested, surface: expected.surface,
         report: evidence.report, evidencePaths: (evidence.evidence ?? []).filter((item) => typeof item.path === "string").map((item) => item.path),
-        gaps: [...new Set(issues)], summary: `Saved Mission result: ${evidence.summary?.verdict}` };
+        gaps: [...new Set(issues)], summary: `Audited Mission result: ${evidence.testVerdict}` };
     }
   } finally { await client.close(); }
   const missions = await records(join(fixture.workspace, ".proofkit", "missions"));

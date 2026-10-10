@@ -178,7 +178,7 @@ describe("external test workspace", () => {
     const legacyEvidence = await restarted.missionEvidence(mission.missionId);
     expect(legacyEvidence.verdict).toBe("passed");
     expect(legacyEvidence.testVerdict).toBe("inconclusive");
-    expect(legacyEvidence.testVerdictReason).toContain("explicitly classified business proof");
+    expect(legacyEvidence.testVerdictReason).toContain("explicitly classified passing business Oracle");
     expect(legacyEvidence.summary).toMatchObject({ verdict: "passed", testVerdict: "inconclusive" });
     expect(legacyEvidence.proofClassification).toMatchObject({ status: "unverified", legacyOracles: 1,
       legacyRunIds: [missionRunId] });

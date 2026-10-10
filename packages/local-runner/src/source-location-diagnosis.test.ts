@@ -27,7 +27,7 @@ it("keeps the business defect confirmed while admitting only checked source hint
   const summary: RunSummary = {
     runId: "source-hint-run", startedAt: now, endedAt: now, status: "completed", verdict: "failed", charter,
     steps: [], assertions: [{ assertion: charter.assertions[0]!, passed: true, message: "Resume visible", evidence: [] }],
-    oracles: [{ name: "resume-terminal", passed: false, message: "stale binding", observedAt: now,
+    oracles: [{ name: "resume-terminal", passed: false, message: "stale binding", observedAt: now, verificationKind: "business",
       evidence: ["source-hint-run/artifacts/oracle-1-source.json", "source-hint-run/artifacts/oracle-1.json"],
       sourceEvidenceCount: 1, sourceEvidenceArtifacts: ["source-hint-run/artifacts/oracle-1-source.json"],
       sourceLocations: ["src/related.ts", "../outside.ts", "src/missing.ts"] }],
@@ -47,6 +47,16 @@ it("keeps the business defect confirmed while admitting only checked source hint
   expect(completed.repairSuggestions[0]?.changes[0]).toContain("source hints");
   expect(completed.repairSuggestions[0]?.changes[0]).not.toContain("outside.ts");
   const result = await service.missionEvidence(mission.missionId);
+  expect(result).toMatchObject({ verdict: "failed", testVerdict: "failed",
+    acceptanceEvidenceIntegrity: { status: "intact" }, proofClassification: { status: "explicit" } });
   expect(result.summary.diagnosis?.sourceLocations).toEqual(["src/related.ts"]);
   expect(await readFile(result.report!, "utf8")).toContain("Source hints (not root-cause evidence): src/related.ts");
+  const business = result.evidence.find((item) => item.kind === "business");
+  expect(business).toBeDefined();
+  await writeFile(business!.path, "changed after the finding");
+  const degraded = await service.missionEvidence(mission.missionId);
+  expect(degraded).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
+    acceptanceEvidenceIntegrity: { status: "degraded" },
+    evidenceIntegrity: { visibleConfirmedFindings: { saved: 1, supported: 0 } } });
+  expect(await readFile(degraded.report!, "utf8")).toContain("Saved failure · current evidence unverified");
 });

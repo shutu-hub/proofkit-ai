@@ -7,10 +7,10 @@ const observation = (runId: string) => ObservationSchema.parse({
   observationId: `observation-${runId}`, source: "surface", kind: "surface.run",
   data: { runId, surface: "web", runKind: "primary", verdict: "passed" }, observedAt,
 });
-const run = (runId: string, verificationKind?: "business" | "http-contract"): RunSummary => ({
+const run = (runId: string, verificationKind?: "business" | "http-contract", passed = true): RunSummary => ({
   runId, startedAt: observedAt, status: "completed", verdict: "passed",
   charter: {} as RunSummary["charter"], steps: [], assertions: [],
-  oracles: [{ name: "check", passed: true, message: "observed", evidence: [], ...(verificationKind ? { verificationKind } : {}) }],
+  oracles: [{ name: "check", passed, message: "observed", evidence: [], ...(verificationKind ? { verificationKind } : {}) }],
   artifacts: [], findings: [],
 });
 
@@ -21,9 +21,20 @@ describe("saved Mission proof classification", () => {
       .map((value) => [value.runId, value]));
     const audit = await auditMissionProofClassification(mission, async (id) => runs.get(id)!);
     expect(audit).toMatchObject({ status: "unverified", checkedRuns: 3, classifiedOracles: 2,
+      businessOracles: 1, passedBusinessOracles: 1, failedBusinessOracles: 0, httpContractOracles: 1,
       legacyOracles: 1, unavailableRuns: 0, legacyRunIds: ["legacy"] });
     const current = await auditMissionProofClassification({ observations: mission.observations.slice(0, 2) }, async (id) => runs.get(id)!);
-    expect(current).toMatchObject({ status: "explicit", checkedRuns: 2, classifiedOracles: 2, legacyOracles: 0 });
+    expect(current).toMatchObject({ status: "explicit", checkedRuns: 2, classifiedOracles: 2,
+      businessOracles: 1, passedBusinessOracles: 1, failedBusinessOracles: 0, httpContractOracles: 1, legacyOracles: 0 });
+  });
+
+  it("separates failed business checks from passing business and HTTP-contract checks", async () => {
+    const runs = new Map([run("failed-business", "business", false), run("passed-status", "http-contract")]
+      .map((value) => [value.runId, value]));
+    const audit = await auditMissionProofClassification({ observations: [observation("failed-business"), observation("passed-status")] },
+      async (id) => runs.get(id)!);
+    expect(audit).toMatchObject({ status: "explicit", businessOracles: 1, passedBusinessOracles: 0,
+      failedBusinessOracles: 1, httpContractOracles: 1 });
   });
 
   it("keeps missing or mismatched Run summaries unverified without re-running them", async () => {

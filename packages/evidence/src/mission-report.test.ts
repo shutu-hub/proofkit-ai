@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { MissionResultSchema, type EvidenceRef, type MissionResult } from "@proofkit/contracts";
+import { MissionResultSchema, type EvidenceRef, type MissionProofClassification, type MissionResult } from "@proofkit/contracts";
 import { MissionReportStore } from "./mission-report.js";
 
 const roots: string[] = [];
@@ -26,6 +26,12 @@ function result(workspaceRoot: string, evidence: EvidenceRef[] = []): MissionRes
 
 function ref(path: string, sha256?: string): EvidenceRef {
   return { evidenceId: path, kind: "business", path, sha256, capturedAt: now, description: `Evidence 'quoted' <tag>` };
+}
+
+function explicitProof(passed: boolean): MissionProofClassification {
+  return { status: "explicit", checkedRuns: 1, classifiedOracles: 1, businessOracles: 1,
+    passedBusinessOracles: passed ? 1 : 0, failedBusinessOracles: passed ? 0 : 1, httpContractOracles: 0,
+    legacyOracles: 0, unavailableRuns: 0, omittedRuns: 0, legacyRunIds: [], unavailableRunIds: [] };
 }
 
 async function file(path: string, content = "fact"): Promise<string> {
@@ -65,8 +71,7 @@ describe("Mission report", () => {
     const workspace = await root();
     const input = result(workspace);
     input.verdict = "passed";
-    input.proofClassification = { status: "explicit", checkedRuns: 1, classifiedOracles: 1,
-      legacyOracles: 0, unavailableRuns: 0, omittedRuns: 0, legacyRunIds: [], unavailableRunIds: [] };
+    input.proofClassification = explicitProof(true);
     input.planning = { source: "submitted", confidence: 0.5, assumptions: [], missingInputs: [], evidenceGaps: ["project-workflow-coverage"], coverage: { requested: "project", source: "explicit", reason: "Requested whole project", inventory: "partial", workflowCoverage: "unmeasured", gaps: ["project-map-truncated"] } };
     input.scope.uncoveredCharterIds = ["billing"];
     const markup = await readFile(await new MissionReportStore(workspace).writeReport(input), "utf8");
@@ -113,8 +118,7 @@ describe("Mission report", () => {
     const evidence = ref(factPath, createHash("sha256").update("accepted").digest("hex"));
     const input = result(workspace, [evidence]);
     input.verdict = "passed";
-    input.proofClassification = { status: "explicit", checkedRuns: 1, classifiedOracles: 1,
-      legacyOracles: 0, unavailableRuns: 0, omittedRuns: 0, legacyRunIds: [], unavailableRunIds: [] };
+    input.proofClassification = explicitProof(true);
     const store = new MissionReportStore(workspace);
     input.acceptanceEvidenceIntegrity = await store.inspectMissionEvidence([evidence], new Set(["run-1"]));
     expect(input.acceptanceEvidenceIntegrity).toMatchObject({ status: "intact", references: { total: 1, intact: 1, omitted: 0 } });
@@ -184,23 +188,64 @@ describe("Mission report", () => {
     const evidence = ref(path, createHash("sha256").update("wrong binding").digest("hex"));
     const input = result(workspace, [evidence]);
     input.verdict = "failed";
+    input.proofClassification = explicitProof(false);
     input.confirmedProductFindings = 1;
     input.findings = [{ findingId: "finding-1", category: "product", status: "confirmed", severity: "high",
       title: "Wrong binding", message: "Candidate relation is wrong", evidence: [evidence], createdAt: now }];
     const store = new MissionReportStore(workspace);
     const before = await store.writeReportSnapshot(input);
+    expect(before.result.testVerdict).toBe("failed");
     expect(before.integrity).toMatchObject({ status: "intact", references: { total: 1, intact: 1, unavailable: 0, legacy: 0 },
       visibleConfirmedFindings: { saved: 1, supported: 1, unsupportedFindingIds: [] } });
     expect(await readFile(before.path, "utf8")).toContain("1 / 1 visible saved confirmed product finding(s) have all cited evidence");
     await writeFile(path, "changed binding");
     const current = await store.writeReportSnapshot(input);
+    expect(current.result).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("cited evidence") });
     expect(current.integrity).toMatchObject({ status: "degraded", references: { total: 1, intact: 0, unavailable: 1, legacy: 0 },
       visibleConfirmedFindings: { saved: 1, supported: 0, unsupportedFindingIds: ["finding-1"] } });
     expect(await store.inspectIntegrity(input)).toMatchObject({ status: "degraded", visibleConfirmedFindings: { supported: 0 } });
     const markup = await readFile(current.path, "utf8");
+    expect(markup).toContain("Saved failure · current evidence unverified");
+    expect(markup).toContain('data-verdict="inconclusive"');
     expect(markup).toContain("saved confirmed · evidence currently unverified");
     expect(markup).toContain("0 / 1 visible saved confirmed product finding(s) have all cited evidence");
     expect(markup).toContain("cannot be independently confirmed from this report");
+  });
+
+  it("requires classified business proof for a saved product finding but preserves an evidenced test failure", async () => {
+    const workspace = await root();
+    const path = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "failure.json"), "observed mismatch");
+    const evidence = ref(path, createHash("sha256").update("observed mismatch").digest("hex"));
+    const input = result(workspace, [evidence]);
+    input.verdict = "failed";
+    const store = new MissionReportStore(workspace);
+    expect((await store.writeReportSnapshot(input)).result.testVerdict).toBe("failed");
+    input.confirmedProductFindings = 1;
+    input.findings = [{ findingId: "legacy-finding", category: "product", status: "confirmed", severity: "high",
+      title: "Business mismatch", message: "Saved without an Oracle kind", evidence: [evidence], createdAt: now }];
+    const legacy = await store.writeReportSnapshot(input);
+    expect(legacy.result).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("explicitly classified failing business Oracle") });
+    expect(await readFile(legacy.path, "utf8")).toContain("Saved failure · current business proof unverified");
+    input.proofClassification = { status: "explicit", checkedRuns: 1, classifiedOracles: 1,
+      businessOracles: 0, passedBusinessOracles: 0, failedBusinessOracles: 0, httpContractOracles: 1,
+      legacyOracles: 0, unavailableRuns: 0, omittedRuns: 0, legacyRunIds: [], unavailableRunIds: [] };
+    expect((await store.writeReportSnapshot(input)).result.testVerdict).toBe("inconclusive");
+  });
+
+  it("does not treat a classified HTTP contract as passing business proof", async () => {
+    const workspace = await root();
+    const path = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "status.json"), "200");
+    const input = result(workspace, [ref(path, createHash("sha256").update("200").digest("hex"))]);
+    input.verdict = "passed";
+    input.proofClassification = { status: "explicit", checkedRuns: 1, classifiedOracles: 1,
+      businessOracles: 0, passedBusinessOracles: 0, failedBusinessOracles: 0, httpContractOracles: 1,
+      legacyOracles: 0, unavailableRuns: 0, omittedRuns: 0, legacyRunIds: [], unavailableRunIds: [] };
+    const snapshot = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(snapshot.result).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      proofClassification: { status: "explicit", passedBusinessOracles: 0 } });
+    expect(await readFile(snapshot.path, "utf8")).toContain("Saved pass · current business proof unverified");
   });
 
   it("requires every cited finding and comparison fact to remain intact", async () => {
@@ -216,6 +261,7 @@ describe("Mission report", () => {
     const rowFact = fact(rowPath, "row fact");
     const input = result(workspace, [baseline, relation]);
     input.verdict = "failed";
+    input.proofClassification = explicitProof(false);
     input.confirmedProductFindings = 1;
     input.findings = [{ findingId: "finding-1", category: "product", status: "confirmed", severity: "high",
       title: "Wrong relation", message: "Two facts establish the wrong relation", evidence: [baseline, relation], createdAt: now }];

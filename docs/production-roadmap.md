@@ -131,6 +131,9 @@ the generated native stdio MCP launcher and real Chrome: core pass, seeded
 business-relation defect, pending business state, project-coverage gap, quick
 page check and inline Charter. Its verifier checks Mission/Run facts, report
 and hashed evidence under an external workspace, with the source unchanged.
+It also checks that start/status receipts claim no audited outcome and that
+`await_test_result`, `get_mission_evidence` and `summary.json` agree on the
+current `testVerdict` and full Mission evidence audit status.
 The current fixture clicks a resume-acquisition button, captures the new file
 ID from its response and requires the independent Oracle to read that same ID.
 The verifier checks the action-window capture, Oracle source facts, cited source
