@@ -113,6 +113,29 @@ describe("Oracle registration and selection", () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it("does not pass a Run when the page passes and an inline endpoint only returns HTTP 200", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "pending" }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server port");
+    try {
+      const root = await projectRoot();
+      const service = new LocalRunnerService({ workspaceRoot: root, root });
+      const started = await service.start({ charter: charter([]), oracleUrl: `http://127.0.0.1:${address.port}/business` });
+      const summary = await service.wait(started.runId);
+      expect(summary.assertions[0]?.passed).toBe(true);
+      expect(summary.oracles[0]?.passed).toBeNull();
+      expect(summary.oracles[0]?.message).toContain("no business predicate");
+      expect(summary.verdict).toBe("inconclusive");
+      expect(summary.oracles[0]?.sourceEvidenceCount).toBe(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
 
 function charter(oracles: string[]) {

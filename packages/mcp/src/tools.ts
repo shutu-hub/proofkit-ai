@@ -190,7 +190,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "start_run",
-    "Start an evidence-producing Web, Electron or mobile test in the configured local project. Returns immediately with a run ID.",
+    "Start an evidence-producing Web, Electron or mobile test in the configured local project. Returns immediately with a run ID. oracleUrl only observes HTTP reachability and cannot establish business success; use a declared business Oracle for that.",
     {
       intent: z.string().min(1).optional(),
       charter: TestCharterSchema.optional(),

@@ -3,6 +3,30 @@ import { describe, expect, it } from "vitest";
 import { httpOracle } from "./index.js";
 
 describe("httpOracle", () => {
+  it("treats a successful HTTP response without a business predicate as reachability only", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "pending", token: "must-not-leak" }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind");
+    try {
+      const url = `http://127.0.0.1:${address.port}`;
+      for (const expectedStatus of [undefined, 200]) {
+        const result = await httpOracle({ name: "resume-workflow", url, expectedStatus }).check({
+          runId: "test", charter: {} as never, steps: [], assertions: [],
+        });
+        expect(result.passed).toBeNull();
+        expect(result.message).toContain("no business predicate");
+        expect(result.evidence[0]).toContain('"status":200');
+        expect(result.evidence[0]).not.toContain("must-not-leak");
+      }
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("turns a read-only endpoint into evidence-backed business truth", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });

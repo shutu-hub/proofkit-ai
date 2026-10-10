@@ -161,15 +161,24 @@ export function httpOracle(options: HttpOracleOptions): BusinessOracle {
       const expectedStatus = options.expectedStatus ?? 200;
       const statusPassed = response.status === expectedStatus;
       const accessUnavailable = !statusPassed && [401, 403, 429].includes(response.status);
-      const contentPassed = statusPassed && options.check ? await options.check(response.body, response) : statusPassed;
-      const passed = accessUnavailable ? null : statusPassed && contentPassed;
+      const hasBusinessPredicate = options.check !== undefined;
+      const isExplicitNegativeStatusCheck = options.expectedStatus !== undefined && options.expectedStatus >= 400;
+      const contentPassed = statusPassed && options.check ? await options.check(response.body, response) : false;
+      const passed = accessUnavailable ? null
+        : hasBusinessPredicate ? statusPassed && contentPassed
+        : isExplicitNegativeStatusCheck ? statusPassed
+        : null;
       return {
         name: options.name,
         passed,
         message: accessUnavailable
           ? `HTTP oracle ${options.name} could not read the business result (status ${response.status}); verify test access and rate limits.`
+          : !hasBusinessPredicate && !isExplicitNegativeStatusCheck
+          ? `HTTP oracle ${options.name} observed status ${response.status}, but no business predicate was declared; endpoint reachability cannot establish a business result.`
           : passed
           ? options.describe?.(response.body) ?? `HTTP oracle passed: ${options.name}`
+          : isExplicitNegativeStatusCheck && !hasBusinessPredicate
+          ? `HTTP oracle ${options.name} expected status ${expectedStatus}, observed ${response.status}.`
           : `HTTP oracle failed: ${options.name} (status ${response.status}, predicate ${contentPassed ? "passed" : "failed"})`,
         evidence: [JSON.stringify({ status: response.status, bodySha256: sha256(JSON.stringify(response.body)), ...(!accessUnavailable && options.facts ? { facts: options.facts(response.body) } : {}) })],
         observedAt: new Date().toISOString(),

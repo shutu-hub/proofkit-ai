@@ -208,8 +208,8 @@ export function createProgram(): Command {
     .option("--level <level>", "quick, core or release")
     .option("--mode <mode>", "deterministic, guided or explore", "guided")
     .option("--evidence-dir <path>", "run artifact directory", ".proofkit/runs")
-    .option("--oracle-url <url>", "read-only HTTP endpoint used as a business oracle")
-    .option("--oracle-name <name>", "business oracle name", "http-check")
+    .option("--oracle-url <url>", "read-only HTTP reachability observation (does not prove business success)")
+    .option("--oracle-name <name>", "HTTP observation name", "http-check")
     .option("--allow-capability-writes", "allow explicitly declared write capabilities")
     .action(async (intent: string, options: RunCommandOptions) => {
       const root = resolve(options.root);
