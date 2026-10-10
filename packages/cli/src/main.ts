@@ -125,9 +125,10 @@ export function createProgram(): Command {
     .option("--level <level>", "quick, core or release", "core")
     .option("--focus <text>", "literal substring in source paths or registration metadata")
     .option("--limit <count>", "maximum details per section (1-50)", "20")
-    .action(async (options: RootOptions & { surface: string; level: string; focus?: string; limit: string }) => {
+    .option("--source-state", "include a bounded Git source fingerprint for workflow inventory authoring")
+    .action(async (options: RootOptions & { surface: string; level: string; focus?: string; limit: string; sourceState?: boolean }) => {
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
-      const scope = await runner.inspectTestScope({ surface: options.surface as LocalAdapterName, level: options.level as TestLevel, focus: options.focus, limit: Number(options.limit) });
+      const scope = await runner.inspectTestScope({ surface: options.surface as LocalAdapterName, level: options.level as TestLevel, focus: options.focus, limit: Number(options.limit), includeSourceState: Boolean(options.sourceState) });
       console.log(JSON.stringify(scope, null, 2));
     });
 

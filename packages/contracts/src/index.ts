@@ -593,6 +593,64 @@ export const SuiteCatalogEntrySchema = z.object({
 });
 export type SuiteCatalogEntry = z.infer<typeof SuiteCatalogEntrySchema>;
 
+/** A reviewed candidate inventory, never evidence that its workflows actually passed. */
+const WorkflowSourcePathSchema = z.string().min(1).max(512).refine((value) =>
+  !value.startsWith("/") && !value.includes("\\") && !value.includes(":")
+  && value.split("/").every((part) => part.length > 0 && part !== "." && part !== ".."),
+"Use a repository-relative source path without traversal");
+export const WorkflowInventorySchema = z.object({
+  schemaVersion: z.literal(1),
+  /** The complete Git source fingerprint captured when the inventory was prepared. */
+  source: z.object({
+    headSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
+    worktreeSha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  }).strict(),
+  /** Human review is a declaration; ProofKit cannot authenticate this identity. */
+  review: z.object({ by: z.string().trim().min(1).max(120), at: z.string().datetime({ offset: true }), method: z.string().trim().min(1).max(500) }).strict().optional(),
+  workflows: z.array(z.object({
+    id: CatalogIdSchema,
+    title: z.string().trim().min(1).max(200),
+    sourcePaths: z.array(WorkflowSourcePathSchema).min(1).max(12),
+    charterIds: z.array(CatalogIdSchema).min(1).max(16),
+    surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1).max(3),
+  }).strict()).min(1).max(150),
+  /** Exclusions are visible gaps for project-wide acceptance. */
+  exclusions: z.array(z.object({
+    id: CatalogIdSchema,
+    reason: z.string().trim().min(1).max(500),
+    sourcePaths: z.array(WorkflowSourcePathSchema).min(1).max(12),
+  }).strict()).max(150).default([]),
+}).strict().superRefine((inventory, ctx) => {
+  const ids = [...inventory.workflows.map((item) => item.id), ...inventory.exclusions.map((item) => item.id)];
+  if (new Set(ids).size !== ids.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows"], message: "Workflow and exclusion IDs must be unique" });
+  for (const [index, workflow] of inventory.workflows.entries()) {
+    if (new Set(workflow.sourcePaths).size !== workflow.sourcePaths.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows", index, "sourcePaths"], message: "Source paths must be unique" });
+    if (new Set(workflow.charterIds).size !== workflow.charterIds.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows", index, "charterIds"], message: "Charter IDs must be unique" });
+    if (new Set(workflow.surfaces).size !== workflow.surfaces.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows", index, "surfaces"], message: "Surfaces must be unique" });
+  }
+});
+export type WorkflowInventory = z.infer<typeof WorkflowInventorySchema>;
+
+/** Read-only inventory diagnostics; no field grants a product verdict. */
+export const WorkflowInventoryInspectionSchema = z.object({
+  status: z.enum(["missing", "invalid", "loaded"]),
+  path: z.literal(".proofkit/workflows.yaml"),
+  sourceMatch: z.enum(["not-checked", "matching", "changed", "unverified"]),
+  reviewDeclared: z.boolean(),
+  workflowCount: z.number().int().nonnegative(),
+  linkedWorkflowCount: z.number().int().nonnegative(),
+  exclusionCount: z.number().int().nonnegative(),
+  missingCharterIds: z.array(CatalogIdSchema).max(20),
+  omittedMissingCharterIds: z.number().int().nonnegative(),
+  uncoveredSurfaces: z.array(z.object({ workflowId: CatalogIdSchema, surface: z.enum(["web", "electron", "mobile"]) })).max(20),
+  omittedUncoveredSurfaces: z.number().int().nonnegative(),
+  missingSourcePaths: z.array(WorkflowSourcePathSchema).max(20),
+  omittedMissingSourcePaths: z.number().int().nonnegative(),
+  issues: z.array(z.string().min(1)).max(20),
+  omittedIssues: z.number().int().nonnegative(),
+});
+export type WorkflowInventoryInspection = z.infer<typeof WorkflowInventoryInspectionSchema>;
+
 export const TestSuiteSchema = z.object({
   suiteId: CatalogIdSchema,
   level: z.literal("release"),
@@ -617,6 +675,8 @@ export const TestScopeInputSchema = z.object({
   /** Literal, case-insensitive substring; this is not semantic workflow selection. */
   focus: z.string().trim().min(1).max(128).optional(),
   limit: z.number().int().min(1).max(50).default(20),
+  /** Request a bounded Git fingerprint for authoring a version-bound workflow inventory. */
+  includeSourceState: z.boolean().default(false),
 });
 export type TestScopeInput = z.input<typeof TestScopeInputSchema>;
 const ScopePlanCheckSchema = z.object({
@@ -632,6 +692,8 @@ export const TestScopeSchema = z.object({
   executionChecks: z.literal("not-run"),
   projectRoot: z.string(),
   workspaceRoot: z.string(),
+  sourceState: SourceStateSchema.optional(),
+  workflowInventory: WorkflowInventoryInspectionSchema.optional(),
   selection: TestScopeInputSchema.extend({ requiredSurfaces: z.array(z.enum(["web", "electron", "mobile"])) }),
   inventory: ProjectMapSchema.shape.inventory.removeDefault().omit({ entryPoints: true, routeHints: true }),
   entryPoints: z.object({ total: ScopeCountSchema, matched: ScopeCountSchema, items: z.array(ProjectEntryPointSchema), omitted: ScopeCountSchema }),
@@ -1068,6 +1130,9 @@ export const TestMissionSchema = z.object({
   verdict: VerdictSchema.optional(),
   charter: TestCharterSchema.optional(),
   suite: TestSuiteSchema.optional(),
+  /** Frozen workspace declaration and diagnostic state for a project-scope request. */
+  workflowInventory: WorkflowInventorySchema.optional(),
+  workflowInventoryInspection: WorkflowInventoryInspectionSchema.optional(),
   plan: MissionPlanSchema,
   agentSteps: z.array(AgentStepSchema).default([]),
   toolCalls: z.array(ToolCallSchema).default([]),
@@ -1182,6 +1247,7 @@ export const MissionResultSchema = z.object({
     charterCount: z.number().int().nonnegative(),
     suiteId: CatalogIdSchema.optional(),
     uncoveredCharterIds: z.array(CatalogIdSchema),
+    workflowInventory: WorkflowInventoryInspectionSchema.optional(),
     routeCoverage: z.object({
       inventoryTruncated: z.boolean(),
       candidateRoutes: z.number().int().nonnegative(),

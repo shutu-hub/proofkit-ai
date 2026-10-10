@@ -76,6 +76,8 @@ export type MissionPlanInput = {
   policy: MissionPolicy;
   charter?: TestMission["charter"];
   suite?: TestSuite;
+  workflowInventory?: TestMission["workflowInventory"];
+  workflowInventoryInspection?: TestMission["workflowInventoryInspection"];
   levelSelection?: TestLevelSelection;
 };
 
@@ -447,6 +449,8 @@ export class MissionAgent {
       status: policy.requireApproval ? "awaiting-approval" : "approved",
       charter: input.charter,
       suite: input.suite,
+      workflowInventory: input.workflowInventory,
+      workflowInventoryInspection: input.workflowInventoryInspection,
       plan,
       createdAt: now,
       updatedAt: now,

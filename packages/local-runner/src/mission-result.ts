@@ -75,6 +75,7 @@ export function projectMissionResult(mission: TestMission, options: {
       charterCount: mission.suite?.charters.length ?? (mission.charter ? 1 : 0),
       suiteId: mission.suite?.suiteId,
       uncoveredCharterIds: options.suiteScope?.uncoveredCharterIds ?? [],
+      workflowInventory: mission.workflowInventoryInspection,
       ...(routeCoverage ? { routeCoverage: {
         inventoryTruncated: routeCoverage.inventoryTruncated,
         candidateRoutes: routeCoverage.candidateRoutes,

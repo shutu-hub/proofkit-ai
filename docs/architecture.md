@@ -73,6 +73,30 @@ Host Skill discovery and model adherence still require host-level evaluation.
 
 Initialization writes to the test workspace. If an existing source project already contains `.proofkit`, the resolver retains that legacy layout unless an explicit workspace is supplied. Config, Mission and Run reads validate the project/workspace binding. Connector and Charter paths are constrained to the workspace, including resolved symlinks. This is an ownership boundary, not a sandbox for trusted connector JavaScript or application startup commands.
 
+### Project workflow inventory
+
+An optional `<workspaceRoot>/.proofkit/workflows.yaml` is a versioned, bounded declaration of business workflows. It remains outside the tested source. Each workflow names owning source paths, registered Charter IDs and required Web/Electron/mobile surfaces; exclusions carry an explicit reason. The file also records the Git HEAD and bounded worktree SHA-256 returned by `proofkit scope --source-state` or MCP `inspect_test_scope({ includeSourceState: true })`. A review declaration records who assessed the list and how, but ProofKit cannot authenticate that identity or infer completeness from it.
+
+The read-only scope inspection reports missing or invalid files, source changes, unavailable fingerprints, stale source paths, missing Charter IDs, incomplete surface links and exclusions. A whole-project Mission freezes the parsed declaration and its inspection in its saved state; its compact result and HTML report show the bounded diagnostics. A valid file or matching fingerprint is **not** execution evidence. The `project-workflow-coverage` gate remains until the system can verify a reviewed complete inventory against every required Charter × surface execution, independent business facts, cleanup, source stability and explicit exclusions. Static route counts cannot discharge that gate.
+
+```yaml
+schemaVersion: 1
+source:
+  headSha: <scope.sourceState.headSha>
+  worktreeSha256: <scope.sourceState.worktreeSha256>
+review:
+  by: "team reviewer"
+  at: "2026-10-10T08:00:00Z"
+  method: "Reviewed business entry points and lifecycle ownership"
+workflows:
+  - id: resume-acquisition
+    title: Resume acquisition and candidate binding
+    sourcePaths: [services/resume-service, apps/micro-resume]
+    charterIds: [resume-web-release, resume-electron-release]
+    surfaces: [web, electron]
+exclusions: []
+```
+
 For a loopback Web or Electron HTTP target on Windows, the local runner also inspects the listening process before preflight, setup or surface connection, then checks again after a configured project startup. It derives a Git checkout from the process's executable or script path without saving its command line. A different checkout is `blocked` by default (`policies.targetBinding: block-different`); `record` retains the mismatch for a deliberately cross-checkout diagnostic. A matching process path is recorded as an association, not proof of which bytes the server delivered. Missing ports, ambiguous process paths, non-Git roots, remote URLs and unsupported platforms remain `unverified` and are visible in Run and Mission evidence. Each check is a point-in-time observation; release-grade source attestation and continuous process-change detection remain future work.
 
 ## Why these boundaries

@@ -1,4 +1,4 @@
-import { TestScopeSchema, type CharterCatalogEntry, type ProofkitConfig, type ProjectMap, type SuiteCatalogEntry, type TestScope, type TestScopeInputSchema } from "@proofkit/contracts";
+import { TestScopeSchema, type CharterCatalogEntry, type ProofkitConfig, type ProjectMap, type SourceState, type SuiteCatalogEntry, type TestScope, type TestScopeInputSchema, type WorkflowInventoryInspection } from "@proofkit/contracts";
 import { requiredCatalogSurfaces, supportsCatalogCharter, supportsCatalogSuite } from "@proofkit/planner";
 import { reconcileRouteDeclarations } from "@proofkit/project";
 import { z, type BusinessOracle, type CapabilityDefinition, type ProjectIntegration } from "@proofkit/runner";
@@ -9,6 +9,8 @@ type Check = TestScope["catalog"]["items"][number]["check"];
 export type ScopeContext = {
   project: ProjectMap;
   workspaceRoot: string;
+  sourceState?: SourceState;
+  workflowInventory: WorkflowInventoryInspection;
   config: ProofkitConfig;
   integration?: ProjectIntegration;
   capabilities: CapabilityDefinition<any, any>[];
@@ -71,9 +73,10 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   if (focus) limitations.push("Focus is a literal substring filter; the focused view is not whole-project coverage");
   if (inventory.retentionFocus) limitations.push("Focus prioritizes matching source files, entry points and routes before inventory retention caps; totals describe the retained candidate slice, not all project routes");
   if (inventory.retentionFocus && inventory.truncated) limitations.push("File discovery and source reads remain bounded; route-text focus cannot recover declarations from unscanned files, and filesystem focus prioritizes only discovered paths");
+  limitations.push("A workflow inventory is a reviewable claim only; reviewer identity, completeness and actual execution remain unverified");
   return TestScopeSchema.parse({
     schemaVersion: 1, testVerdict: "not-asserted", executionChecks: "not-run",
-    projectRoot: project.root, workspaceRoot: context.workspaceRoot,
+    projectRoot: project.root, workspaceRoot: context.workspaceRoot, sourceState: context.sourceState, workflowInventory: context.workflowInventory,
     selection: { ...request, requiredSurfaces: requiredCatalogSurfaces(level, surface) }, inventory,
     entryPoints: { total: project.inventory.entryPoints.length, matched: entries.length, items: entries.slice(0, limit), omitted: Math.max(0, entries.length - limit) },
     routes: {

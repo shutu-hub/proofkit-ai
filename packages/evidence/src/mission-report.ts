@@ -78,12 +78,18 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
   const scopeLabel = coverage?.requested === "project" ? "Whole project requested" : coverage?.requested === "declared" ? "Declared scenarios" : "Acceptance scope not recorded";
   const outcome = result.verdict ?? "not evaluated";
   const route = result.scope.routeCoverage;
+  const workflowInventory = result.scope.workflowInventory;
   const unavailable = [...links.values()].filter((link) => !link.href).length;
   const limits = [
     coverage?.requested === "project" ? "Whole-project workflow coverage has not been proven." : "Acceptance applies to the saved scenarios. Whole-project workflow coverage has not been measured.",
     coverage?.inventory === "partial" || route?.inventoryTruncated ? "The source inventory is partial; it cannot establish complete project coverage." : undefined,
     !coverage ? "This saved Mission has no recorded acceptance scope." : undefined,
     result.scope.uncoveredCharterIds.length ? `Registered release scenarios outside this suite: ${result.scope.uncoveredCharterIds.join(", ")}.` : undefined,
+    workflowInventory ? `Workflow inventory: ${workflowInventory.status}; ${workflowInventory.linkedWorkflowCount}/${workflowInventory.workflowCount} workflows linked to registered Charters; source ${workflowInventory.sourceMatch}; ${workflowInventory.exclusionCount} exclusions. This declaration does not prove completeness or execution.` : undefined,
+    ...(workflowInventory?.issues ?? []).map((issue) => `Workflow inventory gap: ${workflowInventoryIssueLabel(issue)}`),
+    workflowInventory?.missingCharterIds.length ? `Unregistered workflow Charters: ${workflowInventory.missingCharterIds.join(", ")}${workflowInventory.omittedMissingCharterIds ? ` and ${workflowInventory.omittedMissingCharterIds} more` : ""}.` : undefined,
+    workflowInventory?.uncoveredSurfaces.length ? `Uncovered workflow surfaces: ${workflowInventory.uncoveredSurfaces.map((item) => `${item.workflowId}/${item.surface}`).join(", ")}${workflowInventory.omittedUncoveredSurfaces ? ` and ${workflowInventory.omittedUncoveredSurfaces} more` : ""}.` : undefined,
+    workflowInventory?.missingSourcePaths.length ? `Missing workflow source paths: ${workflowInventory.missingSourcePaths.join(", ")}${workflowInventory.omittedMissingSourcePaths ? ` and ${workflowInventory.omittedMissingSourcePaths} more` : ""}.` : undefined,
     route ? `Static routes: ${route.observedCandidates} observed, ${route.mappedCandidates} mapped, ${route.candidateRoutes} candidates. ${route.gapCount} route gaps and ${route.unresolvedTargetCount} unresolved declarations. Route counts are not business workflow coverage.` : undefined,
     unavailable ? `${unavailable} evidence reference(s) cannot be opened from this report.` : undefined,
     result.omittedRunResults ? `${result.omittedRunResults} execution row(s) omitted from this bounded summary.` : undefined,
@@ -173,6 +179,20 @@ function comparisonLabel(value: string): string {
 
 function gapLabel(value: string): string {
   return ({ "surface-assertion": "A positive observable surface assertion is required.", "business-oracle": "An independent business check is required.", "negative-case": "Explicit negative or recovery scenarios are required.", "project-workflow-coverage": "Whole-project workflow inventory and execution coverage proof are required.", "project-map-truncated": "The source inventory is partial.", "project-map-unavailable": "The source inventory is unavailable." } as Record<string, string>)[value] ?? `Unresolved saved planning requirement: ${value}`;
+}
+
+function workflowInventoryIssueLabel(value: string): string {
+  return ({
+    "workflow-inventory-missing": "No workflow inventory is registered.",
+    "workflow-inventory-invalid": "The workspace inventory file is invalid or outside its boundary.",
+    "workflow-inventory-source-changed": "The tested source differs from the inventory fingerprint.",
+    "workflow-inventory-source-unverified": "The tested source fingerprint is unavailable or incomplete.",
+    "workflow-inventory-review-missing": "No review declaration is recorded.",
+    "workflow-inventory-charter-mapping-incomplete": "Some workflows lack a registered Charter for a required surface.",
+    "workflow-inventory-source-path-missing": "A declared source path is missing or points outside the project.",
+    "workflow-inventory-has-exclusions": "The inventory contains explicitly excluded workflows.",
+    "workflow-inventory-completeness-unverified": "The declaration alone cannot prove every business workflow is listed or executed.",
+  } as Record<string, string>)[value] ?? value;
 }
 
 function html(value: string): string {

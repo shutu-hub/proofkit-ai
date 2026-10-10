@@ -68,6 +68,9 @@ describe("CLI workspace onboarding", () => {
     log.mockClear();
     await run("--focus", "RESUMES");
     expect(JSON.parse(String(log.mock.calls[0]?.[0])).routes).toMatchObject({ total: 2, matched: 1, items: [{ path: "/resumes", source: "src/router.ts" }] });
+    log.mockClear();
+    await run("--source-state");
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ sourceState: { method: "unavailable", complete: false }, workflowInventory: { status: "missing" } });
     for (const options of [["--level", "unknown"], ["--surface", "desktop"], ["--limit", "0"], ["--limit", "NaN"], ["--limit", "51"]]) {
       await expect(run(...options)).rejects.toThrow();
     }

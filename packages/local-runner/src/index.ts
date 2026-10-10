@@ -10,7 +10,7 @@ import { inspectEnvironment } from "./environment.js";
 import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
-import { captureSourceState, initProject, inspectTargetBinding, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
+import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowInventory, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
 import { BlockedError, CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
@@ -214,8 +214,12 @@ export class LocalRunnerService {
     const routeTargets = this.config.charters.filter((entry) => supportsCatalogCharter(entry, request.level, request.surface)
       && matches(entry.id, entry.path, ...entry.aliases, ...(entry.routeTargets ?? []).flatMap((target) => [target.path, target.source])))
       .flatMap((entry) => entry.routeTargets ?? []);
+    const sourceState = request.includeSourceState ? await captureSourceState(this.root) : undefined;
+    const workflowInventory = await inspectWorkflowInventory(this.root, this.workspaceRoot, this.config, sourceState);
     return inspectTestScope({
       project: focus ? await scanProject(this.root, { focus, routeTargets }) : await this.discover(), workspaceRoot: this.workspaceRoot, config: this.config,
+      sourceState,
+      workflowInventory: workflowInventory.inspection,
       integration: this.integration, capabilities: this.capabilities, oracles: this.oracles,
       allowCapabilityWrites: this.allowCapabilityWrites,
       checkCharter: async (entry) => {
@@ -323,6 +327,9 @@ export class LocalRunnerService {
       : undefined;
     const projectMap = input.charter || selected || selectedSuite ? await this.discover() : undefined;
     const coverage = assessPlanningCoverage(input.intent, projectMap, input.coverage);
+    const workflowInventory = coverage.requested === "project"
+      ? await inspectWorkflowInventory(this.root, this.workspaceRoot, this.config)
+      : undefined;
     if (selectedSuite) {
       const suite = await this.loadSuite(selectedSuite.entry);
       suite.charters = suite.charters.map((item) => ({ ...item,
@@ -342,6 +349,8 @@ export class LocalRunnerService {
         workspaceRoot: this.workspaceRoot,
         surface,
         suite,
+        workflowInventory: workflowInventory?.inventory,
+        workflowInventoryInspection: workflowInventory?.inspection,
         levelSelection,
         policy: { ...input.policy, level: "release", sideEffectPolicy, timeoutMs },
       });
@@ -405,6 +414,8 @@ export class LocalRunnerService {
       workspaceRoot: this.workspaceRoot,
       surface,
       charter: normalizedCharter,
+      workflowInventory: workflowInventory?.inventory,
+      workflowInventoryInspection: workflowInventory?.inspection,
       levelSelection,
       policy: { ...input.policy, level: levelSelection.resolved, sideEffectPolicy: normalizedCharter.sideEffectPolicy },
     });
@@ -556,6 +567,7 @@ export class LocalRunnerService {
     level: TestMission["level"];
     levelSelection?: TestMission["levelSelection"];
     planning?: TestMission["plan"]["planning"];
+    workflowInventoryInspection?: TestMission["workflowInventoryInspection"];
     executionProfile: TestMission["plan"]["executionProfile"];
     suiteScope?: SuiteScopeSummary;
     taskSummary: Array<{
@@ -618,6 +630,7 @@ export class LocalRunnerService {
       level: mission.level,
       levelSelection: mission.levelSelection,
       planning: mission.plan.planning,
+      workflowInventoryInspection: mission.workflowInventoryInspection,
       executionProfile: mission.plan.executionProfile,
       suiteScope,
       taskSummary: mission.plan.graph.tasks.map((task) => ({
@@ -673,6 +686,8 @@ export class LocalRunnerService {
       surface: previous.surface,
       charter: previous.charter,
       suite: previous.suite,
+      workflowInventory: previous.workflowInventory,
+      workflowInventoryInspection: previous.workflowInventoryInspection,
       levelSelection: previous.levelSelection,
       policy: { ...previous.policy, requireApproval: false },
     });

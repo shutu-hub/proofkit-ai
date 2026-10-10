@@ -15,6 +15,7 @@ See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for
 - Maps workspace manifests and common Web, Electron, and backend entry points.
 - Produces a bounded path-level test map with source/test counts, framework signals, conventional entry points, static route hints and an explicit truncation flag.
 - Gives host agents a read-only test scope view: source locations, level/surface-compatible plans, plan gaps, registered business checks and bounded capability input hints. Static declarations never count as executed coverage.
+- Inspects an optional external `.proofkit/workflows.yaml` business workflow inventory for source freshness, Charter/platform links and explicit exclusions. The declaration is saved with whole-project Missions, while whole-project acceptance remains gated pending execution proof.
 - Checks configured Web/Electron HTTP endpoints, CDP discovery status and local source association before testing, with a bounded deadline and a hashed observation artifact. Login, samples and business readiness remain explicitly unchecked.
 - Prioritizes a literal scope focus before retaining bounded routes and entry points; eligible Charter aliases also prioritize their reviewed route targets. Partial scans remain explicit.
 - Matches one-sentence requests to curated, workspace-owned Charters by explicit aliases; ambiguous matches require a Charter ID, and missing assertions or business Oracles stop automatic execution.
@@ -96,6 +97,8 @@ Inspect what is available before authoring a test:
 proofkit scope --root /path/to/your/project --surface web --level core --limit 20
 # Optionally narrow by a literal source-path or registration substring:
 proofkit scope --root /path/to/your/project --focus resume
+# Include the bounded Git fingerprint needed to bind a workflow inventory:
+proofkit scope --root /path/to/your/project --source-state
 ```
 
 Scope routes are static candidates. Gin group prefixes are composed within a file; unresolved declarations appear in `inventory.routeDiagnostics` with source locations. Other framework literals may need manual interpretation. Neither route mapping nor inspection proves a business result.

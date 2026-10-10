@@ -62,6 +62,8 @@ describe("MCP external workspace", () => {
       const focused = payload(await client.callTool({ name: "inspect_test_scope", arguments: { focus: "简历", limit: 1 } }));
       expect(focused.routes).toMatchObject({ total: 2, matched: 1, omitted: 0 });
       expect(focused.routes.items[0]).toMatchObject({ path: "/resumes", source: "src/router.ts", line: 1, status: "declared" });
+      const fingerprint = payload(await client.callTool({ name: "inspect_test_scope", arguments: { includeSourceState: true } }));
+      expect(fingerprint).toMatchObject({ sourceState: { method: "unavailable", complete: false }, workflowInventory: { status: "missing" } });
       const invalid = await client.callTool({ name: "inspect_test_scope", arguments: { limit: 51 } });
       expect(invalid.isError).toBe(true);
       expect(connectSurface).not.toHaveBeenCalled();

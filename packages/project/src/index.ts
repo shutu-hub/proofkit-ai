@@ -12,6 +12,7 @@ import { BoundedInventory } from "./bounded-inventory.js";
 
 export { defaultWorkspaceRoot, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
 export { captureSourceState } from "./source-state.js";
+export { inspectWorkflowInventory } from "./workflow-inventory.js";
 export { inspectTargetBinding } from "./target-binding.js";
 
 type PackageJson = {

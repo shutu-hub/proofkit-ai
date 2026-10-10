@@ -174,6 +174,28 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     expect(scope.routes).toMatchObject({ mapped: 0, unmapped: 5 });
     expect(scope.testVerdict).toBe("not-asserted");
   });
+
+  it("exposes a workspace workflow claim and freezes it on a whole-project Mission without clearing the coverage gate", async () => {
+    const { runner, callbacks } = await fixture();
+    await mkdir(join(runner.workspaceRoot, ".proofkit"));
+    await writeFile(join(runner.workspaceRoot, ".proofkit", "workflows.yaml"), JSON.stringify({
+      schemaVersion: 1,
+      source: { headSha: "a".repeat(40), worktreeSha256: "b".repeat(64) },
+      workflows: [{ id: "resume", title: "Resume workflow", sourcePaths: ["apps/web/src/router.ts"], charterIds: ["resume-core"], surfaces: ["web"] }],
+    }));
+    const scope = await runner.inspectTestScope();
+    expect(scope.workflowInventory).toMatchObject({ status: "loaded", sourceMatch: "unverified", workflowCount: 1, linkedWorkflowCount: 1 });
+    expect(scope.testVerdict).toBe("not-asserted");
+    const mission = await runner.createMission({ intent: "测试整个项目", charterId: "resume-core", surface: "web" });
+    expect(mission.workflowInventory?.workflows[0]?.id).toBe("resume");
+    expect(mission.workflowInventoryInspection?.sourceMatch).toBe("unverified");
+    expect(mission.plan.planning?.coverage?.requested).toBe("project");
+    expect(mission.plan.planning?.evidenceGaps).toContain("project-workflow-coverage");
+    const evidence = await runner.missionEvidence(mission.missionId);
+    expect(evidence.summary.scope.workflowInventory).toMatchObject({ status: "loaded", workflowCount: 1 });
+    expect(await readFile(evidence.report!, "utf8")).toContain("Workflow inventory: loaded");
+    for (const callback of Object.values(callbacks)) expect(callback).not.toHaveBeenCalled();
+  });
 });
 
 async function fixture() {
