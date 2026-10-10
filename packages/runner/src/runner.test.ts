@@ -1,7 +1,7 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceSnapshot } from "@proofkit/contracts";
 import { CancelledError, ExecutionRunner, type AdapterEvent, type SurfaceAdapter } from "./index.js";
@@ -292,19 +292,32 @@ describe("ExecutionRunner", () => {
   it("does not pass a Run whose final listener probe reaches the Run deadline", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-target-probe-timeout-"));
     let checks = 0;
-    const summary = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root, timeoutMs: 50,
-      targetBinding: async () => {
-        if (++checks === 2) return new Promise(() => {});
-        return { status: "matching-process-path" as const, method: "windows-listener-process" as const,
-          expectedProjectRoot: "D:/code/AIHR", observedProjectRoot: "D:/code/AIHR",
-          targetOrigin: "http://localhost:5174", processId: 12,
-          reason: "Observed listener", observedAt: new Date().toISOString() };
-      },
-    }).run({ intent: "Check target until deadline", level: "core", mode: "deterministic", preconditions: [],
-      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
-      sideEffectPolicy: "allow", metadata: {} }, "target-probe-timeout");
-    expect(checks).toBe(2);
-    expect(summary).toMatchObject({ verdict: "cancelled", targetContinuity: "unverified" });
+    let finalProbeStarted!: () => void;
+    const finalProbe = new Promise<void>((resolve) => { finalProbeStarted = resolve; });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const run = new ExecutionRunner(new FakeAdapter(), { evidenceDir: root, timeoutMs: 50,
+        targetBinding: async () => {
+          if (++checks === 2) {
+            finalProbeStarted();
+            return new Promise(() => {});
+          }
+          return { status: "matching-process-path" as const, method: "windows-listener-process" as const,
+            expectedProjectRoot: "D:/code/AIHR", observedProjectRoot: "D:/code/AIHR",
+            targetOrigin: "http://localhost:5174", processId: 12,
+            reason: "Observed listener", observedAt: new Date().toISOString() };
+        },
+      }).run({ intent: "Check target until deadline", level: "core", mode: "deterministic", preconditions: [],
+        actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+        sideEffectPolicy: "allow", metadata: {} }, "target-probe-timeout");
+      await finalProbe;
+      await vi.advanceTimersByTimeAsync(50);
+      const summary = await run;
+      expect(checks).toBe(2);
+      expect(summary).toMatchObject({ verdict: "cancelled", targetContinuity: "unverified" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a changed target inconclusive even when runtime policy would fail a console signal", async () => {
