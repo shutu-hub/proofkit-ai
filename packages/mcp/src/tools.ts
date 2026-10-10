@@ -206,6 +206,20 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "inspect_run_resources",
+    "Inspect registered connector resources, Run ownership and saved recovery evidence. This does not clean resources or assert a product verdict.",
+    { runId: z.string().regex(/^[a-zA-Z0-9_-]+$/) },
+    async ({ runId }) => result(await runner.inspectRunResources(runId)),
+  );
+
+  server.tool(
+    "recover_run_resources",
+    "Recover orphaned resources using the exact versioned connector and scoped cleanup readbacks. Requires operator write permission; refuses an active owner and preserves original test evidence and verdict.",
+    { runId: z.string().regex(/^[a-zA-Z0-9_-]+$/) },
+    async ({ runId }) => result(await runner.recoverRunResources(runId)),
+  );
+
+  server.tool(
     "cancel_run",
     "Cancel a running ProofKit test. The run keeps its evidence and finishes with a cancelled verdict.",
     {

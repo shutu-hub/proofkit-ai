@@ -51,6 +51,7 @@ The public installation boundary is a single `proofkit-ai` npm tarball with `pro
     fixtures/                   # explicitly prepared file-input fixtures
     inspections/<inspection-id>.json # endpoint observations; no product verdict
     missions/<mission-id>.json
+    recoveries/<run-id>/<attempt-id>/ # separate cleanup proof after owner exit
     runs/<run-id>/
       run.json
       events.jsonl
@@ -342,7 +343,25 @@ ProofKit cannot discover the unreturned resources: the connector must roll back
 partial acquisition itself and make cleanup retryable. The Run records possible
 remaining resources. These are trusted connector observations and filesystem
 integrity checks, not a sandbox, signed attestation or a replacement for an
-isolated deployment. SIGKILL/power-loss resource recovery remains open.
+isolated deployment.
+
+For resources that were registered before a process disappeared, the journal is
+now an atomic recovery record. `inspect_run_resources` validates the original
+Run, project/workspace binding, connector identity, event provenance and saved
+digests before reporting `recoverable`; `recover_run_resources` claims the same
+Run lease, requires the operator write opt-in, `policies.sideEffects: allow`,
+and an exact versioned connector `recover` hook. Recovery writes a separate
+attempt and cleanup artifact under `.proofkit/recoveries/`; it never changes the
+original Run evidence or product verdict. Active or unverifiable owners, foreign
+paths, tampered/missing proof, missing versioned hooks and oversized provenance
+are rejected. Trusted JavaScript remains cooperative: if it ignores the bounded
+signal, ownership is retained until the hook settles or the process exits. This
+is crash recovery for registered resources. Power-loss durability is unverified
+despite flushing the temporary journal before its atomic rename. Provenance
+validation reads at most a 16 MiB prefix and 256 KiB per event; missing
+registration within these bounds refuses automatic cleanup. The version is a
+declared compatibility string, not a code signature. A connector must still
+roll back writes made before it returned a resource handle.
 
 Project configuration can register read-only HTTP oracles by name, JSON Pointer status path, terminal values, interval and deadline. Query bindings can carry the ProofKit `runId` or a sanitized scalar from an earlier capability step. The adapter never interprets these business facts. The URL is parsed and query parameters are encoded with the platform URL API.
 

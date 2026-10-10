@@ -313,8 +313,22 @@ export function createIntegration() {
   if (!origin || new URL(origin).hostname !== "127.0.0.1") {
     throw new Error("Configure the isolated loopback fixture API");
   }
+  async function removeAndReadback(scope, signal) {
+    const url = new URL(`/api/v1/test-scopes/${scope}`, origin);
+    const deleted = await fetch(url, { method: "DELETE", signal });
+    if (!deleted.ok && deleted.status !== 404) throw new Error("Fixture removal failed");
+    const state = await fetch(url, { signal });
+    if (state.status !== 200 && state.status !== 404) throw new Error("Fixture readback failed");
+    return [{
+      resourceId: "scope", status: state.status === 404 ? "removed" : "retained",
+      evidence: { statusCode: state.status },
+      readback: { reader: "fixture.scoped-get", scope,
+        observedAt: new Date().toISOString(), exists: state.status !== 404 },
+    }];
+  }
   return {
     name: "isolated-fixture",
+    version: "1.0.0",
     setupPolicy: {
       sideEffect: "write",
       environments: ["test"],
@@ -322,18 +336,6 @@ export function createIntegration() {
     },
     async setup({ runId, signal }) {
       const url = new URL(`/api/v1/test-scopes/${runId}`, origin);
-      async function removeAndReadback(cleanupSignal) {
-        const deleted = await fetch(url, { method: "DELETE", signal: cleanupSignal });
-        if (!deleted.ok && deleted.status !== 404) throw new Error("Fixture removal failed");
-        const state = await fetch(url, { signal: cleanupSignal });
-        if (state.status !== 200 && state.status !== 404) throw new Error("Fixture readback failed");
-        return [{
-          resourceId: "scope", status: state.status === 404 ? "removed" : "retained",
-          evidence: { statusCode: state.status },
-          readback: { reader: "fixture.scoped-get", scope: runId,
-            observedAt: new Date().toISOString(), exists: state.status !== 404 },
-        }];
-      }
       try {
         const created = await fetch(url, { method: "PUT", signal });
         if (!created.ok) throw new Error("Fixture setup failed");
@@ -341,7 +343,7 @@ export function createIntegration() {
         // A request can write before its response fails. Roll back even before
         // returning the handle, using a fresh bounded signal.
         try {
-          const rollback = await removeAndReadback(AbortSignal.timeout(5000));
+          const rollback = await removeAndReadback(runId, AbortSignal.timeout(5000));
           if (rollback[0].status !== "removed") throw new Error("Fixture rollback retained resources");
         } catch (cleanupError) {
           throw new AggregateError([error, cleanupError], "Setup rollback was not established");
@@ -351,8 +353,16 @@ export function createIntegration() {
       return {
         resources: [{ resourceId: "scope", kind: "fixture-namespace",
           scope: runId, evidence: { owner: runId } }],
-        cleanup: ({ signal: cleanupSignal }) => removeAndReadback(cleanupSignal),
+        cleanup: ({ signal: cleanupSignal }) => removeAndReadback(runId, cleanupSignal),
       };
+    },
+    async recover({ runId, resources, signal }) {
+      if (resources.length !== 1 || resources[0].resourceId !== "scope"
+        || resources[0].kind !== "fixture-namespace" || resources[0].scope !== runId
+        || resources[0].evidence.owner !== runId) {
+        throw new Error("Recovery resource does not belong to this connector Run");
+      }
+      return removeAndReadback(runId, signal);
     },
   };
 }
@@ -364,10 +374,36 @@ receives a fresh signal after cancellation and must honor it. Deletion
 acknowledgement alone does not establish removal: read the same scope after
 deletion. Keep deletes idempotent and validate ownership in the fixture API.
 Returning an old cleanup function remains compatible, reported as `completed`
-rather than `verified`. Process termination and a hook that writes before
-returning a handle still need connector-owned recovery. Read-only page
-inspection denies a declared write setup, so prepare its environment in advance
-or use a separate read-only connector.
+rather than `verified`. For registered resources, a connector can additionally
+export an explicit version and a versioned `recover({ runId, signal,
+projectRoot, workspaceRoot, environment, resources })` hook. After an unexpected
+process exit, inspect the Run first:
+
+```text
+proofkit resources inspect <run-id> --root <project> --workspace <workspace>
+proofkit resources recover <run-id> --root <project> --workspace <workspace> --allow-capability-writes
+```
+
+The equivalent MCP tools are `inspect_run_resources` and
+`recover_run_resources`. Recovery accepts only the original connector name and
+version, a validated atomic registration journal and matching Run event
+provenance. It requires the operator write opt-in, workspace
+`policies.sideEffects: allow`, and a connector write setup policy for the saved
+environment. It claims the Run lease before deleting anything, verifies scoped
+readback, and saves an independent recovery attempt artifact. A successful
+recovery is never a product pass and never changes the original Run verdict.
+Active/unverifiable owners, tampered or redirected evidence, and missing
+recovery hooks fail closed. Provenance scanning accepts at most a 16 MiB log
+prefix and 256 KiB per event; missing registration within those bounds refuses
+automatic cleanup. Connector version matching uses a declared string, not a
+code signature. Trusted
+JavaScript cannot be forcibly stopped by `AbortSignal`; a hook that ignores the
+deadline keeps ownership until it settles or the process exits. A connector
+must still roll back writes made before it returned a handle. Power-loss
+durability is unverified despite the flushed temporary file and atomic rename.
+
+Read-only page inspection denies a declared write setup, so prepare its
+environment in advance or use a separate read-only connector.
 
 ## Choosing a level
 

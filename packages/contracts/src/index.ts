@@ -371,6 +371,19 @@ export const IntegrationSetupPolicySchema = z.object({
   cleanupTimeoutMs: z.number().int().min(100).max(5000).default(5000),
 }).strict();
 export type IntegrationSetupPolicy = z.infer<typeof IntegrationSetupPolicySchema>;
+/** Durable registration for connector-owned resources; contains no executable cleanup code. */
+export const IntegrationResourceJournalSchema = z.object({
+  schemaVersion: z.literal(1),
+  runId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  projectRoot: z.string().min(1).optional(),
+  workspaceRoot: z.string().min(1).optional(),
+  integration: z.object({ name: z.string().min(1).max(128), version: z.string().min(1).max(128).optional() }).strict().optional(),
+  environment: z.enum(["test", "staging", "local"]),
+  cleanupTimeoutMs: z.number().int().min(100).max(5000),
+  registeredAt: z.string().datetime(),
+  resources: z.array(IntegrationResourceSchema).max(32),
+}).strict().refine((journal) => new Set(journal.resources.map((resource) => resource.resourceId)).size === journal.resources.length, "Duplicate registered resource");
+export type IntegrationResourceJournal = z.infer<typeof IntegrationResourceJournalSchema>;
 export const IntegrationCleanupSchema = z.object({
   status: z.enum(["not-required", "completed", "verified", "failed", "unverified"]),
   declaredResources: z.number().int().min(0).max(32),
@@ -803,6 +816,31 @@ export const EvidenceRefSchema = z.object({
   capturedAt: z.string(),
 });
 export type EvidenceRef = z.infer<typeof EvidenceRefSchema>;
+
+export const ResourceRecoveryResultSchema = z.object({
+  attemptId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  runId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  projectRoot: z.string().min(1),
+  workspaceRoot: z.string().min(1),
+  journalSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  startedAt: z.string().datetime(),
+  endedAt: z.string().datetime(),
+  status: z.enum(["verified", "unverified"]),
+  testVerdict: z.literal("not-asserted"),
+  cleanup: IntegrationCleanupSchema,
+  evidence: z.array(EvidenceRefSchema).max(2),
+}).strict();
+export type ResourceRecoveryResult = z.infer<typeof ResourceRecoveryResultSchema>;
+
+export const ResourceRecoveryInspectionSchema = z.object({
+  runId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  status: z.enum(["active", "recoverable", "cleaned", "not-required", "unverified"]),
+  testVerdict: z.literal("not-asserted"),
+  resources: z.array(IntegrationResourceSchema).max(32),
+  issues: z.array(z.string().max(256)).max(8),
+  latestRecovery: ResourceRecoveryResultSchema.optional(),
+}).strict();
+export type ResourceRecoveryInspection = z.infer<typeof ResourceRecoveryInspectionSchema>;
 
 export const ObservationSchema = z.object({
   observationId: z.string().min(1),

@@ -35,6 +35,19 @@ async function fixture() {
 const charter = () => TestCharterSchema.parse({ intent: "verify fixture", level: "quick", actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" });
 
 describe("external test workspace", () => {
+  it.each([
+    ["missing version", "recover: async () => []", "explicit connector version"],
+    ["blank version", "version: ' ', recover: async () => []", "non-empty string version"],
+    ["numeric version", "version: 1, recover: async () => []", "non-empty string version"],
+    ["oversized version", `version: '${"v".repeat(129)}', recover: async () => []`, "non-empty string version"],
+    ["invalid hook", "version: '1.0.0', recover: true", "recovery requires a function"],
+  ])("rejects a recovery connector with %s at loading", async (_label, fields, message) => {
+    const { root, workspaceRoot } = await fixture();
+    await writeFile(join(workspaceRoot, ".proofkit/integration.mjs"), `export default { name: 'recovery-fixture', ${fields} };`);
+    await expect(LocalRunnerService.create({ root, workspaceRoot })).rejects.toThrow(message);
+    expect(await readdir(root)).toEqual(["package.json"]);
+  });
+
   it("selects a curated Charter from natural language without changing the source project", async () => {
     const { root, workspaceRoot } = await fixture();
     const catalogCharter = TestCharterSchema.parse({

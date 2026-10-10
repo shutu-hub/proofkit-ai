@@ -21,6 +21,7 @@ import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from 
 import { inspectTestScope } from "./test-scope.js";
 import { projectMissionResult } from "./mission-result.js";
 import type { MissionResult } from "@proofkit/contracts";
+import { ResourceRecoveryService } from "./resource-recovery.js";
 
 export { loadProjectIntegration } from "./integration.js";
 
@@ -191,6 +192,19 @@ export class LocalRunnerService {
 
   async discover(): Promise<ProjectMap> {
     return scanProject(this.root);
+  }
+
+  async inspectRunResources(runId: string) {
+    return this.resourceRecovery().inspect(runId);
+  }
+
+  async recoverRunResources(runId: string) {
+    return this.resourceRecovery().recover(runId);
+  }
+
+  private resourceRecovery(): ResourceRecoveryService {
+    return new ResourceRecoveryService({ projectRoot: this.root, workspaceRoot: this.workspaceRoot,
+      evidenceDir: this.evidenceDir, config: this.config, integration: this.integration, allowWrites: this.allowCapabilityWrites });
   }
 
   async inspectTestScope(input: TestScopeInput = {}): Promise<TestScope> {

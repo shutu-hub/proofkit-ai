@@ -30,6 +30,7 @@ See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for
 - Supports explicit negative Charters such as duplicate submission and requires their expected outcome and evidence to be present in the Mission result.
 - Keeps configuration, connectors, Missions and run evidence in an external test workspace for new projects, with compatibility for existing project-local layouts.
 - Loads an optional workspace-owned `.proofkit/integration.mjs` module for typed capabilities, business oracles, test setup and cleanup.
+- Journals scoped setup resources before surface execution and verifies deletion through fresh scoped readback. After an owner process exits, CLI/MCP can recover registered resources using the original versioned connector and intact evidence; recovery keeps the original product verdict and evidence unchanged. See [connector setup and recovery](docs/agent-integration.md#scoped-setup-and-cleanup).
 - Enforces a total run deadline and supports cancellation from the CLI or MCP while preserving the evidence directory.
 - Enforces a separate Mission deadline across the AI task graph; expiry closes the active step and records a reviewable environment finding.
 - Propagates Mission stops to primary, replay and negative Runs, waits up to 10 seconds for cleanup, and links cancelled Run reports to the Mission; unfinished cleanup is reported explicitly.

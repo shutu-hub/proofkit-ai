@@ -57,6 +57,9 @@ importers:
       '@proofkit/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@proofkit/evidence':
+        specifier: workspace:*
+        version: link:../evidence
       zod:
         specifier: ^3.25.76
         version: 3.25.76

@@ -47,7 +47,12 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
   readback and a hashed artifact; check that proof again for primary, replay,
   expected-negative outcomes and repair comparisons. Preserve legacy hooks as
   completed rather than independently verified. Connector-owned rollback before
-  handle return and resource recovery after process termination remain required.
+  handle return remains required. The registered-resource journal now supports
+  fail-closed recovery after process termination through `inspect_run_resources`
+  and `recover_run_resources`; recovery requires the original connector name and
+  explicit version, a versioned hook, the same Run lease, operator/workspace
+  write policy, and intact event/artifact provenance. Recovery evidence is
+  separate from the original Run verdict.
 - Keep Agent tool failures as suspected test findings until an independent product oracle confirms a defect.
 - Classify selected browser runtime signals with evidence links and explicit `record`, `fail` or `ignore` policy; reject invalid URL filters instead of silently widening the monitored scope.
 - Select a unique CDP application page for Web/Electron attachment; reject ambiguous windows instead of running a Charter in an arbitrary renderer.
@@ -58,7 +63,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Claim an OS-owned per-Mission execution endpoint before approval or recovery, join a live owner from another CLI/MCP process, route remote cancellation, and release ownership automatically on process exit.
 - Never let a rejected Mission promise leave a durable mission in an unexplained running state.
 
-**Gate:** a fixture integration is loaded without a hosted service; a slow run produces a `cancelled` verdict; cleanup runs on timeout and cancellation; an interrupted read-only task resumes with an audited attempt; an interrupted write task is blocked; two independent processes do not execute one Mission twice and remote cancellation reaches its owner; a failed integration preflight prevents adapter connection and writes evidence; Web/Electron smoke tests remain green.
+**Gate:** a fixture integration is loaded without a hosted service; a slow run produces a `cancelled` verdict; cleanup runs on timeout and cancellation; an interrupted read-only task resumes with an audited attempt; an interrupted write task is blocked; two independent processes do not execute one Mission twice and remote cancellation reaches its owner; a failed integration preflight prevents adapter connection and writes evidence; a forced-kill Web and Electron run refuses active recovery, then recovers only the orphaned registered resources with unchanged original evidence and preserved sentinel data; Web/Electron smoke tests remain green.
 
 **Live environment observation (2026-10-10):** the existing AIHR workspace was bound to one checkout while its configured resume micro-app on port 5174 was served by another. The shared environment command returned `blocked` despite HTTP 200, saved a hashed source-association artifact, and left both complete before/after source fingerprints unchanged. This confirms the wrong-checkout guard on a real local process; it proves no login, isolated data or business acceptance. The running checkout's local-development documentation also declares shared backend data, so business writes require an explicitly scoped synthetic workspace and cleanup before acceptance.
 
@@ -80,7 +85,18 @@ timestamps are checked; unexecuted downstream slots retain a missing-run
 explanation. The complete minimal source tree remains unchanged and all
 configuration, connector code and evidence stay in an external workspace.
 `lifecycle-validation.json` indexes each case and its Mission report. This is
-isolated fixture evidence, not live AIHR acceptance or proof of crash recovery.
+isolated fixture evidence, not live AIHR acceptance.
+
+**Forced-exit recovery evidence (2026-10-10):** `tests/resource-recovery-smoke.mjs`
+uses real Chrome and Electron processes, kills each child after a registered
+resource is created, refuses recovery while the owner is still active, and then
+recovers through the MCP/CLI paths after termination. Both surfaces returned
+`verified` cleanup with separate recovery artifacts; the original Run evidence
+was byte-unchanged, its incomplete original verdict remained unchanged, the
+source tree stayed unchanged, and a protected sentinel resource survived. A
+concurrent recovery attempt was rejected while a cleanup handle was active.
+This proves the registered-resource crash-recovery contract in an isolated
+fixture; it does not prove power-loss durability or live AIHR cleanup.
 
 ## Phase 2: measurable AI planning
 

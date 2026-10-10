@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join, relative, resolve } from "node:path";
@@ -6,6 +6,21 @@ import { createInterface } from "node:readline";
 import { RunEventSchema, RunSummarySchema, type RunEvent, type RunSummary } from "@proofkit/contracts";
 
 export { MissionReportStore } from "./mission-report.js";
+export { LocalExecutionOwnership, type LocalExecutionLease } from "./local-ownership.js";
+
+/** Commit a complete, flushed JSON snapshot with one atomic replacement. */
+export async function atomicWriteJson(path: string, value: unknown): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    const file = await open(temporary, "wx");
+    try {
+      await file.writeFile(`${JSON.stringify(sanitizeEvidence(value), null, 2)}\n`, "utf8");
+      await file.sync();
+    } finally { await file.close(); }
+    await rename(temporary, path);
+  } finally { await unlink(temporary).catch(() => {}); }
+}
 
 const REDACT_KEYS = /authorization|cookie|password|secret|token|access[_-]?key|phone|mobile/i;
 
@@ -83,6 +98,14 @@ export class EvidenceStore {
     return this.relativePath(path);
   }
 
+  async writeJsonAtomic(runId: string, name: string, value: unknown): Promise<string> {
+    const path = join(this.runDir(runId), "artifacts", `${safeName(name)}.json`);
+    await atomicWriteJson(path, value);
+    const bytes = await readFile(path);
+    await this.recordArtifact(runId, path, bytes.length, sha256(bytes));
+    return this.relativePath(path);
+  }
+
   async writeText(runId: string, name: string, value: string): Promise<string> {
     const path = join(this.runDir(runId), "artifacts", safeName(name));
     await mkdir(dirname(path), { recursive: true });
@@ -135,7 +158,7 @@ export class EvidenceStore {
     return relative(this.rootDir, path).replaceAll("\\", "/");
   }
 
-  private async recordArtifact(runId: string, path: string, bytes: number): Promise<void> {
+  private async recordArtifact(runId: string, path: string, bytes: number, digest?: string): Promise<void> {
     await this.appendEvent({
       runId,
       timestamp: new Date().toISOString(),
@@ -143,7 +166,7 @@ export class EvidenceStore {
       payload: {
         path: this.relativePath(path),
         bytes,
-        sha256: sha256(await readFile(path)),
+        sha256: digest ?? sha256(await readFile(path)),
       },
     });
   }

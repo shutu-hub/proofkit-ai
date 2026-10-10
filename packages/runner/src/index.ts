@@ -1,8 +1,10 @@
-import { createRunId, EvidenceStore } from "@proofkit/evidence";
+import { createRunId, EvidenceStore, LocalExecutionOwnership } from "@proofkit/evidence";
 import { hasIncompleteIntegrationCleanup, OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, TargetBindingSchema, type IntegrationSetupPolicy, type RuntimeFinding } from "@proofkit/contracts";
 import { z } from "zod";
 import { inputFileFacts, resolveInputFiles, sameInputFileFacts, type InputFileFact, type SurfaceActionContext } from "./input-files.js";
-import { IntegrationLifecycle, releaseLateIntegration, validateSetupPolicy, type IntegrationSetup, type IntegrationSetupEntry } from "./integration-lifecycle.js";
+import { IntegrationLifecycle, releaseLateIntegration, validateSetupPolicy, type IntegrationRecoveryContext, type IntegrationSetup, type IntegrationSetupEntry } from "./integration-lifecycle.js";
+export { IntegrationLifecycle } from "./integration-lifecycle.js";
+export type { IntegrationRecoveryContext } from "./integration-lifecycle.js";
 export type { IntegrationSetup, IntegrationSetupEntry, IntegrationSetupHandle, IntegrationSetupContext, IntegrationCleanupContext } from "./integration-lifecycle.js";
 export type { SurfaceActionContext, ResolvedInputFile, InputFileFact } from "./input-files.js";
 export { sameInputFileFacts } from "./input-files.js";
@@ -80,6 +82,8 @@ export type ProjectIntegration = {
   preflight?: IntegrationPreflight;
   setup?: IntegrationSetup;
   setupPolicy?: IntegrationSetupPolicy;
+  /** Trusted connector reopens resources by their persisted scope; must not replay product actions. */
+  recover?: (context: IntegrationRecoveryContext) => Promise<import("@proofkit/contracts").IntegrationResourceCleanup[]>;
 };
 
 export type CapabilityDefinition<Input = unknown, Output = unknown> = {
@@ -185,7 +189,7 @@ export class ExecutionRunner {
     this.targetBindingRecheckAfterSetup = options.targetBindingRecheckAfterSetup ?? false;
     this.signal = options.signal;
     this.timeoutMs = options.timeoutMs;
-    this.integration = options.integration;
+    this.integration = options.integration ? { name: options.integration.name, version: options.integration.version } : undefined;
     this.preflight = options.preflight;
     this.projectRoot = options.projectRoot;
     this.workspaceRoot = options.workspaceRoot;
@@ -196,6 +200,20 @@ export class ExecutionRunner {
   }
 
   async run(charter: TestCharter, runId = createRunId()): Promise<RunSummary> {
+    if (!/^[a-zA-Z0-9_-]+$/.test(runId)) throw new Error("Invalid run id");
+    const lease = await new LocalExecutionOwnership(this.store.rootDir, "run").acquire(runId);
+    if (!lease) throw new Error(`Run ${runId} is active; its resources cannot be acquired twice`);
+    const integrationLifecycle = new IntegrationLifecycle(runId, this.store, {
+      projectRoot: this.projectRoot, workspaceRoot: this.workspaceRoot, integration: this.integration, environment: this.environment,
+    });
+    try { return await this.executeRun(charter, runId, integrationLifecycle); }
+    finally {
+      if (integrationLifecycle.hasPendingCleanup) void integrationLifecycle.whenCleanupSettles().then(() => lease.release()).catch(() => {});
+      else await lease.release();
+    }
+  }
+
+  private async executeRun(charter: TestCharter, runId: string, integrationLifecycle: IntegrationLifecycle): Promise<RunSummary> {
     const startedAt = new Date().toISOString();
     const summary: RunSummary = {
       runId,
@@ -223,7 +241,6 @@ export class ExecutionRunner {
     const signal = controller.signal;
     let executionError: Error | undefined;
     let unsubscribe: () => void | Promise<void> = () => {};
-    const integrationLifecycle = new IntegrationLifecycle(runId, this.store);
     const pendingEvents: Promise<void>[] = [];
     const inspectAndRecordTarget = async (phase: "before-setup" | "after-setup") => {
       if (!this.targetBinding) return;

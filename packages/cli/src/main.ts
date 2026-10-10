@@ -372,9 +372,27 @@ export function createProgram(): Command {
       if (summary.verdict !== "passed") process.exitCode = 1;
     });
 
+  const resources = program.command("resources").description("Inspect or recover registered integration resources after an interrupted process");
+  resources.command("inspect <runId>")
+    .option("--root <path>", "project root", ".")
+    .action(async (runId: string, options: RootOptions) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+      console.log(JSON.stringify(await runner.inspectRunResources(runId), null, 2));
+    });
+  resources.command("recover <runId>")
+    .option("--root <path>", "project root", ".")
+    .option("--allow-capability-writes", "allow trusted connector cleanup in its declared test environment")
+    .action(async (runId: string, options: RootOptions & { allowCapabilityWrites?: boolean }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace,
+        allowCapabilityWrites: options.allowCapabilityWrites ?? false });
+      const recovered = await runner.recoverRunResources(runId);
+      console.log(JSON.stringify(recovered, null, 2));
+      if (recovered.status !== "verified") process.exitCode = 2;
+    });
+
   // Every leaf command resolves the same source/workspace pair.
-  for (const command of [...program.commands, ...mission.commands]) {
-    if (command !== mission) command.option("--workspace <path>", "test workspace root; defaults to an external workspace or existing project .proofkit");
+  for (const command of [...program.commands, ...mission.commands, ...resources.commands]) {
+    if (command !== mission && command !== resources) command.option("--workspace <path>", "test workspace root; defaults to an external workspace or existing project .proofkit");
   }
   return program;
 }

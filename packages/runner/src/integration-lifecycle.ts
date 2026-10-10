@@ -1,4 +1,4 @@
-import { IntegrationResourceCleanupSchema, IntegrationResourceSchema, IntegrationSetupPolicySchema, type IntegrationCleanup, type IntegrationResource, type IntegrationResourceCleanup, type IntegrationSetupPolicy } from "@proofkit/contracts";
+import { IntegrationResourceCleanupSchema, IntegrationResourceJournalSchema, IntegrationResourceSchema, IntegrationSetupPolicySchema, type IntegrationCleanup, type IntegrationResource, type IntegrationResourceCleanup, type IntegrationResourceJournal, type IntegrationSetupPolicy } from "@proofkit/contracts";
 import type { EvidenceStore } from "@proofkit/evidence";
 import { sha256 } from "@proofkit/evidence";
 import { readFile } from "node:fs/promises";
@@ -19,6 +19,13 @@ export type IntegrationSetupContext = IntegrationCleanupContext & {
 };
 export type IntegrationSetup = (context: IntegrationSetupContext) => Promise<IntegrationSetupHandle | (() => void | Promise<void>) | undefined>;
 export type IntegrationSetupEntry = { setup: IntegrationSetup; policy?: IntegrationSetupPolicy };
+export type IntegrationRecoveryContext = IntegrationCleanupContext & {
+  projectRoot: string;
+  workspaceRoot: string;
+  environment: "test" | "staging" | "local";
+  resources: IntegrationResource[];
+};
+type JournalContext = Pick<IntegrationResourceJournal, "projectRoot" | "workspaceRoot" | "integration" | "environment">;
 
 type OwnedHandle = {
   release?: (context: IntegrationCleanupContext) => unknown;
@@ -35,8 +42,25 @@ export class IntegrationLifecycle {
   private readonly ids = new Set<string>();
   private timeoutMs = MAX_CLEANUP_MS;
   private attempted = false;
+  private readonly pendingReleases = new Set<Promise<unknown>>();
 
-  constructor(private readonly runId: string, private readonly store: EvidenceStore) {}
+  get hasPendingCleanup(): boolean { return this.pendingReleases.size > 0; }
+  async whenCleanupSettles(): Promise<void> { await Promise.all([...this.pendingReleases]); }
+
+  constructor(private readonly runId: string, private readonly store: EvidenceStore,
+    private readonly journalContext: JournalContext = { environment: "test" }) {}
+
+  /** Reuse removal/readback validation while writing evidence under a new recovery attempt. */
+  static forRecovery(attemptId: string, store: EvidenceStore, resources: IntegrationResource[],
+    cleanup: IntegrationSetupHandle["cleanup"], timeoutMs: number): IntegrationLifecycle {
+    const owned = IntegrationResourceSchema.array().min(1).max(32).parse(resources);
+    if (new Set(owned.map((resource) => resource.resourceId)).size !== owned.length) throw new Error("Duplicate recovery resource");
+    const lifecycle = new IntegrationLifecycle(attemptId, store);
+    lifecycle.begin(IntegrationSetupPolicySchema.parse({ sideEffect: "write", environments: ["test"], cleanupTimeoutMs: timeoutMs }));
+    lifecycle.handles.push({ resources: owned, release: cleanup, legacy: false, valid: true });
+    for (const resource of owned) lifecycle.ids.add(resource.resourceId);
+    return lifecycle;
+  }
 
   begin(policy?: IntegrationSetupPolicy): void {
     this.attempted = true;
@@ -71,9 +95,11 @@ export class IntegrationLifecycle {
       this.issues.push("Setup registered duplicate resources or exceeded the 32-resource limit.");
       throw new Error("Integration resource identity must be unique within a Run and limited to 32 resources.");
     }
-    return this.store.writeJson(this.runId, "integration-setup", {
+    const journal = IntegrationResourceJournalSchema.parse({
+      schemaVersion: 1, runId: this.runId, ...this.journalContext, cleanupTimeoutMs: this.timeoutMs,
       resources: this.handles.flatMap((handle) => handle.resources), registeredAt: new Date().toISOString(),
     });
+    return this.store.writeJsonAtomic(this.runId, "integration-setup", journal);
   }
 
   async finish(): Promise<IntegrationCleanup> {
@@ -99,6 +125,8 @@ export class IntegrationLifecycle {
         const releaseStartedAt = Date.now();
         const pending = Promise.resolve().then(() => owned.release!({ runId: this.runId, signal: controller.signal }))
           .then((value) => ({ kind: "returned" as const, value }), () => ({ kind: "error" as const }));
+        this.pendingReleases.add(pending);
+        void pending.then(() => this.pendingReleases.delete(pending));
         const result = timedOut ? { kind: "timeout" as const } : await Promise.race([pending, deadline.then(() => ({ kind: "timeout" as const }))]);
         if (result.kind === "timeout") {
           this.issues.push("Cleanup timed out; resources may still be active.");

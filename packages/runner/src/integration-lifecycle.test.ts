@@ -2,7 +2,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { LocalExecutionOwnership } from "@proofkit/evidence";
 import type { Action, Assertion, IntegrationResourceCleanup, TestCharter } from "@proofkit/contracts";
 import { CancelledError, ExecutionRunner, type ExecutionOptions, type IntegrationSetupHandle, type SurfaceAdapter } from "./index.js";
 
@@ -100,7 +101,12 @@ describe("integration resource lifecycle", () => {
     const summary = await new ExecutionRunner(adapter(), configuration).run(charter, "hung-cleanup");
     expect(summary.verdict).toBe("blocked"); expect(cleanupSignal?.aborted).toBe(true);
     expect(summary.integrationCleanup?.status).toBe("unverified");
-    finish(removed("hung-cleanup"));
+    const ownership = new LocalExecutionOwnership(configuration.evidenceDir!, "run");
+    try {
+      expect(await ownership.isActive("hung-cleanup")).toBe(true);
+      await expect(new ExecutionRunner(adapter(), configuration).run(charter, "hung-cleanup")).rejects.toThrow("active");
+    } finally { finish(removed("hung-cleanup")); }
+    await vi.waitFor(async () => { expect(await ownership.isActive("hung-cleanup")).toBe(false); });
     expect(JSON.parse(await readFile(join(configuration.evidenceDir!, "hung-cleanup/run.json"), "utf8")).integrationCleanup.status).toBe("unverified");
   });
 

@@ -35,6 +35,8 @@ describe("ProofKit MCP tools", () => {
       "plan_test",
       "start_run",
       "get_run_status",
+      "inspect_run_resources",
+      "recover_run_resources",
       "cancel_run",
       "get_evidence",
       "replay_run",
@@ -47,6 +49,24 @@ describe("ProofKit MCP tools", () => {
 
     await client.close();
     await server.close();
+  });
+
+  it("routes resource inspection and recovery through the same runner without a tool-level write opt-in", async () => {
+    const runner = {
+      inspectRunResources: vi.fn(async () => ({ runId: "run-1", status: "active", testVerdict: "not-asserted", resources: [], issues: [] })),
+      recoverRunResources: vi.fn(async () => { throw new Error("Resource recovery requires operator write permission"); }),
+    } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const inspection = await client.callTool({ name: "inspect_run_resources", arguments: { runId: "run-1" } });
+      expect(JSON.parse(textContent(inspection))).toMatchObject({ status: "active", testVerdict: "not-asserted" });
+      const recovery = await client.callTool({ name: "recover_run_resources", arguments: { runId: "run-1", allowCapabilityWrites: true } });
+      expect(recovery.isError).toBe(true);
+      expect(textContent(recovery)).toContain("operator write permission");
+      expect(runner.recoverRunResources).toHaveBeenCalledWith("run-1");
+      expect((await client.callTool({ name: "recover_run_resources", arguments: { runId: "../foreign" } })).isError).toBe(true);
+      expect(runner.recoverRunResources).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
   });
 
   it("exposes bounded configured environment observations independently of test planning", async () => {

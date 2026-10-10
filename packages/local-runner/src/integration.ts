@@ -46,7 +46,7 @@ export async function loadProjectIntegration(
 function validateIntegration(value: unknown, path: string): ProjectIntegration {
   if (!value || typeof value !== "object") throw new Error(`Integration ${path} must export an object`);
   const integration = value as Partial<ProjectIntegration>;
-  if (typeof integration.name !== "string" || integration.name.trim().length === 0) {
+  if (typeof integration.name !== "string" || integration.name.trim().length === 0 || integration.name.length > 128) {
     throw new Error(`Integration ${path} must export a non-empty name`);
   }
   if (integration.capabilities !== undefined && !Array.isArray(integration.capabilities)) {
@@ -60,6 +60,12 @@ function validateIntegration(value: unknown, path: string): ProjectIntegration {
   }
   if (integration.setup !== undefined && typeof integration.setup !== "function") {
     throw new Error(`Integration ${path} setup must be a function`);
+  }
+  if (integration.version !== undefined && (typeof integration.version !== "string" || !integration.version.trim() || integration.version.length > 128)) {
+    throw new Error(`Integration ${path} must declare a non-empty string version of at most 128 characters`);
+  }
+  if (integration.recover !== undefined && (typeof integration.recover !== "function" || !integration.version)) {
+    throw new Error(`Integration ${path} recovery requires a function and explicit connector version`);
   }
   if (integration.setupPolicy !== undefined) {
     const policy = IntegrationSetupPolicySchema.safeParse(integration.setupPolicy);
