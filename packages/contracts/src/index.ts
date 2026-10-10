@@ -73,6 +73,8 @@ export const CaptureResponseActionSchema = z.object({
     z.object({ kind: z.literal("click"), selector: z.string().min(1) }).strict(),
     z.object({ kind: z.literal("press"), selector: z.string().min(1), key: z.string().min(1) }).strict(),
   ]),
+  /** One reviewed optional click while the same response listener remains active. */
+  followUp: z.object({ kind: z.literal("clickIfVisible"), selector: z.string().min(1).max(1024), waitMs: z.number().int().min(1).max(5000) }).strict().optional(),
   response: z.object({
     url: ResponseEndpointSchema,
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]),
@@ -95,6 +97,7 @@ export const ResponseObservationSchema = z.object({
   requestCount: z.literal(1),
   windowStartedAt: z.string(),
   requestStartedAt: z.string().datetime().optional(),
+  followUp: z.enum(["clicked", "skipped"]).optional(),
   windowEndedAt: z.string(),
   capturedAt: z.string(),
   bodyBytes: z.number().int().min(1).max(65536),

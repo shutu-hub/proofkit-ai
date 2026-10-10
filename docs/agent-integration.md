@@ -292,6 +292,14 @@ assertions:
 oracles: [resume.terminal]
 ```
 
+For a delayed request, add `requestStartTimeoutMs` to the capture and set
+`timeoutMs` to cover the trigger, request wait and response. If a reviewed
+confirmation button may appear after the first click, add one bounded
+`followUp: { kind: clickIfVisible, selector: '...', waitMs: 3000 }` inside
+`captureResponse`. It records `clicked` or `skipped` in the response evidence;
+multiple visible matches or a missing request remain inconclusive. The
+follow-up is an interactive write action and uses the same side-effect policy.
+
 Register a read-only identity/status check in the external config. The example
 assumes the existing independent GET accepts `file_id` and returns
 `data.file_id` and `data.status`; ProofKit does not create that application API:

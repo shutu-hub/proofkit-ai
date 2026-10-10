@@ -16,6 +16,10 @@ actions:
     trigger:
       kind: click
       selector: 'button.control-btn:has-text("立即运行")'
+    followUp:
+      kind: clickIfVisible
+      selector: '.manual-run-dialog .manual-run-dialog__actions .el-button--warning'
+      waitMs: 3000
     requestStartTimeoutMs: 120000
     requestWindowMs: 3000
     timeoutMs: 180000

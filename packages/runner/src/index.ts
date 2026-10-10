@@ -420,6 +420,7 @@ export class ExecutionRunner {
               const result = ResponseObservationSchema.safeParse(receipt.metadata.response);
               if (!result.success || result.data.name !== action.name || result.data.url !== new URL(action.response.url).href
                 || result.data.method !== action.response.method || !action.response.statuses.includes(result.data.status)
+                || (action.followUp ? result.data.followUp === undefined : result.data.followUp !== undefined)
                 || Object.keys(result.data.fields).length !== Object.keys(action.response.fields).length
                 || Object.entries(action.response.fields).some(([name, field]) => {
                   const value = result.data.fields[name];

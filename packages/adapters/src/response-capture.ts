@@ -43,7 +43,8 @@ export function projectResponseFields(body: unknown, fields: CaptureResponseActi
  * This is temporal association, not proof that the click causally created an object.
  * Independent Oracles still own business acceptance.
  */
-export async function captureActionResponse(page: Page, input: CaptureResponseAction, trigger: (context: ResponseCaptureTriggerContext) => Promise<void>, signal?: AbortSignal): Promise<ResponseObservation> {
+export async function captureActionResponse(page: Page, input: CaptureResponseAction,
+  trigger: (context: ResponseCaptureTriggerContext) => Promise<"clicked" | "skipped" | void>, signal?: AbortSignal): Promise<ResponseObservation> {
   const action = CaptureResponseActionSchema.parse(input);
   const endpoint = new URL(action.response.url);
   const controller = new AbortController();
@@ -103,7 +104,7 @@ export async function captureActionResponse(page: Page, input: CaptureResponseAc
     page.on("response", onResponse);
     page.on("requestfailed", onFailure);
     page.on("close", onClose);
-    await scoped(trigger({ signal: scopedSignal, remainingTimeoutMs }), scopedSignal);
+    const followUp = await scoped(trigger({ signal: scopedSignal, remainingTimeoutMs }), scopedSignal);
     if (action.requestStartTimeoutMs !== undefined) {
       if (!selectedRequest) {
         requestStartTimer = setTimeout(() => controller.abort(gap("response-not-observed", "No matching request started within the declared delay")), action.requestStartTimeoutMs);
@@ -144,7 +145,7 @@ export async function captureActionResponse(page: Page, input: CaptureResponseAc
     catch { throw gap("response-json-invalid", "The selected response is not valid JSON"); }
     return ResponseObservationSchema.parse({
       name: action.name, association: "action-window", url: endpoint.href, method: action.response.method, status, requestCount: 1,
-      windowStartedAt, requestStartedAt, windowEndedAt, capturedAt: new Date().toISOString(), bodyBytes: bytes.length,
+      windowStartedAt, requestStartedAt, followUp, windowEndedAt, capturedAt: new Date().toISOString(), bodyBytes: bytes.length,
       bodySha256: createHash("sha256").update(bytes).digest("hex"), fields: projectResponseFields(body, action.response.fields),
     });
   } finally {

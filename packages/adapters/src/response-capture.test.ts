@@ -82,6 +82,43 @@ describe("bounded action response observation", () => {
     await expect(running).rejects.toBe(reason);
     f.clean(); expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
   });
+  it.each(["clicked", "skipped"])("records an optional follow-up that was %s", async (branch) => {
+    const f = fixture(); const req = f.request(); let mainClicks = 0; let followClicks = 0;
+    const main = { first: () => main, waitFor: async () => {}, count: async () => 1,
+      click: async () => { mainClicks++; if (branch === "skipped") f.send(req, f.response(req)); } };
+    const follow = { filter: () => follow, first: () => follow, waitFor: async () => {
+      if (branch === "skipped") throw Object.assign(new Error("not visible"), { name: "TimeoutError" });
+    }, count: async () => 1, click: async () => { followClicks++; f.send(req, f.response(req)); } };
+    Object.assign(f.page, { url: () => action.response.url, title: async () => "test",
+      locator: (selector: string) => selector === "#submit" ? main : follow });
+    class AttachedAdapter extends WebAdapter { constructor() { super(); this.activePage = f.page; } }
+    const receipt = await new AttachedAdapter().act({ ...action, requestStartTimeoutMs: 100, timeoutMs: 250,
+      followUp: { kind: "clickIfVisible", selector: "#confirm", waitMs: 20 } });
+    expect((receipt.metadata.response as { followUp: string }).followUp).toBe(branch);
+    expect(mainClicks).toBe(1); expect(followClicks).toBe(branch === "clicked" ? 1 : 0); f.clean();
+  });
+  it("rejects an ambiguous follow-up and never clicks it after cancellation", async () => {
+    const ambiguous = fixture(); let clicks = 0;
+    const main = { first: () => main, waitFor: async () => {}, count: async () => 1, click: async () => {} };
+    const follow = { filter: () => follow, first: () => follow, waitFor: async () => {}, count: async () => 2, click: async () => { clicks++; } };
+    Object.assign(ambiguous.page, { url: () => action.response.url, locator: (selector: string) => selector === "#submit" ? main : follow });
+    class AmbiguousAdapter extends WebAdapter { constructor() { super(); this.activePage = ambiguous.page; } }
+    const guarded = { ...action, followUp: { kind: "clickIfVisible" as const, selector: "#confirm", waitMs: 20 } };
+    await expect(new AmbiguousAdapter().act(guarded)).rejects.toMatchObject({ code: "follow-up-ambiguous" });
+    expect(clicks).toBe(0); ambiguous.clean();
+
+    const cancelled = fixture(); const controller = new AbortController();
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const delayed = { filter: () => delayed, first: () => delayed, waitFor: () => waiting, count: async () => 1, click: async () => { clicks++; } };
+    Object.assign(cancelled.page, { url: () => action.response.url, locator: (selector: string) => selector === "#submit" ? main : delayed });
+    class CancelledAdapter extends WebAdapter { constructor() { super(); this.activePage = cancelled.page; } }
+    const running = new CancelledAdapter().act(guarded, { signal: controller.signal });
+    await new Promise((resolve) => setTimeout(resolve, 5)); controller.abort(new Error("stop confirmation"));
+    await expect(running).rejects.toThrow("stop confirmation");
+    release(); await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(clicks).toBe(0); cancelled.clean();
+  });
   it.each(["duplicate", "none", "redirect-request", "redirect-response", "request-failed", "page-close"])("cleans an ambiguous or missing observation: %s", async (kind) => {
     const f = fixture();
     await expect(captureActionResponse(f.page, action, async () => {

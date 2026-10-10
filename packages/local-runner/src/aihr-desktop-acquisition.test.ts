@@ -69,6 +69,7 @@ afterEach(async () => {
 function context() {
   const charter = TestCharterSchema.parse({ intent: "点击立即运行并验收一份测试简历", level: "core", sideEffectPolicy: "allow", oracles: [name],
     actions: [{ kind: "captureResponse", name: "created-run", trigger: { kind: "click", selector: "button.control-btn:has-text('立即运行')" },
+      followUp: { kind: "clickIfVisible", selector: "#confirm", waitMs: 300 },
       requestStartTimeoutMs: 3000, requestWindowMs: 200, timeoutMs: 5000, response: {
         url: `${base}/resume-collection/runs`, method: "POST", statuses: [201],
         fields: { collectionRunId: { pointer: "/data/run_id", type: "id" } },
@@ -80,7 +81,7 @@ function context() {
   const now = new Date().toISOString();
   const steps = [StepResultSchema.parse({ stepId: "step-001", action: charter.actions[0], status: "passed", response: {
     name: "created-run", association: "action-window", url: `${base}/resume-collection/runs`, method: "POST", status: 201,
-    requestCount: 1, windowStartedAt: now, requestStartedAt: now, windowEndedAt: now, capturedAt: now,
+    requestCount: 1, windowStartedAt: now, requestStartedAt: now, followUp: "clicked", windowEndedAt: now, capturedAt: now,
     bodyBytes: 20, bodySha256: "a".repeat(64), fields: { collectionRunId: "701" },
   } })];
   return { runId: "proofkit-run", charter, steps, assertions: [] };
@@ -130,6 +131,10 @@ describe("AIHR desktop acquisition independent oracle", () => {
     if (action.kind !== "captureResponse") throw new Error("Expected a response capture");
     forged.steps[0]!.action = { ...action, requestStartTimeoutMs: 1 };
     expect((await oracle.check(forged)).passed).toBe(null);
+    expect(paths).toEqual([]);
+    const missingBranch = context();
+    delete missingBranch.steps[0]!.response!.followUp;
+    expect((await oracle.check(missingBranch)).passed).toBe(null);
     expect(paths).toEqual([]);
   });
 

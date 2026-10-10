@@ -224,7 +224,8 @@ try {
   const desktopReference = await loadCharter(join(repoRoot, ".proofkit", "charters", "aihr-desktop-resume-acquisition.yml"));
   const desktopActions = [{ kind: "goto", url: `${baseUrl}/desktop` }, ...desktopReference.actions];
   desktopActions[2] = { ...desktopActions[2], response: { ...desktopActions[2].response,
-    url: `${baseUrl}/api/v1/resume-collection/runs` }, requestStartTimeoutMs: 1000, requestWindowMs: 100, timeoutMs: 3000 };
+    url: `${baseUrl}/api/v1/resume-collection/runs` }, followUp: { ...desktopActions[2].followUp, waitMs: 100 },
+    requestStartTimeoutMs: 1000, requestWindowMs: 100, timeoutMs: 3000 };
   const desktopCharter = TestCharterSchema.parse({ ...desktopReference, actions: desktopActions,
     metadata: { aihrDesktop: { ...desktopReference.metadata.aihrDesktop, captureStepId: "step-003", maxWaitMs: 1000, pollIntervalMs: 20 } } });
   mode = "success";
@@ -234,19 +235,30 @@ try {
   const desktopPassedSummary = await service.wait(desktopPassedRunId);
   const desktopCapture = desktopPassedSummary.steps[2].response;
   assert.equal(desktopCapture.fields.collectionRunId, desktopRunId);
+  assert.equal(desktopCapture.followUp, "skipped");
   assert.ok(Date.parse(desktopCapture.requestStartedAt) - Date.parse(desktopCapture.windowStartedAt) >= 100);
   assert.equal(desktopPassedSummary.oracles[0].passed, true);
   const desktopSource = JSON.parse(await readFile(join(workspaceRoot, ".proofkit", "runs",
     desktopPassedSummary.oracles[0].sourceEvidenceArtifacts[0]), "utf8"));
   assert.equal(desktopSource.facts[0].target.runId, desktopRunId);
+  const confirmationCharter = TestCharterSchema.parse({ ...desktopCharter,
+    actions: [{ kind: "goto", url: `${baseUrl}/desktop?confirmation=1` }, ...desktopCharter.actions.slice(1)] });
+  const confirmedPassed = await runMission(service, confirmationCharter);
+  assert.equal(confirmedPassed.verdict, "passed", JSON.stringify(confirmedPassed.findings));
+  const confirmedRunId = confirmedPassed.observations.find((item) => item.kind === "surface.run").data.runId;
+  const confirmedSummary = await service.wait(confirmedRunId);
+  assert.equal(confirmedSummary.steps[2].response.followUp, "clicked");
+  assert.equal(confirmedSummary.steps[2].response.fields.collectionRunId, desktopRunId);
+  assert.equal(confirmedSummary.oracles[0].passed, true);
   mode = "stale-binding";
-  const desktopDefect = await runMission(service, desktopCharter);
+  const desktopDefect = await runMission(service, confirmationCharter);
   assert.equal(desktopDefect.verdict, "failed", JSON.stringify(desktopDefect.findings));
   assert.ok(desktopDefect.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"
     && finding.evidence.some((item) => item.kind === "business")));
   const desktopDefectRunId = desktopDefect.observations.find((item) => item.kind === "surface.run").data.runId;
   const desktopDefectSummary = await service.wait(desktopDefectRunId);
   assert.equal(desktopDefectSummary.steps[2].response.fields.collectionRunId, desktopRunId);
+  assert.equal(desktopDefectSummary.steps[2].response.followUp, "clicked");
   assert.equal(desktopDefectSummary.oracles[0].passed, false);
   const desktopDefectSource = JSON.parse(await readFile(join(workspaceRoot, ".proofkit", "runs",
     desktopDefectSummary.oracles[0].sourceEvidenceArtifacts[0]), "utf8"));
@@ -294,7 +306,7 @@ try {
   const cancelledReport = cancelled.mission.evidence.find((item) => item.kind === "report");
   assert.match(await readFile(cancelledReport.path, "utf8"), /cancelled/);
   assert.deepEqual(await readdir(root), ["package.json"]);
-  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, missingChargeMission: missingCharge.missionId, extraChargeMission: extraCharge.missionId, wrongRunMission: wrongRun.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, idempotencyMission: idempotencyMission.missionId, desktopPassedMission: desktopPassed.missionId, desktopDefectMission: desktopDefect.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "mcp-one-sentence-core", "mcp-evidence", "core-mission", "stale-binding-detection", "billing-missing-detection", "billing-extra-type-detection", "upload-run-binding-detection", "evidence-backed-replay-comparison", "idempotency-negative-case", "desktop-click-delayed-run-identity", "desktop-independent-terminal-oracle", "desktop-seeded-binding-defect", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
+  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, missingChargeMission: missingCharge.missionId, extraChargeMission: extraCharge.missionId, wrongRunMission: wrongRun.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, idempotencyMission: idempotencyMission.missionId, desktopPassedMission: desktopPassed.missionId, desktopConfirmedMission: confirmedPassed.missionId, desktopDefectMission: desktopDefect.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "mcp-one-sentence-core", "mcp-evidence", "core-mission", "stale-binding-detection", "billing-missing-detection", "billing-extra-type-detection", "upload-run-binding-detection", "evidence-backed-replay-comparison", "idempotency-negative-case", "desktop-click-delayed-run-identity", "desktop-optional-confirmation-branches", "desktop-independent-terminal-oracle", "desktop-seeded-binding-defect", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
 } finally {
   await mcpClient?.close();
   await mcpServer?.close();
@@ -347,9 +359,14 @@ async function handleRequest(request, response) {
     response.end(`<!doctype html><title>ProofKit isolated resume fixture</title><h1>Resume fixture</h1>
       <button id="check" onclick="fetch('/surface-status').then(r=>r.json()).then(r=>document.querySelector('#result').textContent=r.data.ready?'Resume ready':'Pending')">Check uploaded resume</button><div id="result"></div>`);
   } else if (path === "/desktop") {
+    const confirmFirst = url.searchParams.get("confirmation") === "1";
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end(`<!doctype html><title>ProofKit desktop resume fixture</title><h1>BOSS直聘 简历获取</h1>
-      <button class="control-btn" onclick="setTimeout(()=>fetch('/api/v1/resume-collection/runs?desktop=1',{method:'POST'}).then(r=>r.json()),250)">立即运行</button><div>任务进度</div>`);
+      <button class="control-btn" id="run-now">立即运行</button><div>任务进度</div>
+      <div class="manual-run-dialog" style="display:none"><div class="manual-run-dialog__actions"><button class="el-button--warning" id="confirm-run">确认继续</button></div></div>
+      <script>const start=()=>setTimeout(()=>fetch('/api/v1/resume-collection/runs?desktop=1',{method:'POST'}).then(r=>r.json()),250);
+        document.querySelector('#run-now').onclick=()=>{if(${JSON.stringify(confirmFirst)})document.querySelector('.manual-run-dialog').style.display='block';else start()};
+        document.querySelector('#confirm-run').onclick=()=>{document.querySelector('.manual-run-dialog').style.display='none';start()};</script>`);
   } else if (path === "/surface-status") {
     send({ ready: Boolean(currentFile) });
   } else if (request.method === "POST" && path === "/resume-collection/runs") {

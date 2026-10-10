@@ -64,6 +64,16 @@ describe("response facts in the ordinary Run lifecycle", () => {
     expect(await readFile(join(dir, "response-invalid", "run.json"), "utf8")).not.toContain("UNSELECTED_PRIVATE_BODY");
   });
 
+  it("requires the recorded follow-up branch to match the declared capture action", async () => {
+    const withFollowUp = TestCharterSchema.parse({ ...charter, actions: [{ ...charter.actions[0],
+      followUp: { kind: "clickIfVisible", selector: "#confirm", waitMs: 100 } }] });
+    for (const [plan, response] of [[withFollowUp, observation], [charter, { ...observation, followUp: "clicked" }]] as const) {
+      const summary = await new ExecutionRunner(adapter(response), { evidenceDir: await root() }).run(plan);
+      expect(summary.verdict).toBe("inconclusive");
+      expect(summary.steps[0]?.response).toBeUndefined();
+    }
+  });
+
   it.each(["permission", "unsupported"])("blocks %s capture before connecting", async (reason) => {
     const dir = await root(); const surface = { ...adapter(), supportsResponseCapture: reason !== "unsupported" }; let connected = false;
     surface.connect = async () => { connected = true; };

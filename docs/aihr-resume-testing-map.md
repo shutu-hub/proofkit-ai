@@ -60,6 +60,9 @@ ProofKit 当前 `captureResponse` 只接纳所连接页面主 frame、动作时�
 有界等待首个匹配请求，再用 `requestWindowMs` 检查首个请求后的重复请求；整个动作仍受
 `timeoutMs` 限制。证据记录请求开始时间。时间关联不等于业务因果证明，观察窗外的
 重复请求也不能据此排除，仍需独立业务读取和隔离测试账号。
+参考 Charter 另声明一次可选 `clickIfVisible`：若风险确认按钮在有界时间内唯一可见，
+就在同一请求监听期间点击，否则跳过，并把分支写入响应证据。真实按钮定位和弹窗时序
+仍要通过隔离 CDP 核验；弹窗迟到、多个匹配按钮或没有新请求都不能判通过。
 AIHR 网关请求由 shell renderer 的 backend bridge 发起；能否在实际连接的 Electron 页面
 观察到 `POST /resume-collection/runs`，以及它是否发生在合理的动作窗口内，必须先用
 隔离 CDP 运行核实。不能从源码直接认定该捕获可用，也不能把连接器自己创建的 run

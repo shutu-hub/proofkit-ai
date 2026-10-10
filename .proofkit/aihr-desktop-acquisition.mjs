@@ -45,7 +45,8 @@ export function createDesktopResumeAcquisitionOracle({ z, resolveEnv, positiveSt
       || JSON.stringify(step.action) !== JSON.stringify(declared.action)
       || step.response.url !== endpoint() || step.response.method !== "POST"
       || step.response.status !== 201 || step.response.association !== "action-window"
-      || step.response.requestCount !== 1 || step.response.name !== declared.action.name) return null;
+      || step.response.requestCount !== 1 || step.response.name !== declared.action.name
+      || (declared.action.followUp ? !step.response.followUp : step.response.followUp !== undefined)) return null;
     return positiveString(step.response.fields.collectionRunId);
   }
 

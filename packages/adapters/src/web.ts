@@ -1,6 +1,7 @@
 import type { Browser, BrowserContext, Locator, Page, Request, Response } from "playwright-core";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceControl, SurfaceSnapshot } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceAdapter, SurfaceActionContext } from "@proofkit/runner";
+import { InconclusiveError } from "@proofkit/runner";
 import { captureActionResponse } from "./response-capture.js";
 import { sanitizeSurfaceText, sanitizeSurfaceUrl } from "./surface-sanitize.js";
 
@@ -174,6 +175,22 @@ export class WebAdapter implements SurfaceAdapter {
           const timeout = remainingTimeoutMs();
           if (action.trigger.kind === "click") await locator.click({ timeout });
           else await locator.press(action.trigger.key, { timeout });
+          if (action.followUp) {
+            const followUp = page.locator(action.followUp.selector).filter({ visible: true });
+            try {
+              await followUp.first().waitFor({ state: "visible", timeout: Math.min(action.followUp.waitMs, remainingTimeoutMs()) });
+            } catch (error) {
+              signal.throwIfAborted();
+              if (error instanceof Error && error.name === "TimeoutError") { remainingTimeoutMs(); return "skipped"; }
+              throw error;
+            }
+            signal.throwIfAborted();
+            const count = await followUp.count();
+            if (count !== 1) throw new InconclusiveError("follow-up-ambiguous", `Follow-up selector matched ${count} elements`);
+            signal.throwIfAborted();
+            await followUp.click({ timeout: remainingTimeoutMs() });
+            return "clicked";
+          }
         }, context?.signal);
         break;
       }

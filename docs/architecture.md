@@ -215,6 +215,16 @@ Exactly one matching request is required. Redirects, duplicate requests,
 missing responses, request failure, page closure, unaccepted status, invalid
 JSON or unavailable selected fields produce `inconclusive` evidence gaps.
 
+A Charter may declare one typed `followUp: { kind: clickIfVisible, selector,
+waitMs }` after its first trigger. The same listener covers both clicks. The
+adapter waits at most five seconds for a unique visible follow-up control,
+clicks it if present, and otherwise skips it; the saved response records
+`followUp: clicked|skipped`. Ambiguous controls are inconclusive. Cancellation
+or the total deadline prevents a late control from being clicked. This is
+useful for an optional confirmation dialog, but the Charter must explicitly
+allow side effects and identify the reviewed control. A dialog appearing
+after the declared wait remains an evidence gap.
+
 The legacy window ends `requestWindowMs` after the trigger. A Charter can set
 `requestStartTimeoutMs` to wait that long after the trigger for the first
 matching request. In this delayed mode, duplicate detection continues until

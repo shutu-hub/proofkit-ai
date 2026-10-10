@@ -183,6 +183,11 @@ Use captureResponse around the actual submit click or keypress when an API
 returns the new object's identity. Declare its exact endpoint, method, accepted
 statuses and selected JSON Pointer scalar fields. An independent Oracle must
 query those IDs and check reader identity before waiting for terminal state.
+If the request starts later, set requestStartTimeoutMs while keeping timeoutMs
+large enough for the full action. If an optional confirmation dialog may appear,
+declare one followUp: { kind: clickIfVisible, selector, waitMs } using a reviewed
+unique visible control. The same listener covers both clicks and saves whether
+the follow-up was clicked or skipped. A late or ambiguous dialog is not a pass.
 Multiple matching requests, missing capture or missing reader facts are
 inconclusive. Do not reuse an older successful object as proof of this action.
 

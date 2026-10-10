@@ -10,6 +10,8 @@ describe("action-scoped response contract", () => {
     expect(CaptureResponseActionSchema.parse({ ...action, trigger: { kind: "press", selector: "#name", key: "Enter" } }).trigger.kind).toBe("press");
     expect(ActionSchema.parse({ ...action, requestStartTimeoutMs: 120000, requestWindowMs: 1000, timeoutMs: 180000 }))
       .toMatchObject({ requestStartTimeoutMs: 120000, requestWindowMs: 1000, timeoutMs: 180000 });
+    expect(ActionSchema.parse({ ...action, followUp: { kind: "clickIfVisible", selector: "#confirm", waitMs: 500 } }))
+      .toMatchObject({ followUp: { kind: "clickIfVisible", selector: "#confirm", waitMs: 500 } });
   });
   it.each(["invalid", "file:///private", "https://user:password@example.com/api", "https://example.com/api?token=private", "https://example.com/api#private"])("rejects unsafe endpoint %s", (url) => {
     expect(ActionSchema.safeParse({ ...action, response: { ...action.response, url } }).success).toBe(false);
@@ -19,7 +21,11 @@ describe("action-scoped response contract", () => {
   });
   it("rejects arbitrary triggers, body dumps, empty or excessive projections and unbounded timing", () => {
     for (const change of [{ trigger: { kind: "goto", url: "http://127.0.0.1" } }, { script: "readSecrets()" },
-      { timeoutMs: 600001 }, { requestWindowMs: 0 }, { requestStartTimeoutMs: 0 }, { requestStartTimeoutMs: 300001 }]) {
+      { timeoutMs: 600001 }, { requestWindowMs: 0 }, { requestStartTimeoutMs: 0 }, { requestStartTimeoutMs: 300001 },
+      { followUp: { kind: "clickIfVisible", selector: "#confirm", waitMs: 0 } },
+      { followUp: { kind: "clickIfVisible", selector: "#confirm", waitMs: 5001 } },
+      { followUp: { kind: "clickIfVisible", selector: "x".repeat(1025), waitMs: 500 } },
+      { followUp: { kind: "clickIfVisible", selector: "#confirm", waitMs: 500, script: "danger()" } }]) {
       expect(ActionSchema.safeParse({ ...action, ...change }).success).toBe(false);
     }
     for (const fields of [{}, Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`field${i}`, { pointer: "/data/id", type: "id" }])), { body: { pointer: "/data", type: "object" } }]) {
