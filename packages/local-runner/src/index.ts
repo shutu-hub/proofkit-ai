@@ -1464,7 +1464,7 @@ export class LocalRunnerService {
       targetUrlPrefix: this.config.surfaces.web?.targetUrlPrefix,
       targetTitleContains: this.config.surfaces.web?.targetTitleContains,
       headless: !input.headful,
-      executablePath: this.config.surfaces.web?.executablePath,
+      executablePath: this.config.surfaces.web?.executablePath ?? process.env.PROOFKIT_BROWSER_PATH,
     });
   }
 

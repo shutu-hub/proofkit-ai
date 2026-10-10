@@ -1,0 +1,105 @@
+name: ProofKit Mission Gate
+description: Run or re-audit a local ProofKit Mission with evidence-backed CI outputs.
+inputs:
+  project-root:
+    description: Path to the tested source checkout, absolute or relative to GITHUB_WORKSPACE.
+    required: true
+  workspace-root:
+    description: Path to the external ProofKit test workspace, absolute or relative to GITHUB_WORKSPACE.
+    required: true
+  mission-id:
+    description: Existing Mission ID. Supply this or intent.
+    required: false
+  intent:
+    description: Test request used to create a Mission when mission-id is omitted.
+    required: false
+  mode:
+    description: run executes the Mission; check only re-audits saved evidence.
+    required: false
+    default: run
+  level:
+    description: Test intensity for a newly created Mission.
+    required: false
+    default: core
+  surface:
+    description: Initial surface for a newly created Mission.
+    required: false
+    default: web
+  charter-id:
+    description: Optional catalog Charter ID for a newly created Mission.
+    required: false
+  url:
+    description: Optional page URL for an ad-hoc Charter; do not combine with charter-id.
+    required: false
+  expect-text:
+    description: Optional visible text assertion for an ad-hoc Charter.
+    required: false
+  oracle-name:
+    description: Optional configured business Oracle for an ad-hoc Charter.
+    required: false
+  install-browser:
+    description: Install Playwright Chromium on the runner when executing a Mission.
+    required: false
+    default: 'true'
+  allow-capability-writes:
+    description: Enable explicitly declared test-environment write capabilities for run mode.
+    required: false
+    default: 'false'
+outputs:
+  mission-id:
+    description: The checked Mission ID.
+    value: ${{ steps.gate.outputs.mission-id }}
+  test-verdict:
+    description: Current audited acceptance verdict.
+    value: ${{ steps.gate.outputs.test-verdict }}
+  saved-verdict:
+    description: Historical execution verdict.
+    value: ${{ steps.gate.outputs.saved-verdict }}
+  summary-path:
+    description: Local path to the versioned MissionResult JSON snapshot, when available.
+    value: ${{ steps.gate.outputs.summary-path }}
+  report-path:
+    description: Local path to the HTML report, when available.
+    value: ${{ steps.gate.outputs.report-path }}
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 10.10.0
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Build ProofKit from this action revision
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        pnpm install --frozen-lockfile
+        pnpm build
+    - name: Install Chromium for Linux Web runs
+      if: ${{ inputs.mode != 'check' && inputs.install-browser == 'true' && runner.os == 'Linux' }}
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: pnpm exec playwright-core install --with-deps chromium
+    - name: Install Chromium for non-Linux Web runs
+      if: ${{ inputs.mode != 'check' && inputs.install-browser == 'true' && runner.os != 'Linux' }}
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: pnpm exec playwright-core install chromium
+    - name: Run evidence-backed Mission gate
+      id: gate
+      shell: bash
+      env:
+        PROOFKIT_ACTION_PROJECT_ROOT: ${{ inputs.project-root }}
+        PROOFKIT_ACTION_WORKSPACE_ROOT: ${{ inputs.workspace-root }}
+        PROOFKIT_ACTION_MISSION_ID: ${{ inputs.mission-id }}
+        PROOFKIT_ACTION_INTENT: ${{ inputs.intent }}
+        PROOFKIT_ACTION_MODE: ${{ inputs.mode }}
+        PROOFKIT_ACTION_LEVEL: ${{ inputs.level }}
+        PROOFKIT_ACTION_SURFACE: ${{ inputs.surface }}
+        PROOFKIT_ACTION_CHARTER_ID: ${{ inputs.charter-id }}
+        PROOFKIT_ACTION_URL: ${{ inputs.url }}
+        PROOFKIT_ACTION_EXPECT_TEXT: ${{ inputs.expect-text }}
+        PROOFKIT_ACTION_ORACLE_NAME: ${{ inputs.oracle-name }}
+        PROOFKIT_ACTION_ALLOW_CAPABILITY_WRITES: ${{ inputs.allow-capability-writes }}
+      run: node "$GITHUB_ACTION_PATH/scripts/github-action-gate.mjs"
