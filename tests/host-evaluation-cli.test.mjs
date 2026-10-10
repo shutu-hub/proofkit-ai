@@ -16,8 +16,11 @@ test("host evaluator stops after a provider blocker and does not score later cas
     await rm(toolsRoot, { recursive: true, force: true });
   });
   const cli = join(toolsRoot, "fake-codex.js");
-  await writeFile(cli, 'process.stdout.write(JSON.stringify({type:"error",message:"403 Forbidden: insufficient balance"})+"\\n"); setInterval(()=>{},1000);');
-  const child = spawn(process.execPath, ["tests/host-evaluation.mjs", "--run", "--cases", "core-pass,core-defect", "--timeout-ms", "10000"], {
+  const argvPath = join(toolsRoot, "argv.json");
+  await writeFile(cli, `require("node:fs").writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));
+    process.stdout.write(JSON.stringify({type:"error",message:"403 Forbidden: insufficient balance"})+"\\n"); setInterval(()=>{},1000);`);
+  const child = spawn(process.execPath, ["tests/host-evaluation.mjs", "--run", "--cases", "core-pass,core-defect", "--timeout-ms", "10000",
+    ...(process.platform === "win32" ? ["--windows-sandbox", "unelevated"] : [])], {
     cwd: repo, windowsHide: true, shell: false,
     env: { ...process.env, PROOFKIT_CODEX_CLI: cli }, stdio: ["ignore", "pipe", "pipe"],
   });
@@ -40,4 +43,8 @@ test("host evaluator stops after a provider blocker and does not score later cas
   assert.deepEqual(report.notRun, ["core-defect"]);
   assert.equal(report.cases[0].hostOutcome, "infrastructure-blocked");
   assert.deepEqual(report.cases[0].validation.issues, ["provider-balance"]);
+  if (process.platform === "win32") {
+    assert.equal(report.windowsSandbox, "unelevated");
+    assert.ok(JSON.parse(await readFile(argvPath, "utf8")).includes('windows.sandbox="unelevated"'));
+  }
 });

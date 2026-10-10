@@ -96,6 +96,20 @@ test("a project coverage gap must preserve scope and must not execute a Run", as
   assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
   input.runs.push({ verdict: "passed" }); await rejects(input, "unready-request-executed");
 });
+test("surface reconnaissance does not count as product execution", async (t) => {
+  const input = await fixture(t);
+  const inspection = { verdict: "inconclusive", charter: { metadata: { purpose: "surface-inspection" },
+    sideEffectPolicy: "deny", assertions: [], oracles: [], actions: [{ kind: "observe" }] } };
+  input.runs.unshift(inspection);
+  assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
+  input.expected = { verdict: "not-asserted", level: "core", coverage: "project" };
+  input.answer = { missionId: null, verdict: "not-asserted", level: "core", coverage: "project", surface: "web",
+    report: null, evidencePaths: [], gaps: ["缺少全项目业务流程覆盖清单"] };
+  input.missions = []; input.runs = [inspection]; input.calls.splice(1);
+  assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
+  inspection.charter.actions.push({ kind: "click", selector: "#submit" });
+  await rejects(input, "unready-request-executed");
+});
 test("parses tool lifecycle events and preserves MCP errors rather than counting them as success", () => {
   const item = { id: "call-1", type: "mcp_tool_call", server: "proofkit-test", tool: "run_test", arguments: { intent: "test" }, status: "in_progress" };
   const events = [{ type: "item.started", item }, { type: "item.completed", item: { ...item, status: "completed", result: { content: [{ type: "text", text: '{"missionId":"m1"}' }] } } },

@@ -111,13 +111,23 @@ The second starts the installed Codex CLI with its existing provider and
 credentials. It activates `$proofkit-test`, records the host's actual MCP calls
 and structured answer, then checks both against saved Mission/Run state. Add
 `--implicit-skill` to measure ordinary natural-language activation separately.
+On Windows, `--windows-sandbox unelevated` applies only to this evaluator's
+Codex invocation when the configured sandbox cannot start commands; it does
+not edit Codex settings. Use it only with the isolated synthetic fixture.
+The evaluator explicitly permits calls to its own synthetic ProofKit MCP
+server so unattended runs can save evidence; the fixture denies business
+writes. [OpenAI's CLI reference](https://developers.openai.com/codex/cli/reference/)
+documents the workspace flags, and [Windows sandbox guidance](https://developers.openai.com/codex/windows/windows-sandbox/)
+describes the isolation tradeoff of the unelevated fallback.
 It uses only synthetic loopback facts; it does not contact AIHR or authorize
 business writes. Model usage may incur provider charges. A provider access
 failure or cancelled host MCP call is reported as `infrastructure-blocked`,
 and remaining cases are left unrun. Neither is scored as a model or product
 failure. Reports and event traces are retained under the printed temporary
-evaluation root. Model adherence and false-pass rates require an unblocked
-real-host run; the scripted baseline cannot establish them.
+evaluation root. All eight synthetic cases separately passed through a real
+Codex host with implicit Skill activation, including six Web cases and two
+Electron cases. Broader adherence and false-pass rates remain unmeasured; the
+scripted baseline cannot establish them.
 
 ProofKit marks source/scope/catalog/status reads with MCP read-only hints.
 Actions that generate workspace evidence or execute a Mission do not receive

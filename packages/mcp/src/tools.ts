@@ -333,21 +333,25 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
   const mission = started.mission;
   const profile = mission.plan.executionProfile;
   const terminal = ["completed", "failed", "blocked", "cancelled"];
-  const next = !readiness.ready && mission.status === "awaiting-approval"
-    ? ["inspect_test_scope", "inspect_surface", "plan_test", "run_test"]
-    : mission.status === "awaiting-approval"
-    ? ["approve_test_plan"]
-    : started.running || mission.status === "running"
-      ? ["await_test_result"]
-      : terminal.includes(mission.status)
-        ? ["get_mission_evidence"]
-        : ["start_mission", "get_mission_status"];
+  // startMission can acquire an owner before its first status write. The owner,
+  // not the stale awaiting-approval snapshot, determines the next host action.
+  const status = started.running && mission.status === "awaiting-approval" ? "running" : mission.status;
+  const projectInventoryGap = mission.status === "awaiting-approval" && !readiness.ready
+    && mission.plan.planning?.coverage?.requested === "project"
+    && mission.plan.planning.evidenceGaps.includes("project-workflow-coverage");
+  let next: string[];
+  if (started.running || mission.status === "running") next = ["await_test_result"];
+  else if (terminal.includes(mission.status)) next = ["get_mission_evidence"];
+  else if (projectInventoryGap) next = ["inspect_test_scope"];
+  else if (!readiness.ready && mission.status === "awaiting-approval") next = ["inspect_test_scope", "inspect_surface", "plan_test", "run_test"];
+  else if (mission.status === "awaiting-approval") next = ["approve_test_plan"];
+  else next = ["start_mission", "get_mission_status"];
   return {
     missionId: mission.missionId,
     ...(mission.replayOfMissionId ? { replayOfMissionId: mission.replayOfMissionId } : {}),
     projectRoot: mission.projectRoot,
     workspaceRoot: mission.workspaceRoot,
-    status: mission.status,
+    status,
     running: started.running,
     verdict: mission.verdict,
     level: mission.level,

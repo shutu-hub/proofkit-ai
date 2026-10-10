@@ -6,6 +6,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 export async function verifyHostSession({ expected, answer, calls, missions, runs, workspace, sourceUnchanged }) {
   const issues = [];
   const check = (condition, issue) => { if (!condition) issues.push(issue); };
+  const productRuns = runs.filter((run) => !isSurfaceInspection(run));
   const successful = calls.filter((call) => call.status === "completed" && !call.isError);
   const names = successful.map((call) => call.tool);
   check(sourceUnchanged, "tested-source-changed");
@@ -28,7 +29,7 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   check(missions.every((mission) => mission.surface === (expected.surface ?? "web")), "saved-surface-changed");
 
   if (expected.verdict === "not-asserted") {
-    check(runs.length === 0, "unready-request-executed");
+    check(productRuns.length === 0, "unready-request-executed");
     check(missions.every((mission) => mission.verdict !== "passed"), "unready-request-certified");
     check(Array.isArray(answer.gaps) && answer.gaps.length > 0, "unready-request-has-no-explanation");
     if (answer.report !== null) {
@@ -58,12 +59,12 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   check(typeof answer.report === "string" && observed?.report === answer.report, "answer-report-not-observed");
   const report = await readOwned(answer.report, workspace);
   check(report !== null, "answer-report-unavailable");
-  check(runs.length === 1 && runs[0].verdict === expected.verdict, "unexpected-run-outcome-or-count");
-  check(runs.every((run) => run.steps.some((step) => step.beforeSnapshot?.metadata?.adapter === (expected.surface ?? "web")
+  check(productRuns.length === 1 && productRuns[0].verdict === expected.verdict, "unexpected-run-outcome-or-count");
+  check(productRuns.every((run) => run.steps.some((step) => step.beforeSnapshot?.metadata?.adapter === (expected.surface ?? "web")
     || step.afterSnapshot?.metadata?.adapter === (expected.surface ?? "web"))), "run-surface-changed");
-  check(runs.every((run) => run.assertions.some((assertion) => assertion.passed)), "positive-page-proof-missing");
+  check(productRuns.every((run) => run.assertions.some((assertion) => assertion.passed)), "positive-page-proof-missing");
   if (expected.level !== "quick") {
-    check(runs.every((run) => run.oracles.some((oracle) => (oracle.sourceEvidenceCount ?? 0) > 0)), "independent-business-proof-missing");
+    check(productRuns.every((run) => run.oracles.some((oracle) => (oracle.sourceEvidenceCount ?? 0) > 0)), "independent-business-proof-missing");
   }
   if (expected.verdict === "failed") {
     check(mission?.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"
@@ -84,6 +85,14 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
     check((answer.evidencePaths ?? []).some((path) => refs.some((ref) => ref.path === path && ref.kind === "business")), "answer-omits-business-evidence");
   }
   return { passed: issues.length === 0, issues };
+}
+
+function isSurfaceInspection(run) {
+  const charter = run.charter;
+  return charter?.metadata?.purpose === "surface-inspection" && charter.sideEffectPolicy === "deny"
+    && charter.assertions?.length === 0 && (charter.oracles?.length ?? 0) === 0
+    && Array.isArray(charter.actions) && charter.actions.length > 0
+    && charter.actions.every((action) => action.kind === "observe" || action.kind === "waitForText");
 }
 
 export function parseMcpToolEvents(jsonl) {

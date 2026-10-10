@@ -6,6 +6,10 @@ import { runHost } from "./host-evaluation-runtime.mjs";
 import { parseMcpToolEvents, verifyHostSession } from "./host-evaluation-verifier.mjs";
 
 const requested = argument("--cases");
+const windowsSandbox = argument("--windows-sandbox");
+if (windowsSandbox && (process.platform !== "win32" || !["mxc", "elevated", "unelevated"].includes(windowsSandbox))) {
+  throw new Error("--windows-sandbox requires Windows and one of: mxc, elevated, unelevated");
+}
 const selected = requested ? requested.split(",").map((id) => {
   const found = hostCases.find((item) => item.id === id);
   if (!found) throw new Error(`Unknown host case: ${id}`);
@@ -34,6 +38,7 @@ if (!process.argv.includes("--run")) {
     if (stoppedBy) break;
   }
   const report = { schemaVersion: 1, evaluation: "real-codex-host", productAcceptance: "synthetic-fixture-only", root,
+    windowsSandbox: windowsSandbox ?? "configured",
     total: selected.length, attempted: reports.length,
     evaluated: reports.filter((item) => item.hostOutcome === "evaluated").length,
     passed: reports.filter((item) => item.hostOutcome === "evaluated" && item.validation.passed).length,
@@ -59,8 +64,11 @@ async function evaluate(fixture, expected, cli, timeoutMs) {
   const toml = (value) => JSON.stringify(value);
   const overrides = [`mcp_servers.${serverName}.command=${toml(command)}`, `mcp_servers.${serverName}.args=${toml(args)}`,
     `mcp_servers.${serverName}.required=true`, `mcp_servers.${serverName}.tool_timeout_sec=60`,
-    `mcp_servers.${serverName}.default_tools_approval_mode="auto"`,
+    // This server is bound to a synthetic, side-effect-denying fixture. Tool calls
+    // may save evidence there; an unattended evaluation must permit those calls.
+    `mcp_servers.${serverName}.default_tools_approval_mode="approve"`,
     ...Object.entries(env).map(([key, value]) => `mcp_servers.${serverName}.env.${key}=${toml(value)}`)];
+  if (windowsSandbox) overrides.push(`windows.sandbox=${toml(windowsSandbox)}`);
   // Isolate other user MCP servers without editing the user's settings or replacing their model/provider.
   const configHome = process.env.CODEX_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME, ".codex");
   try {

@@ -62,6 +62,12 @@ Call run_test with the original intent, resolved level, surface and coverage,
 plus the selected catalog ID or validated Charter. Inspect readiness.missing,
 planning and next when it does not start. Correct supported plan gaps rather
 than forcing an evidence-deficient plan through approval.
+For a whole-project request blocked by project-workflow-coverage, inspect the
+external workflow inventory and report that full-project acceptance is not
+established. Do not launch a separate declared-scope Mission as a substitute
+or attach a declared Mission's report to the project Mission ID. Create a
+reviewed inventory only when its workflow list and source links are supported;
+static routes alone cannot prove that list is complete.
 
 Keep the returned missionId. Call await_test_result for that same Mission. Its
 bounded wait returns a terminal summary with current evidence integrity, a

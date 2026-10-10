@@ -167,6 +167,25 @@ describe("ProofKit MCP tools", () => {
     await server.close();
   });
 
+  it("does not request a second approval while a newly started Mission already has an owner", async () => {
+    const mission = fixtureMission("awaiting-approval");
+    const runner = {
+      config: { surfaces: {} },
+      createMission: vi.fn(async () => mission),
+      startMission: vi.fn(async () => ({ mission, running: true })),
+    } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "run_test", arguments: { intent: "测试简历获取核心链路", level: "core" } });
+      expect(JSON.parse(textContent(response))).toMatchObject({
+        missionId: "mission-test", status: "running", running: true, next: ["await_test_result"],
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("waits for an existing Mission and returns an evidence-checked terminal summary without starting it", async () => {
     const running = fixtureMission("running");
     const completed = fixtureMission("completed");
@@ -304,6 +323,27 @@ describe("ProofKit MCP tools", () => {
     expect(runner.startMission).not.toHaveBeenCalled();
     await client.close();
     await server.close();
+  });
+
+  it("does not suggest a narrower rerun when whole-project workflow coverage is missing", async () => {
+    const mission = fixtureMission("awaiting-approval");
+    mission.plan.planning = { source: "catalog", confidence: 0, assumptions: [], missingInputs: [],
+      evidenceGaps: ["project-workflow-coverage"], coverage: { requested: "project", source: "explicit",
+        reason: "测试整个项目", inventory: "bounded", workflowCoverage: "unmeasured", gaps: ["project-workflow-coverage"] } };
+    const runner = { config: { surfaces: {} }, createMission: vi.fn(async () => mission), startMission: vi.fn() } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "run_test", arguments: { intent: "测试整个项目", coverage: "project", level: "core" } });
+      expect(JSON.parse(textContent(response))).toMatchObject({
+        status: "awaiting-approval", running: false,
+        readiness: { ready: false, missing: ["规划证据缺口：project-workflow-coverage"] },
+        next: ["inspect_test_scope"],
+      });
+      expect(runner.startMission).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 
   it("surfaces a planning evidence gap before automatic execution", async () => {
