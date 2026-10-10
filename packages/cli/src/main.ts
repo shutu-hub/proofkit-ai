@@ -333,7 +333,8 @@ export function createProgram(): Command {
     .description("Audit saved evidence and return a CI exit code for the current test verdict")
     .option("--root <path>", "project root", ".")
     .action(async (missionId: string, options: RootOptions) => {
-      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+      // Checking saved evidence does not need to import or execute workspace integration code.
+      const runner = new LocalRunnerService({ root: resolve(options.root), workspaceRoot: options.workspace });
       const evidence = await runner.missionEvidence(missionId);
       console.log(JSON.stringify({
         missionId: evidence.missionId,

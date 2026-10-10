@@ -309,7 +309,7 @@ Mission evidence now includes a bounded result projection and a static HTML/JSON
 - Parallel run isolation and retention policies.
 - Optional result aggregation; no hosted service required for the core product.
 
-**Current CLI gate:** `mission check` re-audits a saved Mission and returns JSON with historical and current verdicts. `mission run`, `mission replay`, and `mission check` exit 0 for current pass, 1 for observed failure, and 2 for blocked, cancelled, inconclusive, or unasserted outcomes. A real-browser smoke covers a passed run, a failed assertion, an unstarted Mission, and a tampered saved artifact. A reusable GitHub Action and broader CI isolation remain open.
+**Current CLI gate:** `mission check` re-audits a saved Mission without importing its workspace integration, and returns JSON with historical and current verdicts plus a versioned `MissionResult` summary. `mission run`, `mission replay`, and `mission check` exit 0 for current pass, 1 for observed failure, and 2 for blocked, cancelled, inconclusive, or unasserted outcomes. A real-browser smoke covers a passed run, a failed assertion, an unstarted Mission, a connector that throws on import, and a tampered saved artifact. A reusable GitHub Action and broader CI isolation remain open.
 
 **Current distribution evidence:** `pnpm test:distribution` builds one `proofkit-ai` tarball, installs it in a fresh directory without the repository's `node_modules`, runs CLI onboarding, and calls the installed MCP server over stdio. The internal `@proofkit/*` modules are bundled into the two entrypoints. npm publication and cross-platform release verification remain open.
 

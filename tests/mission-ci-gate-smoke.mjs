@@ -50,6 +50,21 @@ try {
   assert.equal(replay.code, 0, replay.stderr || replay.stdout);
   assert.equal(JSON.parse(replay.stdout).testVerdict, "passed");
 
+  const negative = JSON.parse((await command("mission", "create", "Check missing fixture text", "--level", "quick", "--url", url,
+    "--expect", "This text is absent", ...location)).stdout);
+  const failed = await command("mission", "run", negative.missionId, "--approve", ...location);
+  assert.equal(failed.code, 1, failed.stderr || failed.stdout);
+  assert.equal(JSON.parse(failed.stdout).testVerdict, "failed");
+
+  // Historical evidence remains auditable even if the project's trusted connector can no longer load.
+  await writeFile(join(workspace, ".proofkit", "integration.mjs"), 'throw new Error("connector must not load during a saved-result check");\n');
+  const isolatedCheck = await command("mission", "check", created.missionId, ...location);
+  assert.equal(isolatedCheck.code, 0, isolatedCheck.stderr || isolatedCheck.stdout);
+  assert.equal(JSON.parse(isolatedCheck.stdout).testVerdict, "passed");
+  const failedCheck = await command("mission", "check", negative.missionId, ...location);
+  assert.equal(failedCheck.code, 1);
+  assert.equal(JSON.parse(failedCheck.stdout).testVerdict, "failed");
+
   const artifact = initial.evidence.find((item) => item.sha256 && item.path && existsSync(item.path));
   assert.ok(artifact, "Passing Mission did not retain a hashed evidence file");
   await writeFile(artifact.path, `${await readFile(artifact.path, "utf8")}\nchanged after the Mission completed\n`);
@@ -58,17 +73,10 @@ try {
   const result = JSON.parse(degraded.stdout);
   assert.equal(result.verdict, "passed");
   assert.equal(result.testVerdict, "inconclusive");
+  assert.equal(result.summary.schemaVersion, "1");
   assert.equal(result.summary.testVerdict, "inconclusive");
   assert.notEqual(result.acceptanceEvidenceIntegrity.status, "intact");
 
-  const negative = JSON.parse((await command("mission", "create", "Check missing fixture text", "--level", "quick", "--url", url,
-    "--expect", "This text is absent", ...location)).stdout);
-  const failed = await command("mission", "run", negative.missionId, "--approve", ...location);
-  assert.equal(failed.code, 1, failed.stderr || failed.stdout);
-  assert.equal(JSON.parse(failed.stdout).testVerdict, "failed");
-  const failedCheck = await command("mission", "check", negative.missionId, ...location);
-  assert.equal(failedCheck.code, 1);
-  assert.equal(JSON.parse(failedCheck.stdout).testVerdict, "failed");
   console.log(JSON.stringify({ missionId: created.missionId, savedVerdict: result.verdict,
     auditedVerdict: result.testVerdict, exitCode: degraded.code }));
 } finally {
