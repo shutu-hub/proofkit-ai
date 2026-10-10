@@ -92,6 +92,7 @@ function executionProfile(level: MissionPolicy["level"], surface: TestMission["s
     : [surface];
   return MissionExecutionProfileSchema.parse({
     surfaceMatrix,
+    collectAllResults: level === "release",
     negativeCases: level === "quick"
       ? []
       : level === "core"
@@ -144,6 +145,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
     }
     profile.declaredNegativeCases = negativeCaseIds;
     profile.requireNegativeCases = negativeCases.length > 0;
+    profile.collectAllResults ||= negativeCases.length > 0;
     const primaryTasks = profile.surfaceMatrix.map((surface) => {
       const taskId = surface === input.surface ? "execute-charter" : `execute-charter-${surface}`;
       return TaskNodeSchema.parse({
@@ -166,6 +168,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
         tool: "surface.replay-charter",
         input: { adapter: surface },
         dependsOn: [primaryTaskId],
+        dependencyMode: "settled",
         maxAttempts: 1,
       });
     }) : [];
@@ -181,6 +184,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
         tool: "surface.run-negative-charter",
         input: { negativeCase, adapter: surface },
         dependsOn: [primaryTaskId],
+        dependencyMode: "settled",
         maxAttempts: 1,
       });
     }));
@@ -206,6 +210,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
         tool: "mission.verify",
         input: {},
         dependsOn: verificationDependencies,
+        dependencyMode: profile.collectAllResults ? "settled" : "passed",
         maxAttempts: 1,
       }),
     ];

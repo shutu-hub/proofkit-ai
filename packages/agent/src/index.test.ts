@@ -558,6 +558,7 @@ describe("MissionAgent", () => {
     expect(plan.graph.tasks).toHaveLength(taskCount);
     expect(plan.executionProfile.surfaceMatrix).toEqual(surfaces);
     expect(plan.executionProfile.requireReplay).toBe(requiresReplay);
+    expect(plan.executionProfile.collectAllResults).toBe(requiresReplay);
     const verify = plan.graph.tasks.find((task) => task.taskId === "verify-result");
     expect(verify?.dependsOn).toEqual(requiresReplay
       ? ["replay-charter", "replay-charter-electron"]
@@ -613,6 +614,7 @@ describe("MissionAgent", () => {
 
     expect(plan.executionProfile.declaredNegativeCases).toEqual(["duplicate-upload"]);
     expect(plan.executionProfile.requireNegativeCases).toBe(true);
+    expect(plan.executionProfile.collectAllResults).toBe(true);
     expect(plan.graph.tasks).toEqual(expect.arrayContaining([
       expect.objectContaining({
         taskId: "negative-duplicate-upload",
@@ -625,6 +627,43 @@ describe("MissionAgent", () => {
       "execute-charter",
       "negative-duplicate-upload",
     ]);
+  });
+
+  it("finishes declared release replay and negative cases after one evidenced run fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-release-collect-"));
+    const calls: string[] = [];
+    const tools = new InMemoryMissionToolRegistry([
+      { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000,
+        inputSchema: z.object({}), execute: async () => { calls.push("reconnaissance"); return {}; } },
+      ...["surface.run-charter", "surface.replay-charter", "surface.run-negative-charter"].map((name) => ({
+        name, description: name, sideEffect: "read" as const, environments: ["test" as const], timeoutMs: 1000,
+        inputSchema: z.object({}).passthrough(),
+        execute: async (_input: unknown, context: { task: { taskId: string } }) => {
+          calls.push(context.task.taskId);
+          return { verdict: context.task.taskId === "execute-charter" ? "failed" as const : "passed" as const };
+        },
+      })),
+      { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000,
+        inputSchema: z.object({}), execute: async () => { calls.push("verify-result"); return { verdict: "passed" as const }; } },
+    ]);
+    const agent = new MissionAgent({ store: new JsonMissionStore(root), tools });
+    const created = await agent.create({
+      intent: "release one workflow across Web and Electron", projectRoot: root, surface: "web",
+      policy: { level: "release", requireApproval: false },
+      charter: {
+        intent: "release one workflow", level: "release", mode: "deterministic", preconditions: [], actions: [],
+        assertions: [{ kind: "text-visible", text: "Ready" }], oracles: ["business-terminal"], sideEffectPolicy: "deny", metadata: {},
+        negativeCases: [{ caseId: "duplicate", title: "Duplicate attempt", actions: [],
+          assertions: [{ kind: "text-visible", text: "Duplicate" }], oracles: ["business-duplicate"], sideEffectPolicy: "deny", metadata: {} }],
+      },
+    });
+    const result = await agent.run(created.missionId);
+    expect(result.status).toBe("failed");
+    expect(result.verdict).toBe("failed");
+    expect(calls).toEqual(["reconnaissance", "execute-charter", "execute-charter-electron",
+      "replay-charter", "replay-charter-electron", "negative-duplicate", "negative-electron-duplicate", "verify-result"]);
+    expect(result.plan.graph.tasks.filter((task) => task.status === "pending")).toHaveLength(0);
+    expect(result.plan.graph.tasks.find((task) => task.taskId === "execute-charter")?.status).toBe("failed");
   });
 
   it("rejects duplicate negative case identifiers before task creation", async () => {

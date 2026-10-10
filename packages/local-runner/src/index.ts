@@ -1079,6 +1079,7 @@ export class LocalRunnerService {
       const expectedRuns = runs.filter((item) => expectedSurfaces.includes(item.data.surface as typeof expectedSurfaces[number])
         && (item.data.runKind === "primary" || item.data.runKind === "replay" || item.data.runKind === "negative" || item.data.runKind === undefined));
       if (expectedRuns.length < expectedRunCount) missing.push(`至少 ${expectedRunCount} 次表面运行`);
+      const observedFailure = expectedRuns.some((item) => item.data.outcomeMatched !== true && item.data.verdict === "failed");
       const planningGaps = context.mission.plan.planning?.evidenceGaps ?? [];
       if (planningGaps.length > 0) {
         missing.push(`规划阶段存在证据缺口：${planningGaps.join("、")}`);
@@ -1094,7 +1095,7 @@ export class LocalRunnerService {
         const observedAt = new Date().toISOString();
         return {
           output: { verified: false, reason: message, level: context.mission.level },
-          verdict: "inconclusive",
+          verdict: observedFailure ? "failed" : "inconclusive",
           firstFailure: FailureBoundarySchema.parse({ kind: "evidence", message, evidence: context.mission.evidence.slice(0, 4), observedAt }),
           findings: [FindingSchema.parse({ findingId: `evidence-gate-${context.mission.level}`, severity: "high", category: "test", status: "confirmed", title: `${context.mission.level} 测试证据不足`, message, evidence: context.mission.evidence.slice(0, 4), createdAt: observedAt })],
         };

@@ -156,6 +156,22 @@ try {
     && pair.surface === "web" && pair.primaryVerdict === "failed" && pair.replayVerdict === "passed"));
   assert.ok((await readFile(divergent.evidence.report, "utf8")).includes("Primary and replay verdicts differ"));
 
+  transientResumeFailures = 1;
+  const singleStarted = payload(await client.callTool({ name: "run_test", arguments: {
+    intent: "测试简历上线完整回归", charterId: "resume", surface: "web",
+  } }));
+  const singleStatus = await waitForMission(client, singleStarted.missionId);
+  const singleEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: singleStarted.missionId } }));
+  assert.equal(singleStatus.mission.verdict, "failed");
+  assert.equal(singleEvidence.testVerdict, "failed");
+  assert.equal(singleEvidence.summary.runs.length, 4);
+  assert.equal(singleEvidence.summary.runs.filter((run) => run.runKind === "primary").length, 2);
+  assert.equal(singleEvidence.summary.runs.filter((run) => run.runKind === "replay").length, 2);
+  assert.equal(singleEvidence.summary.runs.find((run) => run.surface === "web" && run.runKind === "primary")?.verdict, "failed");
+  assert.ok(singleEvidence.summary.runs.filter((run) => run.runKind === "replay").every((run) => run.verdict === "passed"));
+  assert.equal(singleStatus.mission.plan.graph.tasks.filter((task) => task.status === "pending").length, 0);
+  assert.ok(singleEvidence.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"));
+
   defect = true;
   const bad = await runSuite(client);
   assert.equal(bad.status.mission.verdict, "failed");
@@ -315,7 +331,7 @@ try {
   assert.equal(quickEvidence.proofClassification.businessOracles, 0);
   assert.ok(quickEvidence.suiteScope.routeCoverage.gaps.every((item) => item.kind !== "api" || item.status === "mapped-unobserved"));
   assert.equal((await captureSourceState(sourceRoot)).worktreeSha256, source.worktreeSha256);
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, singleReleaseMission: singleStarted.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "single-charter-release-continues-after-product-failure", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
   await quickClient?.close();
   await quickMcpServer?.close();
