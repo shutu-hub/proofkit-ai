@@ -67,6 +67,7 @@ export class MobileAdapter implements SurfaceAdapter {
 
   async act(action: Action): Promise<ActionReceipt> {
     if (action.kind === "setInputFiles") throw new BlockedError("File selection is not supported by the mobile adapter");
+    if (action.kind === "captureResponse") throw new BlockedError("Response capture is not supported by the mobile adapter");
     const startedAt = new Date().toISOString();
     const started = Date.now();
     const before = await this.readUrl();

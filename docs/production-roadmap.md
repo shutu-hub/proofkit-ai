@@ -115,6 +115,25 @@ AIHR parsing, platform acquisition, billing and worker retries remain open.
 
 The default AIHR development request is `core`. The ordinary PDF upload Charter is the default business path; the online intake Charter remains a compatibility flow. A resume acquisition run must include at least one surface assertion and one independent business Oracle for its terminal state. `release` compares and replays the Web and Electron paths; explicitly configured negative or recovery cases are also executed and included in the evidence gate.
 
+**Current-submission identity evidence:** `pnpm test:smoke:response` exercises
+real Web/Electron multipart submissions, MCP core/release execution and fresh
+response IDs on replay. It preloads an older successful object, then requires
+the independent reader to identify the newly returned object. A release
+Mission contains six Runs with distinct response IDs. The fixture also proves
+stored bytes and candidate/job relations through a trusted workspace connector,
+detects corrupted server bytes, and verifies restored behavior by direct replay.
+Duplicate/no-match requests, pending status and stalled bodies remain
+inconclusive; a wrong independent identity fails despite a completed status.
+Small chunked/compressed responses pass. Capture artifacts omit unselected
+response fields, and the source fixture is unchanged. This validates transport,
+identity, evidence and comparison, not live AIHR parsing or worker behavior.
+
+The actual AIHR manual-candidate intake POST returns file/candidate/version/job
+identities and can create business objects before a later enqueue failure.
+Its Oracle must follow that verified flow and its existing readers; it cannot
+require an unrelated online collection workflow. A live isolated acceptance
+Charter and terminal business connector for this path remain open.
+
 ## Phase 4: failure diagnosis and repair loop
 
 **Goal:** turn evidence into an actionable engineering result.

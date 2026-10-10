@@ -141,8 +141,9 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
   if (failedStep) {
     const stepEvidence = evidenceForPaths(evidence, failedStep.artifacts, summary.runId);
     const environmentLike = isEnvironmentFailure(failedStep.error);
+    const observationGap = summary.verdict === "inconclusive" && failedStep.action.kind === "captureResponse";
     const boundary = FailureBoundarySchema.parse({
-      kind: environmentLike ? "environment" : "surface-action",
+      kind: observationGap ? "evidence" : environmentLike ? "environment" : "surface-action",
       stepId: failedStep.stepId,
       message: failedStep.error ?? `Step ${failedStep.stepId} did not pass.`,
       evidence: stepEvidence,
@@ -152,10 +153,10 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
       boundary,
       finding: FindingSchema.parse({
         findingId: `finding-${summary.runId}-step-${failedStep.stepId}`,
-        severity: environmentLike ? "medium" : "low",
-        category: environmentLike ? "environment" : "test",
-        status: "suspected",
-        title: environmentLike ? "Test environment prevented execution" : "Surface step did not complete",
+        severity: observationGap ? "low" : environmentLike ? "medium" : "low",
+        category: observationGap ? "test" : environmentLike ? "environment" : "test",
+        status: observationGap ? "unverified" : "suspected",
+        title: observationGap ? "Action response evidence is incomplete" : environmentLike ? "Test environment prevented execution" : "Surface step did not complete",
         message: boundary.message,
         evidence: stepEvidence,
         createdAt: boundary.observedAt,

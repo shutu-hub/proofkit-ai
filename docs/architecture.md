@@ -152,6 +152,54 @@ outcome. Repair comparison is inconclusive when either side lacks matching
 facts. Different inputs require a new Mission. The mobile adapter currently
 blocks this action; the fixture checks are not a hostile-filesystem sandbox.
 
+### Action response identity and independent acceptance
+
+`captureResponse` installs listeners before a unique-selector `click` or
+`press`. It observes requests started by the selected page's main frame
+during the trigger and the declared post-trigger window, matching exact
+origin, pathname and method. Query values are ignored and are not copied into
+the capture artifact. It binds the response to the observed request object;
+pre-existing responses, other frames and worker requests cannot supply the ID.
+Exactly one matching request is required. Redirects, duplicate requests,
+missing responses, request failure, page closure, unaccepted status, invalid
+JSON or unavailable selected fields produce `inconclusive` evidence gaps.
+
+The action selects 1–16 scalar fields through bounded RFC 6901 pointers.
+Decimal IDs are normalized without accepting unsafe JavaScript integers;
+other ID formats can use the `string` field type. The saved step and response
+artifact retain the selected fields, endpoint, method, status, temporal
+window, body size and SHA-256, rather than the body or headers. JSON bodies
+must contain 1–65,536 decoded bytes; a declared oversized Content-Length is
+rejected before body acquisition. Small chunked and compressed responses are
+supported. Playwright materializes response bodies, so this is an acceptance
+bound rather than a hard bound on transient memory. Other page/network
+observations remain subject to their existing evidence and redaction rules.
+
+Trigger discovery, interaction, window waiting and body acquisition share
+one deadline and cancellation signal. A locator that completes after expiry
+cannot start a new click; an interaction already sent to the browser cannot
+be rolled back. Listeners and timers are released at the boundary. The
+Charter and workspace must allow side effects, and the adapter must declare
+capture support before connection. Web and Electron share this implementation;
+mobile currently blocks the action.
+
+A configured HTTP Oracle query may bind `source: response` to a completed
+capture step and selected field. Its required `matchPointer` independently
+checks the returned object's identity before terminal status evaluation.
+Missing capture facts reject the binding before the GET. Missing independent
+identity remains pending until an inconclusive deadline; a valid mismatching
+identity fails even when its status reports success. There is no fallback to
+a historical object. Richer byte, candidate, job and assessment invariants
+remain the responsibility of a trusted workspace connector.
+
+`association: action-window` describes temporal association, not causal proof.
+Isolated data, controlled background activity and independent business facts
+remain necessary. Direct replay captures fresh response IDs; they need not
+equal the baseline IDs, while selected fixture bytes and ordered input facts
+must still match. A declared negative case cannot turn missing response facts
+into successful acceptance. Capture gaps remain test-evidence findings and
+do not produce a confirmed product diagnosis or repair suggestion.
+
 ### Test scope inspection
 
 `inspect_test_scope` and `proofkit scope` use one Local Runner method to join the bounded Project Map with the external workspace's Charter/Suite catalog and registered capabilities/Oracles. The result reports source path and line, route declarations and unresolved mappings, compatible plan checks, capability side effects/environment and bounded input structure hints. It defaults to `core`/`web`; `focus` is an NFKC-normalized, case-insensitive literal substring in paths or registration metadata, not semantic intent resolution. `limit` caps each detail section at 1–50 items (default 20); retained candidate totals, matched counts, omitted counts and inventory truncation remain explicit.

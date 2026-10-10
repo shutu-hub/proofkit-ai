@@ -305,6 +305,12 @@ the default location. This smoke creates its own Electron app and profile,
 checks multipart bytes against independent server facts, and retains local
 reports for passing, defective and repaired scenarios.
 
+With the same browser/Electron paths, `pnpm test:smoke:response` verifies
+current-submission response IDs, independent identity/status checks, fresh
+IDs on replay, and evidence-backed defect/fix comparison. Its isolated fixture
+also covers ambiguous requests, delayed processing and chunked/compressed JSON;
+live application business acceptance remains a separate validation step.
+
 ## Design principles
 
 1. Reuse mature execution engines; focus on project understanding, cross-layer observation, business oracles and evidence.

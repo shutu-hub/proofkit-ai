@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzeRun } from "./failure-analyzer.js";
-import type { EvidenceRef, RunSummary } from "@proofkit/contracts";
+import { CaptureResponseActionSchema, type EvidenceRef, type RunSummary } from "@proofkit/contracts";
 
 const capturedAt = "2026-10-08T00:00:00.000Z";
 
@@ -28,6 +28,16 @@ function summary(overrides: Partial<RunSummary> = {}): RunSummary {
 }
 
 describe("analyzeRun", () => {
+  it("keeps ambiguous action response evidence unverified without a product diagnosis", () => {
+    const path = "run-fixture/artifacts/step-001-response-gap.json";
+    const action = CaptureResponseActionSchema.parse({ kind: "captureResponse", name: "intake", trigger: { kind: "click", selector: "#submit" },
+      response: { url: "http://127.0.0.1/api/intakes", method: "POST", fields: { id: { pointer: "/data/id", type: "id" } } } });
+    const result = analyzeRun({ summary: summary({ verdict: "inconclusive", steps: [{ stepId: "step-001", action,
+      status: "failed", error: "The page closed during response capture", artifacts: [path] }] }), evidence: [evidence(path, "report")] });
+    expect(result.boundary?.kind).toBe("evidence"); expect(result.finding?.category).toBe("test");
+    expect(result.finding?.status).toBe("unverified"); expect(result.finding?.evidence).toHaveLength(1);
+    expect(result.diagnosis).toBeUndefined(); expect(result.repairSuggestion).toBeUndefined();
+  });
   it("confirms a business failure only when the oracle links evidence", () => {
     const result = analyzeRun({
       summary: summary({ oracles: [{ name: "resume-terminal", passed: false, message: "resume failed", evidence: ["run-fixture/artifacts/oracle-1-source.json", "run-fixture/artifacts/oracle-1.json"], sourceEvidenceCount: 1, sourceEvidenceArtifacts: ["run-fixture/artifacts/oracle-1-source.json"], observedAt: capturedAt }] }),

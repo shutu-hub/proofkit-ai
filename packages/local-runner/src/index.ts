@@ -408,7 +408,7 @@ export class LocalRunnerService {
     const scenarios = [{ actions: charter.actions, sideEffectPolicy: charter.sideEffectPolicy }, ...(charter.negativeCases ?? [])];
     for (const scenario of scenarios) {
       for (const action of scenario.actions) {
-        if (this.restrictWebOrigins && (action.kind === "click" || action.kind === "fill" || action.kind === "press" || action.kind === "setInputFiles") && scenario.sideEffectPolicy !== "allow") {
+        if (this.restrictWebOrigins && (action.kind === "click" || action.kind === "fill" || action.kind === "press" || action.kind === "setInputFiles" || action.kind === "captureResponse") && scenario.sideEffectPolicy !== "allow") {
           throw new Error(`${label} interactive action ${action.kind} requires sideEffectPolicy=allow`);
         }
         if (action.kind !== "capability") continue;
@@ -685,7 +685,9 @@ export class LocalRunnerService {
       const replayInputMismatch = summary.steps.some((step) => step.replayInputMatched === false)
         || (sourceRunId !== undefined && summary.charter.actions.some((action, index) => action.kind === "setInputFiles"
           && summary.steps.find((step) => step.stepId === `step-${String(index + 1).padStart(3, "0")}`)?.replayInputMatched !== true));
-      const outcomeMatched = expectedVerdict === undefined ? undefined : !replayInputMismatch && actualVerdict === expectedVerdict;
+      const responseFactsMissing = summary.charter.actions.some((action, index) => action.kind === "captureResponse"
+        && !summary.steps.find((step) => step.stepId === `step-${String(index + 1).padStart(3, "0")}`)?.response);
+      const outcomeMatched = expectedVerdict === undefined ? undefined : !replayInputMismatch && !responseFactsMissing && actualVerdict === expectedVerdict;
       const effectiveVerdict: Verdict = expectedVerdict === undefined
         ? actualVerdict
         : outcomeMatched ? "passed" : actualVerdict === "passed" ? "failed" : actualVerdict;
@@ -751,7 +753,8 @@ export class LocalRunnerService {
               category: "test",
               status: "confirmed",
               title: "Negative case outcome did not match expectation",
-              message: replayInputMismatch ? "Replay input files were missing, changed or unverified; the expected negative outcome cannot validate different test inputs."
+              message: responseFactsMissing ? "A declared action response was not observed; the expected negative outcome cannot certify missing response evidence."
+                : replayInputMismatch ? "Replay input files were missing, changed or unverified; the expected negative outcome cannot validate different test inputs."
                 : `Expected ${expectedVerdict}, but the surface run ended with ${actualVerdict}.`,
               evidence,
               createdAt: summary.endedAt ?? summary.startedAt,
@@ -1012,7 +1015,7 @@ export class LocalRunnerService {
       requireAssertions: levelProfile.evidencePolicy.requireAssertions,
       requireBusinessOracle: levelProfile.evidencePolicy.requireBusinessOracle,
       allowedActionKinds: policy === "allow"
-        ? ["goto", "click", "fill", "press", "setInputFiles", "waitForText", "screenshot", "observe"]
+        ? ["goto", "click", "fill", "press", "setInputFiles", "captureResponse", "waitForText", "screenshot", "observe"]
         : ["goto", "waitForText", "screenshot", "observe"],
       allowedOracleNames: [...new Set([
         ...this.config.oracles.map((oracle) => oracle.name),
@@ -1314,7 +1317,8 @@ export class LocalRunnerService {
     const configuredOrigin = this.config.surfaces.web?.baseUrl
       ? new URL(this.config.surfaces.web.baseUrl).origin
       : undefined;
-    const urls = [input.url, ...charter.actions.filter((action) => action.kind === "goto").map((action) => action.url)];
+    const urls = [input.url, ...charter.actions.flatMap((action) => action.kind === "goto" ? [action.url]
+      : action.kind === "captureResponse" ? [action.response.url] : [])];
     for (const value of urls) {
       if (!value) continue;
       const parsed = new URL(value);

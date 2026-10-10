@@ -21,6 +21,7 @@
     "test:smoke:local:electron": "pnpm build && node tests/local-runner-aihr-smoke.mjs electron",
     "test:smoke:suite": "pnpm build && node tests/release-suite-smoke.mjs",
     "test:smoke:upload": "pnpm build && node tests/upload-smoke.mjs",
+    "test:smoke:response": "pnpm build && node tests/response-capture-smoke.mjs",
     "test:distribution": "node tests/distribution-smoke.mjs",
     "benchmark:planner": "pnpm build && node tests/planner-benchmark.mjs",
     "dev": "pnpm --filter @proofkit/cli dev"

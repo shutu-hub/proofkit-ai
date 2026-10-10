@@ -85,6 +85,83 @@ prevent expected negative outcomes from passing and make repair comparison
 inconclusive; create a new Mission for a new input dataset. Fixture validation
 occurs at the file action, so earlier form actions may already have executed.
 
+To bind acceptance to the object returned by this submission, replace the
+submit click with `captureResponse`. The following is an illustrative API
+contract, not a ready-made AIHR workflow; inspect real routes and controls:
+
+```yaml
+intent: Verify one resume submission and its terminal processing state
+level: core
+sideEffectPolicy: allow
+actions:
+  - kind: goto
+    url: http://127.0.0.1:5173/resumes
+  - kind: setInputFiles
+    selector: 'input[type="file"][name="resume"]'
+    files: [.proofkit/fixtures/resume.pdf]
+  - kind: captureResponse
+    name: resume-created
+    trigger:
+      kind: click
+      selector: 'button[data-testid="submit-resume"]'
+    response:
+      url: http://127.0.0.1:8080/api/v1/resumes
+      method: POST
+      statuses: [200, 201]
+      fields:
+        fileId: { pointer: /data/file_id, type: id }
+    requestWindowMs: 500
+    timeoutMs: 10000
+assertions:
+  - kind: text-visible
+    text: Resume submitted
+oracles: [resume.terminal]
+```
+
+Register a read-only identity/status check in the external config. The example
+assumes the existing independent GET accepts `file_id` and returns
+`data.file_id` and `data.status`; ProofKit does not create that application API:
+
+```yaml
+policies:
+  sideEffects: allow
+oracles:
+  - name: resume.terminal
+    url: http://127.0.0.1:8080/api/v1/resume-status
+    query:
+      file_id:
+        source: response
+        stepId: step-003
+        field: fileId
+        matchPointer: /data/file_id
+    statusPointer: /data/status
+    successValues: [completed]
+    failureValues: [failed]
+    deadlineMs: 30000
+```
+
+Step IDs are one-based action positions; update the binding if actions are
+inserted. Use the actual API's field pointers and status values. Missing or
+ambiguous response identity is inconclusive. A different independent object
+ID fails even if that object has completed. A configured status Oracle proves
+only these declared facts; use a workspace connector for stored file bytes,
+candidate identity, job relation and other business invariants.
+
+Capture accepts one matching main-frame request started in the action window,
+then only the selected scalar fields from its JSON response. It rejects
+redirects and accepts at most 64 KiB of decoded JSON; this is not a hard
+Playwright memory limit. Temporal association alone does not prove causation.
+Use isolated data and account for background requests. Both the scenario and
+workspace must allow side effects, and the endpoint must satisfy the MCP
+navigation-origin policy. Mobile capture is currently blocked.
+
+Replay preserves fixture input identity but captures a fresh business ID.
+For AIHR's manual intake, the verified POST is
+`/api/v1/resume-collection/candidate-intakes`, with response fields including
+`resume_file_id`, `candidate_id` and `job_id`. Its independent reader and
+terminal invariants must follow that actual flow; a manual intake must not be
+accepted by querying an unrelated online collection workflow.
+
 For repair verification, replay the failed Mission after the application change. The new Mission stores `replayOfMissionId`; once it finishes, `get_mission_evidence` includes a comparison with the source Mission. `compare_missions` reads the same comparison directly. It requires a direct replay, the same project/workspace and saved Charter or suite scope, a confirmed baseline product finding linked to a materialized business source artifact, and a complete passing candidate with its own independent source facts. Primary, required replay, and declared negative Runs are paired by Charter, surface and run kind. A missing Run, changed scope, unmaterialized artifact or unfinished candidate is `inconclusive`; a repeated evidenced Oracle failure is `defect-reproduced`. `verified-in-scope` does not identify which source change fixed the symptom.
 
 The result also includes `sourceChange` and `candidateSourceStability`. These come from bounded, read-only Git fingerprints captured before execution and after verification; only digests and counts are stored. `sourceChange=unknown` means the source state could not be captured completely. A candidate whose source changed during its own run is inconclusive even if the business checks passed.

@@ -1,5 +1,5 @@
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { OracleResultSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, TargetBindingSchema, type RuntimeFinding } from "@proofkit/contracts";
+import { OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, TargetBindingSchema, type RuntimeFinding } from "@proofkit/contracts";
 import { z } from "zod";
 import { inputFileFacts, resolveInputFiles, sameInputFileFacts, type InputFileFact, type SurfaceActionContext } from "./input-files.js";
 export type { SurfaceActionContext, ResolvedInputFile, InputFileFact } from "./input-files.js";
@@ -33,6 +33,7 @@ export type AdapterEvent = {
 export interface SurfaceAdapter {
   readonly name: string;
   readonly supportsFileInputs?: boolean;
+  readonly supportsResponseCapture?: boolean;
   connect(): Promise<void>;
   discover(): Promise<SurfaceSnapshot>;
   snapshot(): Promise<SurfaceSnapshot>;
@@ -106,6 +107,12 @@ export class CancelledError extends Error {
 
 export class RunTimeoutError extends Error {
   override readonly name = "RunTimeoutError";
+}
+
+/** Missing or ambiguous observation is not proof of a product defect. */
+export class InconclusiveError extends Error {
+  override readonly name = "InconclusiveError";
+  constructor(readonly code: string, message: string) { super(message); }
 }
 
 export type ExecutionOptions = {
@@ -231,6 +238,10 @@ export class ExecutionRunner {
     try {
       throwIfAborted(signal);
       assertFillEnvironment(charter.actions);
+      if (charter.actions.some((action) => action.kind === "captureResponse")) {
+        if (charter.sideEffectPolicy !== "allow") throw new BlockedError("Response capture triggers require sideEffectPolicy=allow");
+        if (!this.adapter.supportsResponseCapture) throw new BlockedError(`Response capture is not supported by the ${this.adapter.name} adapter`);
+      }
       if (charter.actions.some((action) => action.kind === "setInputFiles")) {
         if (charter.sideEffectPolicy !== "allow" || !this.allowFileUploads) throw new BlockedError("File selection requires sideEffectPolicy=allow and runner allowFileUploads");
         if (!this.adapter.supportsFileInputs) throw new BlockedError(`File selection is not supported by the ${this.adapter.name} adapter`);
@@ -288,11 +299,11 @@ export class ExecutionRunner {
             step.beforeSnapshot = beforeSnapshot;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-before`, beforeSnapshot));
             const runtimeAction = resolveRuntimeAction(action);
-            let actionContext: SurfaceActionContext | undefined;
+            let actionContext: SurfaceActionContext = { signal };
             if (action.kind === "setInputFiles") {
               if (this.expectedInputFiles) step.replayInputMatched = false;
               try {
-                actionContext = { inputFiles: await withAbort(resolveInputFiles(this.workspaceRoot, action.files, signal), signal, `${stepId} fixture read`) };
+                actionContext.inputFiles = await withAbort(resolveInputFiles(this.workspaceRoot, action.files, signal), signal, `${stepId} fixture read`);
               } catch (error) {
                 if (signal.aborted) throw error;
                 throw new BlockedError(toError(error).message);
@@ -320,9 +331,25 @@ export class ExecutionRunner {
               }
               throw error;
             }
-            step.receipt = actionContext?.inputFiles
-              ? { ...receipt, metadata: { ...receipt.metadata, inputFiles: inputFileFacts(actionContext.inputFiles) } }
-              : receipt;
+            if (action.kind === "captureResponse") {
+              const result = ResponseObservationSchema.safeParse(receipt.metadata.response);
+              if (!result.success || result.data.name !== action.name || result.data.url !== new URL(action.response.url).href
+                || result.data.method !== action.response.method || !action.response.statuses.includes(result.data.status)
+                || Object.keys(result.data.fields).length !== Object.keys(action.response.fields).length
+                || Object.entries(action.response.fields).some(([name, field]) => {
+                  const value = result.data.fields[name];
+                  return field.type === "id" ? typeof value !== "string" || !/^[1-9]\d{0,127}$/.test(value) : typeof value !== field.type;
+                })) throw new InconclusiveError("missing-response-facts", "Adapter did not return valid facts for this response capture");
+              step.response = result.data;
+              step.receipt = { ...receipt, metadata: { adapter: this.adapter.name, response: result.data } };
+              const artifact = await this.store.writeJson(runId, `${stepId}-response`, result.data);
+              step.artifacts.push(artifact);
+              await this.emit({ runId, timestamp: result.data.capturedAt, type: "artifact.created", stepId, payload: { path: artifact, kind: "response-observation" } });
+            } else {
+              step.receipt = actionContext.inputFiles
+                ? { ...receipt, metadata: { ...receipt.metadata, inputFiles: inputFileFacts(actionContext.inputFiles) } }
+                : receipt;
+            }
             const afterSnapshot = await withAbort(action.kind === "observe" ? this.adapter.discover() : this.adapter.snapshot(), signal, `${stepId} snapshot`);
             step.afterSnapshot = afterSnapshot;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-after`, afterSnapshot));
@@ -338,6 +365,7 @@ export class ExecutionRunner {
           const cause = toError(error);
           step.status = cause instanceof BlockedError ? "blocked" : "failed";
           step.error = cause.message;
+          if (cause instanceof InconclusiveError) step.artifacts.push(await this.store.writeJson(runId, `${stepId}-response-gap`, { code: cause.code, message: cause.message }));
           executionError = cause;
           summary.findings.push(`${stepId}: ${cause.message}`);
         }
@@ -393,7 +421,7 @@ export class ExecutionRunner {
     }
 
     const baseVerdict = executionError
-      ? executionError instanceof BlockedError ? "blocked" : executionError instanceof CancelledError || executionError instanceof RunTimeoutError ? "cancelled" : "failed"
+      ? executionError instanceof BlockedError ? "blocked" : executionError instanceof CancelledError || executionError instanceof RunTimeoutError ? "cancelled" : executionError instanceof InconclusiveError ? "inconclusive" : "failed"
       : charter.assertions.length === 0 && this.oracles.length === 0
         ? "inconclusive"
         : summary.assertions.some((result) => !result.passed) || summary.oracles.some((result) => result.passed === false)
@@ -413,7 +441,7 @@ export class ExecutionRunner {
       : baseVerdict;
     if (summary.verdict === "blocked" && environmentBlocked) summary.findings.push("Configured runtime environment blocker was observed; inspect runtime-findings.json.");
     if (summary.verdict === "inconclusive") summary.findings.push(
-      charter.assertions.length === 0 && this.oracles.length === 0
+      executionError instanceof InconclusiveError ? executionError.message : charter.assertions.length === 0 && this.oracles.length === 0
         ? "No executable assertion or business oracle was declared."
         : "A business oracle did not observe a terminal state within its deadline.",
     );
@@ -657,6 +685,7 @@ async function withAbort<T>(promise: Promise<T>, signal: AbortSignal, label: str
     ]);
   } catch (error) {
     if (signal.aborted) throw abortReason(signal);
+    if (error instanceof InconclusiveError) throw error;
     throw new Error(`${label} failed: ${toError(error).message}`);
   } finally {
     if (onAbort) signal.removeEventListener("abort", onAbort);

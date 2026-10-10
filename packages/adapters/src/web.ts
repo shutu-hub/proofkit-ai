@@ -1,6 +1,7 @@
 import type { Browser, BrowserContext, Locator, Page, Request, Response } from "playwright-core";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceControl, SurfaceSnapshot } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceAdapter, SurfaceActionContext } from "@proofkit/runner";
+import { captureActionResponse } from "./response-capture.js";
 
 export type WebAdapterOptions = {
   baseUrl?: string;
@@ -21,6 +22,7 @@ export type WebAdapterOptions = {
 export class WebAdapter implements SurfaceAdapter {
   readonly name: string = "web";
   readonly supportsFileInputs = true;
+  readonly supportsResponseCapture = true;
   protected browser?: Browser;
   protected context?: BrowserContext;
   protected activePage?: Page;
@@ -149,6 +151,7 @@ export class WebAdapter implements SurfaceAdapter {
     const startedAt = new Date().toISOString();
     const started = Date.now();
     const urlBefore = page.url();
+    let response;
     switch (action.kind) {
       case "goto":
         await page.goto(action.url, { waitUntil: "domcontentloaded" });
@@ -163,6 +166,16 @@ export class WebAdapter implements SurfaceAdapter {
       case "press":
         await (await uniqueActionLocator(page, action.selector)).press(action.key);
         break;
+      case "captureResponse": {
+        response = await captureActionResponse(page, action, async ({ signal, remainingTimeoutMs }) => {
+          const locator = await uniqueActionLocator(page, action.trigger.selector, "visible", remainingTimeoutMs());
+          signal.throwIfAborted();
+          const timeout = remainingTimeoutMs();
+          if (action.trigger.kind === "click") await locator.click({ timeout });
+          else await locator.press(action.trigger.key, { timeout });
+        }, context?.signal);
+        break;
+      }
       case "setInputFiles": {
         const files = context?.inputFiles;
         if (!files || files.length !== action.files.length || files.some((file, index) => file.fixture !== action.files[index])) {
@@ -193,7 +206,7 @@ export class WebAdapter implements SurfaceAdapter {
       urlBefore: sanitizeSurfaceUrl(urlBefore),
       urlAfter: sanitizeSurfaceUrl(page.url()),
       titleAfter: sanitizeSurfaceText(await page.title().catch(() => ""), 200),
-      metadata: { adapter: this.name },
+      metadata: { adapter: this.name, ...(response ? { response } : {}) },
     };
   }
 
@@ -304,9 +317,9 @@ async function hasVisibleText(page: Page, text: string): Promise<boolean> {
   return false;
 }
 
-async function uniqueActionLocator(page: Page, selector: string, state: "visible" | "attached" = "visible"): Promise<Locator> {
+async function uniqueActionLocator(page: Page, selector: string, state: "visible" | "attached" = "visible", timeout = 10_000): Promise<Locator> {
   const locator = page.locator(selector);
-  await locator.first().waitFor({ state, timeout: 10_000 });
+  await locator.first().waitFor({ state, timeout });
   const count = await locator.count();
   if (count !== 1) throw new Error(`Action selector matched ${count} elements: ${sanitizeSurfaceText(selector, 120)}`);
   return locator;

@@ -42,6 +42,57 @@ export const InputFileFactSchema = z.object({
 });
 export type InputFileFact = z.infer<typeof InputFileFactSchema>;
 
+/** Exact HTTP endpoint; query values and credentials never enter this contract. */
+export const ResponseEndpointSchema = z.string().url().max(2048).refine((value) => {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+}, "Use an HTTP(S) endpoint without credentials, query or fragment");
+const ResponseFieldNameSchema = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/)
+  .refine((value) => !["constructor", "prototype", "__proto__"].includes(value));
+export const ResponsePointerSchema = z.string().min(1).max(256).refine((value) => value.startsWith("/") && !/~(?![01])/.test(value)
+    && value.split("/").length <= 9
+    && value.split("/").slice(1).every((part) => !["__proto__", "prototype", "constructor"].includes(part.replace(/~1/g, "/").replace(/~0/g, "~"))),
+    "Use an RFC 6901 pointer with at most eight safe segments");
+export const ResponseProjectionSchema = z.record(ResponseFieldNameSchema, z.object({
+  pointer: ResponsePointerSchema,
+  type: z.enum(["id", "string", "number", "boolean"]),
+}).strict()).refine((value) => Object.keys(value).length >= 1 && Object.keys(value).length <= 16, "Select 1-16 scalar response fields");
+export const CaptureResponseActionSchema = z.object({
+  kind: z.literal("captureResponse"),
+  name: z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/),
+  trigger: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("click"), selector: z.string().min(1) }).strict(),
+    z.object({ kind: z.literal("press"), selector: z.string().min(1), key: z.string().min(1) }).strict(),
+  ]),
+  response: z.object({
+    url: ResponseEndpointSchema,
+    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]),
+    statuses: z.array(z.number().int().min(200).max(599)).min(1).max(10).default([200, 201]),
+    fields: ResponseProjectionSchema,
+  }).strict(),
+  /** Continue observing requests for this interval after the trigger completes. */
+  requestWindowMs: z.number().int().min(1).max(5000).default(500),
+  timeoutMs: z.number().int().positive().max(60000).default(10000),
+}).strict();
+export type CaptureResponseAction = z.infer<typeof CaptureResponseActionSchema>;
+export const ResponseObservationSchema = z.object({
+  name: z.string().min(1).max(64),
+  association: z.literal("action-window"),
+  url: ResponseEndpointSchema,
+  method: z.string().min(1),
+  status: z.number().int().min(200).max(599),
+  requestCount: z.literal(1),
+  windowStartedAt: z.string(),
+  windowEndedAt: z.string(),
+  capturedAt: z.string(),
+  bodyBytes: z.number().int().min(1).max(65536),
+  bodySha256: z.string().regex(/^[a-f0-9]{64}$/),
+  fields: z.record(ResponseFieldNameSchema, z.union([z.string().max(256), z.number().finite(), z.boolean()])),
+}).strict();
+export type ResponseObservation = z.infer<typeof ResponseObservationSchema>;
+
 export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("goto"), url: z.string().url() }),
   z.object({ kind: z.literal("click"), selector: z.string().min(1) }),
@@ -52,6 +103,7 @@ export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("screenshot"), name: z.string().min(1).optional() }),
   z.object({ kind: z.literal("capability"), name: z.string().min(1), input: z.record(z.string(), z.unknown()).default({}) }),
   z.object({ kind: z.literal("observe") }),
+  CaptureResponseActionSchema,
 ]);
 export type Action = z.infer<typeof ActionSchema>;
 
@@ -218,6 +270,8 @@ export const StepResultSchema = z.object({
   action: ActionSchema,
   status: z.enum(["passed", "failed", "blocked"]),
   receipt: ActionReceiptSchema.optional(),
+  /** Selected facts from one request observed within this step's action window. */
+  response: ResponseObservationSchema.optional(),
   inputFiles: z.array(InputFileFactSchema).optional(),
   /** Present only when replay checks the selected bytes against its source Run. */
   replayInputMatched: z.boolean().optional(),
@@ -556,6 +610,8 @@ export const ProofkitConfigSchema = z.object({
     query: z.record(z.discriminatedUnion("source", [
       z.object({ source: z.literal("runId") }),
       z.object({ source: z.literal("step"), stepId: z.string().regex(/^step-\d{3}$/), field: z.string().min(1) }),
+      z.object({ source: z.literal("response"), stepId: z.string().regex(/^step-\d{3}$/), field: ResponseFieldNameSchema,
+        matchPointer: ResponsePointerSchema }).strict(),
     ])).default({}),
     statusPointer: z.string().startsWith("/"),
     successValues: z.array(z.string().min(1)).min(1),

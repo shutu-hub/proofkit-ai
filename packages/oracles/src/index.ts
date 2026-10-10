@@ -1,8 +1,8 @@
 import { request } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { sha256 } from "@proofkit/evidence";
-import type { OracleResult, ProofkitConfig } from "@proofkit/contracts";
-import type { BusinessOracle } from "@proofkit/runner";
+import type { CaptureResponseAction, OracleResult, ProofkitConfig, StepResult } from "@proofkit/contracts";
+import { InconclusiveError, type BusinessOracle } from "@proofkit/runner";
 
 export type HttpOracleOptions = {
   name: string;
@@ -33,12 +33,23 @@ export function configuredHttpOracle(config: ProofkitConfig["oracles"][number]):
     name: config.name,
     check(context) {
       const url = new URL(config.url);
+      const matches: Array<{ parameter: string; value: string; pointer: string; type: CaptureResponseAction["response"]["fields"][string]["type"] }> = [];
       for (const [parameter, binding] of Object.entries(config.query)) {
         const value = binding.source === "runId"
           ? context.runId
-          : readStepField(context.steps, binding.stepId, binding.field);
+          : binding.source === "step" ? readStepField(context.steps, binding.stepId, binding.field)
+          : (() => {
+            const selected = readResponseField(context.steps, binding.stepId, binding.field);
+            matches.push({ parameter, value: selected.value, pointer: binding.matchPointer, type: selected.type });
+            return selected.value;
+          })();
         url.searchParams.set(parameter, value);
       }
+      const scopeMatches = (body: unknown): boolean | null => {
+        const values = matches.map((match) => normalizeResponseScalar(jsonPointer(body, match.pointer), match.type));
+        if (values.some((value) => value === undefined)) return null;
+        return values.every((value, index) => value === matches[index]?.value);
+      };
       return pollHttpOracle({
         name: config.name,
         url: url.toString(),
@@ -46,6 +57,9 @@ export function configuredHttpOracle(config: ProofkitConfig["oracles"][number]):
         intervalMs: config.intervalMs,
         deadlineMs: config.deadlineMs,
         evaluate: (body) => {
+          const scoped = scopeMatches(body);
+          if (scoped === null) return "pending";
+          if (!scoped) return "failed";
           const value = jsonPointer(body, config.statusPointer);
           if (typeof value !== "string") return "pending";
           if (success.has(value)) return "passed";
@@ -54,12 +68,46 @@ export function configuredHttpOracle(config: ProofkitConfig["oracles"][number]):
         },
         facts: (body) => {
           const value = jsonPointer(body, config.statusPointer);
-          return { state: typeof value === "string" && (success.has(value) || failure.has(value)) ? value : "pending" };
+          const facts: Record<string, string | number | boolean | null> = {
+            state: typeof value === "string" && (success.has(value) || failure.has(value)) ? value : "pending",
+          };
+          if (matches.length) facts.scopeMatches = scopeMatches(body);
+          for (const match of matches) {
+            facts[`expected_${match.parameter}`] = match.value;
+            facts[`observed_${match.parameter}`] = normalizeResponseScalar(jsonPointer(body, match.pointer), match.type) ?? null;
+          }
+          return facts;
         },
         signal: context.signal,
       }).check(context);
     },
   };
+}
+
+function readResponseField(steps: StepResult[], stepId: string, field: string): {
+  value: string; type: CaptureResponseAction["response"]["fields"][string]["type"];
+} {
+  const step = steps.find((item) => item.stepId === stepId);
+  if (!step || step.status !== "passed" || step.action.kind !== "captureResponse" || !step.response
+    || step.response.name !== step.action.name || !Object.hasOwn(step.action.response.fields, field)
+    || !Object.hasOwn(step.response.fields, field)) {
+    throw new InconclusiveError("response-binding-unavailable", `Oracle binding requires a completed response field: ${stepId}.${field}`);
+  }
+  const type = step.action.response.fields[field]!.type;
+  const value = normalizeResponseScalar(step.response.fields[field], type);
+  if (value === undefined) throw new InconclusiveError("response-binding-unavailable", `Oracle response field is invalid: ${stepId}.${field}`);
+  return { value, type };
+}
+
+function normalizeResponseScalar(value: unknown, type: CaptureResponseAction["response"]["fields"][string]["type"]): string | undefined {
+  if (type === "id") {
+    if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) value = String(value);
+    return typeof value === "string" && /^[1-9]\d{0,127}$/.test(value) ? value : undefined;
+  }
+  if (typeof value !== type) return undefined;
+  if (typeof value === "string" && (value.length > 256 || /[\x00-\x1f]/.test(value))) return undefined;
+  if (typeof value === "number" && !Number.isFinite(value)) return undefined;
+  return String(value);
 }
 
 function readStepField(steps: Array<{ stepId: string; status: string; capabilityOutput?: unknown }>, stepId: string, field: string): string {

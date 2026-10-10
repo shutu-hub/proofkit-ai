@@ -10,7 +10,7 @@ export const MAX_INPUT_FILE_BYTES = 20 * 1024 * 1024;
 
 /** Transient bytes never belong in a Charter, receipt, event or persisted Run. */
 export type ResolvedInputFile = InputFileFact & { buffer: Buffer };
-export type SurfaceActionContext = { inputFiles?: readonly ResolvedInputFile[] };
+export type SurfaceActionContext = { inputFiles?: readonly ResolvedInputFile[]; signal?: AbortSignal };
 
 export class InputFileError extends Error {}
 
