@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProofkitConfigSchema, TestCharterSchema, type RunSummary, type TestCharter, type Verdict } from "@proofkit/contracts";
 import { LocalRunnerService, type LocalAdapterName } from "./index.js";
+import { verifySuiteMission } from "./suite-verifier.js";
 
 const roots: string[] = [];
 
@@ -12,6 +13,23 @@ afterEach(async () => {
 });
 
 describe("explicit release suites", () => {
+  it.each(["primary", "replay", "negative"] as const)("rechecks %s cleanup instead of trusting a saved passing outcome", async (runKind) => {
+    const service = await createSuiteService();
+    stubRuns(service);
+    const mission = await service.createMission({ intent: "上线完整回归", surface: "web" });
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    expect(completed.verdict).toBe("passed");
+    const observation = completed.observations.find((item) => item.data.runKind === runKind)!;
+    if (runKind === "negative") expect(observation.data.outcomeMatched).toBe(true);
+    for (const status of ["failed", "unverified", "verified"] as const) {
+      observation.data.integrationCleanup = status === "verified"
+        ? { status, declaredResources: 1, verifiedResources: 1, artifact: `${observation.data.runId}/artifacts/integration-cleanup.json`, sha256: "0".repeat(64) }
+        : { status, declaredResources: 1, verifiedResources: 0 };
+      expect(verifySuiteMission(completed, service.evidenceDir).verdict).toBe("blocked");
+    }
+  });
+
   it("runs two Charters on Web and Electron with separate replay and negative evidence", async () => {
     const service = await createSuiteService();
     const harness = stubRuns(service);

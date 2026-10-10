@@ -1,14 +1,67 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { RunSummarySchema, TestCharterSchema, TestMissionSchema, type EvidenceRef, type RunSummary, type TestCharter, type TestMission, type Verdict } from "@proofkit/contracts";
 import { compareMissionRecords } from "./mission-comparison.js";
+import { sha256 } from "@proofkit/evidence";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 describe("Mission repair comparison", () => {
+  it.each(["failed", "unverified", "missing", "tampered", "wrong-scope", "wrong-run", "unlisted", "cross-run-link", "before-release"] as const)("rejects repair certification with %s cleanup evidence", async (mode) => {
+    const fixture = await createFixture();
+    const path = "after-primary/artifacts/integration-cleanup.json";
+    const absolute = join(fixture.evidenceDir, path);
+    const now = new Date().toISOString();
+    const proof = {
+      runId: "after-primary", startedAt: now, endedAt: now, status: "verified", declaredResources: 1, verifiedResources: 1,
+      resources: [{ resourceId: "tenant", kind: "test-tenant", scope: "after-primary", evidence: { owner: "after-primary" } }],
+      observations: [{ resourceId: "tenant", status: "removed", releaseStartedAt: now, evidence: { statusCode: 404 }, readback: { reader: "fixture.get", scope: "after-primary", observedAt: now, exists: false } }], issues: [],
+    };
+    const summaryFile = join(fixture.evidenceDir, "after-primary/run.json");
+    const summary = JSON.parse(await readFile(summaryFile, "utf8"));
+    summary.integrationCleanup = { status: "verified", declaredResources: 1, verifiedResources: 1, artifact: path, sha256: sha256(JSON.stringify(proof)) };
+    summary.artifacts.push(path);
+    await writeFile(absolute, JSON.stringify(proof));
+    await writeFile(summaryFile, JSON.stringify(summary));
+    const observation = fixture.candidate.observations[0]!;
+    observation.data.integrationCleanup = summary.integrationCleanup;
+    observation.evidence.push({ evidenceId: `after-primary:${path}`, kind: "runtime", path: absolute, capturedAt: now, sha256: summary.integrationCleanup.sha256 });
+    expect((await fixture.compare()).status).toBe("verified-in-scope");
+    if (mode === "failed" || mode === "unverified") {
+      summary.integrationCleanup = { status: mode, declaredResources: 1, verifiedResources: 0 };
+    } else if (mode === "missing") await rm(absolute);
+    else if (mode === "unlisted") summary.artifacts = summary.artifacts.filter((item: string) => item !== path);
+    else if (mode === "cross-run-link") {
+      const foreignRun = join(fixture.evidenceDir, "foreign-run");
+      await mkdir(foreignRun);
+      await rename(join(fixture.evidenceDir, "after-primary/artifacts"), join(foreignRun, "artifacts"));
+      await symlink(join(foreignRun, "artifacts"), join(fixture.evidenceDir, "after-primary/artifacts"), process.platform === "win32" ? "junction" : "dir");
+    }
+    else {
+      if (mode === "tampered") proof.observations[0]!.readback.exists = true;
+      if (mode === "wrong-scope") proof.observations[0]!.readback.scope = "another-run";
+      if (mode === "wrong-run") proof.runId = "another-run";
+      if (mode === "before-release") {
+        proof.startedAt = new Date(Date.parse(now) - 500).toISOString();
+        proof.observations[0]!.readback.observedAt = new Date(Date.parse(now) - 200).toISOString();
+        proof.observations[0]!.releaseStartedAt = new Date(Date.parse(now) - 100).toISOString();
+      }
+      await writeFile(absolute, JSON.stringify(proof));
+      if (mode !== "tampered") {
+        summary.integrationCleanup.sha256 = sha256(JSON.stringify(proof));
+        observation.evidence.at(-1)!.sha256 = summary.integrationCleanup.sha256;
+      }
+    }
+    await writeFile(summaryFile, JSON.stringify(summary));
+    observation.data.integrationCleanup = summary.integrationCleanup;
+    const result = await fixture.compare();
+    expect(result.status).toBe("inconclusive");
+    expect(result.gaps.some((gap) => gap.includes("test resource cleanup"))).toBe(true);
+  });
+
   it("verifies only the same replay scope with a failed and then passing independent business fact", async () => {
     const fixture = await createFixture();
     const result = await fixture.compare();

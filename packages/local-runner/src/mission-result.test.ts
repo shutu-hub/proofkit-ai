@@ -62,6 +62,19 @@ describe("Mission result projection", () => {
     expect(result.runs.filter((run) => !run.runId)).toHaveLength(5);
   });
 
+  it("explains unexecuted downstream slots after an earlier Run blocks the Mission", async () => {
+    const mission = await fixture();
+    mission.status = "blocked";
+    mission.verdict = "blocked";
+    mission.observations = [observed({ verdict: "blocked", integrationCleanup: { status: "failed", declaredResources: 1, verifiedResources: 0 } })];
+    const result = projectMissionResult(mission, options);
+    expect(result.runs[0]?.integrationCleanup?.status).toBe("failed");
+    expect(result.runs[1]).toMatchObject({ taskStatus: "pending", issue: "No saved run observation for this task." });
+    expect(result.runs[1]?.runId).toBeUndefined();
+    expect(result.runs[1]?.integrationCleanup).toBeUndefined();
+    expect(result.observedRuns).toBe(1);
+  });
+
   it("pairs suite runs by Charter, surface and kind rather than observation order", async () => {
     const mission = await fixture("release");
     const suite = { suiteId: "critical", level: "release" as const, surfaces: ["web", "electron"] as Array<"web" | "electron">, charters: ["resume", "login"].map((charterId) => ({ charterId, charter: { ...mission.charter!, intent: `Test ${charterId}`, negativeCases: [] } })), uncoveredCharterIds: [] };

@@ -1,5 +1,4 @@
-import { existsSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import {
   MissionComparisonSchema,
   SourceStateSchema,
@@ -17,6 +16,8 @@ import {
 import { sha256 } from "@proofkit/evidence";
 import { sameProjectPath } from "@proofkit/project";
 import { sameInputFileFacts } from "@proofkit/runner";
+import { hasCompleteCleanupEvidence } from "./cleanup-evidence.js";
+import { materializedRunArtifact } from "./run-evidence.js";
 
 type Surface = "web" | "electron" | "mobile";
 type RunKind = "primary" | "replay" | "negative";
@@ -120,6 +121,12 @@ export async function compareMissionRecords(
       candidateComplete = false;
       gaps.push(`Candidate is missing ${slotLabel(slot)}.`);
       continue;
+    }
+    const candidateEvidence = after.observation.evidence.filter((ref) => after.summary.artifacts.some((path) => ref.evidenceId === `${after.runId}:${path}`));
+    if (!hasCompleteCleanupEvidence(after.summary.integrationCleanup, after.runId, candidateEvidence, evidenceDir)
+      || !hasCompleteCleanupEvidence(after.observation.data.integrationCleanup, after.runId, candidateEvidence, evidenceDir)) {
+      candidateComplete = false;
+      gaps.push(`Candidate ${slotLabel(slot)} did not establish test resource cleanup.`);
     }
     if (slot.runKind === "negative") {
       const expected = slot.expectedVerdict ?? "passed";
@@ -322,21 +329,7 @@ function hasMaterializedEvidence(record: RunRecord, evidenceDir: string): boolea
 }
 
 function materialized(ref: EvidenceRef, runId: string, path: string, evidenceDir: string): boolean {
-  if (!path.startsWith(`${runId}/`) || path.split(/[\\/]/).some((segment) => segment === "." || segment === "..")) return false;
-  const root = resolve(evidenceDir);
-  const target = resolve(root, path);
-  const within = relative(root, target);
-  if (!within || outside(within) || resolve(ref.path) !== target || !existsSync(target)) return false;
-  try {
-    const actual = realpathSync(target);
-    const actualRelative = relative(realpathSync(root), actual);
-    const stat = statSync(actual);
-    return !outside(actualRelative) && stat.isFile() && stat.size > 0;
-  } catch { return false; }
-}
-
-function outside(path: string): boolean {
-  return path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path);
+  return materializedRunArtifact(ref, runId, path, evidenceDir) !== undefined;
 }
 
 function hasConfirmedFinding(mission: TestMission, facts: EvidenceRef[]): boolean {

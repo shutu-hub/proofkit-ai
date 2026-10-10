@@ -15,6 +15,7 @@ import { BlockedError, CancelledError, ExecutionRunner, z, type BusinessOracle, 
 import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
 import { compareMissionRecords } from "./mission-comparison.js";
+import { hasCompleteCleanupEvidence } from "./cleanup-evidence.js";
 import { ProjectMissionStore } from "./mission-store.js";
 import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from "./suite-verifier.js";
 import { inspectTestScope } from "./test-scope.js";
@@ -581,7 +582,7 @@ export class LocalRunnerService {
       }
     }
     const running = await this.missionAgent.isRunning(mission.missionId);
-    const suiteScope = summarizeSuiteScope(mission);
+    const suiteScope = summarizeSuiteScope(mission, this.evidenceDir);
     const summary = projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, comparison, comparisonUnavailable });
     let report: string | undefined;
     let reportUnavailable: string | undefined;
@@ -715,13 +716,14 @@ export class LocalRunnerService {
           && summary.steps.find((step) => step.stepId === `step-${String(index + 1).padStart(3, "0")}`)?.replayInputMatched !== true));
       const responseFactsMissing = summary.charter.actions.some((action, index) => action.kind === "captureResponse"
         && !summary.steps.find((step) => step.stepId === `step-${String(index + 1).padStart(3, "0")}`)?.response);
-      const outcomeMatched = expectedVerdict === undefined ? undefined : !replayInputMismatch && !responseFactsMissing && actualVerdict === expectedVerdict;
-      const effectiveVerdict: Verdict = expectedVerdict === undefined
+      const evidence = this.runEvidence(summary);
+      const cleanupIncomplete = !hasCompleteCleanupEvidence(summary.integrationCleanup, summary.runId, evidence, this.evidenceDir);
+      const outcomeMatched = expectedVerdict === undefined ? undefined : !cleanupIncomplete && !replayInputMismatch && !responseFactsMissing && actualVerdict === expectedVerdict;
+      const effectiveVerdict: Verdict = cleanupIncomplete && actualVerdict === "passed" ? "blocked" : expectedVerdict === undefined
         ? actualVerdict
         : outcomeMatched ? "passed" : actualVerdict === "passed" ? "failed" : actualVerdict;
       const routeTargets = context.mission.suite?.charters.find((item) => item.charterId === charterId)?.routeTargets ?? [];
       const apiTraffic = await this.matchedApiRouteTargets(summary.runId, adapter, routeTargets);
-      const evidence = this.runEvidence(summary);
       const observation = ObservationSchema.parse({
         observationId: `${context.task.taskId}-${summary.runId}`,
         charterId,
@@ -754,6 +756,7 @@ export class LocalRunnerService {
             ...(finding.consoleLevel ? { consoleLevel: finding.consoleLevel } : {}),
           })),
           targetBinding: summary.targetBinding,
+          integrationCleanup: summary.integrationCleanup,
           businessEvidence: summary.oracles.reduce((count, oracle) => count + ((oracle.sourceEvidenceArtifacts ?? []).some((path) =>
             evidence.some((item) => item.kind === "business" && item.evidenceId === `${summary.runId}:${path}`))
             ? oracle.sourceEvidenceCount ?? 0 : 0), 0),
@@ -781,7 +784,8 @@ export class LocalRunnerService {
               category: "test",
               status: "confirmed",
               title: "Negative case outcome did not match expectation",
-              message: responseFactsMissing ? "A declared action response was not observed; the expected negative outcome cannot certify missing response evidence."
+              message: cleanupIncomplete ? "Test resource cleanup was not established; the expected negative outcome cannot certify this failure."
+                : responseFactsMissing ? "A declared action response was not observed; the expected negative outcome cannot certify missing response evidence."
                 : replayInputMismatch ? "Replay input files were missing, changed or unverified; the expected negative outcome cannot validate different test inputs."
                 : `Expected ${expectedVerdict}, but the surface run ended with ${actualVerdict}.`,
               evidence,
@@ -801,6 +805,13 @@ export class LocalRunnerService {
               createdAt: new Date().toISOString(),
             })]
           : [];
+      if (cleanupIncomplete) findings.push(FindingSchema.parse({
+        findingId: `cleanup-${summary.runId}`, charterId, surface: adapter, severity: "high", category: "environment",
+        status: "confirmed", title: "Test resource cleanup was not established",
+        message: "Cleanup failed or lacks scoped readback evidence. Resources may still be active; an expected negative verdict cannot certify this failure.",
+        evidence: summary.integrationCleanup?.artifact ? evidence.filter((item) => item.evidenceId === `${summary.runId}:${summary.integrationCleanup!.artifact}`) : evidence.slice(0, 2),
+        createdAt: summary.endedAt ?? summary.startedAt,
+      }));
       return {
         output: { runId: summary.runId, charterId, verdict: effectiveVerdict, actualVerdict, expectedVerdict, outcomeMatched, report: this.reportPath(summary.runId), ...(negativeCaseId ? { negativeCaseId } : {}) },
         verdict: effectiveVerdict,
@@ -894,7 +905,7 @@ export class LocalRunnerService {
 
     const verifyOutcome = async (_input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
       if (context.mission.suite) {
-        return verifySuiteMission(context.mission);
+        return verifySuiteMission(context.mission, this.evidenceDir);
       }
       const runs = context.mission.observations.filter((item) => item.kind === "surface.run");
       if (runs.length === 0) throw new Error("No surface run observation is available for verification");
@@ -953,10 +964,12 @@ export class LocalRunnerService {
           findings: [FindingSchema.parse({ findingId: `evidence-gate-${context.mission.level}`, severity: "high", category: "test", status: "confirmed", title: `${context.mission.level} 测试证据不足`, message, evidence: context.mission.evidence.slice(0, 4), createdAt: observedAt })],
         };
       }
+      const cleanupIncomplete = expectedRuns.some((item) => !hasCompleteCleanupEvidence(item.data.integrationCleanup,
+        String(item.data.runId), item.evidence, this.evidenceDir));
       const failed = expectedRuns.some((item) => item.data.outcomeMatched !== true
         && (item.data.verdict === "failed" || item.data.verdict === "blocked" || item.data.verdict === "cancelled"));
       const inconclusive = expectedRuns.some((item) => item.data.outcomeMatched !== true && item.data.verdict === "inconclusive");
-      const verdict = failed ? "failed" : inconclusive ? "inconclusive" : "passed";
+      const verdict = cleanupIncomplete ? "blocked" : failed ? "failed" : inconclusive ? "inconclusive" : "passed";
       return { output: { verified: verdict === "passed", runVerdict: verdict, surfaces: expectedSurfaces }, verdict };
     };
     const verify = async (input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
@@ -989,8 +1002,9 @@ export class LocalRunnerService {
     return [...paths].map((path) => EvidenceRefSchema.parse({
       evidenceId: `${summary.runId}:${path}`,
       kind: path.endsWith("events.jsonl") ? "network" : path.endsWith(".png") ? "screenshot" : path.endsWith("report.html") || oracleReports.has(path)
-        ? "report" : path.endsWith("runtime-findings.json") ? "runtime" : path.includes("/artifacts/target-binding") ? "process" : oracleSourceArtifacts.has(path) ? "business" : "snapshot",
+        ? "report" : path.endsWith("runtime-findings.json") || path.endsWith("integration-cleanup.json") || path.endsWith("integration-setup.json") ? "runtime" : path.includes("/artifacts/target-binding") ? "process" : oracleSourceArtifacts.has(path) ? "business" : "snapshot",
       path: resolve(this.evidenceDir, path),
+      ...(path === summary.integrationCleanup?.artifact && summary.integrationCleanup.sha256 ? { sha256: summary.integrationCleanup.sha256 } : {}),
       description: `Evidence captured by run ${summary.runId}`,
       capturedAt: summary.endedAt ?? summary.startedAt,
     }));
@@ -1229,6 +1243,7 @@ export class LocalRunnerService {
       capabilities: this.capabilities,
       environment: this.config.policies.environment,
       allowCapabilityWrites: this.allowCapabilityWrites,
+      allowSetupWrites: this.allowCapabilityWrites && this.config.policies.sideEffects === "allow",
       allowFileUploads: this.config.policies.sideEffects === "allow",
       expectedInputFiles,
       preflight: this.integration?.preflight,
@@ -1241,30 +1256,10 @@ export class LocalRunnerService {
         targetBindingRecheckAfterSetup: Boolean(input.start !== false && this.config.project.start),
       } : {}),
       integration: this.integration ? { name: this.integration.name, version: this.integration.version } : undefined,
-      setup: setup || integrationSetup ? async (context) => {
-        const cleanups: Array<() => void | Promise<void>> = [];
-        const cleanupAll = async () => {
-          let firstError: Error | undefined;
-          for (const cleanup of cleanups.reverse()) {
-            try { await cleanup(); } catch (error) { firstError ??= toError(error); }
-          }
-          if (firstError) throw firstError;
-        };
-        try {
-          if (integrationSetup) {
-            const cleanup = await integrationSetup(context);
-            if (cleanup) cleanups.push(cleanup);
-          }
-          if (setup) {
-            const cleanup = await setup(context);
-            if (cleanup) cleanups.push(cleanup);
-          }
-          return cleanupAll;
-        } catch (error) {
-          try { await cleanupAll(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], "Integration setup and cleanup failed"); }
-          throw error;
-        }
-      } : undefined,
+      setup: [
+        ...(integrationSetup ? [{ setup: integrationSetup, policy: this.integration?.setupPolicy }] : []),
+        ...(setup ? [setup] : []),
+      ],
     }).run(charter, runId);
   }
 

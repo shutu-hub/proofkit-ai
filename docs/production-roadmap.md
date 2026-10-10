@@ -41,6 +41,13 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
   subscription to return a cleanup handle; mark an expired wait as a possible
   active-resource risk and attempt to release any handle that arrives later.
 - Treat adapter, process and integration cleanup failures as non-green results.
+- Register scoped integration resources before surface execution, retain each
+  acquired handle through later setup failures, and release in reverse order
+  under an independent bounded cleanup signal. Verify removal with fresh scoped
+  readback and a hashed artifact; check that proof again for primary, replay,
+  expected-negative outcomes and repair comparisons. Preserve legacy hooks as
+  completed rather than independently verified. Connector-owned rollback before
+  handle return and resource recovery after process termination remain required.
 - Keep Agent tool failures as suspected test findings until an independent product oracle confirms a defect.
 - Classify selected browser runtime signals with evidence links and explicit `record`, `fail` or `ignore` policy; reject invalid URL filters instead of silently widening the monitored scope.
 - Select a unique CDP application page for Web/Electron attachment; reject ambiguous windows instead of running a Charter in an arbitrary renderer.
@@ -63,6 +70,17 @@ observed the configured login text and five controls, with unchanged complete
 source fingerprints. Both retained suspected console 404 signals; these do
 not identify a failing business workflow or prove a product defect. Evidence
 is saved in the local external workspace's `live-readiness-validation.json`.
+
+**Lifecycle evidence (2026-10-10):** real Chrome and Electron CDP, loopback
+HTTP provisioning/deletion/readback and the MCP path execute 13 Missions and
+22 Runs. This covers a six-Run release matrix plus each surface's successful
+cleanup, retained resource, foreign scope, missing readback, negative-only
+cleanup failure and timeout. Actual artifact digests, Run IDs and release
+timestamps are checked; unexecuted downstream slots retain a missing-run
+explanation. The complete minimal source tree remains unchanged and all
+configuration, connector code and evidence stay in an external workspace.
+`lifecycle-validation.json` indexes each case and its Mission report. This is
+isolated fixture evidence, not live AIHR acceptance or proof of crash recovery.
 
 ## Phase 2: measurable AI planning
 

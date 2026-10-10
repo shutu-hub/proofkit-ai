@@ -1,6 +1,7 @@
 import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, ProjectMapSchema, RouteCoverageTargetSchema, type Observation, type RouteCoverageTarget, type TestMission, type Verdict } from "@proofkit/contracts";
 import type { MissionToolResult } from "@proofkit/agent";
 import { reconcileRouteDeclarations } from "@proofkit/project";
+import { hasCompleteCleanupEvidence } from "./cleanup-evidence.js";
 
 type RunKind = "primary" | "replay" | "negative";
 type RunFact = { runId: string; verdict: Verdict; evidenceCount: number; matchedRoutePaths: string[]; matchedApiTargets: Extract<RouteCoverageTarget, { kind: "api" }>[]; networkLogAvailable: boolean; sourceRunId?: string; negativeCaseId?: string; outcomeMatched?: boolean };
@@ -39,7 +40,7 @@ export type SuiteScopeSummary = {
 };
 
 /** A saved suite is the only execution scope; catalog entries outside it are reported, never run implicitly. */
-export function summarizeSuiteScope(mission: TestMission): SuiteScopeSummary | undefined {
+export function summarizeSuiteScope(mission: TestMission, evidenceDir?: string): SuiteScopeSummary | undefined {
   const suite = mission.suite;
   if (!suite) return undefined;
   const includedCharterIds = suite.charters.map((item) => item.charterId);
@@ -68,6 +69,10 @@ export function summarizeSuiteScope(mission: TestMission): SuiteScopeSummary | u
         return undefined;
       }
       if (fact.evidenceCount < 1) missing.push(`${kind} evidence artifact`);
+      if (!hasCompleteCleanupEvidence(item.data.integrationCleanup, fact.runId, item.evidence, evidenceDir)) {
+        blocked = true;
+        missing.push(`${kind} cleanup evidence`);
+      }
       if (numberValue(item.data.passedAssertions) < 1) missing.push(`${kind} passed surface assertion`);
       if (numberValue(item.data.passedOracles) < 1) missing.push(`${kind} passed business Oracle`);
       if (numberValue(item.data.businessEvidence) < 1) missing.push(`${kind} independent business fact`);
@@ -93,6 +98,10 @@ export function summarizeSuiteScope(mission: TestMission): SuiteScopeSummary | u
         continue;
       }
       negativeCases.push(fact);
+      if (!hasCompleteCleanupEvidence(item.data.integrationCleanup, fact.runId, item.evidence, evidenceDir)) {
+        blocked = true;
+        missing.push(`negative ${declared.caseId} verified cleanup`);
+      }
       if (fact.evidenceCount < 1) missing.push(`negative ${declared.caseId} evidence artifact`);
       if (fact.outcomeMatched !== true) failed = true;
     }
@@ -160,8 +169,8 @@ function summarizeRouteCoverage(mission: TestMission, results: SuiteSurfaceResul
   };
 }
 
-export function verifySuiteMission(mission: TestMission): MissionToolResult {
-  const scope = summarizeSuiteScope(mission);
+export function verifySuiteMission(mission: TestMission, evidenceDir?: string): MissionToolResult {
+  const scope = summarizeSuiteScope(mission, evidenceDir);
   if (!scope) throw new Error("Mission has no suite to verify");
   const failed = scope.results.some((item) => item.verdict === "failed");
   const blocked = scope.results.some((item) => item.verdict === "blocked");

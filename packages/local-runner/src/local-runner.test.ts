@@ -580,7 +580,7 @@ describe("LocalRunnerService", () => {
     expect(completed.firstFailure?.kind).toBe("evidence");
   });
 
-  it("accepts an expected failed verdict for a negative case without creating a product finding", async () => {
+  it.each(["legacy", "failed", "unverified", "missing-proof"] as const)("keeps expected negative outcomes separate from %s cleanup", async (cleanupMode) => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-negative-expected-failure-"));
     roots.push(root);
     const service = new LocalRunnerService({ workspaceRoot: root, root });
@@ -624,6 +624,9 @@ describe("LocalRunnerService", () => {
         oracles: negative ? [] : [{ name: "resume-terminal", passed: true, message: "passed", evidence: [`${runId}/oracle-source.json`, `${runId}/oracle.json`], sourceEvidenceCount: 1, sourceEvidenceArtifacts: [`${runId}/oracle-source.json`], observedAt: now }],
         artifacts: [`${runId}/after.json`, ...(negative ? [] : [`${runId}/oracle-source.json`]), `${runId}/oracle.json`],
         findings: negative ? ["expected authorization rejection"] : [],
+        ...(negative && cleanupMode !== "legacy" ? { integrationCleanup: cleanupMode === "missing-proof"
+          ? { status: "verified" as const, declaredResources: 1, verifiedResources: 1, artifact: `${runId}/artifacts/integration-cleanup.json`, sha256: "0".repeat(64) }
+          : { status: cleanupMode, declaredResources: 1, verifiedResources: 0 } } : {}),
       };
       summaries.set(runId, summary);
       return { runId, status: "completed", verdict: summary.verdict, summary };
@@ -638,13 +641,19 @@ describe("LocalRunnerService", () => {
     const started = await service.startMission(created.missionId, { approve: true });
     const completed = await service.waitMission(started.mission.missionId);
 
-    expect(completed.status).toBe("completed");
-    expect(completed.verdict).toBe("passed");
-    expect(completed.findings).toEqual([]);
+    if (cleanupMode === "legacy") {
+      expect(completed.status).toBe("completed");
+      expect(completed.verdict).toBe("passed");
+      expect(completed.findings).toEqual([]);
+    } else {
+      expect(completed.verdict).not.toBe("passed");
+      expect(completed.findings.some((finding) => finding.category === "environment" && finding.findingId.startsWith("cleanup-"))).toBe(true);
+      expect(completed.findings.some((finding) => finding.category === "product")).toBe(false);
+    }
     expect(completed.observations.find((item) => item.data.runKind === "negative")?.data).toMatchObject({
       verdict: "failed",
       expectedVerdict: "failed",
-      outcomeMatched: true,
+      outcomeMatched: cleanupMode === "legacy",
       negativeCaseId: "unauthorized-upload",
     });
   });

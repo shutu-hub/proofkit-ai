@@ -305,6 +305,45 @@ The mission protocol keeps five related records with separate responsibilities:
 
 The integration module is trusted local code, loaded only from inside the selected test workspace. It exports a name, optional typed capabilities, business oracles, an optional preflight function and a setup function that returns cleanup. Preflight runs after the run record is created but before project setup, browser connection or any capability. It returns a schema-validated pass/fail result and sanitized scalar evidence; a failed preflight produces a `blocked` verdict and a `preflight.json` artifact. The Local Runner composes integration cleanup with project process cleanup and adapter close. Cleanup failures prevent a green verdict.
 
+An integration can declare `setupPolicy` with its side-effect class, environment
+allowlist and `cleanupTimeoutMs` (100–5,000 ms, default 5,000). A write setup
+requires the selected Charter to allow side effects, the operator write opt-in,
+and workspace `policies.sideEffects: allow` before any setup runs. This setup
+gate is separate from existing typed Capability permissions. Connector code
+without a policy remains a trusted legacy hook; its absence is not proof that
+the hook is read-only or that the target deployment is isolated.
+
+New setup hooks return `{ resources, cleanup }`. Up to 32 resources per Run
+carry a unique resource ID, kind, scope and bounded scalar evidence. Returned
+cleanup handles are owned immediately, including handles whose registration
+metadata is invalid. Registration is saved in `integration-setup.json` before
+surface execution. Local Runner keeps connector setup and process startup as
+separate entries, so a later startup error does not lose an earlier handle.
+Handles are released in reverse order and one error does not skip the others.
+
+Cleanup uses a fresh signal independent of Run cancellation. All entries share
+one cleanup deadline, using the smallest declared timeout. A `removed` receipt
+requires an independent readback for the same registered scope, `exists: false`
+and a timestamp within that handle's release window to count as verified.
+Duplicate, missing, foreign, stale or retained observations prevent a green
+result. The Run saves status, counts, resource observations, issues and the
+cleanup interval in `integration-cleanup.json`, then hashes the actual saved
+bytes. Each observation also retains its Runner-owned `releaseStartedAt`, so
+saved proof can be checked against that handle's release boundary. Mission,
+release-suite and repair-comparison gates check the linked
+artifact's Run ownership, real path, digest and scoped observations; a status
+string or an unrelated screenshot cannot substitute for that evidence.
+
+Legacy cleanup functions remain supported as `completed`, without claiming
+independent removal verification. Runs saved before this protocol remain
+readable without a cleanup field. A timeout or late handle cannot retrospectively
+upgrade saved evidence. If setup writes and throws before returning a handle,
+ProofKit cannot discover the unreturned resources: the connector must roll back
+partial acquisition itself and make cleanup retryable. The Run records possible
+remaining resources. These are trusted connector observations and filesystem
+integrity checks, not a sandbox, signed attestation or a replacement for an
+isolated deployment. SIGKILL/power-loss resource recovery remains open.
+
 Project configuration can register read-only HTTP oracles by name, JSON Pointer status path, terminal values, interval and deadline. Query bindings can carry the ProofKit `runId` or a sanitized scalar from an earlier capability step. The adapter never interprets these business facts. The URL is parsed and query parameters are encoded with the platform URL API.
 
 The MCP server exposes both run-level tools (`discover_project`, `plan_test`, `start_run`, `get_run_status`, `cancel_run`, `get_evidence`, `replay_run`) and mission-level tools (`create_test_mission`, `approve_test_plan`, `start_mission`, `get_mission_status`, `get_mission_evidence`, `cancel_mission`, `replay_mission`, `compare_missions`). MCP inputs are validated with Zod. The server is started against one configured local project; it does not accept arbitrary commands or paths. MCP runs cannot execute `project.start`; users start their test environment through the CLI or independently. Both surfaces call the same Local Runner and never create a second execution lifecycle.

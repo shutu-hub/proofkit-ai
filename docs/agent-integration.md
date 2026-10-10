@@ -298,6 +298,77 @@ For UI login fields, use a `fill` action with `value: { env: "PROOFKIT_TEST_PASS
 
 For MCP, the operator sets `PROOFKIT_ALLOW_CAPABILITY_WRITES=1` when launching the server. The workspace must also set `policies.sideEffects: allow`, and the selected Charter and capability must each allow the write. The agent cannot turn on this process-level switch through a tool argument. CLI uses `proofkit mission run <mission-id> --approve --allow-capability-writes`. Use this only with a dedicated test environment and the integration's preflight checks.
 
+### Scoped setup and cleanup
+
+A connector that provisions data declares `setupPolicy` and returns a resource
+handle. The same operator switch, workspace policy and Charter `allow` are
+required for write setup. This example assumes a separately operated test-only
+fixture API with scoped creation, deletion and readback; it does not create
+isolation in a shared production or development deployment. Keep the module in
+the external workspace and add the required business Oracles separately.
+
+```javascript
+export function createIntegration() {
+  const origin = process.env.PROOFKIT_FIXTURE_API;
+  if (!origin || new URL(origin).hostname !== "127.0.0.1") {
+    throw new Error("Configure the isolated loopback fixture API");
+  }
+  return {
+    name: "isolated-fixture",
+    setupPolicy: {
+      sideEffect: "write",
+      environments: ["test"],
+      cleanupTimeoutMs: 5000,
+    },
+    async setup({ runId, signal }) {
+      const url = new URL(`/api/v1/test-scopes/${runId}`, origin);
+      async function removeAndReadback(cleanupSignal) {
+        const deleted = await fetch(url, { method: "DELETE", signal: cleanupSignal });
+        if (!deleted.ok && deleted.status !== 404) throw new Error("Fixture removal failed");
+        const state = await fetch(url, { signal: cleanupSignal });
+        if (state.status !== 200 && state.status !== 404) throw new Error("Fixture readback failed");
+        return [{
+          resourceId: "scope", status: state.status === 404 ? "removed" : "retained",
+          evidence: { statusCode: state.status },
+          readback: { reader: "fixture.scoped-get", scope: runId,
+            observedAt: new Date().toISOString(), exists: state.status !== 404 },
+        }];
+      }
+      try {
+        const created = await fetch(url, { method: "PUT", signal });
+        if (!created.ok) throw new Error("Fixture setup failed");
+      } catch (error) {
+        // A request can write before its response fails. Roll back even before
+        // returning the handle, using a fresh bounded signal.
+        try {
+          const rollback = await removeAndReadback(AbortSignal.timeout(5000));
+          if (rollback[0].status !== "removed") throw new Error("Fixture rollback retained resources");
+        } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], "Setup rollback was not established");
+        }
+        throw error;
+      }
+      return {
+        resources: [{ resourceId: "scope", kind: "fixture-namespace",
+          scope: runId, evidence: { owner: runId } }],
+        cleanup: ({ signal: cleanupSignal }) => removeAndReadback(cleanupSignal),
+      };
+    },
+  };
+}
+```
+
+Resource IDs must be unique within a Run; facts are limited to scalar values,
+and no credentials or response bodies belong in them. The cleanup callback
+receives a fresh signal after cancellation and must honor it. Deletion
+acknowledgement alone does not establish removal: read the same scope after
+deletion. Keep deletes idempotent and validate ownership in the fixture API.
+Returning an old cleanup function remains compatible, reported as `completed`
+rather than `verified`. Process termination and a hook that writes before
+returning a handle still need connector-owned recovery. Read-only page
+inspection denies a declared write setup, so prepare its environment in advance
+or use a separate read-only connector.
+
 ## Choosing a level
 
 | User wording | Level | Agent behavior |

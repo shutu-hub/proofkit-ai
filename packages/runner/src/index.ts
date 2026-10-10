@@ -1,7 +1,9 @@
 import { createRunId, EvidenceStore } from "@proofkit/evidence";
-import { OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, TargetBindingSchema, type RuntimeFinding } from "@proofkit/contracts";
+import { hasIncompleteIntegrationCleanup, OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, TargetBindingSchema, type IntegrationSetupPolicy, type RuntimeFinding } from "@proofkit/contracts";
 import { z } from "zod";
 import { inputFileFacts, resolveInputFiles, sameInputFileFacts, type InputFileFact, type SurfaceActionContext } from "./input-files.js";
+import { IntegrationLifecycle, releaseLateIntegration, validateSetupPolicy, type IntegrationSetup, type IntegrationSetupEntry } from "./integration-lifecycle.js";
+export type { IntegrationSetup, IntegrationSetupEntry, IntegrationSetupHandle, IntegrationSetupContext, IntegrationCleanupContext } from "./integration-lifecycle.js";
 export type { SurfaceActionContext, ResolvedInputFile, InputFileFact } from "./input-files.js";
 export { sameInputFileFacts } from "./input-files.js";
 
@@ -55,12 +57,6 @@ export type BusinessOracle = {
   }): Promise<OracleResult>;
 };
 
-export type IntegrationSetup = (context: {
-  runId: string;
-  signal: AbortSignal;
-  emit: (event: Omit<RunEvent, "runId">) => Promise<void>;
-}) => Promise<(() => void | Promise<void>) | undefined>;
-
 export type IntegrationPreflightResult = {
   passed: boolean;
   message: string;
@@ -83,6 +79,7 @@ export type ProjectIntegration = {
   oracles?: BusinessOracle[];
   preflight?: IntegrationPreflight;
   setup?: IntegrationSetup;
+  setupPolicy?: IntegrationSetupPolicy;
 };
 
 export type CapabilityDefinition<Input = unknown, Output = unknown> = {
@@ -124,6 +121,7 @@ export type ExecutionOptions = {
   capabilities?: CapabilityDefinition<any, any>[];
   environment?: "test" | "staging" | "local";
   allowCapabilityWrites?: boolean;
+  allowSetupWrites?: boolean;
   allowFileUploads?: boolean;
   /** Saved facts from the source Run; absent or changed bytes must block a replay. */
   expectedInputFiles?: Record<string, InputFileFact[]>;
@@ -131,7 +129,8 @@ export type ExecutionOptions = {
   timeoutMs?: number;
   integration?: { name: string; version?: string };
   preflight?: IntegrationPreflight;
-  setup?: IntegrationSetup;
+  setup?: IntegrationSetup | Array<IntegrationSetup | IntegrationSetupEntry>;
+  setupPolicy?: IntegrationSetupPolicy;
   targetBinding?: (signal: AbortSignal) => Promise<TargetBinding>;
   targetBindingPolicy?: "record" | "block-different";
   targetBindingRecheckAfterSetup?: boolean;
@@ -146,9 +145,10 @@ export class ExecutionRunner {
   private readonly capabilities: Map<string, CapabilityDefinition<any, any>>;
   private readonly environment: "test" | "staging" | "local";
   private readonly allowCapabilityWrites: boolean;
+  private readonly allowSetupWrites: boolean;
   private readonly allowFileUploads: boolean;
   private readonly expectedInputFiles?: Record<string, InputFileFact[]>;
-  private readonly setup?: ExecutionOptions["setup"];
+  private readonly setups: IntegrationSetupEntry[];
   private readonly targetBinding?: ExecutionOptions["targetBinding"];
   private readonly targetBindingPolicy: NonNullable<ExecutionOptions["targetBindingPolicy"]>;
   private readonly targetBindingRecheckAfterSetup: boolean;
@@ -172,9 +172,14 @@ export class ExecutionRunner {
     if (this.capabilities.size !== (options.capabilities ?? []).length) throw new Error("Duplicate capability name");
     this.environment = options.environment ?? "test";
     this.allowCapabilityWrites = options.allowCapabilityWrites ?? false;
+    this.allowSetupWrites = options.allowSetupWrites ?? this.allowCapabilityWrites;
     this.allowFileUploads = options.allowFileUploads ?? false;
     this.expectedInputFiles = options.expectedInputFiles;
-    this.setup = options.setup;
+    const setups = options.setup ? Array.isArray(options.setup) ? options.setup : [{ setup: options.setup, policy: options.setupPolicy }] : [];
+    this.setups = setups.map((entry) => {
+      const value = typeof entry === "function" ? { setup: entry } : entry;
+      return { setup: value.setup, ...(value.policy ? { policy: validateSetupPolicy(value.policy) } : {}) };
+    });
     this.targetBinding = options.targetBinding;
     this.targetBindingPolicy = options.targetBindingPolicy ?? "block-different";
     this.targetBindingRecheckAfterSetup = options.targetBindingRecheckAfterSetup ?? false;
@@ -218,7 +223,7 @@ export class ExecutionRunner {
     const signal = controller.signal;
     let executionError: Error | undefined;
     let unsubscribe: () => void | Promise<void> = () => {};
-    let cleanupSetup: () => void | Promise<void> = () => {};
+    const integrationLifecycle = new IntegrationLifecycle(runId, this.store);
     const pendingEvents: Promise<void>[] = [];
     const inspectAndRecordTarget = async (phase: "before-setup" | "after-setup") => {
       if (!this.targetBinding) return;
@@ -237,6 +242,12 @@ export class ExecutionRunner {
     };
     try {
       throwIfAborted(signal);
+      for (const { policy } of this.setups) {
+        if (policy && !policy.environments.includes(this.environment)) throw new BlockedError("Integration setup is not allowed in this environment");
+        if (policy?.sideEffect === "write" && (charter.sideEffectPolicy !== "allow" || !this.allowSetupWrites)) {
+          throw new BlockedError("Write setup requires sideEffectPolicy=allow and operator write permission");
+        }
+      }
       assertFillEnvironment(charter.actions);
       if (charter.actions.some((action) => action.kind === "captureResponse")) {
         if (charter.sideEffectPolicy !== "allow") throw new BlockedError("Response capture triggers require sideEffectPolicy=allow");
@@ -267,13 +278,21 @@ export class ExecutionRunner {
         await this.emit({ runId, timestamp: new Date().toISOString(), type: "artifact.created", payload: { path: artifact, kind: "preflight", passed: result.passed } });
         if (!result.passed) throw new BlockedError(`Integration preflight failed: ${result.message}`);
       }
-      if (this.setup) {
+      for (const { setup, policy } of this.setups) {
         throwIfAborted(signal);
-        cleanupSetup = await withResourceAbort(this.setup({
-          runId,
-          signal,
-          emit: (event) => this.emit({ ...event, runId }),
-        }), signal, "Project setup", async (cleanup) => { await cleanup?.(); }) ?? (() => {});
+        integrationLifecycle.begin(policy);
+        let handle: Awaited<ReturnType<IntegrationSetup>>;
+        try {
+          handle = await withResourceAbort(Promise.resolve().then(() => setup({
+            runId, charter, environment: this.environment, projectRoot: this.projectRoot, workspaceRoot: this.workspaceRoot,
+            signal, emit: (event) => this.emit({ ...event, runId }),
+          })), signal, "Project setup", (lateHandle) => releaseLateIntegration(lateHandle, runId));
+        } catch (error) { integrationLifecycle.acquisitionFailed(); throw error; }
+        const setupArtifact = await integrationLifecycle.register(handle, policy);
+        if (setupArtifact) {
+          summary.artifacts.push(setupArtifact);
+          await this.store.writeSummary(summary);
+        }
         throwIfAborted(signal);
       }
       if (this.targetBindingRecheckAfterSetup) await inspectAndRecordTarget("after-setup");
@@ -415,7 +434,15 @@ export class ExecutionRunner {
         const artifact = await this.store.writeJson(runId, "runtime-findings", summary.runtimeFindings ?? []);
         summary.artifacts.push(artifact);
       }
-      try { await cleanupSetup(); } catch (error) { executionError ??= toError(error); summary.findings.push(`runtime cleanup failed: ${toError(error).message}`); }
+      try {
+        summary.integrationCleanup = await integrationLifecycle.finish();
+        if (summary.integrationCleanup.artifact) summary.artifacts.push(summary.integrationCleanup.artifact);
+        if (hasIncompleteIntegrationCleanup(summary.integrationCleanup)) summary.findings.push("Integration cleanup was not established; inspect integration-cleanup.json. Resources may still be active.");
+      } catch (error) {
+        summary.integrationCleanup = { status: "unverified", declaredResources: 0, verifiedResources: 0 };
+        summary.findings.push("Integration cleanup evidence could not be saved; resources may still be active.");
+        executionError ??= toError(error);
+      }
       if (timeout) clearTimeout(timeout);
       detachSignal();
     }
@@ -439,6 +466,7 @@ export class ExecutionRunner {
       && (baseVerdict === "passed" || baseVerdict === "inconclusive")
       ? "failed"
       : baseVerdict;
+    if (hasIncompleteIntegrationCleanup(summary.integrationCleanup) && summary.verdict === "passed") summary.verdict = "blocked";
     if (summary.verdict === "blocked" && environmentBlocked) summary.findings.push("Configured runtime environment blocker was observed; inspect runtime-findings.json.");
     if (summary.verdict === "inconclusive") summary.findings.push(
       executionError instanceof InconclusiveError ? executionError.message : charter.assertions.length === 0 && this.oracles.length === 0

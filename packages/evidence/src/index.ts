@@ -117,6 +117,7 @@ export class EvidenceStore {
 <style>body{font:14px system-ui,sans-serif;max-width:1100px;margin:40px auto;color:#172033}h1{margin-bottom:4px}.meta{color:#637083}.verdict{display:inline-block;padding:6px 10px;border-radius:5px;background:#edf1f7;font-weight:700}.pass{color:#087443}.fail{color:#b42318}table{border-collapse:collapse;width:100%;margin-top:20px}td,th{border-bottom:1px solid #dce2ea;padding:9px;text-align:left}</style></head>
 <body><h1>ProofKit run</h1><p class="meta">${escapeHtml(summary.charter.intent)}<br>${escapeHtml(summary.runId)}</p><p class="verdict">${escapeHtml(verdict)}</p>
 <h2>Target association</h2><p>${summary.targetBinding ? `${escapeHtml(summary.targetBinding.status)}: ${escapeHtml(summary.targetBinding.reason)}${summary.targetBinding.observedProjectRoot ? ` (${escapeHtml(summary.targetBinding.observedProjectRoot)})` : ""}` : "Not inspected by this runner."}</p>
+<h2>Resource cleanup</h2><p>${escapeHtml(summary.integrationCleanup?.status ?? "not recorded")}${summary.integrationCleanup ? ` (${summary.integrationCleanup.verifiedResources}/${summary.integrationCleanup.declaredResources} resources verified)` : ""} ${links(summary.integrationCleanup?.artifact ? [summary.integrationCleanup.artifact] : [])}</p>
 <h2>Steps</h2><table><thead><tr><th>Step</th><th>Action</th><th>Status</th><th>Evidence</th><th>Error</th></tr></thead><tbody>${rows}</tbody></table>
 <h2>Assertions</h2><ul>${assertions || "<li>No surface assertions declared.</li>"}</ul>
 <h2>Business oracles</h2><ul>${oracles || "<li>None registered.</li>"}</ul>

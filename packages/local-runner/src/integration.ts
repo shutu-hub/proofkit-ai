@@ -1,7 +1,7 @@
 import { access } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ProofkitConfig } from "@proofkit/contracts";
+import { IntegrationSetupPolicySchema, type ProofkitConfig } from "@proofkit/contracts";
 import { resolveWithinWorkspace } from "@proofkit/project";
 import { z } from "@proofkit/runner";
 import type { ProjectIntegration } from "@proofkit/runner";
@@ -60,6 +60,11 @@ function validateIntegration(value: unknown, path: string): ProjectIntegration {
   }
   if (integration.setup !== undefined && typeof integration.setup !== "function") {
     throw new Error(`Integration ${path} setup must be a function`);
+  }
+  if (integration.setupPolicy !== undefined) {
+    const policy = IntegrationSetupPolicySchema.safeParse(integration.setupPolicy);
+    if (!policy.success || !integration.setup) throw new Error(`Integration ${path} contains an invalid setup policy or missing setup hook`);
+    integration.setupPolicy = policy.data;
   }
   for (const capability of integration.capabilities ?? []) {
     if (!capability || typeof capability !== "object" || typeof capability.name !== "string" || typeof capability.description !== "string" || !["none", "read", "write"].includes(capability.sideEffect ?? "") || !Array.isArray(capability.environments) || !capability.environments.every((environment) => ["test", "staging", "local"].includes(environment)) || !Number.isInteger(capability.timeoutMs) || capability.timeoutMs <= 0 || !capability.inputSchema || typeof capability.inputSchema.parse !== "function" || !capability.outputSchema || typeof capability.outputSchema.parse !== "function" || typeof capability.execute !== "function" || typeof capability.evidence !== "function") {

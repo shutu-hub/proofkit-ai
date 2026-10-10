@@ -1,4 +1,4 @@
-import { MissionResultSchema, MissionSurfaceSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionResult, type MissionRunResult, type Observation, type TaskNode, type TestMission } from "@proofkit/contracts";
+import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionResult, type MissionRunResult, type Observation, type TaskNode, type TestMission } from "@proofkit/contracts";
 import type { SuiteScopeSummary } from "./suite-verifier.js";
 
 type RunKind = MissionRunResult["runKind"];
@@ -117,6 +117,7 @@ function projectRun(mission: TestMission, task: TaskNode | undefined, observatio
   const title = negative?.title ?? savedCharter?.intent ?? task?.title ?? mission.intent;
   const evidence = selectEvidence(observation?.evidence ?? []);
   const binding = TargetBindingSchema.safeParse(data.targetBinding);
+  const cleanup = IntegrationCleanupSchema.safeParse(data.integrationCleanup);
   const runId = stringValue(data.runId);
   const verdict = VerdictSchema.safeParse(data.verdict);
   const expected = VerdictSchema.safeParse(data.expectedVerdict ?? (runKind === "negative" ? negative?.expectedVerdict ?? "passed" : undefined));
@@ -124,7 +125,8 @@ function projectRun(mission: TestMission, task: TaskNode | undefined, observatio
   if (!surface.success) issues.push("Saved run has invalid surface metadata.");
   if (runKind === "unknown") issues.push("Saved run has invalid execution-kind metadata.");
   if (observation && (!runId || !/^[a-zA-Z0-9_-]+$/.test(runId) || !verdict.success)) issues.push("Saved run identity or verdict is unavailable.");
-  if (!observation && task && ["passed", "failed", "blocked", "skipped"].includes(task.status)) issues.push("No saved run observation for this task.");
+  if (!observation && task && (["passed", "failed", "blocked", "skipped"].includes(task.status)
+    || ["completed", "failed", "blocked", "cancelled"].includes(mission.status))) issues.push("No saved run observation for this task.");
   return {
     taskId: task?.taskId,
     charterId,
@@ -141,6 +143,7 @@ function projectRun(mission: TestMission, task: TaskNode | undefined, observatio
     oracles: counts(data.passedOracles, data.oracles),
     businessFacts: numberValue(data.businessEvidence),
     targetBinding: binding.success ? binding.data : undefined,
+    integrationCleanup: cleanup.success ? cleanup.data : undefined,
     evidence: evidence.items,
     omittedEvidence: evidence.omitted,
     issue: issues.filter((item): item is string => Boolean(item)).join(" ") || undefined,

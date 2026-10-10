@@ -341,6 +341,73 @@ export const EnvironmentInspectionSchema = z.object({
 });
 export type EnvironmentInspection = z.infer<typeof EnvironmentInspectionSchema>;
 
+const IntegrationFactSchema = z.record(z.string().min(1).max(128), z.union([z.string().max(1024), z.number().finite(), z.boolean(), z.null()]))
+  .refine((facts) => Object.keys(facts).length <= 32, "At most 32 scalar facts are allowed");
+const IntegrationResourceIdSchema = z.string().regex(/^[a-zA-Z0-9._:-]{1,128}$/);
+export const IntegrationResourceSchema = z.object({
+  resourceId: IntegrationResourceIdSchema,
+  kind: z.string().trim().min(1).max(64),
+  scope: IntegrationResourceIdSchema,
+  /** Trusted connector observations; never credentials or arbitrary payloads. */
+  evidence: IntegrationFactSchema,
+}).strict();
+export type IntegrationResource = z.infer<typeof IntegrationResourceSchema>;
+export const IntegrationResourceCleanupSchema = z.object({
+  resourceId: IntegrationResourceIdSchema,
+  status: z.enum(["removed", "retained", "unverified"]),
+  /** A removal acknowledgement alone is insufficient; read back the resource state. */
+  evidence: IntegrationFactSchema,
+  readback: z.object({
+    reader: z.string().regex(/^[a-zA-Z0-9._:/-]{1,128}$/),
+    scope: IntegrationResourceIdSchema,
+    observedAt: z.string().datetime(),
+    exists: z.boolean(),
+  }).strict().optional(),
+}).strict();
+export type IntegrationResourceCleanup = z.infer<typeof IntegrationResourceCleanupSchema>;
+export const IntegrationSetupPolicySchema = z.object({
+  sideEffect: z.enum(["none", "read", "write"]),
+  environments: z.array(z.enum(["test", "staging", "local"])).min(1),
+  cleanupTimeoutMs: z.number().int().min(100).max(5000).default(5000),
+}).strict();
+export type IntegrationSetupPolicy = z.infer<typeof IntegrationSetupPolicySchema>;
+export const IntegrationCleanupSchema = z.object({
+  status: z.enum(["not-required", "completed", "verified", "failed", "unverified"]),
+  declaredResources: z.number().int().min(0).max(32),
+  verifiedResources: z.number().int().min(0).max(32),
+  artifact: z.string().min(1).optional(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+}).strict().superRefine((cleanup, context) => {
+  if (cleanup.verifiedResources > cleanup.declaredResources) context.addIssue({ code: "custom", message: "Verified resources exceed declared resources" });
+  if (cleanup.status === "verified" && (cleanup.declaredResources === 0 || cleanup.verifiedResources !== cleanup.declaredResources || !cleanup.artifact || !cleanup.sha256)) {
+    context.addIssue({ code: "custom", message: "Verified cleanup requires complete resource evidence" });
+  }
+  if (cleanup.status === "completed" && cleanup.declaredResources > 0 && (cleanup.verifiedResources !== cleanup.declaredResources || !cleanup.artifact || !cleanup.sha256)) {
+    context.addIssue({ code: "custom", message: "Legacy cleanup must not hide incomplete resource cleanup" });
+  }
+  if (cleanup.status === "not-required" && cleanup.declaredResources !== 0) context.addIssue({ code: "custom", message: "Declared resources require cleanup" });
+});
+export type IntegrationCleanup = z.infer<typeof IntegrationCleanupSchema>;
+export const IntegrationCleanupArtifactSchema = z.object({
+  runId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  startedAt: z.string().datetime(),
+  endedAt: z.string().datetime(),
+  status: z.enum(["not-required", "completed", "verified", "failed", "unverified"]),
+  declaredResources: z.number().int().min(0).max(32),
+  verifiedResources: z.number().int().min(0).max(32),
+  resources: z.array(IntegrationResourceSchema).max(32),
+  observations: z.array(IntegrationResourceCleanupSchema.extend({
+    /** Runner-owned boundary; the connector cannot supply an earlier release time. */
+    releaseStartedAt: z.string().datetime(),
+  })).max(32),
+  issues: z.array(z.string().min(1).max(256)).max(32),
+}).strict();
+export function hasIncompleteIntegrationCleanup(cleanup: unknown): boolean {
+  if (cleanup === undefined) return false; // Saved Runs before this protocol remain readable.
+  const parsed = IntegrationCleanupSchema.safeParse(cleanup);
+  return !parsed.success || parsed.data.status === "failed" || parsed.data.status === "unverified";
+}
+
 export const RunSummarySchema = z.object({
   runId: z.string(),
   projectRoot: z.string().min(1).optional(),
@@ -358,6 +425,7 @@ export const RunSummarySchema = z.object({
   runtimeHealth: z.enum(["passed", "failed", "ignored"]).optional(),
   runtimeFindings: z.array(RuntimeFindingSchema).optional(),
   targetBinding: TargetBindingSchema.optional(),
+  integrationCleanup: IntegrationCleanupSchema.optional(),
   artifacts: z.array(z.string()).default([]),
   findings: z.array(z.string()).default([]),
 });
@@ -1048,6 +1116,7 @@ export const MissionRunResultSchema = z.object({
   oracles: z.object({ passed: z.number().int().nonnegative(), total: z.number().int().nonnegative() }).optional(),
   businessFacts: z.number().int().nonnegative().optional(),
   targetBinding: TargetBindingSchema.optional(),
+  integrationCleanup: IntegrationCleanupSchema.optional(),
   evidence: z.array(EvidenceRefSchema).max(6),
   omittedEvidence: z.number().int().nonnegative(),
   issue: z.string().optional(),
