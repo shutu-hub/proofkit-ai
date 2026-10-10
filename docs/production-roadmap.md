@@ -167,9 +167,11 @@ MCP next-action guidance prevented that in the verified rerun. Earlier host
 deadline outcomes remain incomplete, even where a saved Mission passed. Those
 eight cases used a fixed historical resume object and do not establish that the
 Oracle verified the object created by the current action. Under the new
-action-identity gate, four real Codex cases have passed separately: Web core
-success, seeded relation defect, inline Charter authoring and Electron core
-success. The remaining real-host cases need reruns. These synthetic cases
+action-identity gate, all eight real Codex cases have now passed separately:
+six Web cases and two Electron cases. The first project-gap rerun mislabeled
+the unexecuted Mission as blocked after a wait receipt suggested approval;
+the MCP contract now returns `testVerdict: not-asserted`, readiness gaps and
+safe next actions, and its verified rerun preserved that distinction. These synthetic cases
 establish a working path on this host, not a general false-pass rate or live
 AIHR acceptance.
 
@@ -180,7 +182,7 @@ portable Skill uses this path so the host does not have to infer completion from
 repeated full Mission reads. MCP unit tests and all six scripted real-Chrome
 host cases exercise it, including pass, seeded defect, pending business state,
 project coverage gap, quick level and inline Charter. Real-host adherence to
-the current identity gate is verified for the four isolated cases above.
+the current identity gate is verified for the eight isolated cases above.
 
 The planning quality gate is covered by tests for missing structural proof, partial discovery versus declared acceptance, whole-project requests, legacy gates, replay and model-reported high confidence. It is a deterministic readiness signal, not a calibrated probability or a substitute for real surface and business evidence. Curated release suites retain their reviewed declared-case scope; the missing-negative-case gap applies to generated release Charters. The real Web/Electron fixture also verifies submitted core scenarios with more than 200 static routes, independent HTTP business facts and a whole-project readiness gate. These checks do not constitute live AIHR acceptance or a measured whole-project workflow inventory.
 

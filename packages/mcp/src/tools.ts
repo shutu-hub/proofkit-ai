@@ -126,12 +126,15 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "Read saved mission status, task graph and verdict. Call get_mission_evidence before claiming a finding or repair is currently supported by intact files.",
     { missionId: z.string().min(1) },
     READ_ONLY_TOOL,
-    async ({ missionId }) => result(await runner.missionStatus(missionId)),
+    async ({ missionId }) => {
+      const current = await runner.missionStatus(missionId);
+      return result({ ...current, testVerdict: current.mission.verdict ?? "not-asserted" });
+    },
   );
 
   server.tool(
     "await_test_result",
-    "Wait briefly for an existing Mission without starting or replaying it. Return a compact, evidence-checked terminal result, a still-running receipt, or the action needed for a Mission that is not running. Cancelling this wait does not cancel the Mission.",
+    "Wait briefly for an existing Mission without starting or replaying it. A Mission that has not run returns testVerdict not-asserted, readiness gaps and safe next actions; it is not a blocked product test. Cancelling this wait does not cancel the Mission.",
     { missionId: z.string().min(1), timeoutMs: z.number().int().min(500).max(30_000).default(20_000) },
     async ({ missionId, timeoutMs }, extra) => result(await awaitTestResult(runner, missionId, timeoutMs, extra.signal)),
   );
@@ -140,7 +143,10 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "get_mission_evidence",
     "Read traceable Mission evidence, current presented-evidence integrity, a bounded result summary and its local HTML report path. Report generation does not execute tests or change the saved verdict.",
     { missionId: z.string().min(1) },
-    async ({ missionId }) => result(await runner.missionEvidence(missionId)),
+    async ({ missionId }) => {
+      const evidence = await runner.missionEvidence(missionId);
+      return result({ ...evidence, testVerdict: evidence.verdict ?? "not-asserted" });
+    },
   );
 
   server.tool(
@@ -285,6 +291,7 @@ async function awaitTestResult(runner: LocalRunnerService, missionId: string, ti
       signal?.throwIfAborted();
       if (!evidence.running && ["completed", "failed", "blocked", "cancelled"].includes(evidence.status)) {
         return { state: "terminal" as const, missionId, status: evidence.status, verdict: evidence.verdict,
+          testVerdict: evidence.verdict ?? "not-asserted",
           level: evidence.level, summary: evidence.summary, evidenceIntegrity: evidence.evidenceIntegrity,
           firstFailure: evidence.firstFailure, report: evidence.report, reportUnavailable: evidence.reportUnavailable,
           next: ["get_mission_evidence"] };
@@ -293,8 +300,19 @@ async function awaitTestResult(runner: LocalRunnerService, missionId: string, ti
       running = evidence.running;
     }
     if (!running) {
+      const readiness = missionReadiness(current.mission);
+      let next: string[];
+      if (status === "awaiting-approval" && projectInventoryGap(current.mission, readiness)) {
+        next = ["inspect_test_scope"];
+      } else if (status === "awaiting-approval" && !readiness.ready) {
+        next = ["inspect_test_scope", "inspect_surface", "plan_test", "run_test"];
+      } else if (status === "awaiting-approval") {
+        next = ["approve_test_plan", "start_mission"];
+      } else {
+        next = ["get_mission_status", "start_mission"];
+      }
       return { state: "needs-action" as const, missionId, status, running: false,
-        next: status === "awaiting-approval" ? ["approve_test_plan", "start_mission"] : ["get_mission_status", "start_mission"] };
+        testVerdict: "not-asserted" as const, readiness, next };
     }
     const remaining = deadline - Date.now();
     if (remaining <= 0) return { state: "still-running" as const, missionId, status,
@@ -329,6 +347,12 @@ function missionReadiness(mission: TestMission): { ready: boolean; missing: stri
   return { ready: missing.length === 0, missing, acceptanceGaps };
 }
 
+function projectInventoryGap(mission: TestMission, readiness: ReturnType<typeof missionReadiness>): boolean {
+  return mission.status === "awaiting-approval" && !readiness.ready
+    && mission.plan.planning?.coverage?.requested === "project"
+    && mission.plan.planning.evidenceGaps.includes("project-workflow-coverage");
+}
+
 function missionStartResponse(started: { mission: TestMission; running: boolean }, readiness = missionReadiness(started.mission)) {
   const mission = started.mission;
   const profile = mission.plan.executionProfile;
@@ -336,13 +360,10 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
   // startMission can acquire an owner before its first status write. The owner,
   // not the stale awaiting-approval snapshot, determines the next host action.
   const status = started.running && mission.status === "awaiting-approval" ? "running" : mission.status;
-  const projectInventoryGap = mission.status === "awaiting-approval" && !readiness.ready
-    && mission.plan.planning?.coverage?.requested === "project"
-    && mission.plan.planning.evidenceGaps.includes("project-workflow-coverage");
   let next: string[];
   if (started.running || mission.status === "running") next = ["await_test_result"];
   else if (terminal.includes(mission.status)) next = ["get_mission_evidence"];
-  else if (projectInventoryGap) next = ["inspect_test_scope"];
+  else if (projectInventoryGap(mission, readiness)) next = ["inspect_test_scope"];
   else if (!readiness.ready && mission.status === "awaiting-approval") next = ["inspect_test_scope", "inspect_surface", "plan_test", "run_test"];
   else if (mission.status === "awaiting-approval") next = ["approve_test_plan"];
   else next = ["start_mission", "get_mission_status"];
@@ -354,6 +375,7 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
     status,
     running: started.running,
     verdict: mission.verdict,
+    testVerdict: mission.verdict ?? "not-asserted",
     level: mission.level,
     levelSelection: mission.levelSelection,
     planning: mission.plan.planning,

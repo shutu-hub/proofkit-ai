@@ -126,10 +126,11 @@ and remaining cases are left unrun. Neither is scored as a model or product
 failure. Reports and event traces are retained under the printed temporary
 evaluation root. All eight synthetic cases passed the stricter scripted MCP
 baseline, which binds the submitted object's captured ID to independently read
-Oracle facts. Four cases passed separately through a real Codex host with
-implicit Skill activation under this gate: Web core success, seeded relation
-defect, inline Charter and Electron core success. The earlier eight real-host
-passes used a fixed historical object and do not prove current-action identity.
+Oracle facts. All eight cases passed separately through a real Codex host with
+implicit Skill activation under this gate: six Web cases, including an
+unexecuted whole-project request correctly labeled `not-asserted`, and two
+Electron core cases. The earlier eight real-host passes used a fixed historical
+object and do not prove current-action identity.
 Broader adherence and false-pass rates remain unmeasured.
 
 ProofKit marks source/scope/catalog/status reads with MCP read-only hints.
@@ -395,7 +396,7 @@ The final evidence gate is checked per primary run and required replay, not acro
 
 If a one-sentence request has no suitable Charter and the planner cannot supply an assertion or required Oracle, `run_test` returns `readiness.ready=false` and does not start the surface. Its next-tool hints point to `inspect_test_scope`, `inspect_surface`, `plan_test` and `run_test`. The agent can inspect the gaps and call `run_test` again with a complete structured Charter. Readiness checks structural prerequisites; they do not prove the assertion is meaningful.
 
-After `run_test` starts, `await_test_result({ missionId })` observes the same Mission for up to 20 seconds by default (maximum 30 seconds). A terminal response includes the saved verdict, bounded summary, current presented-evidence integrity and report path; `still-running` means the agent should call it again with the same ID. `needs-action` means no execution owner is active and identifies the next tool. A wait deadline or MCP cancellation never starts, replays or cancels the Mission. Use `get_mission_evidence` for the detailed findings and evidence links after termination.
+After `run_test` starts, `await_test_result({ missionId })` observes the same Mission for up to 20 seconds by default (maximum 30 seconds). A terminal response includes the saved verdict, bounded summary, current presented-evidence integrity and report path; `still-running` means the agent should call it again with the same ID. `needs-action` means no execution owner is active and identifies the next tool. For an unready Mission, `run_test`, `get_mission_status`, `await_test_result` and `get_mission_evidence` expose `testVerdict: not-asserted`; the wait also repeats the readiness gaps and does not suggest approval. A generated planning report is not a product test result. A wait deadline or MCP cancellation never starts, replays or cancels the Mission. Use `get_mission_evidence` for the detailed findings and evidence links after termination.
 
 ## What the agent receives
 

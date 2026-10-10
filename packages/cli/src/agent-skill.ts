@@ -75,6 +75,11 @@ still-running receipt, or a concrete next action if no owner is running. Repeat
 the wait for a still-running Mission; read get_mission_evidence after termination
 for detailed findings and links. Never restart merely because a wait timed out.
 Cancelling the wait does not cancel the Mission.
+When run_test or await_test_result reports awaiting-approval with readiness.ready
+false, no product test ran. Report testVerdict as not-asserted and explain the
+missing planning proof. Do not label it blocked or failed, even if a planning
+report was generated. Follow the returned next actions; do not approve an
+evidence-deficient Mission.
 Cancel with cancel_mission if the user requests a stop. Do not repeat a write
 scenario blindly after interruption; inspect saved status and resources first.
 inspect_run_resources is observational; recover_run_resources requires a

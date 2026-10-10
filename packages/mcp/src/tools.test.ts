@@ -200,7 +200,7 @@ describe("ProofKit MCP tools", () => {
     try {
       const response = await client.callTool({ name: "await_test_result", arguments: { missionId: "mission-test", timeoutMs: 1000 } });
       expect(JSON.parse(textContent(response))).toMatchObject({ state: "terminal", missionId: "mission-test",
-        status: "completed", verdict: "passed", evidenceIntegrity: { status: "intact" },
+        status: "completed", verdict: "passed", testVerdict: "passed", evidenceIntegrity: { status: "intact" },
         report: "C:/workspace/report.html", next: ["get_mission_evidence"] });
       expect(missionStatus).toHaveBeenCalledTimes(2);
       expect(missionEvidence).toHaveBeenCalledWith("mission-test");
@@ -230,8 +230,38 @@ describe("ProofKit MCP tools", () => {
     try {
       const response = await client.callTool({ name: "await_test_result", arguments: { missionId: "mission-test" } });
       expect(JSON.parse(textContent(response))).toMatchObject({ state: "needs-action", status: "awaiting-approval",
-        running: false, next: ["approve_test_plan", "start_mission"] });
+        running: false, testVerdict: "not-asserted", readiness: { ready: true },
+        next: ["approve_test_plan", "start_mission"] });
       expect(runner.missionEvidence).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("does not suggest approval for an unready whole-project Mission", async () => {
+    const mission = fixtureMission("awaiting-approval");
+    mission.plan.planning = { source: "catalog", confidence: 0, assumptions: [], missingInputs: [],
+      evidenceGaps: ["project-workflow-coverage"], coverage: { requested: "project", source: "explicit",
+        reason: "测试整个项目", inventory: "bounded", workflowCoverage: "unmeasured", gaps: ["project-workflow-coverage"] } };
+    const runner = { missionStatus: vi.fn(async () => ({ mission, running: false })),
+      missionEvidence: vi.fn(), startMission: vi.fn() } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const status = await client.callTool({ name: "get_mission_status", arguments: { missionId: mission.missionId } });
+      expect(JSON.parse(textContent(status))).toMatchObject({ testVerdict: "not-asserted" });
+      const response = await client.callTool({ name: "await_test_result", arguments: { missionId: mission.missionId } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ state: "needs-action", status: "awaiting-approval",
+        testVerdict: "not-asserted", readiness: { ready: false, missing: ["规划证据缺口：project-workflow-coverage"] },
+        next: ["inspect_test_scope"] });
+      expect(runner.startMission).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("labels an unexecuted Mission evidence snapshot as not-asserted", async () => {
+    const runner = { missionEvidence: vi.fn(async () => ({ missionId: "mission-test", status: "awaiting-approval",
+      summary: { verdict: undefined }, report: "C:/workspace/planning-report.html" })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "get_mission_evidence", arguments: { missionId: "mission-test" } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ status: "awaiting-approval", testVerdict: "not-asserted" });
     } finally { await client.close(); await server.close(); }
   });
 
@@ -335,7 +365,7 @@ describe("ProofKit MCP tools", () => {
     try {
       const response = await client.callTool({ name: "run_test", arguments: { intent: "测试整个项目", coverage: "project", level: "core" } });
       expect(JSON.parse(textContent(response))).toMatchObject({
-        status: "awaiting-approval", running: false,
+        status: "awaiting-approval", running: false, testVerdict: "not-asserted",
         readiness: { ready: false, missing: ["规划证据缺口：project-workflow-coverage"] },
         next: ["inspect_test_scope"],
       });

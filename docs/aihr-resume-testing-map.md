@@ -143,6 +143,8 @@ workflow 完成事实必须同时匹配 `run_id`、`candidate.id`、`job.id` 和
 
 随后已把新版只读 `aihr-resume-ui-quick` Charter 登记到外部工作区；“快速检查简历获取页面”能按自然语言选中 `quick` Web 场景，默认 `core` 请求仍因缺少真实页面断言和业务 Oracle 而保留规划缺口。为避开占用 `5174` 的另一份 checkout，从当前 AIHR 源码在 `127.0.0.1:5274` 启动临时 Vite 页面，并将 API 基址指向未监听的本机端口。环境检查确认监听页面进程属于本次源码，但没有后端健康检查，整体只为 `incomplete`。只读页面执行看到了“页面配置加载失败”和 `AuthRequiredError`；工作区显式配置该鉴权信号为环境阻断后，Mission `mission-8d197863-5fd` 返回 `blocked`、`environment` Finding、零个已确认产品问题，相关页面和事件保留在外部工作区。此前 `mission-06e1007b-c8f` 曾仅凭页面断言快照误报已确认产品问题，是历史结果；ProofKit 已改为仅确认页面预期不匹配，不自动归责产品。临时 Vite 进程已停止，没有执行简历业务写入或改动 AIHR 源码。真实 `core` 简历业务验收仍待隔离网关、登录和异步 worker。
 
+2026-10-10 再次执行只读 `proofkit environment`：外部工作区仍指向已停止的 `127.0.0.1:5274`，页面端点不可达，状态为 `blocked`、产品结论为 `not-asserted`，检查快照保存在外部工作区。本机 `8080/8081/8082` 的网关与服务进程路径属于另一份 `D:/tmp/aihr-livekit-interview-voice` checkout，不能据此验收当前源码。此检查未执行简历提交或业务写入。
+
 这次只读复现使用以下启动方式；它故意不连接业务网关，不能作为业务通过的环境：
 
 ```powershell
