@@ -122,9 +122,11 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
       finding: FindingSchema.parse({
         findingId: `finding-${summary.runId}-assertion`,
         severity: confirmed ? "high" : "medium",
-        category: confirmed ? "product" : "unknown",
+        // The observation proves a Charter mismatch, not whether product code,
+        // authentication, environment setup, or the test expectation caused it.
+        category: "unknown",
         status: confirmed ? "confirmed" : "unverified",
-        title: confirmed ? "Surface assertion failed" : "Assertion failed without evidence",
+        title: confirmed ? "Surface assertion mismatch observed" : "Assertion failed without evidence",
         message: failedAssertion.message,
         evidence: assertionEvidence,
         createdAt: boundary.observedAt,
@@ -238,14 +240,15 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
 
 function createDiagnosis(summary: RunSummary, boundary: FailureBoundary, finding: Finding | undefined, verifiedSourceLocations: string[] = []): Diagnosis {
   const sourceLocations = [...new Set(verifiedSourceLocations)];
+  const surfaceMismatch = boundary.kind === "assertion";
   return {
     diagnosisId: `diagnosis-${summary.runId}`,
     summary: finding
       ? `${finding.title}: ${boundary.message}`
       : `A surface assertion failed: ${boundary.message}`,
     // This scores the observed failure boundary, not a source-level root cause.
-    confidence: 0.82,
-    likelyOwner: "surface or business workflow",
+    confidence: surfaceMismatch ? 0.75 : 0.82,
+    likelyOwner: surfaceMismatch ? "undetermined: test setup, environment, or product UI" : "business workflow",
     sourceLocations,
     evidence: boundary.evidence,
     createdAt: boundary.observedAt,
@@ -253,6 +256,19 @@ function createDiagnosis(summary: RunSummary, boundary: FailureBoundary, finding
 }
 
 function createRepairSuggestion(summary: RunSummary, boundary: FailureBoundary, diagnosis: Diagnosis): RepairSuggestion {
+  if (boundary.kind === "assertion") return {
+    suggestionId: `repair-${summary.runId}`,
+    title: "Investigate the observed UI mismatch",
+    rationale: "The linked page observation confirms the assertion mismatch, but does not identify a product defect or its cause. Check authentication, test configuration, and expected UI state before changing product code.",
+    changes: [
+      "Check the test environment, authentication state, and Charter expectation against the linked page observation.",
+      "If product behavior is wrong, identify the responsible implementation and add a regression assertion.",
+      "Replay the same mission after the cause is addressed.",
+    ],
+    confidence: 0.35,
+    evidence: boundary.evidence,
+    status: "proposed",
+  };
   const owner = diagnosis.sourceLocations.length > 0
     ? `Trace the failing boundary and inspect ${diagnosis.sourceLocations.join(", ")} as source hints; file existence does not establish cause.`
     : "Trace the implementation boundary named by the linked business or surface evidence; the source-level cause is unverified.";

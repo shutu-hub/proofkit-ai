@@ -76,7 +76,7 @@ try {
   const analysis = analyzeRun({ summary: failing, evidence: [{ evidenceId: `${failing.runId}:${assertionPath}`, kind: "snapshot",
     path: resolve(".proofkit/electron-runs", assertionPath), capturedAt: failing.endedAt }] });
   assert.equal(analysis.finding?.status, "confirmed");
-  assert.equal(analysis.finding?.category, "product");
+  assert.equal(analysis.finding?.category, "unknown");
   console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, artifacts: summary.artifacts.length }, null, 2));
 } finally {
   child.kill();

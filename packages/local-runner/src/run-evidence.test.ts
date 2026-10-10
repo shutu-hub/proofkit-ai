@@ -71,7 +71,7 @@ describe("Run evidence provenance", () => {
     summary.artifacts = [snapshot];
     await store.writeSummary(summary);
     await store.writeReport(summary);
-    expect(analyzeRun({ summary, evidence: captureRunEvidence(summary, evidenceDir) }).finding).toMatchObject({ category: "product", status: "confirmed" });
+    expect(analyzeRun({ summary, evidence: captureRunEvidence(summary, evidenceDir) }).finding).toMatchObject({ category: "unknown", status: "confirmed" });
     await writeFile(resolve(evidenceDir, snapshot), '{"text":"Error"}');
     expect(analyzeRun({ summary, evidence: captureRunEvidence(summary, evidenceDir) }).finding).toMatchObject({ category: "unknown", status: "unverified" });
   });

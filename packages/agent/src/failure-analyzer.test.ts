@@ -210,7 +210,7 @@ describe("analyzeRun", () => {
     expect(result.finding).toMatchObject({ status: "suspected", category: "environment", evidence: [expect.any(Object)] });
   });
 
-  it("confirms an assertion failure when the assertion points to evidence", () => {
+  it("confirms a surface mismatch without claiming a product defect from its snapshot", () => {
     const path = "run-fixture/artifacts/assertion-001-snapshot.json";
     const result = analyzeRun({
       summary: summary({
@@ -221,7 +221,27 @@ describe("analyzeRun", () => {
 
     expect(result.boundary?.kind).toBe("assertion");
     expect(result.finding?.status).toBe("confirmed");
-    expect(result.finding?.category).toBe("product");
+    expect(result.finding?.category).toBe("unknown");
+    expect(result.diagnosis?.likelyOwner).toContain("undetermined");
+    expect(result.repairSuggestion?.title).toContain("Investigate");
+  });
+
+  it("does not promote an observed error page to a product defect when an auth signal is only suspected", () => {
+    const path = "run-fixture/artifacts/assertion-001-snapshot.json";
+    const result = analyzeRun({
+      summary: summary({
+        verdict: "failed",
+        assertions: [{ assertion: { kind: "text-not-visible", text: "Page configuration failed" }, passed: false,
+          message: "Page configuration failed is visible", evidence: [path] }],
+        runtimeFindings: [{ findingId: "runtime-auth", kind: "console", category: "environment", status: "suspected",
+          severity: "high", message: "AuthRequiredError", eventType: "console", affectsVerdict: false,
+          evidence: ["run-fixture/events.jsonl"], observedAt: capturedAt }],
+      }),
+      evidence: [evidence(path), evidence("run-fixture/events.jsonl", "network")],
+    });
+    expect(result.boundary?.kind).toBe("assertion");
+    expect(result.finding).toMatchObject({ category: "unknown", status: "confirmed" });
+    expect(result.repairSuggestion?.rationale).toContain("authentication");
   });
 
   it("does not confirm a failed assertion from an earlier successful step's snapshot", () => {

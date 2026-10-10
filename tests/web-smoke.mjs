@@ -81,7 +81,7 @@ assert.ok(JSON.parse(await readFile(resolve(".proofkit/smoke-runs", assertionPat
 const analysis = analyzeRun({ summary: failing, evidence: [{ evidenceId: `${failing.runId}:${assertionPath}`, kind: "snapshot",
   path: resolve(".proofkit/smoke-runs", assertionPath), capturedAt: failing.endedAt }] });
 assert.equal(analysis.finding?.status, "confirmed");
-assert.equal(analysis.finding?.category, "product");
+assert.equal(analysis.finding?.category, "unknown");
 assert.deepEqual(analysis.finding?.evidence.map((item) => item.path), [resolve(".proofkit/smoke-runs", assertionPath)]);
 console.log(JSON.stringify({ runId: summary.runId, verdict: summary.verdict, artifacts: summary.artifacts.length }, null, 2));
 server.close();

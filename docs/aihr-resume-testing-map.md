@@ -139,7 +139,17 @@ workflow 完成事实必须同时匹配 `run_id`、`candidate.id`、`job.id` 和
 
 对 `D:\code\Python\AIHR-Microservices` 与外部 `aihr-local-workspace` 执行环境检查时，`http://localhost:5174/` 返回 200，但 Windows 监听进程的代码路径属于 `D:/tmp/aihr-livekit-interview-voice`，因此 `source-binding` 和整体环境状态为 `blocked`；页面可达不能代替当前 checkout 的验收。首次显式 5 秒检查在冷进程查询时仅得到 `incomplete`，15 秒检查确认了不同 checkout；环境检查默认截止时间因此调整为 10 秒，再次使用默认值约 4.2 秒得到相同的 `blocked` 结论。检查只读取本地状态，未执行 AIHR 业务写入。
 
-同一外部工作区当前没有登记的 Charter 或 workflow inventory。聚焦 `resume` 的有界源码扫描显示 195 个路由候选、零个已映射，且 `inventory.truncated=true`；这不是全项目路由总数或业务覆盖率。真实核心测试需要先启动与所选源码一致的隔离 Web/Electron 和后端环境，核实页面控件及业务 reader，再把经过验证的 Charter 登记到外部工作区。当前不能把参考上传 Charter 的接口验证称为 Web/Electron 端到端通过。
+首次检查时，同一外部工作区没有登记的 Charter 或 workflow inventory。聚焦 `resume` 的有界源码扫描显示 195 个路由候选、零个已映射，且 `inventory.truncated=true`；这不是全项目路由总数或业务覆盖率。真实核心测试需要先启动与所选源码一致的隔离 Web/Electron 和后端环境，核实页面控件及业务 reader，再把经过验证的 Charter 登记到外部工作区。当前不能把参考上传 Charter 的接口验证称为 Web/Electron 端到端通过。
+
+随后已把新版只读 `aihr-resume-ui-quick` Charter 登记到外部工作区；“快速检查简历获取页面”能按自然语言选中 `quick` Web 场景，默认 `core` 请求仍因缺少真实页面断言和业务 Oracle 而保留规划缺口。为避开占用 `5174` 的另一份 checkout，从当前 AIHR 源码在 `127.0.0.1:5274` 启动临时 Vite 页面，并将 API 基址指向未监听的本机端口。环境检查确认监听页面进程属于本次源码，但没有后端健康检查，整体只为 `incomplete`。只读页面执行看到了“页面配置加载失败”和 `AuthRequiredError`；工作区显式配置该鉴权信号为环境阻断后，Mission `mission-8d197863-5fd` 返回 `blocked`、`environment` Finding、零个已确认产品问题，相关页面和事件保留在外部工作区。此前 `mission-06e1007b-c8f` 曾仅凭页面断言快照误报已确认产品问题，是历史结果；ProofKit 已改为仅确认页面预期不匹配，不自动归责产品。临时 Vite 进程已停止，没有执行简历业务写入或改动 AIHR 源码。真实 `core` 简历业务验收仍待隔离网关、登录和异步 worker。
+
+这次只读复现使用以下启动方式；它故意不连接业务网关，不能作为业务通过的环境：
+
+```powershell
+cd D:\code\Python\AIHR-Microservices
+$env:VITE_API_BASE_URL = "http://127.0.0.1:9/api/v1"
+pnpm --filter @aihr/micro-resume-collection exec vite --mode devlocal --host 127.0.0.1 --port 5274 --strictPort
+```
 
 在隔离 test/local 环境设置：
 
