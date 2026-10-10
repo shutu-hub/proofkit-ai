@@ -69,11 +69,21 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
     "Connector registration code is trusted and may run when the service is created; this inspection does not invoke setup, preflight, operations or business checks",
   ];
   if (inventory.truncated) limitations.push("Project inventory is truncated; counts describe only the scanned candidate slice");
+  if (inventory.truncationReasons?.includes("file-count-cap")) limitations.push("The source file count exceeded the scan cap; narrow the source focus or review additional modules separately");
+  if (inventory.truncationReasons?.includes("source-read-incomplete")) limitations.push("At least one source file was unavailable or exceeded the source read bound; inspect it before claiming complete discovery");
+  if (inventory.truncationReasons?.includes("entry-point-cap")) limitations.push("The entry-point result cap was reached; the returned entry-point list is incomplete");
+  if (inventory.truncationReasons?.includes("route-hint-cap")) limitations.push("The route-hint result cap was reached; focus on a narrower module or add reviewed route declarations");
   if (inventory.routeDiagnostics?.total) limitations.push(`${inventory.routeDiagnostics.total} Gin route declarations could not be resolved statically; diagnostic locations are hints, not executable route paths`);
   if (focus) limitations.push("Focus is a literal substring filter; the focused view is not whole-project coverage");
   if (inventory.retentionFocus) limitations.push("Focus prioritizes matching source files, entry points and routes before inventory retention caps; totals describe the retained candidate slice, not all project routes");
   if (inventory.retentionFocus && inventory.truncated) limitations.push("File discovery and source reads remain bounded; route-text focus cannot recover declarations from unscanned files, and filesystem focus prioritizes only discovered paths");
   limitations.push("A workflow inventory is a reviewable claim only; reviewer identity, completeness and actual execution remain unverified");
+  const readyCatalog = catalogItems.some((entry) => entry.check.planReady);
+  const next = [
+    ...(surface === "mobile" ? [] : ["inspect_test_environment"]),
+    "inspect_surface",
+    readyCatalog ? "run_test" : "plan_test",
+  ];
   return TestScopeSchema.parse({
     schemaVersion: 1, testVerdict: "not-asserted", executionChecks: "not-run",
     projectRoot: project.root, workspaceRoot: context.workspaceRoot, sourceState: context.sourceState, workflowInventory: context.workflowInventory,
@@ -94,7 +104,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
       inputShape: describeInputShape(item.inputSchema),
     })) },
     oracles: { total: allOracles.length, matched: oracleMatches.length, omitted: Math.max(0, oracleMatches.length - limit), items: oracleMatches.slice(0, limit) },
-    limitations, next: ["inspect_surface", "run_test"], generatedAt: project.generatedAt,
+    limitations, next, generatedAt: project.generatedAt,
   });
 }
 

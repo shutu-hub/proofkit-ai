@@ -92,7 +92,7 @@ describe("focused project inventory", () => {
     }
     await writeFile(join(root, "services", "zz-target", "main.go"), 'api.GET("/target", handler)');
     const focused = await scanProject(root, { focus: "SERVICES/ZZ-TARGET/MAIN.GO" });
-    expect(focused.inventory).toMatchObject({ source: sourceKind, filesScanned: 4_000, truncated: true });
+    expect(focused.inventory).toMatchObject({ source: sourceKind, filesScanned: 4_000, truncated: true, truncationReasons: ["file-count-cap"] });
     expect(focused.inventory.routeHints).toContainEqual(expect.objectContaining({ path: "/target", source: "services/zz-target/main.go" }));
   }, 30_000);
 

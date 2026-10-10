@@ -226,6 +226,7 @@ const execFileAsync = promisify(execFile);
 async function scanInventory(root: string, rootScripts: Record<string, string>, packages: Array<{ path: string; scripts: Record<string, string> }>, dependencies: Set<string>, options: ProjectScanOptions): Promise<{
   filesScanned: number;
   truncated: boolean;
+  truncationReasons: NonNullable<ProjectMap["inventory"]["truncationReasons"]>;
   source: "git" | "filesystem";
   sourceFiles: number;
   testFiles: number;
@@ -256,7 +257,7 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
     (item) => `${item.source}:${item.line}:${item.reason}`);
   let diagnosticTotal = 0;
   let filesScanned = 0;
-  let truncated = false;
+  const truncationReasons = new Set<NonNullable<ProjectMap["inventory"]["truncationReasons"]>[number]>();
   let sourceFiles = 0;
   let testFiles = 0;
   let configFiles = 0;
@@ -295,7 +296,7 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
   const source = gitFiles ? "git" : "filesystem";
   const candidates = (gitFiles ?? await listFilesystemFiles(root, sourceMatches, directoryMatches)).filter(shouldIncludeInventoryPath);
   candidates.sort((left, right) => Number(sourceMatches(right)) - Number(sourceMatches(left)) || inventoryPriority(right) - inventoryPriority(left) || left.localeCompare(right));
-  truncated = candidates.length > MAX_INVENTORY_FILES;
+  if (candidates.length > MAX_INVENTORY_FILES) truncationReasons.add("file-count-cap");
   for (const path of candidates.slice(0, MAX_INVENTORY_FILES)) {
     const absolute = resolve(root, path);
     const withinRoot = relative(root, absolute);
@@ -310,7 +311,7 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
       sourceFiles += 1;
       const kind = classifyEntry(path);
       if (kind) addEntry({ kind, path, reason: "conventional entry point" });
-      if (!isTestFile(path) && !(await readRouteHints(absolute, path, addRoute, addDiagnostic))) truncated = true;
+      if (!isTestFile(path) && !(await readRouteHints(absolute, path, addRoute, addDiagnostic))) truncationReasons.add("source-read-incomplete");
     } else if (CONFIG_EXTENSIONS.has(extension) || /(^|\/)Dockerfile[^/]*$|\.env(?:\.|$)/i.test(path)) {
       configFiles += 1;
     }
@@ -322,10 +323,12 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
   ] as Array<[string, string]>).filter(([dependency]) => dependencies.has(dependency)).map(([, framework]) => framework);
   if (testFiles > 0) testFrameworks.push("repository-tests");
 
-  truncated ||= entries.truncated || routes.truncated;
+  if (entries.truncated) truncationReasons.add("entry-point-cap");
+  if (routes.truncated) truncationReasons.add("route-hint-cap");
   return {
     filesScanned,
-    truncated,
+    truncated: truncationReasons.size > 0,
+    truncationReasons: [...truncationReasons],
     source,
     sourceFiles,
     testFiles,

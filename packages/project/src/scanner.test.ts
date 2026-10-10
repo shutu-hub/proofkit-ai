@@ -119,6 +119,7 @@ describe("scanProject", () => {
     expect(map.inventory.filesScanned).toBe(2);
     expect(map.inventory.routeHints).toHaveLength(200);
     expect(map.inventory.truncated).toBe(true);
+    expect(map.inventory.truncationReasons).toEqual(["route-hint-cap"]);
   });
 
   it("marks the map partial when a source file is too large to inspect", async () => {
@@ -129,6 +130,7 @@ describe("scanProject", () => {
     expect(map.inventory.sourceFiles).toBe(1);
     expect(map.inventory.routeHints).toHaveLength(0);
     expect(map.inventory.truncated).toBe(true);
+    expect(map.inventory.truncationReasons).toEqual(["source-read-incomplete"]);
   });
 
   it("maps fully qualified Gin routes and reports unknown helper prefixes separately", async () => {

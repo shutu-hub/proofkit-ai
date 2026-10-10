@@ -61,6 +61,7 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     expect(TestScopeSchema.safeParse(scope).success).toBe(true);
     expect(scope).toMatchObject({ testVerdict: "not-asserted", executionChecks: "not-run", selection: { level: "core", requiredSurfaces: ["web"] } });
     expect(scope.catalog.items.find((item) => item.id === "resume-core")?.check).toEqual({ eligible: true, planReady: true, issues: [] });
+    expect(scope.next).toEqual(["inspect_test_environment", "inspect_surface", "run_test"]);
     expect(scope.routes).toMatchObject({ total: 5, mapped: 1, unmapped: 4 });
     expect(scope.routes.items.find((item) => item.path === "/resume")).toMatchObject({ source: "apps/web/src/router.ts", line: 3, status: "declared", charterIds: ["resume-core"] });
     expect(scope.routes.items.every((item) => !Object.hasOwn(item, "tested"))).toBe(true);
@@ -102,6 +103,8 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     expect(release.suites.items[0]?.check.planReady).toBe(true);
     const mobile = await runner.inspectTestScope({ level: "release", surface: "mobile" });
     expect(mobile.selection.requiredSurfaces).toEqual(["mobile"]);
+    expect(mobile.next[0]).toBe("inspect_surface");
+    expect(mobile.next).not.toContain("inspect_test_environment");
     expect(mobile.catalog.eligible).toBe(0);
     const created = await runner.createMission({ intent: "test", charterId: "resume-release", surface: "web" });
     expect(created.plan.executionProfile.surfaceMatrix).toEqual(release.selection.requiredSurfaces);
@@ -148,12 +151,15 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     const { runner } = await fixture();
     const project = await runner.discover();
     project.inventory.truncated = true;
+    project.inventory.truncationReasons = ["route-hint-cap"];
     vi.spyOn(runner, "discover").mockResolvedValue(project);
     const limited = await runner.inspectTestScope({ limit: 1 });
     expect(limited.routes).toMatchObject({ matched: 5, omitted: 4 });
     expect(limited.catalog).toMatchObject({ total: 5, matched: 5, omitted: 4 });
     expect(limited.catalog.items).toHaveLength(1);
     expect(limited.inventory.truncated).toBe(true);
+    expect(limited.inventory.truncationReasons).toEqual(["route-hint-cap"]);
+    expect(limited.limitations).toContainEqual(expect.stringContaining("route-hint result cap"));
     const focused = await runner.inspectTestScope({ focus: "RESUME", limit: 50 });
     expect(focused.routes).toMatchObject({ total: 5, matched: 2 });
     expect(focused.routes.items.every((item) => item.path.includes("resume"))).toBe(true);
@@ -161,6 +167,7 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     const empty = await runner.inspectTestScope({ focus: "no-such-workflow" });
     expect(empty.routes.matched).toBe(0);
     expect(empty.catalog.matched).toBe(0);
+    expect(empty.next).toEqual(["inspect_test_environment", "inspect_surface", "plan_test"]);
     await expect(runner.inspectTestScope({ limit: 0 })).rejects.toThrow();
     await expect(runner.inspectTestScope({ level: "unknown" as "core" })).rejects.toThrow();
   });

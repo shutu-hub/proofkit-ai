@@ -536,6 +536,8 @@ A `release` Mission can exercise one Charter or an explicitly declared multi-Cha
 
 Surface snapshots, action receipts and runtime events project HTTP URLs onto one uniquely matching declared route pattern. Other non-root paths become `/__redacted__`; ambiguous matches are not counted as coverage. Mobile URLs use the same path projection without route declarations. Electron file observations retain a SHA-256 document fingerprint for comparison with the configured target, while their displayed URL hides the local path. UI text is bounded and embedded absolute URLs are redacted, but relative paths in visible text, explicitly declared Charter/configuration URLs, connector-owned evidence and screenshot pixels may still contain private values. Use isolated test data for these channels.
 
+The bounded source inventory now reports `truncationReasons` alongside `truncated`: `file-count-cap`, `source-read-incomplete`, `entry-point-cap`, or `route-hint-cap`. A focused scan retains matching routes first but remains partial when any cap is reached. These reasons direct the next source review; they do not clear the whole-project coverage gate.
+
 ## First vertical slice
 
 1. Scan the project and identify Web/Electron entry points, scripts and health URLs.

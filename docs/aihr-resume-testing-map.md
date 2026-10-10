@@ -6,6 +6,12 @@ AIHR 的核心验收对象是一个跨桌面端、网关、多个微服务和异
 
 ProofKit 不复制 AIHR 业务代码，也不直接开放数据库、任意 SQL、shell 或内部服务调用。
 
+## 2026-10-11 本地只读接入检查
+
+ProofKit 使用外部测试工作区绑定 `AIHR-Microservices` 源码，检查 Web 5173 与网关 `/healthz`。两个 HTTP 端点当时返回 200，但 Web 端口的进程属于另一份 `aihr-livekit-interview-voice` 检出；`inspect_test_environment` 因 `different-project` 返回 `blocked`、`testVerdict: not-asserted`。本次没有连接页面、点击按钮或执行简历业务。端口可达不能替代当前源码的运行证明。
+
+对当前源码执行 `inspect_test_scope` 的 `resume` 字面聚焦扫描，共检查 2110 个文件，保留 40 个匹配路由候选；`truncationReasons: [route-hint-cap]`，且外部工作区没有已审阅的业务流程清单或目录用例。这些数量仅是有界静态候选。下一次真实验收需要同一检出的隔离 Web/Electron 进程、测试租户及简历样本、连接器凭据与清理安排，之后才能执行页面动作和独立业务 Oracle。
+
 ## 已核对的真实链路
 
 ### 候选人管理手动录入（独立场景）

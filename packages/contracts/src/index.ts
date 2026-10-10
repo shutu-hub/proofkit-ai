@@ -537,6 +537,8 @@ export const ProjectMapSchema = z.object({
   inventory: z.object({
     filesScanned: z.number().int().nonnegative().default(0),
     truncated: z.boolean().default(false),
+    /** Why a bounded scan cannot support complete inventory claims. Older maps omit this. */
+    truncationReasons: z.array(z.enum(["file-count-cap", "source-read-incomplete", "entry-point-cap", "route-hint-cap"])).max(4).optional(),
     source: z.enum(["git", "filesystem"]).default("filesystem"),
     sourceFiles: z.number().int().nonnegative().default(0),
     testFiles: z.number().int().nonnegative().default(0),
