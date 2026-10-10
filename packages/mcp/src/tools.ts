@@ -141,7 +141,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "get_mission_evidence",
-    "Read traceable Mission evidence, current presented-evidence integrity, a bounded result summary and its local HTML report path. Report generation does not execute tests or change the saved verdict.",
+    "Read traceable Mission evidence, current presented-evidence integrity and Oracle proof classification, a bounded result summary and its local HTML report path. An unverified proofClassification means the saved business verdict needs a rerun; report generation does not execute tests or change that historical verdict.",
     { missionId: z.string().min(1) },
     async ({ missionId }) => {
       const evidence = await runner.missionEvidence(missionId);
@@ -293,6 +293,7 @@ async function awaitTestResult(runner: LocalRunnerService, missionId: string, ti
         return { state: "terminal" as const, missionId, status: evidence.status, verdict: evidence.verdict,
           testVerdict: evidence.verdict ?? "not-asserted",
           level: evidence.level, summary: evidence.summary, evidenceIntegrity: evidence.evidenceIntegrity,
+          proofClassification: evidence.proofClassification,
           firstFailure: evidence.firstFailure, report: evidence.report, reportUnavailable: evidence.reportUnavailable,
           next: ["get_mission_evidence"] };
       }

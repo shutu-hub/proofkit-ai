@@ -7,7 +7,7 @@ import { createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofki
 import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
-import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionComparison, type MissionEvidenceIntegrity, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
+import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionComparison, type MissionEvidenceIntegrity, type MissionProofClassification, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowInventory, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject, verifySourceLocationHints } from "@proofkit/project";
@@ -24,6 +24,7 @@ import { projectMissionResult } from "./mission-result.js";
 import type { MissionResult } from "@proofkit/contracts";
 import { ResourceRecoveryService } from "./resource-recovery.js";
 import { captureRunEvidence } from "./run-evidence.js";
+import { auditMissionProofClassification } from "./mission-proof-classification.js";
 
 export { loadProjectIntegration } from "./integration.js";
 
@@ -638,6 +639,7 @@ export class LocalRunnerService {
     comparison?: MissionComparison;
     comparisonUnavailable?: string;
     evidenceIntegrity: MissionEvidenceIntegrity;
+    proofClassification: MissionProofClassification;
     summary: MissionResult;
     report?: string;
     reportUnavailable?: string;
@@ -657,7 +659,8 @@ export class LocalRunnerService {
     const running = await this.missionAgent.isRunning(mission.missionId);
     const suiteScope = summarizeSuiteScope(mission, this.evidenceDir);
     const workflowExecution = summarizeWorkflowExecution(mission, suiteScope);
-    let summary = projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, comparison, comparisonUnavailable });
+    const proofClassification = await auditMissionProofClassification(mission, (runId) => this.loadRunSummary(runId));
+    let summary = projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, comparison, comparisonUnavailable, proofClassification });
     let report: string | undefined;
     let reportUnavailable: string | undefined;
     let evidenceIntegrity: MissionEvidenceIntegrity;
@@ -714,6 +717,7 @@ export class LocalRunnerService {
       ...(comparison ? { comparison } : {}),
       ...(comparisonUnavailable ? { comparisonUnavailable } : {}),
       evidenceIntegrity,
+      proofClassification,
       summary,
       ...(report ? { report } : {}),
       ...(reportUnavailable ? { reportUnavailable } : {}),

@@ -101,6 +101,12 @@ more presented references or confirmed findings lack verifiable bytes;
 claim current support only when every cited finding and repair fact verifies.
 "no-evidence" cannot support a product claim. The saved verdict is historical,
 and "intact" covers only the presented references, not all project workflows.
+Check get_mission_evidence.proofClassification as well. If it is "unverified",
+saved Oracle results lack explicit business/HTTP-contract classification or a
+referenced Run could not be read; describe the verdict as historical and rerun
+the affected scenarios before claiming current business proof. "explicit" only
+means Oracle kinds were recorded; still check the Mission's business facts,
+coverage and cited evidence.
 
 For an authorized fix, use replay_mission on the original Mission with the
 same scope and fixture bytes, then compare_missions after the replay finishes.

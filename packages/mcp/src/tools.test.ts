@@ -194,13 +194,15 @@ describe("ProofKit MCP tools", () => {
       .mockResolvedValue({ mission: completed, running: false });
     const missionEvidence = vi.fn(async () => ({ missionId: "mission-test", status: "completed", running: false,
       verdict: "passed", level: "core", summary: { missionId: "mission-test", verdict: "passed" },
-      evidenceIntegrity: { status: "intact" }, report: "C:/workspace/report.html" }));
+      evidenceIntegrity: { status: "intact" }, proofClassification: { status: "unverified", legacyOracles: 1 },
+      report: "C:/workspace/report.html" }));
     const runner = { missionStatus, missionEvidence, startMission: vi.fn() } as unknown as LocalRunnerService;
     const { client, server } = await connectedClient(runner);
     try {
       const response = await client.callTool({ name: "await_test_result", arguments: { missionId: "mission-test", timeoutMs: 1000 } });
       expect(JSON.parse(textContent(response))).toMatchObject({ state: "terminal", missionId: "mission-test",
         status: "completed", verdict: "passed", testVerdict: "passed", evidenceIntegrity: { status: "intact" },
+        proofClassification: { status: "unverified", legacyOracles: 1 },
         report: "C:/workspace/report.html", next: ["get_mission_evidence"] });
       expect(missionStatus).toHaveBeenCalledTimes(2);
       expect(missionEvidence).toHaveBeenCalledWith("mission-test");

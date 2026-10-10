@@ -76,6 +76,20 @@ describe("Mission report", () => {
     expect(markup).toContain('id="outcome">Passed');
   });
 
+  it("labels a historical pass unverified when saved Oracle classification is missing", async () => {
+    const workspace = await root();
+    const input = result(workspace);
+    input.verdict = "passed";
+    input.proofClassification = { status: "unverified", checkedRuns: 1, classifiedOracles: 0,
+      legacyOracles: 1, unavailableRuns: 0, omittedRuns: 0, legacyRunIds: ["run-1"], unavailableRunIds: [] };
+    const path = await new MissionReportStore(workspace).writeReport(input);
+    const markup = await readFile(path, "utf8");
+    expect(markup).toContain("Saved pass · current business proof unverified");
+    expect(markup).toContain("1 saved Oracle result(s) lack a verification kind");
+    expect(JSON.parse(await readFile(join(dirname(path), "summary.json"), "utf8")).proofClassification)
+      .toMatchObject({ status: "unverified", legacyRunIds: ["run-1"] });
+  });
+
   it("marks bounded results partial when run evidence or results were omitted", async () => {
     const workspace = await root();
     const input = result(workspace);

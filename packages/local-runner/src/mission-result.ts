@@ -1,4 +1,4 @@
-import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionResult, type MissionRunResult, type Observation, type TaskNode, type TestMission, type WorkflowExecutionCoverage } from "@proofkit/contracts";
+import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionProofClassification, type MissionResult, type MissionRunResult, type Observation, type TaskNode, type TestMission, type WorkflowExecutionCoverage } from "@proofkit/contracts";
 import type { SuiteScopeSummary } from "./suite-verifier.js";
 
 type RunKind = MissionRunResult["runKind"];
@@ -17,6 +17,7 @@ export function projectMissionResult(mission: TestMission, options: {
   workflowExecution?: WorkflowExecutionCoverage;
   comparison?: MissionComparison;
   comparisonUnavailable?: string;
+  proofClassification?: MissionProofClassification;
 }): MissionResult {
   const observations = mission.observations.filter((item) => item.kind === "surface.run");
   const indexed = new Map<string, Observation[]>();
@@ -101,6 +102,7 @@ export function projectMissionResult(mission: TestMission, options: {
     findings: findings.slice(0, 20),
     omittedFindings: Math.max(0, findings.length - 20),
     confirmedProductFindings: mission.findings.filter((finding) => finding.category === "product" && finding.status === "confirmed").length,
+    proofClassification: options.proofClassification,
     firstFailure: mission.firstFailure,
     diagnosis: mission.diagnosis,
     repairSuggestions: mission.repairSuggestions.slice(0, 10),

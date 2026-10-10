@@ -1342,6 +1342,19 @@ export const MissionEvidenceIntegritySchema = z.object({
 });
 export type MissionEvidenceIntegrity = z.infer<typeof MissionEvidenceIntegritySchema>;
 
+/** Current classification of saved Oracle results; this does not rewrite a historical verdict. */
+export const MissionProofClassificationSchema = z.object({
+  status: z.enum(["explicit", "unverified", "not-applicable"]),
+  checkedRuns: z.number().int().nonnegative(),
+  classifiedOracles: z.number().int().nonnegative(),
+  legacyOracles: z.number().int().nonnegative(),
+  unavailableRuns: z.number().int().nonnegative(),
+  omittedRuns: z.number().int().nonnegative(),
+  legacyRunIds: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/)).max(10),
+  unavailableRunIds: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/)).max(10),
+});
+export type MissionProofClassification = z.infer<typeof MissionProofClassificationSchema>;
+
 export const MissionResultSchema = z.object({
   schemaVersion: z.literal("1"),
   missionId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
@@ -1389,6 +1402,7 @@ export const MissionResultSchema = z.object({
   omittedFindings: z.number().int().nonnegative(),
   confirmedProductFindings: z.number().int().nonnegative(),
   evidenceIntegrity: MissionEvidenceIntegritySchema.optional(),
+  proofClassification: MissionProofClassificationSchema.optional(),
   firstFailure: FailureBoundarySchema.optional(),
   diagnosis: DiagnosisSchema.optional(),
   repairSuggestions: z.array(RepairSuggestionSchema).max(10),
