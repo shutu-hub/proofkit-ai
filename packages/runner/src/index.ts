@@ -441,7 +441,10 @@ export class ExecutionRunner {
         }
         for (const oracle of this.oracles) {
           throwIfAborted(signal);
-          const result = OracleResultSchema.parse(await withAbort(oracle.check({ runId, charter, steps: summary.steps, assertions: summary.assertions, signal }), signal, `Oracle ${oracle.name}`));
+          const parsedResult = OracleResultSchema.parse(await withAbort(oracle.check({ runId, charter, steps: summary.steps, assertions: summary.assertions, signal }), signal, `Oracle ${oracle.name}`));
+          // Older project connectors omit the field. Persist an explicit kind
+          // for every new Run while keeping their existing business semantics.
+          const result: OracleResult = { ...parsedResult, verificationKind: parsedResult.verificationKind ?? "business" };
           if (result.name !== oracle.name) throw new Error(`Oracle ${oracle.name} returned a result for ${result.name}`);
           const sourceFacts = result.evidence.filter((item) => item.trim().length > 0).map((item) => {
             try { return JSON.parse(item) as unknown; } catch { return item; }
@@ -495,7 +498,8 @@ export class ExecutionRunner {
       ? "ignored"
       : (summary.runtimeFindings ?? []).length > 0 ? "failed" : "passed";
     const environmentBlocked = (summary.runtimeFindings ?? []).some((finding) => finding.category === "environment" && finding.status === "confirmed" && finding.affectsVerdict);
-    const independentBusinessFailure = summary.oracles.some((oracle) => oracle.passed === false && (oracle.sourceEvidenceCount ?? 0) > 0);
+    const independentBusinessFailure = summary.oracles.some((oracle) => oracle.verificationKind !== "http-contract"
+      && oracle.passed === false && (oracle.sourceEvidenceCount ?? 0) > 0);
     summary.verdict = environmentBlocked && !independentBusinessFailure
       ? "blocked"
       : this.runtimeQuality.mode === "fail"

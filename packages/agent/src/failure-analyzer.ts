@@ -65,7 +65,7 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
     };
   }
 
-  const failedOracle = summary.oracles.find((oracle) => oracle.passed === false);
+  const failedOracle = summary.oracles.find((oracle) => oracle.verificationKind !== "http-contract" && oracle.passed === false);
   if (failedOracle) {
     const oracleEvidence = failedOracle.sourceEvidenceCount && failedOracle.sourceEvidenceArtifacts?.length
       ? evidenceForPaths(evidence.filter((item) => item.kind === "business"), failedOracle.sourceEvidenceArtifacts, summary.runId)
@@ -102,6 +102,31 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
         message: "The oracle reported a failure, but the run did not retain a traceable evidence reference.",
         evidence: [],
         createdAt: boundary.observedAt,
+      }),
+    };
+  }
+
+  const failedHttpContract = summary.oracles.find((oracle) => oracle.verificationKind === "http-contract" && oracle.passed === false);
+  if (failedHttpContract) {
+    const contractEvidence = evidenceForPaths(evidence, failedHttpContract.sourceEvidenceArtifacts ?? [], summary.runId);
+    const observedAt = failedHttpContract.observedAt ?? summary.endedAt ?? summary.startedAt;
+    const boundary = FailureBoundarySchema.parse({
+      kind: "evidence",
+      message: failedHttpContract.message,
+      evidence: contractEvidence,
+      observedAt,
+    });
+    return {
+      boundary,
+      finding: FindingSchema.parse({
+        findingId: `finding-${summary.runId}-http-contract-${safeId(failedHttpContract.name)}`,
+        severity: "medium",
+        category: "unknown",
+        status: contractEvidence.length > 0 ? "confirmed" : "unverified",
+        title: "HTTP contract mismatch observed",
+        message: failedHttpContract.message,
+        evidence: contractEvidence,
+        createdAt: observedAt,
       }),
     };
   }

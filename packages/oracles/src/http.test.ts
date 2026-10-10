@@ -18,6 +18,7 @@ describe("httpOracle", () => {
           runId: "test", charter: {} as never, steps: [], assertions: [],
         });
         expect(result.passed).toBeNull();
+        expect(result.verificationKind).toBe("http-contract");
         expect(result.message).toContain("no business predicate");
         expect(result.evidence[0]).toContain('"status":200');
         expect(result.evidence[0]).not.toContain("must-not-leak");
@@ -42,6 +43,7 @@ describe("httpOracle", () => {
     }).check({ runId: "test", charter: {} as never, steps: [], assertions: [] });
     server.close();
     expect(result.passed).toBe(true);
+    expect(result.verificationKind).toBe("business");
     expect(result.evidence[0]).not.toContain("must-not-leak");
   });
 
@@ -83,6 +85,7 @@ describe("httpOracle", () => {
       const negativeCase = await httpOracle({ name: "access-negative", url: `http://127.0.0.1:${address.port}`,
         expectedStatus: 403 }).check({ runId: "test", charter: {} as never, steps: [], assertions: [] });
       expect(negativeCase.passed).toBe(true);
+      expect(negativeCase.verificationKind).toBe("http-contract");
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

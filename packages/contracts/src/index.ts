@@ -243,6 +243,8 @@ export type AssertionResult = z.infer<typeof AssertionResultSchema>;
 export const OracleResultSchema = z.object({
   name: z.string().min(1),
   passed: z.boolean().nullable(),
+  /** Status-only checks establish an HTTP contract, not an independent business outcome. */
+  verificationKind: z.enum(["business", "http-contract"]).optional(),
   message: z.string(),
   evidence: z.array(z.string()).default([]),
   /** Evidence supplied by the Oracle before ProofKit adds its own result artifact. */

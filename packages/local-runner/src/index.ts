@@ -828,7 +828,7 @@ export class LocalRunnerService {
           assertions: summary.assertions.length,
           passedAssertions: summary.assertions.filter((item) => item.passed).length,
           oracles: summary.oracles.length,
-          passedOracles: summary.oracles.filter((item) => item.passed === true).length,
+          passedOracles: summary.oracles.filter((item) => item.verificationKind !== "http-contract" && item.passed === true).length,
           runtimeHealth: summary.runtimeHealth ?? "passed",
           runtimeFindingCount: (summary.runtimeFindings ?? []).length,
           runtimeFindings: (summary.runtimeFindings ?? []).slice(0, 20).map((finding) => ({
@@ -842,7 +842,7 @@ export class LocalRunnerService {
           })),
           targetBinding: summary.targetBinding,
           integrationCleanup: summary.integrationCleanup,
-          businessEvidence: summary.oracles.reduce((count, oracle) => count + ((oracle.sourceEvidenceArtifacts ?? []).some((path) =>
+          businessEvidence: summary.oracles.reduce((count, oracle) => count + (oracle.verificationKind !== "http-contract" && (oracle.sourceEvidenceArtifacts ?? []).some((path) =>
             evidence.some((item) => item.kind === "business" && item.evidenceId === `${summary.runId}:${path}`))
             ? oracle.sourceEvidenceCount ?? 0 : 0), 0),
           matchedRoutePaths: matchedWebRouteTargets(summary, routeTargets),
@@ -857,7 +857,7 @@ export class LocalRunnerService {
       // the raw run verdict in the observation and report the normalized
       // scenario verdict to the Mission Agent.
       const expectedFailureOutcome = runKind === "negative" && expectedVerdict !== undefined && expectedVerdict !== "passed";
-      const failedOracle = summary.oracles.find((oracle) => oracle.passed === false);
+      const failedOracle = summary.oracles.find((oracle) => oracle.verificationKind !== "http-contract" && oracle.passed === false);
       const verifiedSourceLocations = expectedFailureOutcome || outcomeMatched === true || !failedOracle
         ? [] : await verifySourceLocationHints(this.root, failedOracle.sourceLocations ?? []);
       const analysis = expectedFailureOutcome ? {} : outcomeMatched === true ? {} : analyzeRun({ summary, evidence, verifiedSourceLocations });

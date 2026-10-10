@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebAdapter } from "@proofkit/adapters";
 import { ProofkitConfigSchema, TestCharterSchema } from "@proofkit/contracts";
+import { httpOracle } from "@proofkit/oracles";
 import { LocalRunnerService } from "./index.js";
 
 const roots: string[] = [];
@@ -132,6 +133,39 @@ describe("Oracle registration and selection", () => {
       expect(summary.oracles[0]?.message).toContain("no business predicate");
       expect(summary.verdict).toBe("inconclusive");
       expect(summary.oracles[0]?.sourceEvidenceCount).toBe(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("does not count a passing negative HTTP status contract as core business proof", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(403, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "access denied" }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server port");
+    try {
+      const root = await projectRoot();
+      const oracle = httpOracle({ name: "access-negative", url: `http://127.0.0.1:${address.port}/private`, expectedStatus: 403 });
+      const service = new LocalRunnerService({ workspaceRoot: root, root, oracles: [oracle] });
+      const core = TestCharterSchema.parse({ ...charter(["access-negative"]), level: "core" });
+      const started = await service.start({ charter: core });
+      const summary = await service.wait(started.runId);
+      expect(summary.verdict).toBe("passed");
+      expect(summary.oracles[0]).toMatchObject({ passed: true, verificationKind: "http-contract" });
+      expect((await service.evidenceFor(started.runId, "report")).content).toContain("HTTP contract");
+
+      const created = await service.createMission({ intent: core.intent, surface: "web", charter: core });
+      await service.startMission(created.missionId, { approve: true });
+      const mission = await service.waitMission(created.missionId);
+      expect(mission.verdict).toBe("inconclusive");
+      const observation = mission.observations.find((item) => item.kind === "surface.run" && item.data.runKind === "primary");
+      expect(observation?.data).toMatchObject({ passedAssertions: 1, passedOracles: 0, businessEvidence: 0 });
+      expect(observation?.evidence.some((item) => item.kind === "business")).toBe(false);
+      expect(observation?.evidence.some((item) => item.kind === "other" && item.path.includes("oracle-1-source"))).toBe(true);
+      expect(mission.findings.some((finding) => finding.category === "product" && finding.status === "confirmed")).toBe(false);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

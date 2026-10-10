@@ -139,6 +139,7 @@ export function jsonPointer(value: unknown, pointer: string): unknown {
 }
 
 export function httpOracle(options: HttpOracleOptions): BusinessOracle {
+  const verificationKind = options.check ? "business" as const : "http-contract" as const;
   return {
     name: options.name,
     async check(context): Promise<OracleResult> {
@@ -152,6 +153,7 @@ export function httpOracle(options: HttpOracleOptions): BusinessOracle {
         }
         return {
           name: options.name,
+          verificationKind,
           passed: null,
           message: `HTTP oracle could not observe ${options.name} (${httpObservationFailure(error)}).`,
           evidence: [],
@@ -170,6 +172,7 @@ export function httpOracle(options: HttpOracleOptions): BusinessOracle {
         : null;
       return {
         name: options.name,
+        verificationKind,
         passed,
         message: accessUnavailable
           ? `HTTP oracle ${options.name} could not read the business result (status ${response.status}); verify test access and rate limits.`

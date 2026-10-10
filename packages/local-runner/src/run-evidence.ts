@@ -34,7 +34,10 @@ export function captureRunEvidence(summary: RunSummary, evidenceDir: string): Ev
   const provenance = artifactDigests(runId, evidenceDir);
   const paths = new Set([`${runId}/run.json`, `${runId}/report.html`, `${runId}/events.jsonl`, ...summary.artifacts]);
   const oracleReports = new Set(summary.oracles.map((oracle) => oracle.evidence.at(-1)));
-  const oracleSourceArtifacts = new Set(summary.oracles.flatMap((oracle) => oracle.sourceEvidenceArtifacts ?? []));
+  const oracleSourceArtifacts = new Set(summary.oracles.filter((oracle) => oracle.verificationKind !== "http-contract")
+    .flatMap((oracle) => oracle.sourceEvidenceArtifacts ?? []));
+  const httpContractArtifacts = new Set(summary.oracles.filter((oracle) => oracle.verificationKind === "http-contract")
+    .flatMap((oracle) => oracle.sourceEvidenceArtifacts ?? []));
   const refs: EvidenceRef[] = [];
   for (const path of paths) {
     const isArtifact = summary.artifacts.includes(path);
@@ -51,6 +54,7 @@ export function captureRunEvidence(summary: RunSummary, evidenceDir: string): Ev
     refs.push(EvidenceRefSchema.parse({
       ...base,
       kind: path.endsWith("events.jsonl") ? "network" : path.endsWith(".png") ? "screenshot" : oracleSourceArtifacts.has(path) ? "business"
+        : httpContractArtifacts.has(path) ? "other"
         : path.endsWith("report.html") || oracleReports.has(path) ? "report"
           : path.endsWith("runtime-findings.json") || path.endsWith("integration-cleanup.json") || path.endsWith("integration-setup.json") ? "runtime" : path.includes("/artifacts/target-binding") ? "process" : "snapshot",
       sha256: digest.sha256,

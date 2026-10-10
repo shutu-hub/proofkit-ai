@@ -28,6 +28,20 @@ function summary(overrides: Partial<RunSummary> = {}): RunSummary {
 }
 
 describe("analyzeRun", () => {
+  it("reports a status-only HTTP mismatch without claiming a business product defect", () => {
+    const source = "run-fixture/artifacts/oracle-1-source.json";
+    const result = analyzeRun({
+      summary: summary({ oracles: [{ name: "access-negative", verificationKind: "http-contract", passed: false,
+        message: "Expected status 403, observed 500", evidence: [source], sourceEvidenceCount: 1,
+        sourceEvidenceArtifacts: [source], observedAt: capturedAt }] }),
+      evidence: [evidence(source, "other")],
+    });
+    expect(result.boundary?.kind).toBe("evidence");
+    expect(result.finding).toMatchObject({ category: "unknown", status: "confirmed", title: "HTTP contract mismatch observed" });
+    expect(result.diagnosis).toBeUndefined();
+    expect(result.repairSuggestion).toBeUndefined();
+  });
+
   it("keeps ambiguous action response evidence unverified without a product diagnosis", () => {
     const path = "run-fixture/artifacts/step-001-response-gap.json";
     const action = CaptureResponseActionSchema.parse({ kind: "captureResponse", name: "intake", trigger: { kind: "click", selector: "#submit" },

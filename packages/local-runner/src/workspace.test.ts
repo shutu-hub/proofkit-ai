@@ -150,7 +150,7 @@ describe("external test workspace", () => {
       status: omittedEvidenceReferences ? "partial" : "intact",
       omittedEvidenceReferences,
     });
-    expect((await restarted.evidenceFor(started.runId, "report")).content).toContain("Business oracles");
+    expect((await restarted.evidenceFor(started.runId, "report")).content).toContain("Oracle checks");
     const replay = await restarted.replayMission(mission.missionId);
     expect((await restarted.waitMission(replay.mission.missionId)).verdict).toBe("passed");
     const business = acceptedEvidence.evidence.find((ref) => ref.kind === "business");

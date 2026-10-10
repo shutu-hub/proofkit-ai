@@ -139,7 +139,7 @@ export async function compareMissionRecords(
     }
     const declaredOracles = slot.charter.oracles ?? [];
     const passedOracles = declaredOracles.every((name) => {
-      const oracle = after.summary.oracles.find((item) => item.name === name && item.passed === true);
+      const oracle = after.summary.oracles.find((item) => item.name === name && item.verificationKind !== "http-contract" && item.passed === true);
       return oracle !== undefined && (!candidate.plan.executionProfile.requireBusinessOracle || oracleFacts(after, oracle, evidenceDir).length > 0);
     });
     if (after.summary.verdict !== "passed" || !after.summary.assertions.some((item) => item.passed)
@@ -312,12 +312,14 @@ async function recordFor(mission: TestMission, slot: Slot, loadRun: (runId: stri
 }
 
 function businessFacts(record: RunRecord, evidenceDir: string): { count: number; refs: EvidenceRef[] } {
-  const refs = record.summary.oracles.flatMap((oracle) => oracleFacts(record, oracle, evidenceDir));
-  const count = record.summary.oracles.reduce((total, oracle) => total + (oracleFacts(record, oracle, evidenceDir).length > 0 ? oracle.sourceEvidenceCount ?? 0 : 0), 0);
+  const businessOracles = record.summary.oracles.filter((oracle) => oracle.verificationKind !== "http-contract");
+  const refs = businessOracles.flatMap((oracle) => oracleFacts(record, oracle, evidenceDir));
+  const count = businessOracles.reduce((total, oracle) => total + (oracleFacts(record, oracle, evidenceDir).length > 0 ? oracle.sourceEvidenceCount ?? 0 : 0), 0);
   return { count, refs: [...new Map(refs.map((item) => [item.evidenceId, item])).values()] };
 }
 
 function oracleFacts(record: RunRecord, oracle: OracleResult, evidenceDir: string): EvidenceRef[] {
+  if (oracle.verificationKind === "http-contract") return [];
   if (!oracle.sourceEvidenceCount || !oracle.sourceEvidenceArtifacts?.length) return [];
   return oracle.sourceEvidenceArtifacts.flatMap((path) => {
     if (!record.summary.artifacts.includes(path)) return [];

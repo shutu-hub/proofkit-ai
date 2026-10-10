@@ -628,6 +628,7 @@ describe("ExecutionRunner", () => {
     }).run({ intent: "check resume facts", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [], oracles: ["resume-terminal"], sideEffectPolicy: "deny", metadata: {} }, "facts-run");
 
     const oracle = summary.oracles[0]!;
+    expect(oracle.verificationKind).toBe("business");
     expect(oracle.sourceEvidenceCount).toBe(1);
     expect(oracle.sourceEvidenceArtifacts).toEqual(["facts-run/artifacts/oracle-1-source.json"]);
     expect(oracle.evidence).toEqual(["facts-run/artifacts/oracle-1-source.json", "facts-run/artifacts/oracle-1.json"]);
