@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto";
 import type { Browser, BrowserContext, Locator, Page, Request, Response } from "playwright-core";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceControl, SurfaceSnapshot } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceAdapter, SurfaceActionContext } from "@proofkit/runner";
 import { InconclusiveError } from "@proofkit/runner";
 import { captureActionResponse } from "./response-capture.js";
-import { sanitizeSurfaceText, sanitizeSurfaceUrl } from "./surface-sanitize.js";
+import { projectSurfaceUrl, sanitizeSurfaceText } from "./surface-sanitize.js";
 
 export type WebAdapterOptions = {
   baseUrl?: string;
@@ -141,12 +142,16 @@ export class WebAdapter implements SurfaceAdapter {
       page.title().catch(() => ""),
       page.locator("body").innerText({ timeout: 2_000 }).catch(() => ""),
     ]);
+    const projected = projectSurfaceUrl(url, this.options.routePatterns);
+    const fileDocumentSha256 = fileDocumentFingerprint(url);
     return {
       capturedAt: new Date().toISOString(),
-      url: sanitizeSurfaceUrl(url),
+      url: projected.value,
       title: sanitizeSurfaceText(title, 200),
       text: sanitizeSurfaceText(text, 20_000),
-      metadata: { adapter: this.name, matchedRoutePaths: matchDeclaredRoutePaths(url, this.options.routePatterns ?? []) },
+      metadata: { adapter: this.name, urlPathEvidence: projected.pathEvidence,
+        matchedRoutePaths: matchDeclaredRoutePaths(url, this.options.routePatterns ?? []),
+        ...(fileDocumentSha256 ? { fileDocumentSha256 } : {}) },
     };
   }
 
@@ -217,16 +222,19 @@ export class WebAdapter implements SurfaceAdapter {
       case "capability":
         throw new Error("Capability actions are executed by the runner");
     }
+    const projectedBefore = projectSurfaceUrl(urlBefore, this.options.routePatterns);
+    const projectedAfter = projectSurfaceUrl(page.url(), this.options.routePatterns);
     return {
       actionId: `${action.kind}-${started}`,
       kind: action.kind,
       startedAt,
       endedAt: new Date().toISOString(),
       durationMs: Date.now() - started,
-      urlBefore: sanitizeSurfaceUrl(urlBefore),
-      urlAfter: sanitizeSurfaceUrl(page.url()),
+      urlBefore: projectedBefore.value,
+      urlAfter: projectedAfter.value,
       titleAfter: sanitizeSurfaceText(await page.title().catch(() => ""), 200),
-      metadata: { adapter: this.name, ...(response ? { response } : {}) },
+      metadata: { adapter: this.name, urlBeforePathEvidence: projectedBefore.pathEvidence,
+        urlAfterPathEvidence: projectedAfter.pathEvidence, ...(response ? { response } : {}) },
     };
   }
 
@@ -353,12 +361,22 @@ export function matchDeclaredRoutePaths(value: string, patterns: readonly string
     : url.protocol === "http:" || url.protocol === "https:" ? url.pathname : undefined;
   if (!observed) return [];
   const actual = observed.split("/");
-  return [...new Set(patterns.filter((pattern) => {
+  const matches = [...new Set(patterns.filter((pattern) => {
     if (!pattern.startsWith("/") || /[?#\s{}$]/.test(pattern)) return false;
     const expected = pattern.split("/");
     return expected.length === actual.length && expected.every((segment, index) =>
       segment.startsWith(":") ? Boolean(actual[index]) : segment === actual[index]);
   }))].sort();
+  return matches.length === 1 ? matches : [];
+}
+
+/** A digest lets the suite verifier bind a redacted file URL to its configured document. */
+function fileDocumentFingerprint(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "file:") return undefined;
+    return createHash("sha256").update(`${url.host}${url.pathname}`).digest("hex");
+  } catch { return undefined; }
 }
 
 /** Never choose the first tab by accident when an attached browser has several pages. */

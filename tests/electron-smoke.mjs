@@ -51,7 +51,7 @@ try {
     await inspectionAdapter.connect();
     const snapshot = await inspectionAdapter.discover();
     assert.equal(snapshot.metadata.surface, "electron");
-    assert.equal(snapshot.url, "data:text/html;base64,[CONTENT REDACTED]");
+    assert.equal(snapshot.url, "data:[CONTENT REDACTED]");
     assert.equal(snapshot.controls?.find((control) => control.name === "Fetch resume")?.selector, "#fetch");
   } finally {
     await inspectionAdapter.close();

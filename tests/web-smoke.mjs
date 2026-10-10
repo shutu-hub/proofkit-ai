@@ -62,7 +62,8 @@ assert.ok(summary.artifacts.length >= 2);
 const events = (await readFile(`.proofkit/smoke-runs/${summary.runId}/events.jsonl`, "utf8"))
   .trim().split("\n").map((line) => JSON.parse(line));
 assert.ok(events.some((event) => event.type === "adapter.event" && event.payload.eventType === "response"
-  && event.payload.status === 204 && event.payload.url === `${baseUrl}/startup-script.js`), "startup network response was not captured");
+  && event.payload.status === 204 && event.payload.method === "GET"
+  && event.payload.url === `${baseUrl}/__redacted__` && event.payload.urlPathEvidence === "redacted"), "startup network response was not captured");
 const failing = await new ExecutionRunner(new WebAdapter({ executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" }), { evidenceDir: ".proofkit/smoke-runs" }).run({
   intent: "Detect a visible configuration error",
   level: "quick",

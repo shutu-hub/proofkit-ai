@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -517,8 +518,10 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
         stepId: "step-001", action: { kind: "observe" }, status: "passed", artifacts: [],
         beforeSnapshot: { capturedAt: now, url: "http://127.0.0.1:8765/", metadata: {} },
         afterSnapshot: { capturedAt: now,
-          url: fileElectron ? fileDocument : `${visitOrigin}/${visited ? options.dynamicResume && charterId === "resume" ? "resumes/private-candidate-123" : charterId : ""}`,
-          metadata: fileElectron ? { adapter: "electron", matchedRoutePaths: visited ? [routePattern] : [] } : {} },
+          url: fileElectron ? "file:[PATH REDACTED]" : `${visitOrigin}/${visited ? options.dynamicResume && charterId === "resume" ? "resumes/private-candidate-123" : charterId : ""}`,
+          metadata: fileElectron ? { adapter: "electron", urlPathEvidence: "redacted",
+            fileDocumentSha256: createHash("sha256").update(`${new URL(fileDocument).host}${new URL(fileDocument).pathname}`).digest("hex"),
+            matchedRoutePaths: visited ? [routePattern] : [] } : {} },
       }],
       assertions: kind === "negative" ? [] : [{ assertion: charter.assertions[0]!, passed: true, message: "visible", evidence: [`${runId}/snapshot.json`] }],
       oracles: charter.oracles?.length ? [{ name: `${charterId}-oracle`, verificationKind: "business", passed: !failed, message: failed ? "business state is wrong" : "business state is done", evidence: missing ? [oracleArtifact] : [sourceArtifact, oracleArtifact], sourceEvidenceCount: missing ? 0 : 1, sourceEvidenceArtifacts: missing ? [] : [sourceArtifact], observedAt: now }] : [],

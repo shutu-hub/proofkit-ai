@@ -1584,25 +1584,28 @@ function matchedWebRouteTargets(summary: RunSummary, targets: RouteCoverageTarge
     }
   } catch { /* An invalid file target cannot establish file route coverage. */ }
   if (!approvedOrigin && !approvedFile) return [];
+  const approvedFileSha256 = approvedFile ? sha256(`${approvedFile.host}${approvedFile.pathname}`) : undefined;
   const paths = new Set<string>();
   const matchedPatterns = new Set<string>();
-  const accept = (value: string, patterns?: unknown, adapter?: unknown) => {
-    let url: URL;
-    try { url = new URL(value); } catch { return; }
-    const http = approvedOrigin !== undefined && url.origin === approvedOrigin;
-    const file = approvedFile !== undefined && url.protocol === "file:" && url.host === approvedFile.host
-      && url.pathname === approvedFile.pathname && adapter === "electron";
+  const accept = (value: string, patterns?: unknown, adapter?: unknown, pathEvidence?: unknown, fileDocumentSha256?: unknown) => {
+    let url: URL | undefined;
+    try { url = new URL(value); } catch { /* A redacted file URL may not be parseable. */ }
+    const http = approvedOrigin !== undefined && url?.origin === approvedOrigin;
+    const file = approvedFile !== undefined && adapter === "electron" && (fileDocumentSha256 === approvedFileSha256
+      || url?.protocol === "file:" && url.host === approvedFile.host && url.pathname === approvedFile.pathname);
     if (!http && !file) return;
-    if (http) paths.add(url.pathname);
+    if (http && url && pathEvidence !== "redacted" && url.pathname !== "/__redacted__") paths.add(url.pathname);
     if (Array.isArray(patterns)) for (const pattern of patterns) {
       if (typeof pattern === "string" && declared.has(pattern)) matchedPatterns.add(pattern);
     }
   };
   for (const step of summary.steps) {
     for (const snapshot of [step.beforeSnapshot, step.afterSnapshot]) {
-      if (snapshot?.url) accept(snapshot.url, snapshot.metadata.matchedRoutePaths, snapshot.metadata.adapter);
+      if (snapshot?.url) accept(snapshot.url, snapshot.metadata.matchedRoutePaths, snapshot.metadata.adapter,
+        snapshot.metadata.urlPathEvidence, snapshot.metadata.fileDocumentSha256);
     }
-    for (const value of [step.receipt?.urlBefore, step.receipt?.urlAfter]) if (value) accept(value);
+    if (step.receipt?.urlBefore) accept(step.receipt.urlBefore, undefined, undefined, step.receipt.metadata.urlBeforePathEvidence);
+    if (step.receipt?.urlAfter) accept(step.receipt.urlAfter, undefined, undefined, step.receipt.metadata.urlAfterPathEvidence);
   }
   return [...declared].filter((pattern) => matchedPatterns.has(pattern) || [...paths].some((path) => routeMatches(pattern, path))).sort();
 }

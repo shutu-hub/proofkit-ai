@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -25,6 +26,7 @@ await writeFile(htmlPath, `<!doctype html><title>Electron file route fixture</ti
 route.startsWith('/resumes/')?'Resume ready':route==='/login'?'Login ready':'Unknown route'}
 addEventListener('hashchange',render);render()</script>`);
 const fileUrl = pathToFileURL(htmlPath).href;
+const expectedFileSha256 = createHash("sha256").update(`${new URL(fileUrl).host}${new URL(fileUrl).pathname}`).digest("hex");
 
 const server = createServer((request, response) => {
   if (request.url === "/favicon.ico") { response.writeHead(204).end(); return; }
@@ -99,11 +101,19 @@ app.on('window-all-closed',()=>app.quit());`);
     assert.deepEqual(item.data.matchedRoutePaths, [expected]);
     const summary = await service.wait(item.data.runId);
     assert.equal(summary.verdict, "passed");
+    const runText = await readFile(join(workspaceRoot, ".proofkit", "runs", summary.runId, "run.json"), "utf8");
+    const eventText = await readFile(join(workspaceRoot, ".proofkit", "runs", summary.runId, "events.jsonl"), "utf8");
+    assert.ok(!`${runText}\n${eventText}`.includes(fileUrl));
+    assert.ok(!`${runText}\n${eventText}`.includes("/resumes/123"));
     assert.ok(summary.steps.some((step) => step.afterSnapshot?.metadata.matchedRoutePaths?.includes(expected)));
     assert.ok(summary.steps.every((step) => !step.afterSnapshot?.url?.includes("#")));
     const snapshots = summary.steps.flatMap((step) => [step.beforeSnapshot, step.afterSnapshot].filter(Boolean));
     if (item.data.surface === "electron") {
-      assert.ok(snapshots.every((snapshot) => snapshot.url === fileUrl));
+      assert.ok(snapshots.every((snapshot) => snapshot.url === "file:[PATH REDACTED]"));
+      assert.ok(snapshots.every((snapshot) => snapshot.metadata.fileDocumentSha256 === expectedFileSha256));
+      assert.ok(!JSON.stringify(snapshots).includes(fileUrl));
+    } else {
+      assert.ok(snapshots.every((snapshot) => snapshot.url === `${oracleOrigin}/resumes/:id`));
       assert.ok(!JSON.stringify(snapshots).includes("/resumes/123"));
     }
   }

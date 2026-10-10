@@ -45,7 +45,7 @@ describe("MobileAdapter", () => {
     });
     await adapter.connect();
     const snapshot = await adapter.snapshot();
-    expect(snapshot).toMatchObject({ text: expect.stringContaining("Ready"), title: "ProofKit", url: "http://device.local/home" });
+    expect(snapshot).toMatchObject({ text: expect.stringContaining("Ready"), title: "ProofKit", url: "http://device.local/__redacted__" });
     const receipt = await adapter.act({ kind: "click", selector: "accessibility=Continue" });
     expect(receipt.kind).toBe("click");
     await adapter.act({ kind: "fill", selector: "id=email", value: "test@example.com" });
@@ -170,7 +170,7 @@ describe("MobileAdapter", () => {
     const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
     await adapter.connect();
     const snapshot = await adapter.snapshot();
-    expect(snapshot.url).toBe("https://example.com/app");
+    expect(snapshot.url).toBe("https://example.com/__redacted__");
     expect(snapshot.text).toContain("Submit");
     expect(snapshot.text).toContain("Send");
     expect(snapshot.text).toContain("[REDACTED_EMAIL]");
