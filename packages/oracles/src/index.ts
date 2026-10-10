@@ -146,28 +146,42 @@ export function httpOracle(options: HttpOracleOptions): BusinessOracle {
       try {
         response = await fetchJson({ ...options, signal: context.signal });
       } catch (error) {
+        if (context.signal?.aborted) {
+          const reason = context.signal.reason;
+          throw reason instanceof Error ? reason : new Error("HTTP oracle cancelled");
+        }
         return {
           name: options.name,
-          passed: false,
-          message: `HTTP oracle could not observe ${options.name}: ${error instanceof Error ? error.message : String(error)}`,
+          passed: null,
+          message: `HTTP oracle could not observe ${options.name} (${httpObservationFailure(error)}).`,
           evidence: [],
           observedAt: new Date().toISOString(),
         };
       }
-      const statusPassed = response.status === (options.expectedStatus ?? 200);
+      const expectedStatus = options.expectedStatus ?? 200;
+      const statusPassed = response.status === expectedStatus;
+      const accessUnavailable = !statusPassed && [401, 403, 429].includes(response.status);
       const contentPassed = statusPassed && options.check ? await options.check(response.body, response) : statusPassed;
-      const passed = statusPassed && contentPassed;
+      const passed = accessUnavailable ? null : statusPassed && contentPassed;
       return {
         name: options.name,
         passed,
-        message: passed
+        message: accessUnavailable
+          ? `HTTP oracle ${options.name} could not read the business result (status ${response.status}); verify test access and rate limits.`
+          : passed
           ? options.describe?.(response.body) ?? `HTTP oracle passed: ${options.name}`
           : `HTTP oracle failed: ${options.name} (status ${response.status}, predicate ${contentPassed ? "passed" : "failed"})`,
-        evidence: [JSON.stringify({ status: response.status, bodySha256: sha256(JSON.stringify(response.body)), ...(options.facts ? { facts: options.facts(response.body) } : {}) })],
+        evidence: [JSON.stringify({ status: response.status, bodySha256: sha256(JSON.stringify(response.body)), ...(!accessUnavailable && options.facts ? { facts: options.facts(response.body) } : {}) })],
         observedAt: new Date().toISOString(),
       };
     },
   };
+}
+
+function httpObservationFailure(error: unknown): string {
+  if (error instanceof Error && error.message === "HTTP oracle timed out") return "timeout";
+  if (error instanceof Error && error.message === "HTTP oracle response exceeds 1 MB") return "response-too-large";
+  return "transport-error";
 }
 
 export function pollHttpOracle(options: PollHttpOracleOptions): BusinessOracle {

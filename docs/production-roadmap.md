@@ -54,6 +54,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
   write policy, and intact event/artifact provenance. Recovery evidence is
   separate from the original Run verdict.
 - Keep Agent tool failures as suspected test findings until an independent product oracle confirms a defect.
+- Keep one-shot HTTP Oracle transport errors, timeouts, oversized responses and unexpected 401/403/429 reader responses inconclusive. Preserve only bounded status/digest or reason evidence; explicitly expected access-denial statuses remain valid negative checks. A passing UI assertion cannot turn a denied business read green.
 - Save contemporaneous snapshot/screenshot evidence for each page assertion and leave a result inconclusive when neither observation can be saved. Failure analysis no longer borrows an earlier step artifact to confirm an assertion defect.
 - Classify selected browser runtime signals with evidence links and explicit `record`, `fail` or `ignore` policy; reject invalid URL filters instead of silently widening the monitored scope.
 - Select a unique CDP application page for Web/Electron attachment; reject ambiguous windows instead of running a Charter in an arbitrary renderer.

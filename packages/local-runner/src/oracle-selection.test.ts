@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,6 +89,29 @@ describe("Oracle registration and selection", () => {
     const started = await service.start({ charter: charter([]) });
     await expect(service.wait(started.runId)).rejects.toThrow("CDP endpoint must use loopback");
     expect(WebAdapter.prototype.connect).not.toHaveBeenCalled();
+  });
+
+  it("keeps a denied inline business reader inconclusive after a passing page assertion", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(403, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "test access denied" }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server port");
+    try {
+      const root = await projectRoot();
+      const service = new LocalRunnerService({ workspaceRoot: root, root });
+      const started = await service.start({ charter: charter([]), oracleUrl: `http://127.0.0.1:${address.port}/business` });
+      const summary = await service.wait(started.runId);
+      expect(summary.assertions[0]?.passed).toBe(true);
+      expect(summary.oracles[0]?.passed).toBeNull();
+      expect(summary.verdict).toBe("inconclusive");
+      expect(summary.oracles[0]?.sourceEvidenceCount).toBe(1);
+      expect(summary.findings).toContain("A business oracle could not establish its result; inspect its saved report for reader access, transport and terminal-state gaps.");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
 

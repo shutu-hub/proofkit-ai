@@ -510,7 +510,7 @@ export class ExecutionRunner {
         ? "No executable assertion or business oracle was declared."
         : summary.assertions.some((result) => result.evidence.length === 0)
           ? "A surface assertion has no contemporaneous saved observation; its result cannot establish product correctness."
-        : "A business oracle did not observe a terminal state within its deadline.",
+        : "A business oracle could not establish its result; inspect its saved report for reader access, transport and terminal-state gaps.",
     );
     summary.status = "completed";
     summary.endedAt = new Date().toISOString();
