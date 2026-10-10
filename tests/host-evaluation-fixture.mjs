@@ -7,13 +7,13 @@ import { setupAgent } from "../packages/cli/dist/agent-setup.js";
 import { hash } from "./host-evaluation-verifier.mjs";
 
 export const hostCases = [
-  { id: "core-pass", prompt: "测试简历获取功能", surface: "web", level: "core", coverage: "declared", verdict: "passed", state: "complete" },
+  { id: "core-pass", prompt: "测试简历获取功能", surface: "web", level: "core", coverage: "declared", verdict: "passed", state: "complete", omitSurfaceInScriptedBaseline: true },
   { id: "core-defect", prompt: "测试简历获取功能", surface: "web", level: "core", coverage: "declared", verdict: "failed", state: "complete", wrongRelation: true },
   { id: "core-pending", prompt: "测试简历获取功能", surface: "web", level: "core", coverage: "declared", verdict: "inconclusive", state: "pending" },
   { id: "project-gap", prompt: "测试整个项目的所有功能", surface: "web", level: "core", coverage: "project", verdict: "not-asserted", state: "complete" },
   { id: "quick-pass", prompt: "快速测试简历获取页面", surface: "web", level: "quick", coverage: "declared", verdict: "passed", state: "complete" },
   { id: "author-core", prompt: "测试简历获取功能", surface: "web", level: "core", coverage: "declared", verdict: "passed", state: "complete", noCatalog: true },
-  { id: "electron-core-pass", prompt: "测试 Electron 桌面端的简历获取功能", surface: "electron", level: "core", coverage: "declared", verdict: "passed", state: "complete", optional: true },
+  { id: "electron-core-pass", prompt: "测试 Electron 桌面端的简历获取功能", surface: "electron", level: "core", coverage: "declared", verdict: "passed", state: "complete", optional: true, omitSurfaceInScriptedBaseline: true },
   { id: "electron-core-defect", prompt: "测试 Electron 桌面端的简历获取功能", surface: "electron", level: "core", coverage: "declared", verdict: "failed", state: "complete", wrongRelation: true, optional: true },
 ];
 

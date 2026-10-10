@@ -130,6 +130,8 @@ submission IDs and preserve the original fixture identity.
 All five readers use captured identities, never IDs inferred from another
 reader's response:
 
+The response and reader projections below were checked against the AIHR source at `dc781c3763933d3062d4b3bd33491e38c2a82a44` on 2026-10-11. The relevant handler files had no local changes; the resume collection, candidate, job and assessment HTTP handler/router Go tests passed. This verifies the checked-out source contracts, not a deployed gateway version or a completed business workflow.
+
 | Gateway resource | Required facts |
 | --- | --- |
 | `GET /resume-collection/files/:fileId` | file ID, SHA-256, `manual_upload`, candidate ID, extraction and parse state |

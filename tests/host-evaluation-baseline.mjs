@@ -55,7 +55,8 @@ async function evaluate(fixture, expected) {
     await withDeadline(client.connect(transport), 15_000, "native MCP connection");
     const scope = await call("inspect_test_scope", { focus: "简历", level: expected.level, surface: expected.surface });
     if (scope.testVerdict !== "not-asserted") throw new Error("Scope inspection unexpectedly claims acceptance");
-    const input = { intent: expected.prompt, level: expected.level, coverage: expected.coverage, surface: expected.surface };
+    const input = { intent: expected.prompt, level: expected.level, coverage: expected.coverage,
+      ...(expected.omitSurfaceInScriptedBaseline ? {} : { surface: expected.surface }) };
     if (expected.noCatalog || expected.coverage === "project") {
       input.charter = expected.noCatalog ? fixture.corePlan
         : JSON.parse(await readFile(join(fixture.workspace, ".proofkit", "charters", "resume-core.yml"), "utf8"));

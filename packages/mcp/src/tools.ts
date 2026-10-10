@@ -380,6 +380,7 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
     verdict: mission.verdict,
     testVerdict: "not-asserted",
     level: mission.level,
+    surface: mission.surface,
     levelSelection: mission.levelSelection,
     planning: mission.plan.planning,
     executionProfile: profile,

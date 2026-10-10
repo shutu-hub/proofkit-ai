@@ -142,6 +142,7 @@ describe("ProofKit MCP tools", () => {
       status: "running",
       running: true,
       level: "core",
+      surface: "web",
       executionProfile: {
         surfaceMatrix: ["web"],
         requireBusinessOracle: true,

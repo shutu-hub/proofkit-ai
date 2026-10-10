@@ -106,6 +106,8 @@ coverage gap, a quick page check and a submitted Charter without a catalog
 entry. Its `scripted-mcp-baseline` result **does not measure an AI host**.
 The desktop cases use a separate Electron profile and CDP port, and the
 verifier rejects an answer or saved Run silently switched to Web.
+In the scripted baseline, `core-pass` omits `surface` to check the ordinary Web fallback. The optional `electron-core-pass` also omits it, checking desktop intent selection through the full MCP and Electron path when an Electron executable is provided.
+The `run_test` start receipt returns the selected `surface` and full `executionProfile.surfaceMatrix`, so the host can inspect the saved execution target even when it omitted the input platform.
 
 The second starts the installed Codex CLI with its existing provider and
 credentials. It activates `$proofkit-test`, records the host's actual MCP calls
