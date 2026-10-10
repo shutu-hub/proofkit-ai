@@ -46,10 +46,12 @@ export function summarizeSuiteScope(mission: TestMission, evidenceDir?: string):
   const includedCharterIds = suite.charters.map((item) => item.charterId);
   const observations = mission.observations.filter((item) => item.kind === "surface.run");
   const requireReplay = suite.level === "release";
+  const requireBusinessOracle = suite.level !== "quick";
   const results = suiteChecks(suite).map(({ charterId, charter, surface }): SuiteSurfaceResult => {
     const missing: string[] = [];
     if (!hasPositiveSurfaceAssertion(charter.assertions)) missing.push("positive surface assertion");
     if (mission.plan.executionProfile.requireReplay !== requireReplay) missing.push("replay policy differs from suite level");
+    if (mission.plan.executionProfile.requireBusinessOracle !== requireBusinessOracle) missing.push("business Oracle policy differs from suite level");
     const scheduledTask = (tool: string, negativeCaseId?: string) => mission.plan.graph.tasks.find((task) => task.tool === tool
       && task.charterId === charterId && task.input.charterId === charterId && task.input.adapter === surface
       && (negativeCaseId === undefined || (typeof task.input.negativeCase === "object" && task.input.negativeCase !== null
@@ -87,8 +89,8 @@ export function summarizeSuiteScope(mission: TestMission, evidenceDir?: string):
         missing.push(`${kind} cleanup evidence`);
       }
       if (numberValue(item.data.passedAssertions) < 1) missing.push(`${kind} passed surface assertion`);
-      if (numberValue(item.data.passedOracles) < 1) missing.push(`${kind} passed business Oracle`);
-      if (numberValue(item.data.businessEvidence) < 1) missing.push(`${kind} independent business fact`);
+      if (requireBusinessOracle && numberValue(item.data.passedOracles) < 1) missing.push(`${kind} passed business Oracle`);
+      if (requireBusinessOracle && numberValue(item.data.businessEvidence) < 1) missing.push(`${kind} independent business fact`);
       if (fact.verdict === "failed") failed = true;
       if (fact.verdict === "blocked" || fact.verdict === "cancelled") blocked = true;
       if (fact.verdict === "inconclusive") inconclusive = true;
@@ -143,7 +145,7 @@ function summarizeRouteCoverage(mission: TestMission, results: SuiteSurfaceResul
   let observedCandidates = 0;
   for (const { candidate: route, charterIds, runtimeSourceAmbiguous: ambiguousRuntimePath } of routes) {
     if (charterIds.length > 0) mappedCandidates++;
-    const observed = !ambiguousRuntimePath && charterIds.some((charterId) => {
+    const observed = !ambiguousRuntimePath && !(mission.suite!.level === "quick" && route.kind === "api") && charterIds.some((charterId) => {
       const charter = mission.suite!.charters.find((item) => item.charterId === charterId);
       return (charter?.surfaces ?? mission.suite!.surfaces).every((surface) => {
         const result = results.find((item) => item.charterId === charterId && item.surface === surface);
@@ -162,9 +164,12 @@ function summarizeRouteCoverage(mission: TestMission, results: SuiteSurfaceResul
         ...route,
         status: charterIds.length > 0 ? "mapped-unobserved" : "unmapped",
         charterIds,
-        ...(route.kind === "api" && charterIds.length > 0 ? { reason: charterIds.some((charterId) => results.some((result) => result.charterId === charterId && (!result.primary?.networkLogAvailable || !result.replay?.networkLogAvailable)))
-          ? "Network event log is unavailable for a required run"
-          : "No matching successful API response on every required run" } : {}),
+        ...(route.kind === "api" && charterIds.length > 0 ? { reason: mission.suite!.level === "quick"
+          ? "Quick surface checks do not independently verify API business outcomes"
+          : charterIds.some((charterId) => results.some((result) => result.charterId === charterId
+            && (!result.primary?.networkLogAvailable || mission.suite!.level === "release" && !result.replay?.networkLogAvailable)))
+            ? "Network event log is unavailable for a required run"
+            : "No matching successful API response on every required run" } : {}),
         ...(ambiguousRuntimePath && charterIds.length > 0 ? { reason: "Runtime URL cannot identify which source owns this route" } : {}),
       });
     }

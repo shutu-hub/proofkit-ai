@@ -268,6 +268,49 @@ describe("explicit release suites", () => {
 });
 
 describe("workflow inventory Missions", () => {
+  it("counts a quick Web route but requires core business proof for an API route", async () => {
+    for (const level of ["quick", "core"] as const) {
+      const service = await createWorkflowService(level);
+      service.config.charters.find((entry) => entry.id === "resume")!.routeTargets!.push({
+        kind: "api", method: "GET", path: "/api/v1/people", origin: "http://127.0.0.1:8765",
+        source: "services/gateway/router.ts",
+      });
+      stubRuns(service, { network: "valid" });
+      const mission = await service.createMission({ intent: "测试整个项目", surface: "web", level });
+      await service.startMission(mission.missionId, { approve: true });
+      await service.waitMission(mission.missionId);
+      const coverage = (await service.missionEvidence(mission.missionId)).suiteScope?.routeCoverage;
+      expect(coverage?.gaps.find((item) => item.kind === "web" && item.path === "/resume")).toBeUndefined();
+      const apiGap = coverage?.gaps.find((item) => item.kind === "api" && item.path === "/api/v1/people");
+      if (level === "quick") expect(apiGap?.reason).toContain("Quick surface checks");
+      else expect(apiGap).toBeUndefined();
+    }
+  });
+
+  it("runs a quick project graph with only declared surface checks and keeps business acceptance open", async () => {
+    const service = await createWorkflowService("quick");
+    const harness = stubRuns(service);
+    const mission = await service.createMission({ intent: "快速测试整个项目", surface: "web" });
+    expect(mission.suite).toMatchObject({ origin: "workflow-inventory", level: "quick", surfaces: ["web", "electron"] });
+    expect(mission.levelSelection).toMatchObject({ resolved: "quick", source: "inferred" });
+    expect(mission.plan.executionProfile).toMatchObject({ requireBusinessOracle: false, requireReplay: false, minimumEvidence: 1 });
+    expect(mission.plan.graph.tasks.filter((task) => task.tool === "surface.run-charter")
+      .map((task) => `${task.charterId}/${task.input.adapter}`)).toEqual(["resume/web", "login/electron"]);
+    expect(mission.plan.graph.tasks.some((task) => task.tool === "surface.replay-charter" || task.tool === "surface.run-negative-charter")).toBe(false);
+
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    const evidence = await service.missionEvidence(mission.missionId);
+    expect(harness.started).toHaveLength(2);
+    expect(harness.replayed).toHaveLength(0);
+    expect(evidence.suiteScope?.results).toHaveLength(2);
+    expect(evidence.suiteScope?.results.every((item) => item.verdict === "passed" && !item.replay)).toBe(true);
+    expect(evidence.workflowExecution).toMatchObject({ status: "all-declared-evidenced", requiredProof: "surface", requiredChecks: 2, evidencedChecks: 2 });
+    expect(evidence.workflowExecution?.limitations).toContain("Quick checks establish declared surface assertions, not independent business terminal state.");
+    expect(evidence.proofClassification).toMatchObject({ status: "not-applicable", businessOracles: 0, unavailableRuns: 0, legacyOracles: 0 });
+    expect(completed.verdict).toBe("inconclusive");
+  });
+
   it("runs a core project graph with different Charters on Web and Electron", async () => {
     const service = await createWorkflowService("core");
     const harness = stubRuns(service);
@@ -287,13 +330,22 @@ describe("workflow inventory Missions", () => {
     expect(harness.replayed).toHaveLength(0);
     expect(evidence.suiteScope?.results.map((item) => `${item.charterId}/${item.surface}`)).toEqual(["resume/web", "login/electron"]);
     expect(evidence.suiteScope?.results.every((item) => item.verdict === "passed" && !item.replay)).toBe(true);
-    expect(evidence.workflowExecution).toMatchObject({ status: "all-declared-evidenced", requiredChecks: 2, evidencedChecks: 2, sourceBinding: "matching" });
+    expect(evidence.workflowExecution).toMatchObject({ status: "all-declared-evidenced", requiredProof: "business", requiredChecks: 2, evidencedChecks: 2, sourceBinding: "matching" });
     expect(completed.verdict).toBe("inconclusive");
     expect(completed.plan.planning?.evidenceGaps).toContain("project-workflow-coverage");
     const unscheduled = structuredClone(completed);
     unscheduled.plan.graph.tasks.find((task) => task.taskId === "execute-resume-web")!.status = "skipped";
     expect(summarizeSuiteScope(unscheduled, service.evidenceDir)?.results[0]).toMatchObject({
       verdict: "inconclusive", missing: expect.arrayContaining(["primary task did not pass"]),
+    });
+    const weakened = structuredClone(completed);
+    weakened.plan.executionProfile.requireBusinessOracle = false;
+    weakened.observations.find((item) => item.kind === "surface.run" && item.charterId === "resume")!.data.passedOracles = 0;
+    weakened.observations.find((item) => item.kind === "surface.run" && item.charterId === "resume")!.data.businessEvidence = 0;
+    expect(summarizeSuiteScope(weakened, service.evidenceDir)?.results[0]).toMatchObject({
+      verdict: "inconclusive", missing: expect.arrayContaining([
+        "business Oracle policy differs from suite level", "primary passed business Oracle", "primary independent business fact",
+      ]),
     });
   });
 
@@ -316,14 +368,15 @@ describe("workflow inventory Missions", () => {
   });
 });
 
-async function createWorkflowService(level: "core" | "release"): Promise<LocalRunnerService> {
+async function createWorkflowService(level: "quick" | "core" | "release"): Promise<LocalRunnerService> {
   const service = await createSuiteService();
   for (const entry of service.config.charters.filter((item) => item.id === "resume" || item.id === "login")) {
     entry.level = level;
     entry.surfaces = [entry.id === "resume" ? "web" : "electron"];
     const path = join(service.workspaceRoot, entry.path);
     const charter = TestCharterSchema.parse(JSON.parse(await readFile(path, "utf8")));
-    await writeFile(path, JSON.stringify({ ...charter, level }));
+    await writeFile(path, JSON.stringify({ ...charter, level,
+      ...(level === "quick" ? { oracles: [], negativeCases: [] } : {}) }));
   }
   execFileSync("git", ["-C", service.root, "init", "-q"]);
   execFileSync("git", ["-C", service.root, "-c", "core.autocrlf=false", "add", "."]);
@@ -400,15 +453,16 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     const oracleArtifact = `${runId}/oracle.json`;
     const sourceArtifact = `${runId}/oracle-source.json`;
     const summary: RunSummary = {
-      runId, startedAt: now, endedAt: now, status: "completed", verdict, charter,
+      runId, projectRoot: service.root, workspaceRoot: service.workspaceRoot,
+      startedAt: now, endedAt: now, status: "completed", verdict, charter,
       steps: kind === "negative" ? [] : [{
         stepId: "step-001", action: { kind: "observe" }, status: "passed", artifacts: [],
         beforeSnapshot: { capturedAt: now, url: "http://127.0.0.1:8765/", metadata: {} },
         afterSnapshot: { capturedAt: now, url: `http://127.0.0.1:8765/${visited ? options.dynamicResume && charterId === "resume" ? "resumes/private-candidate-123" : charterId : ""}`, metadata: {} },
       }],
       assertions: kind === "negative" ? [] : [{ assertion: charter.assertions[0]!, passed: true, message: "visible", evidence: [`${runId}/snapshot.json`] }],
-      oracles: [{ name: `${charterId}-oracle`, passed: !failed, message: failed ? "business state is wrong" : "business state is done", evidence: missing ? [oracleArtifact] : [sourceArtifact, oracleArtifact], sourceEvidenceCount: missing ? 0 : 1, sourceEvidenceArtifacts: missing ? [] : [sourceArtifact], observedAt: now }],
-      artifacts: [`${runId}/snapshot.json`, ...(missing ? [] : [sourceArtifact]), oracleArtifact],
+      oracles: charter.oracles?.length ? [{ name: `${charterId}-oracle`, verificationKind: "business", passed: !failed, message: failed ? "business state is wrong" : "business state is done", evidence: missing ? [oracleArtifact] : [sourceArtifact, oracleArtifact], sourceEvidenceCount: missing ? 0 : 1, sourceEvidenceArtifacts: missing ? [] : [sourceArtifact], observedAt: now }] : [],
+      artifacts: [`${runId}/snapshot.json`, ...(charter.oracles?.length ? [...(missing ? [] : [sourceArtifact]), oracleArtifact] : [])],
       findings: [],
     };
     summaries.set(runId, summary);

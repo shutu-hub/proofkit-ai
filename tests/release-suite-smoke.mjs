@@ -68,6 +68,8 @@ let electron;
 let profile;
 let mcpServer;
 let client;
+let quickMcpServer;
+let quickClient;
 try {
   profile = await mkdtemp(join(tmpdir(), "proofkit-release-electron-"));
   const appPath = join(profile, "app.cjs");
@@ -244,9 +246,60 @@ try {
   assert.deepEqual({ status: directEvidence.workflowExecution.status, required: directEvidence.workflowExecution.requiredChecks,
     evidenced: directEvidence.workflowExecution.evidencedChecks, source: directEvidence.workflowExecution.sourceBinding },
   { status: "all-declared-evidenced", required: 2, evidenced: 2, source: "matching" });
+
+  const quickWorkspaceRoot = join(caseRoot, "quick-workspace");
+  await mkdir(join(quickWorkspaceRoot, ".proofkit", "charters"), { recursive: true });
+  for (const flow of ["resume", "login"]) {
+    const charter = TestCharterSchema.parse({
+      intent: `quick ${flow}`, level: "quick", mode: "deterministic",
+      actions: [{ kind: "goto", url: `${baseUrl}/${flow}` }, { kind: "click", selector: "#start" },
+        { kind: "waitForText", text: `${flow} ready` }],
+      assertions: [{ kind: "text-visible", text: `${flow} ready` }],
+      oracles: [], sideEffectPolicy: "allow",
+    });
+    await writeFile(join(quickWorkspaceRoot, ".proofkit", "charters", `${flow}.yml`), JSON.stringify(charter));
+  }
+  const quickConfig = ProofkitConfigSchema.parse({ project: { root: sourceRoot }, surfaces,
+    policies: { environment: "test", sideEffects: "allow", targetBinding: "record" },
+    run: { timeoutMs: 15_000 },
+    charters: ["resume", "login"].map((flow) => ({ id: flow, path: `.proofkit/charters/${flow}.yml`,
+      aliases: [flow], level: "quick", surfaces: [flow === "resume" ? "web" : "electron"],
+      routeTargets: [{ kind: "web", path: `/${flow}`, source: "apps/web/src/router.ts" },
+        { kind: "api", method: "POST", path: `/api/v1/${flow}/start`, origin: baseUrl, source: "services/gateway/router.ts" }] })),
+  });
+  await writeFile(join(quickWorkspaceRoot, ".proofkit", "config.yaml"), JSON.stringify(quickConfig));
+  await writeFile(join(quickWorkspaceRoot, ".proofkit", "workflows.yaml"), JSON.stringify({
+    schemaVersion: 1, source: { headSha: source.headSha, worktreeSha256: source.worktreeSha256 },
+    review: { by: "fixture", at: new Date().toISOString(), method: "Declared quick fixture checks" },
+    workflows: [
+      { id: "resume-flow", title: "Resume", sourcePaths: ["apps/web/src/router.ts"], checks: [{ charterId: "resume", surfaces: ["web"] }], surfaces: ["web"] },
+      { id: "login-flow", title: "Login", sourcePaths: ["apps/web/src/router.ts"], checks: [{ charterId: "login", surfaces: ["electron"] }], surfaces: ["electron"] },
+    ], exclusions: [],
+  }));
+  quickMcpServer = await createProofkitMcp({ root: sourceRoot, workspaceRoot: quickWorkspaceRoot });
+  const [quickClientTransport, quickServerTransport] = InMemoryTransport.createLinkedPair();
+  quickClient = new Client({ name: "quick-project-smoke", version: "1" });
+  await Promise.all([quickMcpServer.connect(quickServerTransport), quickClient.connect(quickClientTransport)]);
+  const quickProject = payload(await quickClient.callTool({ name: "run_test", arguments: { intent: "快速测试整个项目" } }));
+  assert.equal(quickProject.suiteId, "project-workflows");
+  assert.equal(quickProject.levelSelection.resolved, "quick");
+  assert.equal(quickProject.readiness.ready, true);
+  const quickStatus = await waitForMission(quickClient, quickProject.missionId);
+  assert.equal(quickStatus.mission.verdict, "inconclusive");
+  const quickEvidence = payload(await quickClient.callTool({ name: "get_mission_evidence", arguments: { missionId: quickProject.missionId } }));
+  assert.equal(quickEvidence.summary.expectedRuns, 2);
+  assert.equal(quickEvidence.summary.observedRuns, 2);
+  assert.deepEqual(quickEvidence.suiteScope.results.map((item) => `${item.charterId}/${item.surface}`), ["resume/web", "login/electron"]);
+  assert.ok(quickEvidence.suiteScope.results.every((item) => item.verdict === "passed" && !item.replay));
+  assert.deepEqual({ required: quickEvidence.workflowExecution.requiredChecks, evidenced: quickEvidence.workflowExecution.evidencedChecks, proof: quickEvidence.workflowExecution.requiredProof }, { required: 2, evidenced: 2, proof: "surface" });
+  assert.ok(quickEvidence.workflowExecution.limitations.some((item) => item.includes("not independent business terminal state")));
+  assert.equal(quickEvidence.proofClassification.businessOracles, 0);
+  assert.ok(quickEvidence.suiteScope.routeCoverage.gaps.every((item) => item.kind !== "api" || item.status === "mapped-unobserved"));
   assert.equal((await captureSourceState(sourceRoot)).worktreeSha256, source.worktreeSha256);
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
+  await quickClient?.close();
+  await quickMcpServer?.close();
   await client?.close();
   await mcpServer?.close();
   if (electron && electron.exitCode === null) {

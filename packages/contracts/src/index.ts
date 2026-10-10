@@ -704,6 +704,8 @@ export type WorkflowInventoryInspection = z.infer<typeof WorkflowInventoryInspec
 /** Evidence measured against a saved inventory; even full declared coverage cannot prove inventory completeness. */
 export const WorkflowExecutionCoverageSchema = z.object({
   status: z.enum(["not-measured", "partial", "all-declared-evidenced"]),
+  /** The proof required for each declared check; surface proof cannot claim a business terminal state. */
+  requiredProof: z.enum(["surface", "business"]).optional(),
   workflowCount: z.number().int().nonnegative(),
   evidencedWorkflowCount: z.number().int().nonnegative(),
   requiredChecks: z.number().int().nonnegative(),
@@ -728,7 +730,7 @@ export type WorkflowExecutionCoverage = z.infer<typeof WorkflowExecutionCoverage
 export const TestSuiteSchema = z.object({
   suiteId: CatalogIdSchema,
   origin: z.enum(["catalog", "workflow-inventory"]).default("catalog"),
-  level: z.enum(["core", "release"]),
+  level: TestLevelSchema,
   surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1),
   charters: z.array(z.object({
     charterId: CatalogIdSchema,

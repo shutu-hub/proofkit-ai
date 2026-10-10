@@ -335,7 +335,7 @@ export class LocalRunnerService {
       : undefined;
     const inspection = workflowInventory?.inspection;
     const inventory = workflowInventory?.inventory;
-    const projectSuite = levelSelection.resolved !== "quick" && !input.suiteId && !input.charter && !input.charterId && !hasAdHocOptions && inventory
+    const projectSuite = !input.suiteId && !input.charter && !input.charterId && !hasAdHocOptions && inventory
       && inspection?.status === "loaded" && inspection.sourceMatch === "matching"
       && inspection.missingCharterIds.length === 0 && inspection.uncoveredSurfaces.length === 0 && inspection.missingSourcePaths.length === 0
       && inventory.workflows.flatMap(workflowChecks).every(({ charterId }) => this.config.charters.some((entry) => entry.id === charterId && entry.level === levelSelection.resolved))
@@ -458,7 +458,7 @@ export class LocalRunnerService {
     return TestSuiteSchema.parse({ suiteId: entry.id, level: entry.level, surfaces: entry.surfaces, charters, uncoveredCharterIds });
   }
 
-  private async loadWorkflowSuite(inventory: WorkflowInventory, level: "core" | "release"): Promise<TestSuite> {
+  private async loadWorkflowSuite(inventory: WorkflowInventory, level: TestLevel): Promise<TestSuite> {
     const catalog = new Map(this.config.charters.map((entry) => [entry.id, entry]));
     const surfacesByCharter = new Map<string, Set<LocalAdapterName>>();
     for (const workflow of inventory.workflows) {

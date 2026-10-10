@@ -239,12 +239,12 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       suiteId: suite.suiteId,
       charterIds: suite.charters.map((item) => item.charterId),
       collectAllResults: true,
-      negativeCases: suite.level === "core" ? ["关键权限或输入边界"] : ["权限边界", "无效输入", "重试与恢复", "重复提交与幂等"],
+      negativeCases: suite.level === "quick" ? [] : suite.level === "core" ? ["关键权限或输入边界"] : ["权限边界", "无效输入", "重试与恢复", "重复提交与幂等"],
       declaredNegativeCases: negativeCases.map((item) => item.caseId),
-      requireBusinessOracle: true,
+      requireBusinessOracle: suite.level !== "quick",
       requireReplay: suite.level === "release",
       requireNegativeCases: negativeCases.length > 0,
-      minimumEvidence: suite.level === "core" ? 2 : 3,
+      minimumEvidence: suite.level === "quick" ? 1 : suite.level === "core" ? 2 : 3,
     });
     const primaryTasks = checks.map(({ charterId, charter, surface }) => TaskNodeSchema.parse({
       taskId: `execute-${charterId}-${surface}`,
@@ -299,7 +299,9 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       version: "1",
       generatedBy: suite.origin === "workflow-inventory" ? "deterministic-workflow-planner-v1" : "deterministic-suite-planner-v1",
       graph: { tasks, terminalTaskIds: ["verify-result"] },
-      successCriteria: ["逐流程主运行和回放完成", "每个流程及表面有独立业务事实", "明确报告未通过和未覆盖范围"],
+      successCriteria: suite.level === "quick"
+        ? ["逐流程主运行完成", "每个流程及表面有页面断言和可追溯证据", "明确报告业务终态和全项目覆盖未验证"]
+        : ["逐流程主运行和所需回放完成", "每个流程及表面有独立业务事实", "明确报告未通过和未覆盖范围"],
       planning: planningQuality(input, suite.origin === "workflow-inventory" ? "workflow-inventory" : "catalog"),
       level: suite.level,
       executionProfile: profile,

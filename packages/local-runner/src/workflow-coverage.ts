@@ -36,6 +36,7 @@ export function summarizeWorkflowExecution(mission: TestMission, suiteScope?: Su
   const sourceBinding = compareSourceBinding(mission);
   const limitations = [
     "The inventory's completeness and reviewer identity are not independently verified.",
+    ...(mission.level === "quick" ? ["Quick checks establish declared surface assertions, not independent business terminal state."] : []),
     ...(!inventory ? ["No valid frozen workflow inventory is available for this Mission."] : []),
     ...(!suiteScope ? ["No verified multi-Charter suite result is available; single-Charter Runs cannot establish the declared project matrix."] : []),
     ...(suiteScope?.uncoveredCharterIds.length ? [`${suiteScope.uncoveredCharterIds.length} registered Charters are outside the executed workflow inventory.`] : []),
@@ -45,6 +46,7 @@ export function summarizeWorkflowExecution(mission: TestMission, suiteScope?: Su
   ];
   return WorkflowExecutionCoverageSchema.parse({
     status: !inventory || !suiteScope ? "not-measured" : evidencedChecks === requiredChecks ? "all-declared-evidenced" : "partial",
+    requiredProof: mission.level === "quick" ? "surface" : "business",
     workflowCount: inventory?.workflows.length ?? 0,
     evidencedWorkflowCount,
     requiredChecks,
