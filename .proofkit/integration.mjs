@@ -801,7 +801,7 @@ function readBillingUsageCapability(state) {
       pagesRead: z.number().int().nonnegative(), total: z.number().int().nonnegative().nullable(),
       totalPoints: z.number().nullable(), matchedCount: z.number().int().nonnegative().nullable(),
       matchedPoints: z.number().nullable(), itemKeys: z.array(z.string()),
-      charges: z.array(z.object({ itemKey: z.string(), points: z.number().int().nonnegative() })),
+      charges: z.array(z.object({ workflowType: z.string(), itemKey: z.string(), points: z.number().int().nonnegative() })),
     }),
     async execute(input, { runId, signal }) {
       input = resolveEnv(input);
@@ -837,6 +837,7 @@ function readBillingUsageCapability(state) {
         for (const item of data.items) {
           const id = positiveString(item?.id);
           if (!id || ids.has(id) || !positiveString(item.workflow_run_id)
+            || typeof item.workflow_type !== "string" || !item.workflow_type
             || typeof item.workflow_item_key !== "string" || !item.workflow_item_key
             || !Number.isSafeInteger(item.points) || item.points < 0
             || (input.workflowType && item.workflow_type !== input.workflowType)) {
@@ -851,7 +852,8 @@ function readBillingUsageCapability(state) {
           pagesRead: page, total, totalPoints, matchedCount: matched.length,
           matchedPoints: matched.reduce((sum, item) => sum + item.points, 0),
           itemKeys: matched.map((item) => item.workflow_item_key),
-          charges: matched.map((item) => ({ itemKey: item.workflow_item_key, points: item.points })),
+          charges: matched.map((item) => ({ workflowType: item.workflow_type,
+            itemKey: item.workflow_item_key, points: item.points })),
         };
         if (seen > total || data.items.length < input.pageSize) return incomplete("pagination-inconsistent", page, total, totalPoints);
       }
@@ -881,7 +883,9 @@ function createBillingUsageOracle(state, billingRead) {
       const pipelinePassed = remembered.resumePipeline?.passed === true;
       const facts = { collectionRunId, itemKeySha256: itemKey ? digest(itemKey) : null,
         pipelinePassed, ledgerComplete: false, ledgerReason: null,
-        pagesRead: 0, total: null, exactChargeCount: null, exactPoints: null, expectedPoints: 300 };
+        pagesRead: 0, total: null, runChargeCount: null, exactChargeCount: null,
+        unexpectedChargeCount: null, exactPoints: null,
+        expectedWorkflowType: "communication_resume_screening", expectedPoints: 300 };
       if (!collectionRunId || !itemKey || !pipelinePassed) {
         return { name: "aihr.billingUsage", passed: null,
           message: "A successful current-run upload and pipeline observation are required before billing can be assessed.",
@@ -889,7 +893,7 @@ function createBillingUsageOracle(state, billingRead) {
       }
       let scan;
       try {
-        const input = billingRead.inputSchema.parse({ runId: collectionRunId, workflowType: "communication_resume_screening" });
+        const input = billingRead.inputSchema.parse({ runId: collectionRunId });
         scan = await billingRead.execute(input, { runId, signal });
       } catch (error) {
         signal?.throwIfAborted();
@@ -904,14 +908,16 @@ function createBillingUsageOracle(state, billingRead) {
           evidence: [JSON.stringify({ ...facts, ledgerReason: scan.reason, pagesRead: scan.pagesRead, total: scan.total })],
           observedAt: new Date().toISOString() };
       }
-      const exact = scan.charges.filter((charge) => charge.itemKey === itemKey);
-      const passed = exact.length === 1 && exact[0].points === 300;
+      const exact = scan.charges.filter((charge) => charge.itemKey === itemKey
+        && charge.workflowType === "communication_resume_screening");
+      const passed = scan.charges.length === 1 && exact.length === 1 && exact[0].points === 300;
       const evidence = { ...facts, ledgerComplete: true, pagesRead: scan.pagesRead, total: scan.total,
         startDate: scan.startDate, endDate: scan.endDate,
+        runChargeCount: scan.charges.length, unexpectedChargeCount: scan.charges.length - exact.length,
         exactChargeCount: exact.length, exactPoints: exact.reduce((sum, charge) => sum + charge.points, 0) };
       return { name: "aihr.billingUsage", passed,
-        message: passed ? "The current collection Run and upload key have exactly one 300-point billing charge."
-          : "The current collection Run and upload key do not have exactly one correctly priced billing charge.",
+        message: passed ? "The current collection Run has exactly one 300-point communication screening charge for this upload."
+          : "The current collection Run has missing, extra, wrongly typed or wrongly priced billing charges.",
         evidence: [JSON.stringify(evidence)],
         ...(passed ? {} : { sourceLocations: ["services/billing-service/internal/service/billing_service.go",
           "services/resume-collection-service/internal/service/workflow_execution_service.go"] }),

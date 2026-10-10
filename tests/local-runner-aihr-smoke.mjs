@@ -162,7 +162,17 @@ try {
   assert.equal(missingChargeSummary.oracles[1].passed, false);
   assert.ok(missingCharge.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"
     && finding.evidence.some((item) => item.kind === "business" && item.path.endsWith("oracle-2-source.json"))));
-  assert.equal(uploaded, 4);
+  mode = "billing-extra-type";
+  const extraCharge = await runMcpMission(mcpClient, "测试简历获取");
+  assert.equal(extraCharge.verdict, "failed");
+  const extraChargeRunId = extraCharge.observations.find((item) => item.kind === "surface.run").data.runId;
+  const extraChargeSummary = await service.wait(extraChargeRunId);
+  assert.equal(extraChargeSummary.assertions[0].passed, true);
+  assert.equal(extraChargeSummary.oracles[0].passed, true);
+  assert.equal(extraChargeSummary.oracles[1].passed, false);
+  assert.ok(extraCharge.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"
+    && finding.evidence.some((item) => item.kind === "business" && item.path.endsWith("oracle-2-source.json"))));
+  assert.equal(uploaded, 5);
   assert.equal(unrelatedReads, 0);
   assert.deepEqual(fixtureErrors, []);
   for (const evidence of [...success.evidence, ...failed.evidence]) await readFile(evidence.path);
@@ -238,7 +248,7 @@ try {
   const cancelledReport = cancelled.mission.evidence.find((item) => item.kind === "report");
   assert.match(await readFile(cancelledReport.path, "utf8"), /cancelled/);
   assert.deepEqual(await readdir(root), ["package.json"]);
-  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, missingChargeMission: missingCharge.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, idempotencyMission: idempotencyMission.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "mcp-one-sentence-core", "mcp-evidence", "core-mission", "stale-binding-detection", "billing-missing-detection", "evidence-backed-replay-comparison", "idempotency-negative-case", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
+  console.log(JSON.stringify({ surface, defaultRun: defaultRun.runId, successMission: success.missionId, seededDefectMission: failed.missionId, missingChargeMission: missingCharge.missionId, extraChargeMission: extraCharge.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, idempotencyMission: idempotencyMission.missionId, cancellationMission: cancellationMission.missionId, projectRoot: root, evidenceRoot: workspaceRoot, verified: ["external-workspace", "source-unchanged", "restart-status", "default-charter", "preflight-evidence", "multipart-run-binding", "surface-click", "mcp-one-sentence-core", "mcp-evidence", "core-mission", "stale-binding-detection", "billing-missing-detection", "billing-extra-type-detection", "evidence-backed-replay-comparison", "idempotency-negative-case", "selected-oracle-only", "mission-cancellation", "cancelled-run-evidence", "cleanup-before-terminal"] }, null, 2));
 } finally {
   await mcpClient?.close();
   await mcpServer?.close();
@@ -313,6 +323,8 @@ async function handleRequest(request, response) {
       files.set(currentFile.file_id, currentFile);
       if (mode !== "billing-missing") charges.push({ id: String(++sequence), workflow_type: "communication_resume_screening",
         workflow_run_id: collectionRunId, workflow_item_key: clientItemKey, points: 300 });
+      if (mode === "billing-extra-type") charges.push({ id: String(++sequence), workflow_type: "proactive_talent_screening",
+        workflow_run_id: collectionRunId, workflow_item_key: `${clientItemKey}:unexpected`, points: 50 });
       if (useIdempotencyFixture) idempotentUploads.set(clientItemKey, currentFile);
       uploaded++;
       send({ ...currentFile, duplicate: false });
@@ -328,7 +340,8 @@ async function handleRequest(request, response) {
   } else if (path === "/billing/usage-charges") {
     assert.ok(url.searchParams.get("start_date"));
     assert.ok(url.searchParams.get("end_date"));
-    const filtered = charges.filter((charge) => charge.workflow_type === url.searchParams.get("workflow_type"));
+    assert.equal(url.searchParams.get("workflow_type"), null);
+    const filtered = charges;
     const page = Number(url.searchParams.get("page"));
     const pageSize = Number(url.searchParams.get("page_size"));
     send({ page, page_size: pageSize, total: filtered.length,

@@ -123,7 +123,7 @@ describe("AIHR project integration", () => {
       data: { items: [{ id: 902, screening_stage: "workflow_completion", screening_result: "passed" }], pagination: { total: 1 } },
       expected: { runId: "900", total: 1 } },
     { name: "aihr.readBillingUsage", path: "/billing/usage-charges", input: { runId: "900", startDate: "2026-10-09", endDate: "2026-10-11" },
-      data: { items: [{ id: "1", workflow_run_id: "900", workflow_item_key: "proofkit:case", points: 300 }],
+      data: { items: [{ id: "1", workflow_type: "communication_resume_screening", workflow_run_id: "900", workflow_item_key: "proofkit:case", points: 300 }],
         page: 1, page_size: 100, total: 1, total_points: 300 },
       expected: { runId: "900", complete: true, matchedCount: 1, matchedPoints: 300 } },
   ])("passes the Runner capability signal to $name gateway reads", async ({ name, path, input, data, expected }) => {
@@ -148,9 +148,9 @@ describe("AIHR project integration", () => {
       const page = Number(url.searchParams.get("page"));
       pages.push(page);
       const items = page === 1
-        ? Array.from({ length: 100 }, (_, index) => ({ id: String(index + 1), workflow_run_id: "899",
+        ? Array.from({ length: 100 }, (_, index) => ({ id: String(index + 1), workflow_type: "communication_resume_screening", workflow_run_id: "899",
           workflow_item_key: `unrelated-${index}`, points: 300 }))
-        : [{ id: "101", workflow_run_id: "900", workflow_item_key: "proofkit:fixture:upload-1", points: 300 }];
+        : [{ id: "101", workflow_type: "communication_resume_screening", workflow_run_id: "900", workflow_item_key: "proofkit:fixture:upload-1", points: 300 }];
       send(response, { page, page_size: 100, total: 101, total_points: 30300, items });
     });
     const read = await loadPipelineWait("aihr.readBillingUsage");
@@ -170,7 +170,7 @@ describe("AIHR project integration", () => {
     expect(noWindow).toMatchObject({ complete: false, reason: "date-window-unverified", matchedCount: null });
     await startPollingGateway((_path, response) => send(response, {
       page: 1, page_size: 1, total: 2, total_points: 600,
-      items: [{ id: "1", workflow_run_id: "899", workflow_item_key: "unrelated", points: 300 }],
+      items: [{ id: "1", workflow_type: "communication_resume_screening", workflow_run_id: "899", workflow_item_key: "unrelated", points: 300 }],
     }));
     const capped = await read.execute(read.inputSchema.parse({ runId: "900", startDate: "2026-10-09", endDate: "2026-10-11", pageSize: 1, maxPages: 1 }),
       { runId: "billing-capped", signal: new AbortController().signal });
@@ -616,7 +616,8 @@ describe("AIHR project integration", () => {
     expect(gateway.requestPaths.filter((path) => path === "/workflow-executions")).toHaveLength(Math.min(completionPage, 20));
   });
 
-  it.each(["success", "relation-old-file", "billing-missing", "billing-duplicate", "billing-wrong-price", "billing-reader-error"] as const)("executes the checked-in env-based Charter through Local Runner: %s", async (mode) => {
+  it.each(["success", "relation-old-file", "billing-missing", "billing-duplicate", "billing-wrong-price",
+    "billing-extra-item", "billing-extra-type", "billing-reader-error"] as const)("executes the checked-in env-based Charter through Local Runner: %s", async (mode) => {
     const fixtureBytes = Buffer.from("%PDF-1.4 proofkit fixture\n", "utf8");
     const fixtureSha256 = createHash("sha256").update(fixtureBytes).digest("hex");
     const gateway = await startCollectionGatewayMock({ fixtureSha256, mode });
@@ -661,6 +662,10 @@ describe("AIHR project integration", () => {
     if (mode.startsWith("billing-") && mode !== "billing-reader-error") {
       expect(summary.oracles[1]?.sourceLocations).toContain("services/billing-service/internal/service/billing_service.go");
       expect(billingFacts).toMatchObject({ facts: [{ ledgerComplete: true, expectedPoints: 300 }] });
+    }
+    if (mode === "billing-extra-item" || mode === "billing-extra-type") {
+      expect(billingFacts).toMatchObject({ facts: [{ runChargeCount: 2,
+        exactChargeCount: 1, unexpectedChargeCount: 1 }] });
     }
     if (mode === "billing-reader-error") expect(billingFacts).toMatchObject({ facts: [{ ledgerReason: "reader-unavailable" }] });
     expect(summary.steps[1]?.capabilityOutput).toMatchObject({ collectionRunId: "900", fileSha256: fixtureSha256 });
@@ -974,7 +979,8 @@ async function startGatewayMock(mode: () => OnlineMode): Promise<ReturnType<type
 }
 
 type CollectionMode = "success" | "relation-old-file" | "assessment-old-file" | "extract-failed" | "not-found"
-  | "billing-missing" | "billing-duplicate" | "billing-wrong-price" | "billing-reader-error"
+  | "billing-missing" | "billing-duplicate" | "billing-wrong-price" | "billing-extra-item"
+  | "billing-extra-type" | "billing-reader-error"
   | "assessment-retry" | "assessment-running" | "assessment-task-missing" | "assessment-dead" | "assessment-cancelled" | "assessment-failed";
 
 function completionFact() {
@@ -1036,12 +1042,17 @@ async function startCollectionGatewayMock(options: { fixtureSha256: string; mode
     }
     if (request.method === "GET" && path === "/billing/usage-charges") {
       if (mode === "billing-reader-error") return sendError(response, 503, "UNAVAILABLE", "billing fixture unavailable");
+      if (url.searchParams.has("workflow_type")) return sendError(response, 400, "INVALID_FILTER", "all types must be checked");
       const points = mode === "billing-wrong-price" ? 50 : 300;
       const items = mode === "billing-missing" ? [] : [
         { id: "1001", workflow_type: "communication_resume_screening", workflow_run_id: 900,
           workflow_item_key: clientItemKey, points },
         ...(mode === "billing-duplicate" ? [{ id: "1002", workflow_type: "communication_resume_screening",
           workflow_run_id: 900, workflow_item_key: clientItemKey, points }] : []),
+        ...(mode === "billing-extra-item" || mode === "billing-extra-type" ? [{ id: "1003",
+          workflow_type: mode === "billing-extra-type" ? "proactive_talent_screening" : "communication_resume_screening",
+          workflow_run_id: 900, workflow_item_key: `${clientItemKey}:unexpected`,
+          points: mode === "billing-extra-type" ? 50 : 300 }] : []),
       ];
       return send(response, { page: Number(url.searchParams.get("page")),
         page_size: Number(url.searchParams.get("page_size")), total: items.length,
