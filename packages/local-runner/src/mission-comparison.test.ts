@@ -128,6 +128,20 @@ describe("Mission repair comparison", () => {
     expect(result.defects[0]?.outcome).toBe("unverified");
   });
 
+  it("does not confirm a defect or repair after saved business facts are rewritten", async () => {
+    const changedBaseline = await createFixture();
+    await writeFile(join(changedBaseline.evidenceDir, "before-primary", "artifacts", "oracle-source.json"), '{"bound":true}');
+    const baselineResult = await changedBaseline.compare();
+    expect(baselineResult.status).toBe("inconclusive");
+    expect(baselineResult.defects).toHaveLength(0);
+
+    const changedCandidate = await createFixture();
+    await writeFile(join(changedCandidate.evidenceDir, "after-primary", "artifacts", "oracle-source.json"), '{"bound":false}');
+    const candidateResult = await changedCandidate.compare();
+    expect(candidateResult.status).toBe("inconclusive");
+    expect(candidateResult.defects[0]?.outcome).toBe("unverified");
+  });
+
   it("requires every declared negative case and release replay slot before verifying", async () => {
     const fixture = await createFixture({ negativeCase: true });
     const missingNegative = await fixture.compare();
@@ -241,7 +255,8 @@ async function writeRun(evidenceDir: string, charter: TestCharter, runId: string
   const runDir = join(evidenceDir, runId);
   await mkdir(join(runDir, "artifacts"), { recursive: true });
   const path = `${runId}/artifacts/oracle-source.json`;
-  await writeFile(join(runDir, "artifacts", "oracle-source.json"), JSON.stringify({ bound: verdict === "passed" }));
+  const source = JSON.stringify({ bound: verdict === "passed" });
+  await writeFile(join(runDir, "artifacts", "oracle-source.json"), source);
   const now = new Date().toISOString();
   const summary: RunSummary = {
     runId, startedAt: now, endedAt: now, status: "completed", verdict,
@@ -251,7 +266,7 @@ async function writeRun(evidenceDir: string, charter: TestCharter, runId: string
     artifacts: [path], findings: [],
   };
   await writeFile(join(runDir, "run.json"), JSON.stringify(summary));
-  const ref: EvidenceRef = { evidenceId: `${runId}:${path}`, kind: "business", path: resolve(evidenceDir, path), capturedAt: now };
+  const ref: EvidenceRef = { evidenceId: `${runId}:${path}`, kind: "business", path: resolve(evidenceDir, path), sha256: sha256(source), capturedAt: now };
   return { ref };
 }
 

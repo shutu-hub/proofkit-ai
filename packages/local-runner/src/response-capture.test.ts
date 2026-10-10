@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CaptureResponseActionSchema, ProofkitConfigSchema, RunSummarySchema, TestCharterSchema, type RunSummary, type Verdict } from "@proofkit/contracts";
 import { LocalRunnerService } from "./index.js";
+import { installMockRunEvidence } from "./mock-run-evidence.test-helper.js";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -78,6 +79,7 @@ function negativePlan(expected: Verdict) {
     expectedVerdict: expected, sideEffectPolicy: "allow" as const, metadata: {} }] };
 }
 function stubRuns(service: LocalRunnerService, root: string, expected: Verdict, captureNegative: boolean) {
+  installMockRunEvidence(service);
   const summaries = new Map<string, RunSummary>();
   service.start = async (input = {}) => {
     const charter = input.charter!; const negative = Boolean(charter.metadata.negativeCaseId);

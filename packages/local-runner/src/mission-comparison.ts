@@ -332,7 +332,7 @@ function hasMaterializedEvidence(record: RunRecord, evidenceDir: string): boolea
 }
 
 function materialized(ref: EvidenceRef, runId: string, path: string, evidenceDir: string): boolean {
-  return materializedRunArtifact(ref, runId, path, evidenceDir) !== undefined;
+  return Boolean(ref.sha256 && materializedRunArtifact(ref, runId, path, evidenceDir));
 }
 
 function hasConfirmedFinding(mission: TestMission, facts: EvidenceRef[]): boolean {

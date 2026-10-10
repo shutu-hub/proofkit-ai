@@ -82,7 +82,8 @@ describe("Mission report", () => {
     const unrelated = await file(join(workspace, ".proofkit", "runs", "run-other", "artifacts", "fact.json"));
     const secret = await file(join(workspace, ".proofkit", "runs", "run-1", "config.yaml"));
     const external = await file(join(outside, "external.json"));
-    const input = result(workspace, [ref(valid), ref(unrelated), ref(secret), ref(external), ref("https://invalid.example/fact"), ref("run-1/artifacts/missing.json")]);
+    const digest = createHash("sha256").update("fact").digest("hex");
+    const input = result(workspace, [ref(valid, digest), ref(unrelated, digest), ref(secret, digest), ref(external, digest), ref("https://invalid.example/fact", digest), ref("run-1/artifacts/missing.json", digest)]);
     const markup = await readFile(await new MissionReportStore(workspace).writeReport(input), "utf8");
     expect(markup).toContain("../../runs/run-1/artifacts/%E4%BA%8B%E5%AE%9E%20%23%20&#39;quote&#39;.json");
     expect(markup.match(/Business fact unavailable/g)).toHaveLength(5);
@@ -104,6 +105,24 @@ describe("Mission report", () => {
     expect((await readdir(join(workspace, ".proofkit", "missions", input.missionId))).sort()).toEqual(["report.html", "summary.json"]);
   });
 
+  it("does not present a saved confirmed finding as currently verified after its evidence changes", async () => {
+    const workspace = await root();
+    const path = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "failure.json"), "wrong binding");
+    const evidence = ref(path, createHash("sha256").update("wrong binding").digest("hex"));
+    const input = result(workspace, [evidence]);
+    input.verdict = "failed";
+    input.confirmedProductFindings = 1;
+    input.findings = [{ findingId: "finding-1", category: "product", status: "confirmed", severity: "high",
+      title: "Wrong binding", message: "Candidate relation is wrong", evidence: [evidence], createdAt: now }];
+    const store = new MissionReportStore(workspace);
+    expect(await readFile(await store.writeReport(input), "utf8")).toContain("1 / 1 visible saved confirmed product finding(s) have available evidence");
+    await writeFile(path, "changed binding");
+    const markup = await readFile(await store.writeReport(input), "utf8");
+    expect(markup).toContain("saved confirmed · evidence currently unverified");
+    expect(markup).toContain("0 / 1 visible saved confirmed product finding(s) have available evidence");
+    expect(markup).toContain("cannot be independently confirmed from this report");
+  });
+
   it("rejects artifact directory links outside the workspace and across Runs", async () => {
     const workspace = await root();
     const outside = await root();
@@ -114,9 +133,19 @@ describe("Mission report", () => {
     await mkdir(artifacts, { recursive: true });
     await symlink(outside, join(artifacts, "outside"), process.platform === "win32" ? "junction" : "dir");
     await symlink(other, join(artifacts, "other-run"), process.platform === "win32" ? "junction" : "dir");
-    const input = result(workspace, [ref(join(artifacts, "outside", "fact.json")), ref(join(artifacts, "other-run", "fact.json"))]);
+    const digest = createHash("sha256").update("fact").digest("hex");
+    const input = result(workspace, [ref(join(artifacts, "outside", "fact.json"), digest), ref(join(artifacts, "other-run", "fact.json"), digest)]);
     const markup = await readFile(await new MissionReportStore(workspace).writeReport(input), "utf8");
     expect(markup.match(/Business fact unavailable/g)).toHaveLength(2);
+  });
+
+  it("labels legacy references without a digest as integrity unverified", async () => {
+    const workspace = await root();
+    const path = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "legacy.json"));
+    const markup = await readFile(await new MissionReportStore(workspace).writeReport(result(workspace, [ref(path)])), "utf8");
+    expect(markup).toContain("Business fact integrity unverified");
+    expect(markup).toContain("1 lack a saved digest");
+    expect(markup).not.toContain('href="../../runs/run-1/artifacts/legacy.json"');
   });
 
   it("refuses redirected report directories before creating files outside the workspace", async () => {

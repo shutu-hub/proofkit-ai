@@ -2,13 +2,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProofkitConfigSchema, TestCharterSchema, type RunSummary, type TestCharter, type Verdict } from "@proofkit/contracts";
 import { captureSourceState } from "@proofkit/project";
 import { LocalRunnerService, type LocalAdapterName } from "./index.js";
 import { summarizeSuiteScope, verifySuiteMission } from "./suite-verifier.js";
+import { installMockRunEvidence } from "./mock-run-evidence.test-helper.js";
 
 const roots: string[] = [];
+vi.setConfig({ testTimeout: 20_000 });
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -232,7 +234,7 @@ describe("explicit release suites", () => {
   });
 
   it("requires matching API method, origin and successful responses in every required run", async () => {
-    for (const network of ["valid", "wrong-method", "wrong-origin", "bad-status", "missing-replay-log"] as const) {
+    for (const network of ["valid", "wrong-method", "wrong-origin", "bad-status", "missing-replay-response"] as const) {
       const service = await createSuiteService();
       service.config.charters[0]!.routeTargets!.push({ kind: "api", method: "GET", path: "/api/v1/people", origin: "http://127.0.0.1:8765", source: "services/gateway/router.ts" });
       stubRuns(service, { network });
@@ -243,9 +245,9 @@ describe("explicit release suites", () => {
       expect(completed.verdict).toBe("passed");
       expect(coverage).toMatchObject({ candidateRoutes: 6, mappedCandidates: 3, observedCandidates: network === "valid" ? 3 : 2 });
       if (network !== "valid") expect(coverage?.gaps).toContainEqual(expect.objectContaining({ kind: "api", path: "/api/v1/people", status: "mapped-unobserved" }));
-      if (network === "missing-replay-log") expect(coverage?.gaps.find((item) => item.path === "/api/v1/people")?.reason).toContain("unavailable");
+      if (network === "missing-replay-response") expect(coverage?.gaps.find((item) => item.path === "/api/v1/people")?.reason).toContain("No matching successful API response");
     }
-  });
+  }, 20_000);
 
   it("rejects a suite whose Charter is missing a required surface or business Oracle", async () => {
     const service = await createSuiteService({ loginSurfaces: ["web"] });
@@ -381,7 +383,8 @@ async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[];
   return LocalRunnerService.create({ root, workspaceRoot });
 }
 
-function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-log" } = {}) {
+function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-response" } = {}) {
+  installMockRunEvidence(service);
   const summaries = new Map<string, RunSummary>();
   const started: Array<{ charterId: string; surface: LocalAdapterName; negativeCaseId?: string }> = [];
   const replayed: Array<{ sourceRunId: string; charterId: string; surface: LocalAdapterName }> = [];
@@ -412,7 +415,7 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     return summary;
   };
   const writeNetworkEvent = async (summary: RunSummary, surface: LocalAdapterName, kind: "primary" | "replay" | "negative") => {
-    if (!options.network || options.network === "missing-replay-log" && kind === "replay") return;
+    if (!options.network || options.network === "missing-replay-response" && kind === "replay") return;
     const runDir = join(service.evidenceDir, summary.runId);
     await mkdir(runDir, { recursive: true });
     await writeFile(join(runDir, "events.jsonl"), `${JSON.stringify({

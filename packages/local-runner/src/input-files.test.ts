@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProofkitConfigSchema, RunSummarySchema, TestCharterSchema, type RunSummary } from "@proofkit/contracts";
 import { LocalRunnerService, type LocalRunInput } from "./index.js";
+import { installMockRunEvidence } from "./mock-run-evidence.test-helper.js";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -52,6 +53,7 @@ async function baseline(options: { blockedNegative?: boolean } = {}) {
     config: ProofkitConfigSchema.parse({ project: { root }, policies: { environment: "test", sideEffects: "allow" } }),
     oracles: [{ name: oracleName, check: async () => { throw new Error("Stub runs supply independent facts"); } }],
   });
+  installMockRunEvidence(service);
   const fileAction = { kind: "setInputFiles" as const, selector: "#resume", files: [".proofkit/fixtures/resume.pdf"] };
   const charter = TestCharterSchema.parse({ intent: "upload", level: "core", actions: [fileAction],
     assertions: [{ kind: "text-visible", text: "ready" }], oracles: [oracleName], sideEffectPolicy: "allow",

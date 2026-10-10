@@ -7,7 +7,7 @@ import { createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofki
 import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
-import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
+import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowInventory, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject } from "@proofkit/project";
@@ -23,6 +23,7 @@ import { inspectTestScope } from "./test-scope.js";
 import { projectMissionResult } from "./mission-result.js";
 import type { MissionResult } from "@proofkit/contracts";
 import { ResourceRecoveryService } from "./resource-recovery.js";
+import { captureRunEvidence } from "./run-evidence.js";
 
 export { loadProjectIntegration } from "./integration.js";
 
@@ -1071,19 +1072,7 @@ export class LocalRunnerService {
   }
 
   private runEvidence(summary: RunSummary): EvidenceRef[] {
-    const eventsPath = resolve(this.evidenceDir, summary.runId, "events.jsonl");
-    const paths = new Set([`${summary.runId}/run.json`, `${summary.runId}/report.html`, ...(existsSync(eventsPath) ? [`${summary.runId}/events.jsonl`] : []), ...summary.artifacts]);
-    const oracleReports = new Set(summary.oracles.map((oracle) => oracle.evidence.at(-1)));
-    const oracleSourceArtifacts = new Set(summary.oracles.flatMap((oracle) => oracle.sourceEvidenceArtifacts ?? []));
-    return [...paths].map((path) => EvidenceRefSchema.parse({
-      evidenceId: `${summary.runId}:${path}`,
-      kind: path.endsWith("events.jsonl") ? "network" : path.endsWith(".png") ? "screenshot" : path.endsWith("report.html") || oracleReports.has(path)
-        ? "report" : path.endsWith("runtime-findings.json") || path.endsWith("integration-cleanup.json") || path.endsWith("integration-setup.json") ? "runtime" : path.includes("/artifacts/target-binding") ? "process" : oracleSourceArtifacts.has(path) ? "business" : "snapshot",
-      path: resolve(this.evidenceDir, path),
-      ...(path === summary.integrationCleanup?.artifact && summary.integrationCleanup.sha256 ? { sha256: summary.integrationCleanup.sha256 } : {}),
-      description: `Evidence captured by run ${summary.runId}`,
-      capturedAt: summary.endedAt ?? summary.startedAt,
-    }));
+    return captureRunEvidence(summary, this.evidenceDir);
   }
 
   private async matchedApiRouteTargets(runId: string, adapter: LocalAdapterName, targets: RouteCoverageTarget[]): Promise<{

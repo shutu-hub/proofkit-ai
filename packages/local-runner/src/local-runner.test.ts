@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ProofkitConfigSchema, type NegativeCase, type RunSummary, type TestCharter, type TestMission } from "@proofkit/contracts";
 import { ExecutionRunner, type SurfaceAdapter } from "@proofkit/runner";
 import { LocalRunnerService } from "./index.js";
+import { installMockRunEvidence } from "./mock-run-evidence.test-helper.js";
 
 const roots: string[] = [];
 const servers: Array<ReturnType<typeof createServer>> = [];
@@ -36,6 +37,7 @@ describe("LocalRunnerService", () => {
     };
     service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
     service.wait = async () => summary;
+    installMockRunEvidence(service);
 
     const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
     expect(created.status).toBe("awaiting-approval");
@@ -117,6 +119,7 @@ describe("LocalRunnerService", () => {
     };
     service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
     service.wait = async () => summary;
+    installMockRunEvidence(service);
 
     const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
     const started = await service.startMission(created.missionId, { approve: true });
@@ -147,6 +150,7 @@ describe("LocalRunnerService", () => {
     };
     service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
     service.wait = async () => summary;
+    installMockRunEvidence(service);
 
     const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
     await service.startMission(created.missionId, { approve: true });
@@ -200,6 +204,7 @@ describe("LocalRunnerService", () => {
       return { runId, status: "completed", verdict: summary.verdict, summary };
     };
     service.wait = async (runId) => summaries.get(runId)!;
+    installMockRunEvidence(service);
 
     const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
     await service.startMission(created.missionId, { approve: true });
@@ -229,6 +234,7 @@ describe("LocalRunnerService", () => {
     };
     service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
     service.wait = async () => summary;
+    installMockRunEvidence(service);
 
     const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
     await service.startMission(created.missionId, { approve: true });
@@ -259,6 +265,7 @@ describe("LocalRunnerService", () => {
     };
     service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
     service.wait = async () => summary;
+    installMockRunEvidence(service);
 
     const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
     const started = await service.startMission(created.missionId, { approve: true });
@@ -281,6 +288,7 @@ describe("LocalRunnerService", () => {
     };
     service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
     service.wait = async () => summary;
+    installMockRunEvidence(service);
 
     const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
     const started = await service.startMission(created.missionId, { approve: true });
@@ -321,9 +329,10 @@ describe("LocalRunnerService", () => {
     };
     let sequence = 0;
     const runs: Array<{ adapter: string; runKind: string }> = [];
+    const summaries = new Map<string, RunSummary>();
     const createSummary = (adapter: string): RunSummary => {
       sequence += 1;
-      return {
+      const summary: RunSummary = {
         runId: `release-run-${sequence}`,
         startedAt: new Date().toISOString(),
         endedAt: new Date().toISOString(),
@@ -336,6 +345,8 @@ describe("LocalRunnerService", () => {
         artifacts: [`release-run-${sequence}/after.json`, `release-run-${sequence}/oracle-source.json`, `release-run-${sequence}/oracle.json`, `release-run-${sequence}/trace.json`],
         findings: [],
       };
+      summaries.set(summary.runId, summary);
+      return summary;
     };
     service.start = async (input) => {
       const adapter = input.adapter ?? "web";
@@ -344,9 +355,11 @@ describe("LocalRunnerService", () => {
       return { runId: summary.runId, status: "completed", verdict: summary.verdict, summary };
     };
     service.wait = async (runId) => {
-      const index = Number(runId.split("-").at(-1));
-      return createSummary(index % 2 === 0 ? "electron" : "web");
+      const summary = summaries.get(runId);
+      if (!summary) throw new Error(`Unknown fixture run ${runId}`);
+      return summary;
     };
+    installMockRunEvidence(service);
     service.replay = async (runId, input = {}) => {
       const adapter = input.adapter ?? "web";
       const summary = createSummary(adapter);
@@ -495,6 +508,7 @@ describe("LocalRunnerService", () => {
       if (!summary) throw new Error(`Unknown fixture run ${runId}`);
       return summary;
     };
+    installMockRunEvidence(service);
 
     const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
     expect(created.plan.executionProfile).toMatchObject({
@@ -636,6 +650,7 @@ describe("LocalRunnerService", () => {
       if (!summary) throw new Error(`Unknown fixture run ${runId}`);
       return summary;
     };
+    installMockRunEvidence(service);
 
     const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
     const started = await service.startMission(created.missionId, { approve: true });
