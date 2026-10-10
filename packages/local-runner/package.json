@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests --maxWorkers=2 --minWorkers=1"
   },
   "dependencies": {
     "@proofkit/agent": "workspace:*",

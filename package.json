@@ -13,7 +13,7 @@
     "build": "pnpm -r build && node scripts/build-distribution.mjs",
     "prepack": "pnpm build",
     "typecheck": "pnpm -r build && pnpm -r typecheck",
-    "test": "pnpm -r test",
+    "test": "pnpm -r --workspace-concurrency 2 test",
     "test:smoke:web": "pnpm build && node tests/web-smoke.mjs",
     "test:smoke:inspect": "pnpm build && node tests/inspection-smoke.mjs",
     "test:smoke:electron": "pnpm build && node tests/electron-smoke.mjs",
