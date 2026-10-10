@@ -236,9 +236,88 @@ describe("MissionAgent", () => {
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0]?.status).toBe("failed");
     expect(result.toolCalls[0]?.error).toContain("fixture surface is unavailable");
+    expect(result.agentSteps[0]).toMatchObject({ status: "failed", endedAt: expect.any(String) });
+    expect(result.currentTaskId).toBeUndefined();
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.status).toBe("suspected");
     expect(result.findings[0]?.message).toContain("fixture surface is unavailable");
+  });
+
+  it("settles a thrown suite tool call without starting another workflow", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-suite-tool-error-"));
+    const calls: string[] = [];
+    const tools = new InMemoryMissionToolRegistry([
+      { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({}) },
+      { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}).passthrough(), execute: async (_input, context) => {
+        calls.push(context.task.taskId);
+        if (context.task.taskId === "execute-charter") throw new Error("first workflow could not start");
+        return { verdict: "passed" as const };
+      } },
+      { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => {
+        calls.push("verify-result");
+        return { verdict: "passed" as const };
+      } },
+    ]);
+    const planner = {
+      async plan(input: Parameters<DeterministicMissionPlanner["plan"]>[0]) {
+        const base = await new DeterministicMissionPlanner().plan(input);
+        const primary = base.graph.tasks.find((task) => task.taskId === "execute-charter")!;
+        return {
+          ...base,
+          executionProfile: { ...base.executionProfile, collectAllResults: true },
+          graph: {
+            ...base.graph,
+            tasks: [
+              ...base.graph.tasks.filter((task) => task.taskId !== "verify-result"),
+              { ...primary, taskId: "execute-other" },
+              { ...base.graph.tasks.find((task) => task.taskId === "verify-result")!, dependsOn: ["execute-charter", "execute-other"], dependencyMode: "settled" as const },
+            ],
+          },
+        };
+      },
+    };
+    const agent = new MissionAgent({ store: new JsonMissionStore(root), tools, planner });
+    const created = await agent.create({ intent: "verify independent workflows", projectRoot: root, surface: "web", policy: { requireApproval: false } });
+
+    const result = await agent.run(created.missionId);
+
+    expect(calls).toEqual(["execute-charter"]);
+    expect(result.status).toBe("failed");
+    expect(result.verdict).toBe("failed");
+    expect(result.plan.graph.tasks.find((task) => task.taskId === "execute-charter")?.status).toBe("failed");
+    expect(result.plan.graph.tasks.find((task) => task.taskId === "execute-other")?.status).toBe("pending");
+    expect(result.agentSteps.find((step) => step.taskId === "execute-charter")).toMatchObject({ status: "failed", endedAt: expect.any(String) });
+    expect(result.toolCalls.find((call) => call.taskId === "execute-charter")).toMatchObject({ status: "failed", endedAt: expect.any(String) });
+    expect(result.agentSteps.every((step) => step.status !== "running")).toBe(true);
+    expect(result.currentTaskId).toBeUndefined();
+  });
+
+  it("classifies a tool-only timeout as an environment block", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-tool-timeout-"));
+    const tools = new InMemoryMissionToolRegistry([{
+      name: "project.discover", description: "slow discover", sideEffect: "none", environments: ["test"],
+      timeoutMs: 10, cancellationGraceMs: 100, inputSchema: z.object({}),
+      execute: async (_input, context) => {
+        await new Promise<void>((resolve) => {
+          if (context.signal.aborted) resolve();
+          else context.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return {};
+      },
+    }]);
+    const agent = new MissionAgent({ store: new JsonMissionStore(root), tools });
+    const created = await agent.create({ intent: "timeout one tool", projectRoot: root, surface: "web", policy: { requireApproval: false, timeoutMs: 1000 } });
+
+    const result = await agent.run(created.missionId);
+
+    expect(result.status).toBe("blocked");
+    expect(result.verdict).toBe("blocked");
+    expect(result.plan.graph.tasks[0]?.status).toBe("blocked");
+    expect(result.toolCalls[0]).toMatchObject({ status: "blocked", endedAt: expect.any(String) });
+    expect(result.agentSteps[0]).toMatchObject({ status: "blocked", endedAt: expect.any(String) });
+    expect(result.currentTaskId).toBeUndefined();
+    expect(result.firstFailure).toMatchObject({ kind: "environment", message: expect.stringContaining("timed out") });
+    expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Mission tool timed out: project.discover", category: "environment" })]));
   });
 
   it("recovers an interrupted read task when an attempt remains", async () => {

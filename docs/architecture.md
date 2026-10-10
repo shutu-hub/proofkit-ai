@@ -326,6 +326,14 @@ timed out` keeps the reason reviewable. The lower-level `run.timeoutMs`
 remains the deadline for one surface Run; both deadlines are retained so a
 slow business workflow cannot keep an AI client waiting indefinitely.
 
+An individual MissionTool timeout is a separate environment block. Its Task,
+ToolCall and AgentStep all receive terminal `blocked` receipts, and the Mission
+records an environment first-failure boundary. An unexpected tool exception
+also closes all three audit records and stops the Mission, including a suite:
+the tool may have failed before its resource cleanup completed. A suite
+continues independent workflows after an explicit failed Run result whose
+normal lifecycle has completed, not after an unhandled tool exception.
+
 Mission cancellation and deadlines propagate through primary, replay and
 negative-case tools to the Local Runner's Run signal. Business observers and
 capabilities receive that signal; local startup health probes also abort.
