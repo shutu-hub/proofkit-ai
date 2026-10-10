@@ -192,6 +192,8 @@ Environment observations always carry `testVerdict: not-asserted`. They do not s
 
 Before drafting a new Charter, call `inspect_surface({ surface: "web" })` or `inspect_surface({ surface: "electron" })` against an already running local page. It records a read-only observation Run and returns bounded controls, including hidden file inputs with `inputType: "file"` and `visible: false`, and a selector only when it matched exactly one element at inspection time. The result says `testVerdict: "not-asserted"`; it is reconnaissance, not a pass. Control hints cover the main frame only, are capped at 60, omit input values, and can become stale after navigation. Web/Electron `click`, `fill`, `press` and `setInputFiles` recheck selector uniqueness during the test Run and fail on ambiguity. The Run keeps snapshot, screenshot and event evidence in the external workspace. Use isolated test data because screenshots can contain everything visible on the page.
 
+Runs sharing one external test workspace execute exclusively, including read-only inspection and Runs from separate Missions or surfaces. If another Run owns the workspace, the contender records a `blocked` Run before attaching to the page; report this as test-environment contention and retry only after the active Run and its cleanup finish. Separate workspaces aimed at one account, device or CDP endpoint still need explicit isolation.
+
 For a page that renders asynchronously, configure `surfaces.web.readyWhen` or
 `surfaces.electron.readyWhen` once, or override it in
 `inspect_surface({ surface: "web", readyWhen: { text: "Log in", timeoutMs: 5000 } })`.

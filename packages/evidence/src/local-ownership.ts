@@ -10,7 +10,7 @@ export type LocalExecutionLease = { release(): Promise<void> };
 
 /** A process-owned socket is released by the OS even if Node exits without cleanup. */
 export class LocalExecutionOwnership {
-  constructor(private readonly rootDir: string, private readonly namespace: "mission" | "run" = "mission") {}
+  constructor(private readonly rootDir: string, private readonly namespace: "mission" | "run" | "workspace" = "mission") {}
 
   async acquire(missionId: string, onCancel?: (reason: string) => void): Promise<LocalExecutionLease | undefined> {
     const { endpoint, key } = await this.address(missionId);
@@ -92,7 +92,7 @@ export class LocalExecutionOwnership {
     await mkdir(this.rootDir, { recursive: true });
     const canonical = await realpath(this.rootDir);
     const namespace = process.platform === "win32" ? canonical.toLowerCase() : canonical;
-    const key = createHash("sha256").update(this.namespace === "run" ? "run\0" : "").update(namespace).update("\0").update(missionId).digest("hex");
+    const key = createHash("sha256").update(this.namespace === "mission" ? "" : `${this.namespace}\0`).update(namespace).update("\0").update(missionId).digest("hex");
     if (process.platform === "win32") return { endpoint: `\\\\.\\pipe\\proofkit-${this.namespace}-${key}`, key };
     if (process.platform === "linux") return { endpoint: `\0proofkit-${this.namespace}-${key}`, key };
     // On systems without abstract Unix sockets, use a deterministic loopback

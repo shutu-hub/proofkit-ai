@@ -386,8 +386,13 @@ describe("ExecutionRunner", () => {
     const finish = new Promise<void>((resolve) => { finishSetup = resolve; });
     let lateCleanup!: () => void;
     const cleaned = new Promise<void>((resolve) => { lateCleanup = resolve; });
+    let executionLeaseHeld = false;
     const summaryPromise = new ExecutionRunner(new FakeAdapter(), {
       evidenceDir: root, signal: controller.signal,
+      executionLease: async () => {
+        executionLeaseHeld = true;
+        return { release: async () => { executionLeaseHeld = false; } };
+      },
       setup: async () => { setupStarted(); await finish; return () => { lateCleanup(); }; },
     }).run({ intent: "expire setup grace", level: "core", mode: "deterministic", preconditions: [], actions: [], assertions: [], sideEffectPolicy: "deny", metadata: {} }, "expired-setup");
     await started;
@@ -395,8 +400,12 @@ describe("ExecutionRunner", () => {
     const summary = await summaryPromise;
     expect(summary.verdict).toBe("cancelled");
     expect(summary.findings.some((finding) => finding.includes("resources may still be active"))).toBe(true);
+    expect(executionLeaseHeld).toBe(true);
     finishSetup();
     await cleaned;
+    const until = Date.now() + 1_000;
+    while (executionLeaseHeld && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(executionLeaseHeld).toBe(false);
   }, 10_000);
 
   it("records steps and passes an independent assertion", async () => {
