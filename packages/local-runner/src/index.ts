@@ -26,6 +26,7 @@ import { ResourceRecoveryService } from "./resource-recovery.js";
 import { captureRunEvidence } from "./run-evidence.js";
 import { auditMissionProofClassification } from "./mission-proof-classification.js";
 import { acquireCdpTarget, acquireElectronPortFileScope, acquireExecutionScope, sharedTargetIdentity } from "./execution-scope.js";
+import { sourceBindingTarget } from "./source-binding-target.js";
 
 export { loadProjectIntegration } from "./integration.js";
 
@@ -1391,9 +1392,10 @@ export class LocalRunnerService {
         return lease;
       } } : {}),
       ...(surface === "web" || surface === "electron" ? {
-        targetBinding: (bindingSignal: AbortSignal) => inspectTargetBinding(this.root, targetUrl, bindingSignal),
+        targetBinding: async (bindingSignal: AbortSignal) => inspectTargetBinding(this.root,
+          await sourceBindingTarget(surface, targetUrl, electronCdp, electronPortFile, bindingSignal), bindingSignal),
         targetBindingPolicy: this.config.policies.targetBinding,
-        targetBindingRecheckAfterSetup: Boolean(input.start !== false && this.config.project.start),
+        targetBindingRecheckAfterSetup: Boolean(integrationSetup || (input.start !== false && this.config.project.start)),
       } : {}),
       integration: this.integration ? { name: this.integration.name, version: this.integration.version } : undefined,
       setup: [

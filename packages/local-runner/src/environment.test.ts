@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProofkitConfigSchema } from "@proofkit/contracts";
-import { WebAdapter } from "@proofkit/adapters";
+import { ElectronAdapter, WebAdapter } from "@proofkit/adapters";
 import * as project from "@proofkit/project";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { LocalRunnerService } from "./index.js";
@@ -121,6 +121,70 @@ describe("environment inspection", () => {
     expect(await service.inspectEnvironment({ surface: "electron" })).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "cdp-http", status: "blocked" })]) });
     await writeFile(file, "9".repeat(5000));
     expect((await service.inspectEnvironment({ surface: "electron" })).status).toBe("blocked");
+  });
+  it("checks the CDP listener's source when an Electron page has a file URL", async () => {
+    const { root, workspaceRoot, binding } = await fixture();
+    const url = await serve((_req, res) => res.end("CDP ready"));
+    await mkdir(workspaceRoot);
+    const file = join(workspaceRoot, "DevToolsActivePort");
+    await writeFile(file, `${new URL(url).port}\n/devtools/browser/private\n`);
+    const service = new LocalRunnerService({ root, workspaceRoot, config: ProofkitConfigSchema.parse({
+      project: { root, health: [url] }, surfaces: { electron: { devtoolsActivePort: file, targetUrlPrefix: "file:///app/index.html" } },
+    }) });
+    const result = await service.inspectEnvironment({ surface: "electron" });
+    expect(binding).toHaveBeenCalledWith(root, url, expect.any(AbortSignal));
+    expect(result.checks).toContainEqual(expect.objectContaining({ id: "source-binding", status: "passed",
+      targetBinding: expect.objectContaining({ targetOrigin: url }) }));
+    expect(JSON.stringify(result)).not.toContain("private");
+  });
+  it("blocks a file-page Electron Run when its CDP listener belongs to another checkout", async () => {
+    const { root, workspaceRoot, binding } = await fixture();
+    const cdpUrl = "http://127.0.0.1:9222";
+    binding.mockResolvedValue({ status: "different-project", method: "windows-listener-process",
+      expectedProjectRoot: root, observedProjectRoot: join(root, "other"), targetOrigin: cdpUrl,
+      reason: "Different checkout", observedAt: new Date().toISOString() });
+    const connect = vi.spyOn(ElectronAdapter.prototype, "connect");
+    const service = new LocalRunnerService({ root, workspaceRoot, config: ProofkitConfigSchema.parse({
+      project: { root }, surfaces: { electron: { cdpUrl, targetUrlPrefix: "file:///app/index.html" } },
+    }) });
+    const started = await service.start({ adapter: "electron", charter: {
+      intent: "Check Electron page", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "observe" }], assertions: [{ kind: "text-visible", text: "ready" }],
+      sideEffectPolicy: "deny", metadata: {},
+    } });
+    const result = await service.wait(started.runId);
+    expect(binding).toHaveBeenCalledWith(root, cdpUrl, expect.any(AbortSignal));
+    expect(result).toMatchObject({ verdict: "blocked", targetBinding: { status: "different-project", targetOrigin: cdpUrl } });
+    expect(connect).not.toHaveBeenCalled();
+  });
+  it("rechecks a connector-created Electron port before attachment and cleans up on mismatch", async () => {
+    const { root, workspaceRoot, binding } = await fixture();
+    await mkdir(workspaceRoot);
+    const file = join(workspaceRoot, "DevToolsActivePort");
+    const cdpUrl = "http://127.0.0.1:9224";
+    binding.mockImplementation(async (_root, url) => ({
+      status: url ? "different-project" : "unverified", method: url ? "windows-listener-process" : "unavailable",
+      expectedProjectRoot: root, ...(url ? { observedProjectRoot: join(root, "other"), targetOrigin: url } : {}),
+      reason: url ? "Different checkout" : "No running target", observedAt: new Date().toISOString(),
+    }));
+    const cleanup = vi.fn();
+    const connect = vi.spyOn(ElectronAdapter.prototype, "connect");
+    const service = new LocalRunnerService({ root, workspaceRoot, config: ProofkitConfigSchema.parse({
+      project: { root }, surfaces: { electron: { devtoolsActivePort: file, targetUrlPrefix: "file:///app/index.html" } },
+    }), integration: { name: "electron-launch-fixture", setup: async () => {
+      await writeFile(file, "9224\n");
+      return cleanup;
+    } } });
+    const started = await service.start({ adapter: "electron", start: false, charter: {
+      intent: "Check connector-started Electron", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "observe" }], assertions: [{ kind: "text-visible", text: "ready" }],
+      sideEffectPolicy: "deny", metadata: {},
+    } });
+    const result = await service.wait(started.runId);
+    expect(binding.mock.calls.map((call) => call[1])).toEqual([undefined, cdpUrl]);
+    expect(result).toMatchObject({ verdict: "blocked", targetBinding: { status: "different-project", targetOrigin: cdpUrl } });
+    expect(connect).not.toHaveBeenCalled();
+    expect(cleanup).toHaveBeenCalledOnce();
   });
   it("rejects remote MCP health/CDP probes before sending them and validates input limits", async () => {
     const { root, workspaceRoot } = await fixture();

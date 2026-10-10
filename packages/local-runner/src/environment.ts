@@ -3,6 +3,7 @@ import { EnvironmentInspectionInputSchema, EnvironmentInspectionSchema, type Env
 import { resolveElectronCdpUrl } from "@proofkit/adapters";
 import { inspectTargetBinding } from "@proofkit/project";
 import { probeHttpEndpoint } from "@proofkit/runtime";
+import { sourceBindingTarget } from "./source-binding-target.js";
 
 type Check = EnvironmentInspection["checks"][number];
 type Context = { root: string; workspaceRoot: string; config: ProofkitConfig; restrictWebOrigins: boolean };
@@ -57,7 +58,11 @@ export async function inspectEnvironment(context: Context, input: EnvironmentIns
     if (targetUrl && /^https?:\/\//i.test(targetUrl)) probe("surface-http", targetUrl, 200, false);
     else if (targetUrl) checks.push({ id: "surface-http", kind: "configuration", status: "unverified", message: "This surface selector has no HTTP endpoint; use inspect_surface for the actual page." });
     bounded("source-binding", "source-binding", async () => {
-      const targetBinding = await inspectTargetBinding(context.root, targetUrl, controller.signal);
+      const bindingUrl = await sourceBindingTarget(surface, targetUrl,
+        surface === "electron" ? electron?.cdpUrl : web?.cdpUrl,
+        surface === "electron" ? electron?.devtoolsActivePort ?? process.env.PROOFKIT_ELECTRON_DEVTOOLS_PORT : undefined,
+        controller.signal);
+      const targetBinding = await inspectTargetBinding(context.root, bindingUrl, controller.signal);
       return { id: "source-binding", kind: "source-binding", status: targetBinding.status === "matching-process-path" ? "passed" : targetBinding.status === "different-project" && config.policies.targetBinding === "block-different" ? "blocked" : "unverified", message: targetBinding.reason, targetBinding };
     });
     const cdpConfigured = surface === "electron" ? hasConnection : Boolean(web?.cdpUrl);
