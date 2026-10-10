@@ -651,6 +651,30 @@ export function workflowChecks(workflow: WorkflowInventory["workflows"][number])
 }
 
 /** Read-only inventory diagnostics; no field grants a product verdict. */
+export const WorkflowCandidateAuditSchema = z.object({
+  status: z.enum(["scanned", "partial"]),
+  routeCandidates: z.number().int().nonnegative(),
+  entryCandidates: z.number().int().nonnegative(),
+  sourceOwned: z.number().int().nonnegative(),
+  routeLinked: z.number().int().nonnegative(),
+  excluded: z.number().int().nonnegative(),
+  unclaimed: z.number().int().nonnegative(),
+  unlinkedRoutes: z.number().int().nonnegative(),
+  overlappingExclusions: z.number().int().nonnegative(),
+  unresolvedRouteDeclarations: z.number().int().nonnegative(),
+  skippedCandidates: z.number().int().nonnegative(),
+  gaps: z.array(z.object({
+    kind: z.enum(["web-route", "api-route", "entry-point"]),
+    source: WorkflowSourcePathSchema,
+    path: z.string().min(1).optional(),
+    method: RouteHttpMethodSchema.optional(),
+    reason: z.enum(["unclaimed-source", "unlinked-route", "overlapping-exclusion"]),
+  })).max(20),
+  omittedGaps: z.number().int().nonnegative(),
+  limitations: z.array(z.string().min(1)).max(5),
+});
+export type WorkflowCandidateAudit = z.infer<typeof WorkflowCandidateAuditSchema>;
+
 export const WorkflowInventoryInspectionSchema = z.object({
   status: z.enum(["missing", "invalid", "loaded"]),
   path: z.literal(".proofkit/workflows.yaml"),
@@ -665,6 +689,7 @@ export const WorkflowInventoryInspectionSchema = z.object({
   omittedUncoveredSurfaces: z.number().int().nonnegative(),
   missingSourcePaths: z.array(WorkflowSourcePathSchema).max(20),
   omittedMissingSourcePaths: z.number().int().nonnegative(),
+  candidateAudit: WorkflowCandidateAuditSchema.optional(),
   issues: z.array(z.string().min(1)).max(20),
   omittedIssues: z.number().int().nonnegative(),
 });

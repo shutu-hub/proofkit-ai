@@ -1,15 +1,16 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
-import { workflowChecks, WorkflowInventoryInspectionSchema, WorkflowInventorySchema, type ProofkitConfig, type SourceState, type WorkflowInventory, type WorkflowInventoryInspection } from "@proofkit/contracts";
+import { workflowChecks, WorkflowInventoryInspectionSchema, WorkflowInventorySchema, type ProjectMap, type ProofkitConfig, type SourceState, type WorkflowInventory, type WorkflowInventoryInspection } from "@proofkit/contracts";
 import { resolveWithinWorkspace } from "./context.js";
 import { captureSourceState } from "./source-state.js";
+import { auditWorkflowCandidates } from "./workflow-candidate-audit.js";
 
 const INVENTORY_PATH = ".proofkit/workflows.yaml" as const;
 const MAX_INVENTORY_BYTES = 1024 * 1024;
 
 /** Inspect a workspace-owned workflow claim without running a test or connector. */
-export async function inspectWorkflowInventory(projectRoot: string, workspaceRoot: string, config: ProofkitConfig, sourceState?: SourceState): Promise<{
+export async function inspectWorkflowInventory(projectRoot: string, workspaceRoot: string, config: ProofkitConfig, sourceState?: SourceState, project?: ProjectMap): Promise<{
   inventory?: WorkflowInventory;
   inspection: WorkflowInventoryInspection;
 }> {
@@ -71,12 +72,18 @@ export async function inspectWorkflowInventory(projectRoot: string, workspaceRoo
     if (!checkedPaths.has(path)) checkedPaths.set(path, canonicalProjectRoot ? await sourcePathExists(canonicalProjectRoot, path) : false);
     if (!checkedPaths.get(path)) missingSourcePaths.add(path);
   }
+  const candidateAudit = project ? auditWorkflowCandidates(project, inventory, config) : undefined;
   const issues = [
     ...(sourceMatch === "changed" ? ["workflow-inventory-source-changed"] : sourceMatch === "unverified" ? ["workflow-inventory-source-unverified"] : []),
     ...(!inventory.review ? ["workflow-inventory-review-missing"] : []),
     ...(linkedWorkflowCount < inventory.workflows.length ? ["workflow-inventory-charter-mapping-incomplete"] : []),
     ...(missingSourcePaths.size ? ["workflow-inventory-source-path-missing"] : []),
     ...(inventory.exclusions.length ? ["workflow-inventory-has-exclusions"] : []),
+    ...(candidateAudit?.unclaimed ? ["workflow-inventory-candidates-unclaimed"] : []),
+    ...(candidateAudit?.unlinkedRoutes ? ["workflow-inventory-routes-unlinked"] : []),
+    ...(candidateAudit?.overlappingExclusions ? ["workflow-inventory-exclusion-overlap"] : []),
+    ...(candidateAudit?.status === "partial" ? ["workflow-inventory-candidate-scan-partial"] : []),
+    ...(candidateAudit?.unresolvedRouteDeclarations ? ["workflow-inventory-route-targets-unresolved"] : []),
     // A declared reviewer is metadata, not an authenticated approval or execution proof.
     "workflow-inventory-completeness-unverified",
   ];
@@ -90,6 +97,7 @@ export async function inspectWorkflowInventory(projectRoot: string, workspaceRoo
       missingCharterIds: missingCharters.slice(0, 20), omittedMissingCharterIds: Math.max(0, missingCharters.length - 20),
       uncoveredSurfaces: uncoveredSurfaces.slice(0, 20), omittedUncoveredSurfaces: Math.max(0, uncoveredSurfaces.length - 20),
       missingSourcePaths: missingPaths.slice(0, 20), omittedMissingSourcePaths: Math.max(0, missingPaths.length - 20),
+      candidateAudit,
       issues: issues.slice(0, 20), omittedIssues: Math.max(0, issues.length - 20),
     }),
   };

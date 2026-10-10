@@ -70,7 +70,7 @@ describe("Mission report", () => {
     expect(markup).toContain("Whole project requested");
     expect(markup).toContain("workflow coverage has not been proven");
     expect(markup).toContain("source inventory is partial");
-    expect(markup).toContain("outside this suite: billing");
+    expect(markup).toContain("Registered scenarios outside this Mission matrix: billing");
     expect(markup).toContain("Missing test requirements");
     expect(markup).toContain('id="outcome">Passed');
   });

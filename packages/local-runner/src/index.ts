@@ -215,10 +215,13 @@ export class LocalRunnerService {
     const routeTargets = this.config.charters.filter((entry) => supportsCatalogCharter(entry, request.level, request.surface)
       && matches(entry.id, entry.path, ...entry.aliases, ...(entry.routeTargets ?? []).flatMap((target) => [target.path, target.source])))
       .flatMap((entry) => entry.routeTargets ?? []);
-    const sourceState = request.includeSourceState ? await captureSourceState(this.root) : undefined;
-    const workflowInventory = await inspectWorkflowInventory(this.root, this.workspaceRoot, this.config, sourceState);
+    const [sourceState, project] = await Promise.all([
+      request.includeSourceState ? captureSourceState(this.root) : Promise.resolve(undefined),
+      focus ? scanProject(this.root, { focus, routeTargets }) : this.discover(),
+    ]);
+    const workflowInventory = await inspectWorkflowInventory(this.root, this.workspaceRoot, this.config, sourceState, project);
     return inspectTestScope({
-      project: focus ? await scanProject(this.root, { focus, routeTargets }) : await this.discover(), workspaceRoot: this.workspaceRoot, config: this.config,
+      project, workspaceRoot: this.workspaceRoot, config: this.config,
       sourceState,
       workflowInventory: workflowInventory.inspection,
       integration: this.integration, capabilities: this.capabilities, oracles: this.oracles,
@@ -326,7 +329,7 @@ export class LocalRunnerService {
     const projectMap = projectRequested || input.charter || preliminarySelected || selectedSuite ? await this.discover() : undefined;
     const coverage = assessPlanningCoverage(input.intent, projectMap, input.coverage);
     const workflowInventory = coverage.requested === "project"
-      ? await inspectWorkflowInventory(this.root, this.workspaceRoot, this.config)
+      ? await inspectWorkflowInventory(this.root, this.workspaceRoot, this.config, undefined, projectMap)
       : undefined;
     const inspection = workflowInventory?.inspection;
     const inventory = workflowInventory?.inventory;

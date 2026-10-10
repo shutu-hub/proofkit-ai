@@ -185,15 +185,24 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     }));
     const scope = await runner.inspectTestScope();
     expect(scope.workflowInventory).toMatchObject({ status: "loaded", sourceMatch: "unverified", workflowCount: 1, linkedWorkflowCount: 1 });
+    expect(scope.workflowInventory?.candidateAudit).toMatchObject({ status: "scanned", unlinkedRoutes: 1, unclaimed: expect.any(Number) });
+    expect(scope.workflowInventory?.candidateAudit?.gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "apps/web/src/other-router.ts", reason: "unclaimed-source" }),
+    ]));
     expect(scope.testVerdict).toBe("not-asserted");
     const mission = await runner.createMission({ intent: "测试整个项目", charterId: "resume-core", surface: "web" });
     expect(mission.workflowInventory?.workflows[0]?.id).toBe("resume");
     expect(mission.workflowInventoryInspection?.sourceMatch).toBe("unverified");
+    expect(mission.workflowInventoryInspection?.candidateAudit).toEqual(scope.workflowInventory?.candidateAudit);
     expect(mission.plan.planning?.coverage?.requested).toBe("project");
     expect(mission.plan.planning?.evidenceGaps).toContain("project-workflow-coverage");
     const evidence = await runner.missionEvidence(mission.missionId);
     expect(evidence.summary.scope.workflowInventory).toMatchObject({ status: "loaded", workflowCount: 1 });
-    expect(await readFile(evidence.report!, "utf8")).toContain("Workflow inventory: loaded");
+    expect(evidence.summary.scope.workflowInventory?.candidateAudit).toEqual(mission.workflowInventoryInspection?.candidateAudit);
+    const report = await readFile(evidence.report!, "utf8");
+    expect(report).toContain("Workflow inventory: loaded");
+    expect(report).toContain("Static candidate review:");
+    expect(report).toContain("apps/web/src/other-router.ts");
     for (const callback of Object.values(callbacks)) expect(callback).not.toHaveBeenCalled();
   });
 });

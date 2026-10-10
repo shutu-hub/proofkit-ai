@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { stringify } from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
-import { ProofkitConfigSchema, WorkflowInventorySchema } from "@proofkit/contracts";
+import { ProjectMapSchema, ProofkitConfigSchema, WorkflowInventorySchema } from "@proofkit/contracts";
 import { captureSourceState } from "./source-state.js";
 import { inspectWorkflowInventory } from "./workflow-inventory.js";
 
@@ -43,6 +43,12 @@ describe("external workflow inventory", () => {
     expect(valid.inspection).toMatchObject({ status: "loaded", sourceMatch: "matching", reviewDeclared: true, workflowCount: 1, linkedWorkflowCount: 1, missingCharterIds: [], missingSourcePaths: [] });
     expect(valid.inspection.issues).toContain("workflow-inventory-completeness-unverified");
     expect(valid.inventory?.workflows[0]?.id).toBe("resume");
+    const projectMap = ProjectMapSchema.parse({ root: project, detected: { web: true, electron: true, backend: false },
+      inventory: { routeHints: [{ kind: "web", path: "/resume", source: "src/app.ts", line: 1 }],
+        entryPoints: [{ kind: "web", path: "src/other.ts", reason: "entry" }] }, generatedAt: new Date().toISOString() });
+    const audited = (await inspectWorkflowInventory(project, workspace, config, source, projectMap)).inspection;
+    expect(audited.candidateAudit).toMatchObject({ routeCandidates: 1, entryCandidates: 1, unlinkedRoutes: 1, unclaimed: 1 });
+    expect(audited.issues).toEqual(expect.arrayContaining(["workflow-inventory-routes-unlinked", "workflow-inventory-candidates-unclaimed"]));
 
     await writeFile(join(project, "src", "app.ts"), "export const changed = true;\n");
     expect((await inspectWorkflowInventory(project, workspace, config)).inspection.sourceMatch).toBe("changed");
