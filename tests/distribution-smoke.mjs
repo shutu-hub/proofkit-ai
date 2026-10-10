@@ -44,6 +44,9 @@ try {
   assert.equal((await npm(["exec", "--prefix", installDir, "--", "proofkit", "--version"], scratch)).stdout.trim(), packed.version);
   assert.match((await npm(["exec", "--prefix", installDir, "--", "proofkit", "mission", "create", "--help"], scratch)).stdout, /--charter <path>/);
   assert.match((await npm(["exec", "--prefix", installDir, "--", "proofkit", "mission", "report", "--help"], scratch)).stdout, /Usage: proofkit mission report \[options\] <missionId>/);
+  const inspectionHelp = (await command(process.execPath, [cli, "inspect", "--help"], scratch)).stdout;
+  assert.match(inspectionHelp, /--ready-text <text>/);
+  assert.match(inspectionHelp, /--ready-timeout-ms <milliseconds>/);
   await command(process.execPath, [cli, "init", "--root", source, "--workspace", workspace], scratch);
   const doctor = await command(process.execPath, [cli, "doctor", "--root", source, "--workspace", workspace], scratch);
   assert.match(doctor.stdout, /web surface\s+detected/);
@@ -99,6 +102,10 @@ try {
     await withDeadline(client.connect(transport), 10_000, "MCP connection");
     const listed = await withDeadline(client.listTools(), 10_000, "MCP tool listing");
     assert.ok(listed.tools.some((tool) => tool.name === "inspect_surface"));
+    const surfaceInspection = listed.tools.find((tool) => tool.name === "inspect_surface");
+    assert.equal(surfaceInspection.inputSchema.properties.readyWhen.properties.timeoutMs.maximum, 15000);
+    const invalidReadiness = await client.callTool({ name: "inspect_surface", arguments: { readyWhen: { text: "ready", timeoutMs: 15001 } } });
+    assert.equal(invalidReadiness.isError, true);
     assert.ok(listed.tools.some((tool) => tool.name === "inspect_test_scope"));
     assert.ok(listed.tools.some((tool) => tool.name === "inspect_test_environment"));
     const environmentResponse = await withDeadline(client.callTool({ name: "inspect_test_environment", arguments: {} }), 10_000, "Installed MCP environment inspection");

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestMission } from "@proofkit/contracts";
-import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
+import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 
 export function registerTools(server: McpServer, runner: LocalRunnerService): void {
@@ -28,11 +28,11 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "inspect_surface",
-    "Observe the configured Web or Electron page and return bounded visible controls with unique selector hints and evidence links. This is reconnaissance, not a product pass verdict.",
-    { surface: z.enum(["web", "electron"]).default("web"), url: z.string().url().optional() },
-    async ({ surface, url }) => {
+    "Observe the configured Web or Electron page after an optional visible-text prerequisite. Return bounded controls, runtime diagnostics and evidence. This is reconnaissance, not a product pass verdict.",
+    { surface: z.enum(["web", "electron"]).default("web"), url: z.string().url().optional(), readyWhen: SurfaceReadinessSchema.optional() },
+    async ({ surface, url, readyWhen }, extra) => {
       if (surface === "electron" && url) throw new Error("Electron inspection uses the configured CDP page selector; url is only for Web");
-      return result(await runner.inspectSurface({ adapter: surface, url: surfaceUrl(url, runner) }));
+      return result(await runner.inspectSurface({ adapter: surface, url: surfaceUrl(url, runner), readyWhen, signal: extra.signal }));
     },
   );
 

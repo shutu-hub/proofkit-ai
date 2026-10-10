@@ -31,6 +31,8 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
   recovery and final verification, with a persisted timeout Finding.
 - Expose cancellation through the CLI and MCP.
 - Expose shared CLI/MCP Web/Electron environment observations before surface attachment: one total deadline, at most eight health endpoints, local source association and a hashed external-workspace artifact. Keep login, fixtures, integration preflight, business terminal state and coverage explicitly unchecked; do not start applications or invoke connector operations.
+- Reuse the existing Runner for configurable visible-text prerequisites before surface inspection, return observed/unverified readiness and bounded runtime diagnostics, and propagate MCP cancellation. Readiness is an observation, never business acceptance; trusted integration lifecycle hooks still apply.
+
 - Propagate Mission cancellation and deadlines to primary, replay and negative
   Runs, retain cancelled Run evidence, and wait up to 10 seconds for cleanup.
   Record an explicit environment Finding when a tool does not settle.
@@ -52,6 +54,15 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 **Gate:** a fixture integration is loaded without a hosted service; a slow run produces a `cancelled` verdict; cleanup runs on timeout and cancellation; an interrupted read-only task resumes with an audited attempt; an interrupted write task is blocked; two independent processes do not execute one Mission twice and remote cancellation reaches its owner; a failed integration preflight prevents adapter connection and writes evidence; Web/Electron smoke tests remain green.
 
 **Live environment observation (2026-10-10):** the existing AIHR workspace was bound to one checkout while its configured resume micro-app on port 5174 was served by another. The shared environment command returned `blocked` despite HTTP 200, saved a hashed source-association artifact, and left both complete before/after source fingerprints unchanged. This confirms the wrong-checkout guard on a real local process; it proves no login, isolated data or business acceptance. The running checkout's local-development documentation also declares shared backend data, so business writes require an explicitly scoped synthetic workspace and cleanup before acceptance.
+
+**Readiness evidence (2026-10-10):** the real Chrome/Electron inspection fixture
+waits for delayed controls, rejects a missing prerequisite, retains bounded
+redacted runtime diagnostics, and verifies cancellation and external-source
+immutability. Two read-only observations of the running AIHR checkout both
+observed the configured login text and five controls, with unchanged complete
+source fingerprints. Both retained suspected console 404 signals; these do
+not identify a failing business workflow or prove a product defect. Evidence
+is saved in the local external workspace's `live-readiness-validation.json`.
 
 ## Phase 2: measurable AI planning
 

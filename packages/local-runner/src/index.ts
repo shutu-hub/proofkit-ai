@@ -5,6 +5,7 @@ import { analyzeRun, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRu
 import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import { createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofkit/evidence";
 import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
+import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
 import { EvidenceRefSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, type EvidenceRef, type MissionComparison, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
@@ -58,7 +59,9 @@ export type LocalRunStatus = {
   report?: string;
 };
 
-export type SurfaceInspectionInput = Pick<LocalRunInput, "adapter" | "url" | "cdp" | "devtoolsPortFile" | "headful" | "signal">;
+export type SurfaceInspectionInput = Pick<LocalRunInput, "adapter" | "url" | "cdp" | "devtoolsPortFile" | "headful" | "signal"> & {
+  readyWhen?: { text: string; timeoutMs?: number };
+};
 export type SurfaceInspection = {
   inspectionId: string;
   surface: "web" | "electron";
@@ -68,6 +71,9 @@ export type SurfaceInspection = {
   snapshot?: SurfaceSnapshot;
   targetBinding?: TargetBinding;
   runtimeHealth?: RunSummary["runtimeHealth"];
+  readiness: { status: "not-requested" | "observed" | "unverified"; condition?: SurfaceReadiness };
+  runtimeFindings: NonNullable<RunSummary["runtimeFindings"]>;
+  runtimeFindingsOmitted: number;
   findings: string[];
   evidence: EvidenceRef[];
 };
@@ -229,6 +235,8 @@ export class LocalRunnerService {
     if (surface === "web" && !(input.url || input.cdp || this.config.surfaces.web?.baseUrl || this.config.surfaces.web?.cdpUrl)) {
       throw new Error("Web inspection needs a configured baseUrl, CDP endpoint, or explicit URL");
     }
+    const configuredReadiness = input.readyWhen ?? this.config.surfaces[surface]?.readyWhen;
+    const readyWhen = configuredReadiness === undefined ? undefined : SurfaceReadinessSchema.parse(configuredReadiness);
     const controller = new AbortController();
     const onAbort = () => controller.abort(input.signal?.reason);
     if (input.signal?.aborted) onAbort();
@@ -237,20 +245,27 @@ export class LocalRunnerService {
     try {
       const charter = TestCharterSchema.parse({
         intent: `Inspect the current ${surface} surface`, level: "quick", mode: "deterministic",
-        actions: [{ kind: "observe" }], assertions: [], sideEffectPolicy: "deny",
+        actions: [...(readyWhen ? [{ kind: "waitForText", ...readyWhen }] : []), { kind: "observe" }], assertions: [], sideEffectPolicy: "deny",
         metadata: { purpose: "surface-inspection" },
       });
       const started = await this.start({ ...input, adapter: surface, charter, start: false, signal: controller.signal });
       const summary = await this.wait(started.runId);
-      const observed = summary.steps.find((step) => step.action.kind === "observe")?.afterSnapshot;
+      const observation = summary.steps.find((step) => step.action.kind === "observe");
+      const observed = observation?.status === "passed" ? observation.afterSnapshot : undefined;
+      const stopped = summary.verdict === "blocked" || summary.verdict === "cancelled" ? summary.verdict : undefined;
+      const readinessObserved = Boolean(!stopped && observed && summary.steps.find((step) => step.action.kind === "waitForText")?.status === "passed");
+      const runtimeFindings = summary.runtimeFindings ?? [];
       return {
         inspectionId: summary.runId,
         surface,
-        status: observed ? "observed" : summary.verdict === "blocked" || summary.verdict === "cancelled" ? summary.verdict : "failed",
+        status: stopped ?? (observed ? "observed" : "failed"),
         testVerdict: "not-asserted",
         ...(observed ? { snapshot: { ...observed, text: observed.text?.slice(0, 2_000) } } : {}),
         ...(summary.targetBinding ? { targetBinding: summary.targetBinding } : {}),
         runtimeHealth: summary.runtimeHealth,
+        readiness: readyWhen ? { status: readinessObserved ? "observed" : "unverified", condition: readyWhen } : { status: "not-requested" },
+        runtimeFindings: runtimeFindings.slice(0, 10).map((finding) => ({ ...finding, message: finding.message.slice(0, 2_000) })),
+        runtimeFindingsOmitted: Math.max(0, runtimeFindings.length - 10),
         findings: summary.findings.filter((finding) => finding !== "No executable assertion or business oracle was declared.").slice(0, 10),
         evidence: this.runEvidence(summary),
       };

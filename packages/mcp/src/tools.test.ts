@@ -62,6 +62,37 @@ describe("ProofKit MCP tools", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  it("validates reconnaissance prerequisites and propagates MCP cancellation to the inspector", async () => {
+    let markStarted!: () => void;
+    const started = new Promise<void>((done) => { markStarted = done; });
+    let markAborted!: () => void;
+    const aborted = new Promise<void>((done) => { markAborted = done; });
+    const runner = { config: { surfaces: {} }, inspectSurface: vi.fn(async (input) => {
+      markStarted();
+      return new Promise((done) => input.signal.addEventListener("abort", () => {
+        markAborted();
+        done({ status: "cancelled", testVerdict: "not-asserted" });
+      }, { once: true }));
+    }) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      for (const readyWhen of [{ text: " " }, { text: "ready", timeoutMs: 15001 }, { text: "ready", timeoutMs: 99 }]) {
+        expect((await client.callTool({ name: "inspect_surface", arguments: { readyWhen } })).isError).toBe(true);
+      }
+      expect(runner.inspectSurface).not.toHaveBeenCalled();
+      const controller = new AbortController();
+      const request = client.callTool({ name: "inspect_surface", arguments: { readyWhen: { text: "ready" } } }, undefined, { signal: controller.signal });
+      const rejected = expect(request).rejects.toThrow();
+      await started;
+      expect(runner.inspectSurface).toHaveBeenCalledWith(expect.objectContaining({
+        adapter: "web", readyWhen: { text: "ready", timeoutMs: 5000 }, signal: expect.any(AbortSignal),
+      }));
+      controller.abort(new Error("Stop reconnaissance"));
+      await rejected;
+      await aborted;
+    } finally { await client.close(); await server.close(); }
+  });
+
   it("returns a stable mission start contract for an AI client", async () => {
     const mission = fixtureMission("running");
     const runner = {

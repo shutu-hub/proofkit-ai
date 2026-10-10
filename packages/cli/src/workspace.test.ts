@@ -11,6 +11,24 @@ afterEach(async () => {
 });
 
 describe("CLI workspace onboarding", () => {
+  it("rejects invalid inspection prerequisites before creating a Run or launching a browser", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-cli-inspection-source-"));
+    const workspace = await mkdtemp(join(tmpdir(), "proofkit-cli-inspection-workspace-"));
+    roots.push(root, workspace);
+    await writeFile(join(root, "package.json"), '{"name":"inspection-source"}');
+    await mkdir(join(workspace, ".proofkit"));
+    await writeFile(join(workspace, ".proofkit/config.yaml"), JSON.stringify({
+      project: { root }, surfaces: { web: { baseUrl: "http://127.0.0.1:1" } },
+    }));
+    const run = (...args: string[]) => createProgram().parseAsync(["node", "proofkit", "inspect", "--root", root, "--workspace", workspace, ...args]);
+    await expect(run("--ready-timeout-ms", "100")).rejects.toThrow("requires --ready-text");
+    await expect(run("--ready-text", " ")).rejects.toThrow();
+    await expect(run("--ready-text", "ready", "--ready-timeout-ms", "NaN")).rejects.toThrow();
+    await expect(run("--ready-text", "ready", "--ready-timeout-ms", "15001")).rejects.toThrow();
+    expect(await readdir(join(workspace, ".proofkit"))).toEqual(["config.yaml"]);
+    expect(await readdir(root)).toEqual(["package.json"]);
+  });
+
   it("reports environment prerequisites and an external artifact without changing source", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-cli-environment-source-"));
     const workspace = await mkdtemp(join(tmpdir(), "proofkit-cli-environment-workspace-"));

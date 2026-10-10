@@ -9,6 +9,13 @@ export type RunMode = z.infer<typeof RunModeSchema>;
 export const SideEffectPolicySchema = z.enum(["deny", "confirm", "allow"]);
 export type SideEffectPolicy = z.infer<typeof SideEffectPolicySchema>;
 
+/** An observable prerequisite for reconnaissance, not a business assertion. */
+export const SurfaceReadinessSchema = z.object({
+  text: z.string().trim().min(1).max(512),
+  timeoutMs: z.number().int().min(100).max(15_000).default(5_000),
+}).strict();
+export type SurfaceReadiness = z.infer<typeof SurfaceReadinessSchema>;
+
 /** Persist an environment variable name, never its runtime value, for credential fields. */
 export const FillValueSchema = z.union([
   z.string(),
@@ -608,12 +615,14 @@ export const ProofkitConfigSchema = z.object({
       targetUrlPrefix: z.string().min(1).optional(),
       targetTitleContains: z.string().min(1).optional(),
       executablePath: z.string().min(1).optional(),
+      readyWhen: SurfaceReadinessSchema.optional(),
     }).optional(),
     electron: z.object({
       cdpUrl: z.string().optional(),
       devtoolsActivePort: z.string().optional(),
       targetUrlPrefix: z.string().min(1).optional(),
       targetTitleContains: z.string().min(1).optional(),
+      readyWhen: SurfaceReadinessSchema.optional(),
     }).optional(),
     mobile: z.object({
       serverUrl: z.string().url().default("http://127.0.0.1:4723"),

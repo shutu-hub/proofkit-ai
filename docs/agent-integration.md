@@ -45,6 +45,26 @@ Environment observations always carry `testVerdict: not-asserted`. They do not s
 
 Before drafting a new Charter, call `inspect_surface({ surface: "web" })` or `inspect_surface({ surface: "electron" })` against an already running local page. It records a read-only observation Run and returns bounded controls, including hidden file inputs with `inputType: "file"` and `visible: false`, and a selector only when it matched exactly one element at inspection time. The result says `testVerdict: "not-asserted"`; it is reconnaissance, not a pass. Control hints cover the main frame only, are capped at 60, omit input values, and can become stale after navigation. Web/Electron `click`, `fill`, `press` and `setInputFiles` recheck selector uniqueness during the test Run and fail on ambiguity. The Run keeps snapshot, screenshot and event evidence in the external workspace. Use isolated test data because screenshots can contain everything visible on the page.
 
+For a page that renders asynchronously, configure `surfaces.web.readyWhen` or
+`surfaces.electron.readyWhen` once, or override it in
+`inspect_surface({ surface: "web", readyWhen: { text: "Log in", timeoutMs: 5000 } })`.
+CLI equivalent: `proofkit inspect --ready-text "Log in" --ready-timeout-ms 5000`.
+The prerequisite uses the existing `waitForText` step, then observes the page;
+it matches visible text containing the configured string in the main frame.
+Text is trimmed, accepts 1–512 characters, and must describe public UI content;
+it is stored with the Run. Timeout is 100–15000 ms (default 5000), within the
+existing 30-second inspection deadline and configured Run deadline.
+`readiness.status` is `not-requested`, `observed` or `unverified`. A missing
+condition produces a failed inspection with evidence, no successful snapshot,
+and still `not-asserted`; it does not establish a product bug. Observing text
+proves only that prerequisite at that moment, not app stability or login.
+The response also retains up to ten already classified `runtimeFindings`
+(messages capped at 2000 characters) and `runtimeFindingsOmitted`; full findings
+remain in Run artifacts. An observed page can have failed `runtimeHealth`.
+MCP cancellation reaches the same Run lifecycle. Inspection uses trusted
+integration preflight/setup/cleanup hooks when configured; those hooks remain
+responsible for test isolation even when browser actions only observe.
+
 When the workspace has no matching catalog entry, the host agent can inspect the source and `discover_project` result, then submit a complete structured Charter directly to `run_test` or `create_test_mission`. This is a one-Mission test contract; it does not modify the tested project or silently register a reusable catalog entry. For example, after the workspace has registered a read-only `resume.terminal` Oracle:
 
 ```json
