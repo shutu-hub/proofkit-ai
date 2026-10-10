@@ -19,7 +19,7 @@ The important distinction is that an upload response is an acknowledgement, not 
 
 The project integration is loaded from `<workspaceRoot>/.proofkit/integration.mjs` (or the path configured by `integration.path`). The module is trusted local test-workspace code and is composed into the same Local Runner lifecycle used by CLI, MCP and CI. It can export capabilities, read-only oracles, and a setup hook that returns cleanup. The Runner supplies a cancellation signal and the configured total run deadline to every run.
 
-The ProofKit repository includes a reference AIHR integration at `.proofkit/integration.mjs`, with its sibling `.proofkit/aihr-manual-intake.mjs`. Copy both files to the external workspace's `.proofkit/` directory; the entry module imports the sibling even when a different AIHR Oracle is selected. No ProofKit file is needed in the AIHR repository. The connector calls only gateway endpoints and keeps the domain-specific allowlist in the workspace-owned module. The current capabilities are:
+The ProofKit repository includes a reference AIHR integration at `.proofkit/integration.mjs`, with sibling `.proofkit/aihr-manual-intake.mjs` and `.proofkit/aihr-desktop-acquisition.mjs`. Copy all three files to the external workspace's `.proofkit/` directory; the entry module imports both siblings even when their Oracles are not selected. No ProofKit file is needed in the AIHR repository. The connector calls only gateway endpoints and keeps the domain-specific allowlist in the workspace-owned module. The current capabilities are:
 
 | Capability | Side effect | Evidence returned |
 | --- | --- | --- |
@@ -53,6 +53,12 @@ The minimum acceptance set is:
 - Billing or usage changes are limited to the declared test scope.
 
 If any one of these facts cannot be observed, the result is `inconclusive` or `blocked`, never an inferred pass.
+
+### Desktop “立即运行” acceptance scope
+
+`.proofkit/charters/aihr-desktop-resume-acquisition.yml` is a reference `core` Charter for an isolated Electron session with exactly one expected synthetic BOSS resume. It waits for the page, clicks “立即运行”, and captures the delayed `POST /api/v1/resume-collection/runs` response from that same renderer. The `aihr.desktopResumeAcquisition` Oracle accepts only the captured `run_id`; it reads that Run and its bounded file list through the gateway, then independently checks each listed file's identity, Run ownership, extraction, candidate/job relation, assessment worker completion and matching workflow fact. It does not create a collection Run through a connector or borrow a historical success.
+
+The Charter's response URL must be edited to the exact test gateway address. `metadata.aihrDesktop` declares the capture step, test job, `boss` source and exactly one expected file; invalid declarations fail integration preflight before page connection. This single-file scope is deliberate: the current relation and assessment readers show the latest file, so a second upload can legally replace earlier facts. `requestStartTimeoutMs` waits for the shell's delayed bridge request, `requestWindowMs` checks duplicates after the first request, and `timeoutMs` bounds the entire capture. The Run's total timeout must also cover `maxWaitMs` for the independent business read. A risk-confirmation dialog, no matching request, unexpected file count, absent reader identity, pending worker or incomplete workflow remains inconclusive. The reference selector and CDP visibility still require a real isolated-session inspection before catalog registration. This scope does not verify billing, other BOSS accounts or the full project.
 
 ### Assessment and identity gates
 
@@ -174,7 +180,7 @@ This split lets the same integration be used from the CLI, MCP and CI. MCP must 
 
 ## Implementation order
 
-1. Run `proofkit init --root <AIHR-source> --workspace <external-test-workspace>`, then copy or adapt both `.proofkit/integration.mjs` and `.proofkit/aihr-manual-intake.mjs` in that external workspace.
+1. Run `proofkit init --root <AIHR-source> --workspace <external-test-workspace>`, then copy or adapt `.proofkit/integration.mjs`, `.proofkit/aihr-manual-intake.mjs` and `.proofkit/aihr-desktop-acquisition.mjs` in that external workspace.
 2. Use the ordinary upload Charter to validate `collection_run → file → extract → parse → candidate → job → assessment`.
 3. Add or refine read-only observers for billing and retry/idempotency facts against a dedicated test workspace.
 4. Add `seedTestCandidate` and `resetTestScope` only after the test workspace and cleanup contract are explicit.

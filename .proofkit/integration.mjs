@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { createManualCandidateIntakeOracle } from "./aihr-manual-intake.mjs";
+import { createDesktopResumeAcquisitionOracle } from "./aihr-desktop-acquisition.mjs";
 let z;
 const positiveId = () => z.union([z.number().int().positive(), z.string().regex(/^[1-9][0-9]*$/)]);
 const positiveIdInput = () => z.union([z.number().int().positive(), z.string().min(1)]);
@@ -19,10 +20,12 @@ export function createIntegration({ z: injectedZ, workspaceRoot }) {
   z = injectedZ;
   const state = new Map();
   const billingRead = readBillingUsageCapability(state);
+  const desktopAcquisition = createDesktopResumeAcquisitionOracle({ z, resolveEnv, positiveString, getOrNull, aihrFetch,
+    pollPipeline, observeResumeCollectionPipeline, evaluateResumePipeline, resumePipelineEvidence });
 
   return {
     name: "aihr-resume-workflows",
-    version: "0.1.0",
+    version: "0.2.0",
     capabilities: [
       createResumeRunCapability(state),
       createResumeFileUploadCapability(state, workspaceRoot),
@@ -36,8 +39,8 @@ export function createIntegration({ z: injectedZ, workspaceRoot }) {
     ],
     oracles: [createResumeCollectionPipelineOracle(state), createOnlineResumePipelineOracle(state), createResumeUploadIdempotencyOracle(state),
       createBillingUsageOracle(state, billingRead),
-      createManualCandidateIntakeOracle({ z, resolveEnv, positiveString, getOrNull, pollPipeline })],
-    preflight: aihrPreflight,
+      createManualCandidateIntakeOracle({ z, resolveEnv, positiveString, getOrNull, pollPipeline }), desktopAcquisition],
+    preflight: (input) => aihrPreflight(input, desktopAcquisition),
     setup: async ({ runId }) => {
       state.set(runId, { createdAt: new Date().toISOString() });
       return () => state.delete(runId);
@@ -45,7 +48,7 @@ export function createIntegration({ z: injectedZ, workspaceRoot }) {
   };
 }
 
-async function aihrPreflight({ charter, environment }) {
+async function aihrPreflight({ charter, environment }, desktopAcquisition) {
   const actionNames = charter.actions
     .filter((action) => action.kind === "capability")
     .map((action) => action.name);
@@ -76,6 +79,10 @@ async function aihrPreflight({ charter, environment }) {
   ].includes(name));
   const baseUrl = env("AIHR_PROOFKIT_API_BASE_URL") ?? "http://127.0.0.1:8080/api/v1";
   const errors = [];
+  if (oracleNames.includes("aihr.desktopResumeAcquisition")) {
+    const error = desktopAcquisition.validateCharter(charter);
+    if (error) errors.push(error);
+  }
   let parsed;
   try {
     parsed = new URL(baseUrl);
@@ -548,6 +555,7 @@ async function observeResumeCollectionPipeline(target, signal) {
     terminal: isResumeFileTerminal(file),
     collectionRunId,
     fileId,
+    fileReaderId: positiveString(file.file_id),
     fileRunId: positiveString(file.run_id),
     fileSha256: nullable(file.file_sha256),
     extractStatus: nullable(file.extract_status),

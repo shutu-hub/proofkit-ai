@@ -27,7 +27,7 @@ ProofKit 的 `setInputFiles` 可以直接操作这类隐藏文件控件：将脱
 补齐表单、提交、正向 UI 断言和独立业务 Oracle。手动录入专用
 `aihr.manualCandidateIntake` 已实现，通过本次提交的五个身份和文件 SHA-256
 核对文件、候选人、版本、岗位关系及评估 worker 终态。复制连接器时需同时复制
-`.proofkit/integration.mjs` 与 `.proofkit/aihr-manual-intake.mjs`。
+`.proofkit/integration.mjs`、`.proofkit/aihr-manual-intake.mjs` 与 `.proofkit/aihr-desktop-acquisition.mjs`。
 真实 Web/Electron 隔离样例已验证执行、缺陷注入与修复回放；真实 AIHR 页面与
 worker 验收尚未完成。同摘要版本可以合法复用 ID 并改绑文件，这种当前状态变化
 返回 `inconclusive`；缺失 reader 身份也不能确认缺陷。接口非原子且不能证明
@@ -242,7 +242,7 @@ Set-Location $proofkitRoot
 pnpm --filter @proofkit/cli dev -- doctor --root $sourceRoot --workspace $testWorkspace
 ```
 
-此前的外部工作区快照中，`doctor` 已识别 AIHR 的 Web、Electron 和后端入口，连接器已加载 9 个受控 capability 和 3 个业务 Oracle。当前参考连接器另增加了 `aihr.manualCandidateIntake`，共 4 个 Oracle；使用新版时需一起复制 `.proofkit/integration.mjs` 与 `.proofkit/aihr-manual-intake.mjs`，再重新运行 `doctor`。三个参考 Charter 尚未登记为自然语言可执行目录用例。上述静态检查不启动 AIHR、不访问业务接口，也不修改 AIHR 源码。
+此前的外部工作区快照中，`doctor` 已识别 AIHR 的 Web、Electron 和后端入口。当前参考连接器有 9 个受控 capability 和 6 个业务 Oracle，其中包括手动录入和桌面端立即运行验收；使用新版时需一起复制三个连接器文件，再重新运行 `doctor`。桌面端参考 Charter 尚未经过真实页面验证，不能登记为自然语言目录用例。上述静态检查不启动 AIHR、不访问业务接口，也不修改 AIHR 源码。
 
 真实业务验收还需要独立的 local/test 网关、异步 worker、脱敏 PDF、测试租户与账号，以及真实页面断言。先在 AIHR 仓库的终端启动隔离的桌面应用，并开放仅监听本机的 CDP 端口：
 
@@ -271,7 +271,7 @@ pnpm test
 ## 下一阶段
 
 1. 在与所选源码版本对应的隔离 Electron、网关和 worker 环境中侦察 BOSS 页签、风险确认和 `POST /runs` 的真实 CDP 可见性，冻结动作定位与响应身份策略。
-2. 将“立即运行”设计为独立的 UI Charter，不在同一 Charter 中由 capability 代替用户点击；把本次 backend run、文件、候选人、岗位和评估事实绑定到同一 Run 的 Oracle。
+2. 在真实隔离页面核验参考“立即运行” UI Charter 的按钮定位、风险确认分支和响应可见性，再登记为目录用例；当前隔离 Chrome/Electron 样例已经把点击后的 backend run、单份文件、候选人、岗位和评估事实绑定到同一 Oracle。
 3. 在真实隔离环境中验证 `collection_run → file → extract → parse → assessment`，并分别处理零结果、待处理、风险确认和明确失败。
 4. 增加重试、重复提交、计费幂等和取消恢复场景；登记经过验证的 Charter 供自然语言选择，不向 AIHR 源码写入 ProofKit 文件。
 5. 继续改进基于代码/路由的测试建议，保持类型化动作、capability allowlist 和副作用权限校验。

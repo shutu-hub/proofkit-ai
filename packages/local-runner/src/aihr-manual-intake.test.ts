@@ -54,7 +54,7 @@ beforeEach(async () => {
   process.env.AIHR_PROOFKIT_API_BASE_URL = base;
   const root = await mkdtemp(join(tmpdir(), "proofkit-manual-oracle-")); roots.push(root);
   await mkdir(join(root, ".proofkit"));
-  for (const file of ["integration.mjs", "aihr-manual-intake.mjs"]) await copyFile(join(integrationRoot, file), join(root, ".proofkit", file));
+  for (const file of ["integration.mjs", "aihr-manual-intake.mjs", "aihr-desktop-acquisition.mjs"]) await copyFile(join(integrationRoot, file), join(root, ".proofkit", file));
   service = await LocalRunnerService.create({ root });
   oracle = service.integration!.oracles!.find((item) => item.name === name)!;
 });

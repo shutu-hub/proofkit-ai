@@ -28,7 +28,7 @@ const bytes = Buffer.from("%PDF-1.4\nsynthetic manual-intake resume\n");
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const expectedSha = digest(bytes);
 await writeFile(join(workspace, fixtureRef), bytes);
-for (const file of ["integration.mjs", "aihr-manual-intake.mjs"]) {
+for (const file of ["integration.mjs", "aihr-manual-intake.mjs", "aihr-desktop-acquisition.mjs"]) {
   await copyFile(join(repo, ".proofkit", file), join(workspace, ".proofkit", file));
 }
 const privateMarker = "UNSELECTED_MANUAL_CONTACT_TEXT_6a47";

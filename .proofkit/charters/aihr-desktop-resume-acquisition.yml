@@ -1,0 +1,43 @@
+intent: 验证 AIHR 桌面端立即运行产生的本次 BOSS 简历完成处理和岗位评估
+level: core
+mode: deterministic
+sideEffectPolicy: allow
+preconditions:
+  - 使用仅包含一份待获取脱敏简历的隔离 BOSS 测试账号和 AIHR 测试租户
+  - Electron CDP 已连接到当前源码对应的简历获取页面，网关和异步 worker 可用
+  - 核实本工作区的 AIHR 测试身份、岗位和预期文件数；停用同账号的自动调度
+  - 将下方响应 URL 改为本测试环境真实网关地址，并让 Run 总时限覆盖异步业务等待
+actions:
+  - kind: waitForText
+    text: BOSS直聘 简历获取
+    timeoutMs: 10000
+  - kind: captureResponse
+    name: desktop-collection-run
+    trigger:
+      kind: click
+      selector: 'button.control-btn:has-text("立即运行")'
+    requestStartTimeoutMs: 120000
+    requestWindowMs: 3000
+    timeoutMs: 180000
+    response:
+      url: http://127.0.0.1:8080/api/v1/resume-collection/runs
+      method: POST
+      statuses: [201]
+      fields:
+        collectionRunId:
+          pointer: /data/run_id
+          type: id
+  - kind: observe
+assertions:
+  - kind: text-visible
+    text: 任务进度
+oracles:
+  - aihr.desktopResumeAcquisition
+metadata:
+  aihrDesktop:
+    captureStepId: step-002
+    jobId: "$env:AIHR_PROOFKIT_JOB_ID"
+    sourceChannel: boss
+    expectedFileCount: 1
+    maxWaitMs: 300000
+    pollIntervalMs: 1000

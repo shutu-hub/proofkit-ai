@@ -8,6 +8,7 @@ coverage/
 !/.proofkit/config.yaml
 !/.proofkit/integration.mjs
 !/.proofkit/aihr-manual-intake.mjs
+!/.proofkit/aihr-desktop-acquisition.mjs
 !/.proofkit/charters/
 !/.proofkit/charters/*.yml
 .env
