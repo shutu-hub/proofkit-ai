@@ -7,6 +7,7 @@ let z;
 const positiveId = () => z.union([z.number().int().positive(), z.string().regex(/^[1-9][0-9]*$/)]);
 const positiveIdInput = () => z.union([z.number().int().positive(), z.string().min(1)]);
 const environment = ["test", "staging", "local"];
+const MAX_GATEWAY_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 /**
  * AIHR integration deliberately talks to the public gateway contract. It does
@@ -25,7 +26,7 @@ export function createIntegration({ z: injectedZ, workspaceRoot }) {
 
   return {
     name: "aihr-resume-workflows",
-    version: "0.2.0",
+    version: "0.2.1",
     capabilities: [
       createResumeRunCapability(state),
       createResumeFileUploadCapability(state, workspaceRoot),
@@ -1213,15 +1214,58 @@ async function aihrFetch(path, options = {}) {
       ? undefined
       : JSON.stringify(options.body);
   const response = await fetch(url, { method: options.method ?? "GET", headers, body: requestBody, signal: options.signal });
-  const text = await response.text();
-  let body = {};
-  try { body = text ? JSON.parse(text) : {}; } catch { body = { message: text.slice(0, 256) }; }
+  const body = await readGatewayJson(response, options.signal);
   if (!response.ok || (body.code && body.code !== "SUCCESS")) {
-    const error = new Error(`AIHR gateway ${response.status}: ${String(body.message ?? body.code ?? "request failed").slice(0, 256)}`);
+    // Gateway messages can contain resume text or personal data. Never persist them
+    // through an exception, including when a server returns malformed JSON.
+    const error = new Error(`AIHR gateway ${response.status}: request rejected`);
     error.status = response.status;
     throw error;
   }
   return body;
+}
+
+async function readGatewayJson(response, signal) {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength && /^\d+$/.test(declaredLength) && BigInt(declaredLength) > BigInt(MAX_GATEWAY_RESPONSE_BYTES)) {
+    void response.body?.cancel().catch(() => {});
+    throw gatewayResponseError(response.status, "response too large");
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw gatewayResponseError(response.status, "response body unavailable");
+  const chunks = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      signal?.throwIfAborted();
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_GATEWAY_RESPONSE_BYTES) {
+        void reader.cancel().catch(() => {});
+        throw gatewayResponseError(response.status, "response too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  let body;
+  try {
+    body = bytes ? JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, bytes))) : {};
+  } catch {
+    throw gatewayResponseError(response.status, "invalid JSON response");
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw gatewayResponseError(response.status, "invalid JSON response");
+  }
+  return body;
+}
+
+function gatewayResponseError(status, reason) {
+  const error = new Error(`AIHR gateway ${status}: ${reason}`);
+  error.status = status;
+  return error;
 }
 
 function resolveEnv(value) {

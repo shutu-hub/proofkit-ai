@@ -21,6 +21,8 @@ The project integration is loaded from `<workspaceRoot>/.proofkit/integration.mj
 
 The ProofKit repository includes a reference AIHR integration at `.proofkit/integration.mjs`, with sibling `.proofkit/aihr-manual-intake.mjs` and `.proofkit/aihr-desktop-acquisition.mjs`. Copy all three files to the external workspace's `.proofkit/` directory; the entry module imports both siblings even when their Oracles are not selected. No ProofKit file is needed in the AIHR repository. The connector calls only gateway endpoints and keeps the domain-specific allowlist in the workspace-owned module. The current capabilities are:
 
+The reference connector reads gateway JSON through an 8 MiB byte limit, including chunked responses. It rejects an oversized or malformed response without storing its body or business error message in Run evidence. A gateway reader failure is therefore an execution/reader gap, not proof that the resume workflow produced a wrong business result. The connector version is `0.2.1`; copy the updated entry module when using an existing external workspace.
+
 | Capability | Side effect | Evidence returned |
 | --- | --- | --- |
 | `aihr.createResumeCollectionRun` | test-only write | opaque run ID, source channel and status |

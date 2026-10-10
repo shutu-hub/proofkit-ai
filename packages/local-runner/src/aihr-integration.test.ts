@@ -291,6 +291,73 @@ describe("AIHR project integration", () => {
     await expect(boundedWait(wait, pipeline.input)).rejects.toThrow("AIHR gateway 503");
   });
 
+  it("keeps a private gateway error out of the persisted Run evidence", async () => {
+    const marker = "PRIVATE_RESUME_CONTACT_24680";
+    await startPollingGateway((_path, response) => sendError(response, 503, "UNAVAILABLE", marker));
+    Object.assign(process.env, {
+      AIHR_PROOFKIT_TEST_SCOPE: "proofkit:fixture",
+      AIHR_PROOFKIT_ACCESS_TOKEN: "isolated-fixture-token",
+      AIHR_PROOFKIT_ENTERPRISE_ID: "1",
+      AIHR_PROOFKIT_WORKSPACE_ID: "2",
+      AIHR_PROOFKIT_USER_ID: "3",
+    });
+    vi.spyOn(WebAdapter.prototype, "connect").mockResolvedValue();
+    vi.spyOn(WebAdapter.prototype, "subscribeEvents").mockResolvedValue(() => {});
+    vi.spyOn(WebAdapter.prototype, "close").mockResolvedValue();
+    const root = await createIntegrationProject();
+    const service = await LocalRunnerService.create({ root });
+    const charter = TestCharterSchema.parse({ ...aihrCharter(), oracles: ["aihr.onlineResumePipeline"] });
+    const started = await service.start({ charter });
+    const summary = await service.wait(started.runId);
+    expect(summary.verdict).toBe("failed");
+    const runRoot = join(root, ".proofkit", "runs", summary.runId);
+    const saved = [JSON.stringify(summary), await readFile(join(runRoot, "events.jsonl"), "utf8")].join("\n");
+    expect(saved).toContain("AIHR gateway 503");
+    expect(saved).not.toContain(marker);
+  });
+
+  it.each([
+    ["private HTTP failure", new Response(JSON.stringify({ code: "UNAVAILABLE", message: "PRIVATE_RESUME_CONTACT_24680" }), { status: 503 }), "request rejected"],
+    ["invalid JSON", new Response("PRIVATE_RESUME_CONTACT_24680", { status: 200 }), "invalid JSON response"],
+    ["large declared response", new Response("", { status: 200, headers: { "content-length": String(9 * 1024 * 1024) } }), "response too large"],
+  ] as const)("bounds the AIHR gateway reader for %s", async (_name, response, expected) => {
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "http://127.0.0.1:8080/api/v1";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const read = service.integration?.capabilities?.find((item) => item.name === "aihr.readResumeCollectionRun");
+    if (!read) throw new Error("AIHR reader is missing");
+    const error = await read.execute({ runId: "900" }, { runId: "bounded-reader", signal: new AbortController().signal }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toContain(expected);
+    expect(error.message).not.toContain("PRIVATE_RESUME_CONTACT_24680");
+  });
+
+  it("cancels a chunked gateway response after its byte limit", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(4 * 1024 * 1024));
+        controller.enqueue(new Uint8Array(4 * 1024 * 1024 + 1));
+      },
+      cancel() { cancelled = true; },
+    });
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "http://127.0.0.1:8080/api/v1";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(stream, { status: 200 }));
+    const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
+    const read = service.integration?.capabilities?.find((item) => item.name === "aihr.readResumeCollectionRun");
+    if (!read) throw new Error("AIHR reader is missing");
+    await expect(read.execute({ runId: "900" }, { runId: "chunked-reader", signal: new AbortController().signal })).rejects.toThrow("response too large");
+    expect(cancelled).toBe(true);
+  });
+
+  it("retains the existing missing-resource behavior for a 404 gateway response", async () => {
+    await startPollingGateway((_path, response) => sendError(response, 404, "NOT_FOUND", "PRIVATE_RESUME_CONTACT_24680"));
+    const wait = await loadPipelineWait("aihr.waitResumeCollectionPipeline");
+    const observed = await boundedWait(wait, { runId: "900", fileId: "901", jobId: "505" });
+    expect(observed.passed).toBeNull();
+    expect(JSON.stringify(observed)).not.toContain("PRIVATE_RESUME_CONTACT_24680");
+  });
+
   it.each(pipelines)("preserves cancellation during the $name polling interval and releases timers", async (pipeline) => {
     const wait = await loadPipelineWait(pipeline.capability);
     const controller = new AbortController();
