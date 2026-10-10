@@ -182,18 +182,30 @@ try {
     for (const item of evidence.evidence.filter((item) => item.kind === "business")) await readFile(item.path);
     scopedMissions.push(started.missionId);
   }
-  for (const selection of [{ charter: coreCharter }, { suiteId: "release-critical" }]) {
-    const whole = payload(await client.callTool({ name: "run_test", arguments: { intent: "测试整个项目", surface: "web", ...selection } }));
-    assert.equal(whole.running, false);
-    assert.equal(whole.readiness.ready, false);
-    assert.equal(whole.planning.coverage.requested, "project");
-    assert.ok(whole.planning.evidenceGaps.includes("project-workflow-coverage"));
-  }
+  const singleWhole = payload(await client.callTool({ name: "run_test", arguments: { intent: "测试整个项目", surface: "web", charter: coreCharter } }));
+  assert.equal(singleWhole.running, false);
+  assert.equal(singleWhole.readiness.ready, false);
+  assert.ok(singleWhole.planning.evidenceGaps.includes("project-workflow-coverage"));
+  await writeFile(join(workspaceRoot, ".proofkit", "workflows.yaml"), JSON.stringify({
+    schemaVersion: 1, source: { headSha: "a".repeat(40), worktreeSha256: "b".repeat(64) },
+    workflows: ["resume", "login"].map((id) => ({ id, title: id, sourcePaths: ["apps/web/src/router.ts"],
+      checks: [{ charterId: id, surfaces: ["web", "electron"] }], surfaces: ["web", "electron"] })),
+  }));
+  const wholeSuite = payload(await client.callTool({ name: "run_test", arguments: { intent: "测试整个项目", surface: "web", suiteId: "release-critical" } }));
+  assert.equal(wholeSuite.readiness.ready, true);
+  assert.ok(wholeSuite.readiness.acceptanceGaps.includes("project-workflow-coverage"));
+  assert.equal(wholeSuite.planning.coverage.requested, "project");
+  const wholeStatus = await waitForMission(client, wholeSuite.missionId);
+  assert.equal(wholeStatus.mission.verdict, "inconclusive");
+  const wholeEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: wholeSuite.missionId } }));
+  assert.deepEqual({ status: wholeEvidence.workflowExecution.status, requiredChecks: wholeEvidence.workflowExecution.requiredChecks,
+    evidencedChecks: wholeEvidence.workflowExecution.evidencedChecks }, { status: "all-declared-evidenced", requiredChecks: 4, evidencedChecks: 4 });
+  assert.ok((await readFile(wholeEvidence.report, "utf8")).includes("Declared workflow execution: 4/4"));
   assert.deepEqual(await readdir(sourceRoot), ["apps", "package.json", "services"]);
   assert.equal(await readFile(routeFile, "utf8"), routeSource);
   assert.equal(await readFile(apiRouteFile, "utf8"), apiRouteSource);
   assert.equal(await readFile(extraRouteFile, "utf8"), extraRouteSource);
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
   await client?.close();
   await mcpServer?.close();

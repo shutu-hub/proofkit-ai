@@ -267,8 +267,9 @@ function result(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
 }
 
-function missionReadiness(mission: TestMission): { ready: boolean; missing: string[] } {
+function missionReadiness(mission: TestMission): { ready: boolean; missing: string[]; acceptanceGaps: string[] } {
   const missing: string[] = [];
+  const acceptanceGaps: string[] = [];
   const charters = mission.suite?.charters.map((item) => item) ?? [{ charterId: "", charter: mission.charter }];
   for (const { charterId, charter } of charters) {
     const prefix = charterId ? `${charterId}: ` : "";
@@ -277,8 +278,15 @@ function missionReadiness(mission: TestMission): { ready: boolean; missing: stri
       missing.push(`${prefix}至少一个独立业务 Oracle`);
     }
   }
-  for (const gap of mission.plan.planning?.evidenceGaps ?? []) missing.push(`规划证据缺口：${gap}`);
-  return { ready: missing.length === 0, missing };
+  for (const gap of mission.plan.planning?.evidenceGaps ?? []) {
+    if (mission.suite && mission.plan.planning?.coverage?.requested === "project"
+      && (gap === "project-workflow-coverage" || gap === "project-map-truncated")) {
+      acceptanceGaps.push(gap);
+    } else {
+      missing.push(`规划证据缺口：${gap}`);
+    }
+  }
+  return { ready: missing.length === 0, missing, acceptanceGaps };
 }
 
 function missionStartResponse(started: { mission: TestMission; running: boolean }, readiness = missionReadiness(started.mission)) {

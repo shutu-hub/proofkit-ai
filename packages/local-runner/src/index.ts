@@ -18,6 +18,7 @@ import { compareMissionRecords } from "./mission-comparison.js";
 import { hasCompleteCleanupEvidence } from "./cleanup-evidence.js";
 import { ProjectMissionStore } from "./mission-store.js";
 import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from "./suite-verifier.js";
+import { summarizeWorkflowExecution } from "./workflow-coverage.js";
 import { inspectTestScope } from "./test-scope.js";
 import { projectMissionResult } from "./mission-result.js";
 import type { MissionResult } from "@proofkit/contracts";
@@ -568,6 +569,7 @@ export class LocalRunnerService {
     levelSelection?: TestMission["levelSelection"];
     planning?: TestMission["plan"]["planning"];
     workflowInventoryInspection?: TestMission["workflowInventoryInspection"];
+    workflowExecution?: import("@proofkit/contracts").WorkflowExecutionCoverage;
     executionProfile: TestMission["plan"]["executionProfile"];
     suiteScope?: SuiteScopeSummary;
     taskSummary: Array<{
@@ -609,7 +611,8 @@ export class LocalRunnerService {
     }
     const running = await this.missionAgent.isRunning(mission.missionId);
     const suiteScope = summarizeSuiteScope(mission, this.evidenceDir);
-    const summary = projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, comparison, comparisonUnavailable });
+    const workflowExecution = summarizeWorkflowExecution(mission, suiteScope);
+    const summary = projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, comparison, comparisonUnavailable });
     let report: string | undefined;
     let reportUnavailable: string | undefined;
     try {
@@ -631,6 +634,7 @@ export class LocalRunnerService {
       levelSelection: mission.levelSelection,
       planning: mission.plan.planning,
       workflowInventoryInspection: mission.workflowInventoryInspection,
+      workflowExecution,
       executionProfile: mission.plan.executionProfile,
       suiteScope,
       taskSummary: mission.plan.graph.tasks.map((task) => ({

@@ -151,6 +151,29 @@ describe("explicit release suites", () => {
     expect(await readFile(routePath, "utf8")).toBe(routeSource);
   });
 
+  it("measures frozen project workflow checks from verified suite Runs without claiming whole-project acceptance", async () => {
+    const service = await createSuiteService();
+    await writeFile(join(service.workspaceRoot, ".proofkit", "workflows.yaml"), JSON.stringify({
+      schemaVersion: 1, source: { headSha: "a".repeat(40), worktreeSha256: "b".repeat(64) },
+      review: { by: "fixture", at: new Date().toISOString(), method: "Reviewed fixture business flows" },
+      workflows: ["resume", "login"].map((id) => ({ id, title: id, sourcePaths: ["apps/web/src/router.ts"],
+        checks: [{ charterId: id, surfaces: ["web", "electron"] }], surfaces: ["web", "electron"] })),
+    }));
+    stubRuns(service, { missingBusinessFact: "resume/electron/replay" });
+    const mission = await service.createMission({ intent: "测试整个项目", surface: "web", suiteId: "release-critical" });
+    expect(mission.workflowInventory?.workflows).toHaveLength(2);
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    const evidence = await service.missionEvidence(mission.missionId);
+    expect(completed.verdict).toBe("inconclusive");
+    expect(evidence.workflowExecution).toMatchObject({ status: "partial", requiredChecks: 4, evidencedChecks: 3,
+      evidencedWorkflowCount: 1, sourceBinding: "unverified",
+      gaps: [{ workflowId: "resume", charterId: "resume", surface: "electron", reason: "inconclusive" }] });
+    expect(evidence.summary.scope.workflowExecution).toEqual(evidence.workflowExecution);
+    expect(await readFile(evidence.report!, "utf8")).toContain("Declared workflow execution: 3/4");
+    expect(evidence.planning?.evidenceGaps).toContain("project-workflow-coverage");
+  });
+
   it("counts a mapped route as observed only after passing primary and replay visits on both surfaces", async () => {
     const service = await createSuiteService();
     stubRuns(service);

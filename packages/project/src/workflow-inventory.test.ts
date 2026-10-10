@@ -33,7 +33,9 @@ describe("external workflow inventory", () => {
       schemaVersion: 1,
       source: { headSha: source.headSha!, worktreeSha256: source.worktreeSha256! },
       review: { by: "fixture reviewer", at: new Date().toISOString(), method: "Reviewed source entries and product workflow list" },
-      workflows: [{ id: "resume", title: "Resume acquisition", sourcePaths: ["src/app.ts"], charterIds: ["resume-web", "resume-electron"], surfaces: ["web", "electron"] }],
+      workflows: [{ id: "resume", title: "Resume acquisition", sourcePaths: ["src/app.ts"], checks: [
+        { charterId: "resume-web", surfaces: ["web"] }, { charterId: "resume-electron", surfaces: ["electron"] },
+      ], surfaces: ["web", "electron"] }],
       exclusions: [],
     };
     await writeFile(join(workspace, ".proofkit", "workflows.yaml"), stringify(inventory));
@@ -45,7 +47,9 @@ describe("external workflow inventory", () => {
     await writeFile(join(project, "src", "app.ts"), "export const changed = true;\n");
     expect((await inspectWorkflowInventory(project, workspace, config)).inspection.sourceMatch).toBe("changed");
     await writeFile(join(workspace, ".proofkit", "workflows.yaml"), stringify({ ...inventory,
-      workflows: [{ ...inventory.workflows[0], sourcePaths: ["src/removed.ts"], charterIds: ["resume-web", "unknown"], surfaces: ["web", "electron"] }],
+      workflows: [{ ...inventory.workflows[0], sourcePaths: ["src/removed.ts"], checks: [
+        { charterId: "resume-web", surfaces: ["web"] }, { charterId: "unknown", surfaces: ["electron"] },
+      ] }],
       exclusions: [{ id: "billing", reason: "No isolated billing fixture yet", sourcePaths: ["src/app.ts"] }],
     }));
     const gaps = (await inspectWorkflowInventory(project, workspace, config)).inspection;
@@ -60,6 +64,9 @@ describe("external workflow inventory", () => {
     expect(() => WorkflowInventorySchema.parse({ schemaVersion: 1, source: { headSha: "a".repeat(40), worktreeSha256: "b".repeat(64) }, workflows: [
       { id: "same", title: "One", sourcePaths: ["src/app.ts"], charterIds: ["test"], surfaces: ["web"] },
       { id: "same", title: "Two", sourcePaths: ["src/app.ts"], charterIds: ["test"], surfaces: ["web"] },
+    ] })).toThrow();
+    expect(() => WorkflowInventorySchema.parse({ schemaVersion: 1, source: { headSha: "a".repeat(40), worktreeSha256: "b".repeat(64) }, workflows: [
+      { id: "resume", title: "Resume", sourcePaths: ["src/app.ts"], checks: [{ charterId: "web", surfaces: ["web"] }], surfaces: ["web", "electron"] },
     ] })).toThrow();
     const { project, workspace } = await fixture();
     const path = join(workspace, ".proofkit", "workflows.yaml");

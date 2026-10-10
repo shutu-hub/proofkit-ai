@@ -194,6 +194,27 @@ describe("ProofKit MCP tools", () => {
     await server.close();
   });
 
+  it("runs a structurally ready project suite while retaining whole-project acceptance gaps", async () => {
+    const mission = fixtureMission("awaiting-approval");
+    const charter = { ...mission.charter!, level: "release" as const };
+    mission.level = "release";
+    mission.policy.level = "release";
+    mission.plan.level = "release";
+    mission.plan.executionProfile = { ...mission.plan.executionProfile, suiteId: "critical", charterIds: ["resume", "login"], surfaceMatrix: ["web", "electron"], collectAllResults: true, requireReplay: true };
+    mission.suite = { suiteId: "critical", level: "release", surfaces: ["web", "electron"], charters: [{ charterId: "resume", charter }, { charterId: "login", charter }], uncoveredCharterIds: [] };
+    mission.charter = undefined;
+    mission.plan.planning = { source: "catalog", confidence: 0, assumptions: [], missingInputs: [], evidenceGaps: ["project-workflow-coverage", "project-map-truncated"],
+      coverage: { requested: "project", source: "inferred", reason: "whole project", inventory: "partial", workflowCoverage: "unmeasured", gaps: ["project-map-truncated", "project-workflow-coverage"] } };
+    const runner = { config: { surfaces: {} }, createMission: vi.fn(async () => mission), startMission: vi.fn(async () => ({ mission, running: true })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    const response = await client.callTool({ name: "run_test", arguments: { intent: "测试整个项目", suiteId: "critical", level: "release" } });
+    const payload = JSON.parse(textContent(response));
+    expect(payload).toMatchObject({ running: true, readiness: { ready: true, missing: [], acceptanceGaps: ["project-workflow-coverage", "project-map-truncated"] } });
+    expect(runner.startMission).toHaveBeenCalled();
+    await client.close();
+    await server.close();
+  });
+
   it("holds an incomplete core request before surface execution", async () => {
     const mission = fixtureMission("awaiting-approval");
     mission.charter = { ...mission.charter!, assertions: [], oracles: [] };

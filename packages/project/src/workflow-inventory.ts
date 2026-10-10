@@ -1,7 +1,7 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
-import { WorkflowInventoryInspectionSchema, WorkflowInventorySchema, type ProofkitConfig, type SourceState, type WorkflowInventory, type WorkflowInventoryInspection } from "@proofkit/contracts";
+import { workflowChecks, WorkflowInventoryInspectionSchema, WorkflowInventorySchema, type ProofkitConfig, type SourceState, type WorkflowInventory, type WorkflowInventoryInspection } from "@proofkit/contracts";
 import { resolveWithinWorkspace } from "./context.js";
 import { captureSourceState } from "./source-state.js";
 
@@ -50,16 +50,17 @@ export async function inspectWorkflowInventory(projectRoot: string, workspaceRoo
   let linkedWorkflowCount = 0;
   for (const workflow of inventory.workflows) {
     let linked = true;
-    for (const surface of workflow.surfaces) {
-      if (!workflow.charterIds.some((id) => catalog.get(id)?.surfaces.includes(surface))) {
+    for (const check of workflowChecks(workflow)) {
+      const entry = catalog.get(check.charterId);
+      if (!entry) {
+        missingCharterIds.add(check.charterId);
         linked = false;
-        uncoveredSurfaces.push({ workflowId: workflow.id, surface });
       }
-    }
-    for (const id of workflow.charterIds) {
-      if (!catalog.has(id)) {
-        missingCharterIds.add(id);
-        linked = false;
+      for (const surface of check.surfaces) {
+        if (!entry?.surfaces.includes(surface)) {
+          linked = false;
+          uncoveredSurfaces.push({ workflowId: workflow.id, surface });
+        }
       }
     }
     if (linked) linkedWorkflowCount++;

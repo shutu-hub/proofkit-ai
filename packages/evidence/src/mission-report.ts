@@ -79,6 +79,7 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
   const outcome = result.verdict ?? "not evaluated";
   const route = result.scope.routeCoverage;
   const workflowInventory = result.scope.workflowInventory;
+  const workflowExecution = result.scope.workflowExecution;
   const unavailable = [...links.values()].filter((link) => !link.href).length;
   const limits = [
     coverage?.requested === "project" ? "Whole-project workflow coverage has not been proven." : "Acceptance applies to the saved scenarios. Whole-project workflow coverage has not been measured.",
@@ -90,6 +91,10 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
     workflowInventory?.missingCharterIds.length ? `Unregistered workflow Charters: ${workflowInventory.missingCharterIds.join(", ")}${workflowInventory.omittedMissingCharterIds ? ` and ${workflowInventory.omittedMissingCharterIds} more` : ""}.` : undefined,
     workflowInventory?.uncoveredSurfaces.length ? `Uncovered workflow surfaces: ${workflowInventory.uncoveredSurfaces.map((item) => `${item.workflowId}/${item.surface}`).join(", ")}${workflowInventory.omittedUncoveredSurfaces ? ` and ${workflowInventory.omittedUncoveredSurfaces} more` : ""}.` : undefined,
     workflowInventory?.missingSourcePaths.length ? `Missing workflow source paths: ${workflowInventory.missingSourcePaths.join(", ")}${workflowInventory.omittedMissingSourcePaths ? ` and ${workflowInventory.omittedMissingSourcePaths} more` : ""}.` : undefined,
+    workflowExecution ? `Declared workflow execution: ${workflowExecution.evidencedChecks}/${workflowExecution.requiredChecks} Charter/platform checks and ${workflowExecution.evidencedWorkflowCount}/${workflowExecution.workflowCount} workflows evidenced; source binding ${workflowExecution.sourceBinding}. This does not prove the inventory is complete.` : undefined,
+    ...(workflowExecution?.gaps.slice(0, 10) ?? []).map((gap) => `Missing workflow check: ${gap.workflowId} · ${gap.charterId}/${gap.surface} · ${gap.reason}.`),
+    workflowExecution?.gaps.length && workflowExecution.gaps.length > 10 ? `${workflowExecution.gaps.length - 10} more workflow check gaps are in summary.json.` : undefined,
+    workflowExecution?.omittedGaps ? `${workflowExecution.omittedGaps} workflow check gaps are omitted from the bounded summary.` : undefined,
     route ? `Static routes: ${route.observedCandidates} observed, ${route.mappedCandidates} mapped, ${route.candidateRoutes} candidates. ${route.gapCount} route gaps and ${route.unresolvedTargetCount} unresolved declarations. Route counts are not business workflow coverage.` : undefined,
     unavailable ? `${unavailable} evidence reference(s) cannot be opened from this report.` : undefined,
     result.omittedRunResults ? `${result.omittedRunResults} execution row(s) omitted from this bounded summary.` : undefined,

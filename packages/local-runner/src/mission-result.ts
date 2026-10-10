@@ -1,4 +1,4 @@
-import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionResult, type MissionRunResult, type Observation, type TaskNode, type TestMission } from "@proofkit/contracts";
+import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionResult, type MissionRunResult, type Observation, type TaskNode, type TestMission, type WorkflowExecutionCoverage } from "@proofkit/contracts";
 import type { SuiteScopeSummary } from "./suite-verifier.js";
 
 type RunKind = MissionRunResult["runKind"];
@@ -14,6 +14,7 @@ export function projectMissionResult(mission: TestMission, options: {
   workspaceRoot: string;
   running: boolean;
   suiteScope?: SuiteScopeSummary;
+  workflowExecution?: WorkflowExecutionCoverage;
   comparison?: MissionComparison;
   comparisonUnavailable?: string;
 }): MissionResult {
@@ -76,6 +77,7 @@ export function projectMissionResult(mission: TestMission, options: {
       suiteId: mission.suite?.suiteId,
       uncoveredCharterIds: options.suiteScope?.uncoveredCharterIds ?? [],
       workflowInventory: mission.workflowInventoryInspection,
+      workflowExecution: options.workflowExecution,
       ...(routeCoverage ? { routeCoverage: {
         inventoryTruncated: routeCoverage.inventoryTruncated,
         candidateRoutes: routeCoverage.candidateRoutes,

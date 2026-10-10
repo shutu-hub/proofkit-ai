@@ -611,7 +611,13 @@ export const WorkflowInventorySchema = z.object({
     id: CatalogIdSchema,
     title: z.string().trim().min(1).max(200),
     sourcePaths: z.array(WorkflowSourcePathSchema).min(1).max(12),
-    charterIds: z.array(CatalogIdSchema).min(1).max(16),
+    /** Shorthand: every Charter is required on every declared workflow surface. */
+    charterIds: z.array(CatalogIdSchema).min(1).max(16).optional(),
+    /** Explicit Charter × surface obligations for platform-specific scenarios. */
+    checks: z.array(z.object({
+      charterId: CatalogIdSchema,
+      surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1).max(3),
+    }).strict()).min(1).max(16).optional(),
     surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1).max(3),
   }).strict()).min(1).max(150),
   /** Exclusions are visible gaps for project-wide acceptance. */
@@ -624,12 +630,25 @@ export const WorkflowInventorySchema = z.object({
   const ids = [...inventory.workflows.map((item) => item.id), ...inventory.exclusions.map((item) => item.id)];
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows"], message: "Workflow and exclusion IDs must be unique" });
   for (const [index, workflow] of inventory.workflows.entries()) {
+    if (Boolean(workflow.charterIds) === Boolean(workflow.checks)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows", index], message: "Declare charterIds or checks, but not both" });
     if (new Set(workflow.sourcePaths).size !== workflow.sourcePaths.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows", index, "sourcePaths"], message: "Source paths must be unique" });
-    if (new Set(workflow.charterIds).size !== workflow.charterIds.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows", index, "charterIds"], message: "Charter IDs must be unique" });
+    if (workflow.charterIds && new Set(workflow.charterIds).size !== workflow.charterIds.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows", index, "charterIds"], message: "Charter IDs must be unique" });
+    if (workflow.checks && new Set(workflow.checks.map((check) => check.charterId)).size !== workflow.checks.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows", index, "checks"], message: "Check Charter IDs must be unique" });
     if (new Set(workflow.surfaces).size !== workflow.surfaces.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows", index, "surfaces"], message: "Surfaces must be unique" });
+    const checks = workflow.checks ?? workflow.charterIds?.map((charterId) => ({ charterId, surfaces: workflow.surfaces })) ?? [];
+    const assigned = new Set(checks.flatMap((check) => check.surfaces));
+    for (const surface of workflow.surfaces) if (!assigned.has(surface)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows", index, "surfaces"], message: `No Charter check covers ${surface}` });
+    for (const [checkIndex, check] of checks.entries()) {
+      if (new Set(check.surfaces).size !== check.surfaces.length || check.surfaces.some((surface) => !workflow.surfaces.includes(surface))) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["workflows", index, "checks", checkIndex, "surfaces"], message: "Check surfaces must be unique and within the workflow surface set" });
+      }
+    }
   }
 });
 export type WorkflowInventory = z.infer<typeof WorkflowInventorySchema>;
+export function workflowChecks(workflow: WorkflowInventory["workflows"][number]): Array<{ charterId: string; surfaces: Array<"web" | "electron" | "mobile"> }> {
+  return workflow.checks ?? workflow.charterIds?.map((charterId) => ({ charterId, surfaces: workflow.surfaces })) ?? [];
+}
 
 /** Read-only inventory diagnostics; no field grants a product verdict. */
 export const WorkflowInventoryInspectionSchema = z.object({
@@ -650,6 +669,30 @@ export const WorkflowInventoryInspectionSchema = z.object({
   omittedIssues: z.number().int().nonnegative(),
 });
 export type WorkflowInventoryInspection = z.infer<typeof WorkflowInventoryInspectionSchema>;
+
+/** Evidence measured against a saved inventory; even full declared coverage cannot prove inventory completeness. */
+export const WorkflowExecutionCoverageSchema = z.object({
+  status: z.enum(["not-measured", "partial", "all-declared-evidenced"]),
+  workflowCount: z.number().int().nonnegative(),
+  evidencedWorkflowCount: z.number().int().nonnegative(),
+  requiredChecks: z.number().int().nonnegative(),
+  evidencedChecks: z.number().int().nonnegative(),
+  sourceBinding: z.enum(["matching", "changed", "unverified"]),
+  reviewDeclared: z.boolean(),
+  exclusionCount: z.number().int().nonnegative(),
+  suiteId: CatalogIdSchema.optional(),
+  gaps: z.array(z.object({
+    workflowId: CatalogIdSchema,
+    charterId: CatalogIdSchema,
+    surface: z.enum(["web", "electron", "mobile"]),
+    reason: z.enum(["no-suite", "not-scheduled", "failed", "blocked", "cancelled", "inconclusive"]),
+    primaryRunId: z.string().optional(),
+    replayRunId: z.string().optional(),
+  })).max(40),
+  omittedGaps: z.number().int().nonnegative(),
+  limitations: z.array(z.string().min(1)).max(8),
+});
+export type WorkflowExecutionCoverage = z.infer<typeof WorkflowExecutionCoverageSchema>;
 
 export const TestSuiteSchema = z.object({
   suiteId: CatalogIdSchema,
@@ -1248,6 +1291,7 @@ export const MissionResultSchema = z.object({
     suiteId: CatalogIdSchema.optional(),
     uncoveredCharterIds: z.array(CatalogIdSchema),
     workflowInventory: WorkflowInventoryInspectionSchema.optional(),
+    workflowExecution: WorkflowExecutionCoverageSchema.optional(),
     routeCoverage: z.object({
       inventoryTruncated: z.boolean(),
       candidateRoutes: z.number().int().nonnegative(),

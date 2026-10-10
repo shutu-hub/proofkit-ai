@@ -75,9 +75,11 @@ Initialization writes to the test workspace. If an existing source project alrea
 
 ### Project workflow inventory
 
-An optional `<workspaceRoot>/.proofkit/workflows.yaml` is a versioned, bounded declaration of business workflows. It remains outside the tested source. Each workflow names owning source paths, registered Charter IDs and required Web/Electron/mobile surfaces; exclusions carry an explicit reason. The file also records the Git HEAD and bounded worktree SHA-256 returned by `proofkit scope --source-state` or MCP `inspect_test_scope({ includeSourceState: true })`. A review declaration records who assessed the list and how, but ProofKit cannot authenticate that identity or infer completeness from it.
+An optional `<workspaceRoot>/.proofkit/workflows.yaml` is a versioned, bounded declaration of business workflows. It remains outside the tested source. Each workflow names owning source paths, explicit Charter × surface checks and required Web/Electron/mobile surfaces; `charterIds` is a shorthand requiring every listed Charter on every workflow surface. Exclusions carry an explicit reason. The file also records the Git HEAD and bounded worktree SHA-256 returned by `proofkit scope --source-state` or MCP `inspect_test_scope({ includeSourceState: true })`. A review declaration records who assessed the list and how, but ProofKit cannot authenticate that identity or infer completeness from it.
 
-The read-only scope inspection reports missing or invalid files, source changes, unavailable fingerprints, stale source paths, missing Charter IDs, incomplete surface links and exclusions. A whole-project Mission freezes the parsed declaration and its inspection in its saved state; its compact result and HTML report show the bounded diagnostics. A valid file or matching fingerprint is **not** execution evidence. The `project-workflow-coverage` gate remains until the system can verify a reviewed complete inventory against every required Charter × surface execution, independent business facts, cleanup, source stability and explicit exclusions. Static route counts cannot discharge that gate.
+The read-only scope inspection reports missing or invalid files, source changes, unavailable fingerprints, stale source paths, missing Charter IDs, incomplete surface links and exclusions. A whole-project Mission freezes the parsed declaration and its inspection in its saved state. Each workflow may bind specific Charters to specific surfaces; the older `charterIds` shorthand requires every listed Charter on every workflow surface. The Mission result measures each frozen Charter × surface check against the saved release suite's verified primary and replay Runs, business source facts and cleanup proof. It reports evidenced checks and workflows, missing slots and source binding at both Mission endpoints. Only suite results are credited; a passing unrelated Charter or route observation cannot fill a missing check. A ready project-scoped suite may execute through MCP even while acceptance-only coverage gaps remain, and the response lists those gaps separately from execution blockers.
+
+A valid file, matching fingerprint, or even `all-declared-evidenced` execution is **not** proof that the inventory contains every product workflow or that its reviewer identity is authentic. `project-workflow-coverage` therefore remains an acceptance gate. Static route counts cannot discharge it. The next gate needs a defensible completeness review of source and product flows, stable source and target association, and a policy for explicit exclusions before a whole-project pass can be issued.
 
 ```yaml
 schemaVersion: 1
@@ -92,10 +94,14 @@ workflows:
   - id: resume-acquisition
     title: Resume acquisition and candidate binding
     sourcePaths: [services/resume-service, apps/micro-resume]
-    charterIds: [resume-web-release, resume-electron-release]
+    checks:
+      - charterId: resume-acquisition-release
+        surfaces: [web, electron]
     surfaces: [web, electron]
 exclusions: []
 ```
+
+The current release-suite scheduler requires each included Charter to support its complete suite surface matrix. The inventory can describe platform-specific Charters, but scheduling them together in one project Mission is still open; until then their unscheduled checks remain visible gaps.
 
 For a loopback Web or Electron HTTP target on Windows, the local runner also inspects the listening process before preflight, setup or surface connection, then checks again after a configured project startup. It derives a Git checkout from the process's executable or script path without saving its command line. A different checkout is `blocked` by default (`policies.targetBinding: block-different`); `record` retains the mismatch for a deliberately cross-checkout diagnostic. A matching process path is recorded as an association, not proof of which bytes the server delivered. Missing ports, ambiguous process paths, non-Git roots, remote URLs and unsupported platforms remain `unverified` and are visible in Run and Mission evidence. Each check is a point-in-time observation; release-grade source attestation and continuous process-change detection remain future work.
 
