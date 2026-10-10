@@ -193,7 +193,7 @@ describe("ProofKit MCP tools", () => {
       .mockResolvedValueOnce({ mission: running, running: true })
       .mockResolvedValue({ mission: completed, running: false });
     const missionEvidence = vi.fn(async () => ({ missionId: "mission-test", status: "completed", running: false,
-      verdict: "passed", level: "core", summary: { missionId: "mission-test", verdict: "passed" },
+      verdict: "passed", testVerdict: "inconclusive", testVerdictReason: "Legacy Oracle proof is unverified", level: "core", summary: { missionId: "mission-test", verdict: "passed" },
       evidenceIntegrity: { status: "intact" }, proofClassification: { status: "unverified", legacyOracles: 1 },
       report: "C:/workspace/report.html" }));
     const runner = { missionStatus, missionEvidence, startMission: vi.fn() } as unknown as LocalRunnerService;
@@ -201,8 +201,9 @@ describe("ProofKit MCP tools", () => {
     try {
       const response = await client.callTool({ name: "await_test_result", arguments: { missionId: "mission-test", timeoutMs: 1000 } });
       expect(JSON.parse(textContent(response))).toMatchObject({ state: "terminal", missionId: "mission-test",
-        status: "completed", verdict: "passed", testVerdict: "passed", evidenceIntegrity: { status: "intact" },
+        status: "completed", verdict: "passed", testVerdict: "inconclusive", evidenceIntegrity: { status: "intact" },
         proofClassification: { status: "unverified", legacyOracles: 1 },
+        testVerdictReason: "Legacy Oracle proof is unverified",
         report: "C:/workspace/report.html", next: ["get_mission_evidence"] });
       expect(missionStatus).toHaveBeenCalledTimes(2);
       expect(missionEvidence).toHaveBeenCalledWith("mission-test");

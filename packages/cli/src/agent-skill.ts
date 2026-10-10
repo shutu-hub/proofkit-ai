@@ -88,7 +88,8 @@ Resource recovery does not change the original product verdict.
 
 ## Present and verify the result
 
-Use the saved summary verdict and report path. Give the user the tested scope
+Use get_mission_evidence.testVerdict and the report path for the user-facing
+outcome. The separate verdict field is the saved historical result. Give the tested scope
 and level, a compact outcome, the first actionable failure and its evidence,
 plus any missing acceptance obligations. Distinguish failed business facts from
 blocked access/environment, cancelled work and inconclusive evidence. A console
@@ -107,6 +108,10 @@ referenced Run could not be read; describe the verdict as historical and rerun
 the affected scenarios before claiming current business proof. "explicit" only
 means Oracle kinds were recorded; still check the Mission's business facts,
 coverage and cited evidence.
+For a saved pass whose required proof classification is unverified or whose
+presented evidence is degraded or absent, testVerdict is inconclusive and
+testVerdictReason explains the rerun needed. Do not report the saved pass as a
+current acceptance result.
 
 For an authorized fix, use replay_mission on the original Mission with the
 same scope and fixture bytes, then compare_missions after the replay finishes.

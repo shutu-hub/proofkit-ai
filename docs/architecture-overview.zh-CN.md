@@ -54,7 +54,7 @@ Runner 在执行页面步骤前原子保存资源登记日志。若进程退出�
 
 一次性 HTTP 业务检查读不到接口、超时、响应过大，或收到非预期的 401/403/429 时保持 `inconclusive`；这些情况不能证明产品业务缺陷。明确声明期望 401/403 的负向用例仍可通过。证据只保留响应状态与摘要或有限原因，不保存原始错误与响应正文。
 
-一次性 HTTP 检查仅返回 200、但没有业务谓词时，只能证明接口可达，结果为 `inconclusive`；即使显式期望 200 也不能替代业务终态检查。CLI `--oracle-url` 与 MCP `start_run.oracleUrl` 属于这种观察入口。核心模块验收应使用带业务谓词的 Oracle、配置的终态 Oracle 或工作区连接器；显式期望 4xx/5xx 的负向状态检查仍可验证其声明的 HTTP 契约。新 Run 的 Oracle 结果用 `verificationKind` 区分 `business` 与 `http-contract`；后者的状态与摘要仍保留为证据，但不计入 Mission 的业务 Oracle、业务事实或修复证明，也不会单独确认业务产品缺陷。历史 Mission verdict 不会被改写；`proofClassification: unverified` 标出未分类的旧 Oracle 或读不到的 Run，结果页会提示重新执行后再主张当前业务通过。
+一次性 HTTP 检查仅返回 200、但没有业务谓词时，只能证明接口可达，结果为 `inconclusive`；即使显式期望 200 也不能替代业务终态检查。CLI `--oracle-url` 与 MCP `start_run.oracleUrl` 属于这种观察入口。核心模块验收应使用带业务谓词的 Oracle、配置的终态 Oracle 或工作区连接器；显式期望 4xx/5xx 的负向状态检查仍可验证其声明的 HTTP 契约。新 Run 的 Oracle 结果用 `verificationKind` 区分 `business` 与 `http-contract`；后者的状态与摘要仍保留为证据，但不计入 Mission 的业务 Oracle、业务事实或修复证明，也不会单独确认业务产品缺陷。历史 Mission `verdict` 不会被改写；`proofClassification: unverified` 标出未分类的旧 Oracle 或读不到的 Run。已保存的核心/上线测试通过若缺少明确分类，或已保存的通过结果有损坏、缺失证据，高层 MCP 的 `testVerdict` 会给出 `inconclusive` 和原因，提示重新执行。
 
 文件上传使用 `setInputFiles`，引用外部工作区的 `.proofkit/fixtures/<file>`，一次可选择 1–10 个文件、总量不超过 20 MiB。Web/Electron 共用执行器，支持唯一的隐藏文件控件；场景与工作区都需允许副作用。上传动作只保存文件名、大小、SHA-256、MIME 等输入事实，业务成功仍需独立 Oracle。样本在上传步骤读取，因此前置页面动作可能已执行；页面回显也可能进入截图或快照，应使用脱敏样本。
 

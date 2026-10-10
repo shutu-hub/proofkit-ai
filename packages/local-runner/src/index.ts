@@ -610,6 +610,8 @@ export class LocalRunnerService {
     status: TestMission["status"];
     running: boolean;
     verdict?: TestMission["verdict"];
+    testVerdict: NonNullable<TestMission["verdict"]> | "not-asserted";
+    testVerdictReason?: string;
     level: TestMission["level"];
     levelSelection?: TestMission["levelSelection"];
     planning?: TestMission["plan"]["planning"];
@@ -676,6 +678,14 @@ export class LocalRunnerService {
       evidenceIntegrity = await this.missionReports.inspectIntegrity(summary);
       summary = { ...summary, evidenceIntegrity };
     }
+    const classificationGap = mission.verdict === "passed" && mission.level !== "quick"
+      && proofClassification.status !== "explicit";
+    const evidenceGap = mission.verdict === "passed"
+      && (evidenceIntegrity.status === "degraded" || evidenceIntegrity.status === "no-evidence");
+    const testVerdict = classificationGap || evidenceGap ? "inconclusive" : mission.verdict ?? "not-asserted";
+    const testVerdictReason = classificationGap
+      ? "Saved core/release pass lacks explicitly classified business proof; rerun affected scenarios."
+      : evidenceGap ? "Saved pass has unavailable or unverifiable presented evidence; rerun before claiming acceptance." : undefined;
     return {
       missionId: mission.missionId,
       replayOfMissionId: mission.replayOfMissionId,
@@ -684,6 +694,8 @@ export class LocalRunnerService {
       status: mission.status,
       running,
       verdict: mission.verdict,
+      testVerdict,
+      ...(testVerdictReason ? { testVerdictReason } : {}),
       level: mission.level,
       levelSelection: mission.levelSelection,
       planning: mission.plan.planning,

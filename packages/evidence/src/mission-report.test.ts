@@ -73,7 +73,7 @@ describe("Mission report", () => {
     expect(markup).toContain("source inventory is partial");
     expect(markup).toContain("Registered scenarios outside this Mission matrix: billing");
     expect(markup).toContain("Missing test requirements");
-    expect(markup).toContain('id="outcome">Passed');
+    expect(markup).toContain('id="outcome">Saved pass · current evidence unverified');
   });
 
   it("labels a historical pass unverified when saved Oracle classification is missing", async () => {

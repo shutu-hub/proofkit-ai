@@ -113,6 +113,8 @@ describe("MCP external workspace", () => {
       const final = await waitForMission(client, started.missionId);
       expect(final.mission.verdict).toBe("passed");
       const evidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
+      expect(evidence.testVerdict).toBe("passed");
+      expect(evidence.proofClassification).toMatchObject({ status: "explicit", legacyOracles: 0 });
       expect(evidence.evidence).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "business" })]));
       const omittedEvidenceReferences = evidence.summary.runs.reduce((count: number, run: { omittedEvidence: number }) => count + run.omittedEvidence, 0);
       expect(evidence.evidenceIntegrity).toMatchObject({
@@ -124,6 +126,8 @@ describe("MCP external workspace", () => {
       await writeFile(sourceFact.path, "changed after the saved Mission result");
       const changed = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
       expect(changed.verdict).toBe("passed");
+      expect(changed.testVerdict).toBe("inconclusive");
+      expect(changed.testVerdictReason).toContain("unverifiable presented evidence");
       expect(changed.evidenceIntegrity).toMatchObject({ status: "degraded", references: { unavailable: 1 } });
       expect(changed.summary.evidenceIntegrity).toEqual(changed.evidenceIntegrity);
       expect(evidence.planning.coverage).toEqual(started.planning.coverage);

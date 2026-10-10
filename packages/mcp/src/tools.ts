@@ -123,7 +123,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "get_mission_status",
-    "Read saved mission status, task graph and verdict. Call get_mission_evidence before claiming a finding or repair is currently supported by intact files.",
+    "Read saved mission status, task graph and historical verdict. The status receipt is not an evidence audit; call get_mission_evidence before claiming a product outcome or repair.",
     { missionId: z.string().min(1) },
     READ_ONLY_TOOL,
     async ({ missionId }) => {
@@ -141,11 +141,11 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "get_mission_evidence",
-    "Read traceable Mission evidence, current presented-evidence integrity and Oracle proof classification, a bounded result summary and its local HTML report path. An unverified proofClassification means the saved business verdict needs a rerun; report generation does not execute tests or change that historical verdict.",
+    "Read traceable Mission evidence, current presented-evidence integrity and Oracle proof classification, a bounded result summary and its local HTML report path. testVerdict is downgraded to inconclusive when a saved pass lacks required current proof; verdict retains the historical value.",
     { missionId: z.string().min(1) },
     async ({ missionId }) => {
       const evidence = await runner.missionEvidence(missionId);
-      return result({ ...evidence, testVerdict: evidence.verdict ?? "not-asserted" });
+      return result({ ...evidence, testVerdict: evidence.testVerdict ?? evidence.verdict ?? "not-asserted" });
     },
   );
 
@@ -291,7 +291,8 @@ async function awaitTestResult(runner: LocalRunnerService, missionId: string, ti
       signal?.throwIfAborted();
       if (!evidence.running && ["completed", "failed", "blocked", "cancelled"].includes(evidence.status)) {
         return { state: "terminal" as const, missionId, status: evidence.status, verdict: evidence.verdict,
-          testVerdict: evidence.verdict ?? "not-asserted",
+          testVerdict: evidence.testVerdict,
+          testVerdictReason: evidence.testVerdictReason,
           level: evidence.level, summary: evidence.summary, evidenceIntegrity: evidence.evidenceIntegrity,
           proofClassification: evidence.proofClassification,
           firstFailure: evidence.firstFailure, report: evidence.report, reportUnavailable: evidence.reportUnavailable,
