@@ -1134,6 +1134,7 @@ export class LocalRunnerService {
         const payload = event.payload;
         if (event.type !== "adapter.event" || payload.adapter !== adapter || payload.eventType !== "response") continue;
         if (typeof payload.url !== "string" || typeof payload.method !== "string" || typeof payload.status !== "number") continue;
+        if (payload.urlPathEvidence === "redacted") continue;
         if (payload.status < 200 || payload.status >= 300) continue;
         let responseUrl: URL;
         try { responseUrl = new URL(payload.url); } catch { continue; }
@@ -1366,6 +1367,8 @@ export class LocalRunnerService {
       signal,
       timeoutMs: this.config.run.timeoutMs,
       runtimeQuality: this.config.policies.runtime,
+      urlEvidenceTargets: input.coverageRouteTargets,
+      webEvidenceOrigin: targetUrl && /^(https?):\/\//i.test(targetUrl) ? new URL(targetUrl).origin : undefined,
       executionLease: async (leaseSignal) => {
         const identity = sharedTargetIdentity(surface, input, this.config);
         if (!resolveElectronPortFile || !identity) return acquireExecutionScope(this.workspaceRoot, identity);

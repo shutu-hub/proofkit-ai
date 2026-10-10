@@ -79,7 +79,7 @@ Runner 在执行页面步骤前原子保存资源登记日志。若进程退出�
 
 外部工作区可放 `.proofkit/workflows.yaml`：逐项声明业务流程、源码位置、Charter×目标平台，并绑定 `scope --source-state` 提供的 Git 指纹。`inspect_test_scope` 会报告文件缺失、源码变化、无效映射和明确排除项，并把有界源码地图中的入口与路由同清单交叉核对，列出未归属入口、没有关联 Charter 路由声明的候选路由、排除项重叠及静态扫描不完整的位置。清单新鲜且关联完整时，未指定单个 Charter 或套件的全项目请求会直接从清单生成 Mission：`quick` 运行已登记的页面主路径，不要求业务 Oracle；默认 `core` 运行主路径并要求独立业务事实；`release` 还运行对应回放。已声明的负向场景按 Charter 执行。结果按冻结清单逐项核对各级别要求的断言、业务事实、清理和运行证据，`workflowExecution.requiredProof` 明确标出本次要求的是 `surface` 还是 `business` 证明。`quick` 的 API 路由不记为已验证业务结果，且所有级别的静态候选都不等于业务流程全集；即使声明检查通过，清单完整性仍未独立证明，`project` 通过门禁保持有效。
 
-Web 路由覆盖要求本次 Run 的页面 URL 与配置的 HTTP origin 一致。Electron `file:` hash 路由还要求页面是配置的同一 HTML 文件，适配器只保存匹配的声明路由模式（如 `/resumes/:id`），不保存 hash 中的具体 ID；缺少文件绑定或访问同前缀的其他文件都不能计入覆盖。一般 Web URL 路径和运行诊断 URL 仍可能含具体 ID，更广泛的路径脱敏尚待完善。
+Web 路由覆盖要求本次 Run 的页面 URL 与配置的 HTTP origin 一致。Electron `file:` hash 路由还要求页面是配置的同一 HTML 文件，适配器只保存匹配的声明路由模式（如 `/resumes/:id`），不保存 hash 中的具体 ID；缺少文件绑定或访问同前缀的其他文件都不能计入覆盖。运行事件和诊断中的 HTTP URL 只保存唯一匹配的已声明路由模式；其他路径保存为 `/__redacted__`，运行信号筛选仍使用内存中的原始 URL，API 覆盖仍核对方法、origin、状态和声明模式。Web 页面快照与动作回执中的普通 HTTP 路径仍可能含具体 ID，文件 URL 也保留了用于窗口绑定的本地 HTML 路径；这些证据应使用脱敏测试数据，更广泛的路径脱敏尚待完善。
 
 结果分为 `passed`、`failed`、`blocked`、`cancelled`、`inconclusive`。产品缺陷需有证据支持；登录、环境或覆盖缺口按实际原因报告。修复比较只确认原缺陷在相同测试范围内未再复现。
 

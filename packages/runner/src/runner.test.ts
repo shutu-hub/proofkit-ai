@@ -528,7 +528,7 @@ describe("ExecutionRunner", () => {
     expect(summary.runtimeFindings?.map((item) => item.message)).toEqual(["target page"]);
   });
 
-  it("removes URL credentials and query data from adapter event evidence", async () => {
+  it("redacts undeclared URL paths as well as credentials and query data from runtime evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-runtime-url-"));
     const summary = await new ExecutionRunner(new EventAdapter([
       { type: "response", payload: { method: "GET", status: 500, url: "http://user:password@fixture/api/resume?token=private#candidate" } },
@@ -538,9 +538,70 @@ describe("ExecutionRunner", () => {
       sideEffectPolicy: "deny", metadata: {},
     }, "runtime-url");
     const events = await readFile(join(root, "runtime-url", "events.jsonl"), "utf8");
-    expect(summary.runtimeFindings?.[0]?.url).toBe("http://fixture/api/resume");
-    expect(events).toContain("http://fixture/api/resume");
+    expect(summary.runtimeFindings?.[0]?.url).toBe("http://fixture/__redacted__");
+    expect(events).toContain("http://fixture/__redacted__");
+    expect(events).toContain('"urlPathEvidence":"redacted"');
+    expect(events).not.toContain("/api/resume");
     expect(events).not.toMatch(/password|private|candidate/);
+  });
+
+  it("records declared route patterns while classifying the original runtime URL", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-runtime-pattern-"));
+    const privateId = "private-candidate-123";
+    const summary = await new ExecutionRunner(new EventAdapter([
+      { type: "pageerror", payload: {
+        message: `Failed at http://fixture/resumes/${privateId}?token=private`,
+        url: `http://fixture/resumes/${privateId}?token=private`,
+      } },
+      { type: "response", payload: {
+        method: "GET", status: 500, url: `http://fixture/api/v1/resumes/${privateId}?token=private`,
+      } },
+      { type: "pageerror", payload: { message: "ignore another ID", url: "http://fixture/other/private-456" } },
+    ]), {
+      evidenceDir: root,
+      webEvidenceOrigin: "http://fixture",
+      urlEvidenceTargets: [
+        { kind: "web", path: "/resumes/:id" },
+        { kind: "api", method: "GET", origin: "http://fixture", path: "/api/v1/resumes/:id" },
+      ],
+      runtimeQuality: { allowUrlPatterns: [privateId] },
+    }).run({
+      intent: "runtime route projection", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "deny", metadata: {},
+    }, "runtime-pattern");
+
+    expect(summary.runtimeFindings?.map((finding) => finding.url)).toEqual([
+      "http://fixture/resumes/:id", "http://fixture/api/v1/resumes/:id",
+    ]);
+    const saved = await readFile(join(root, "runtime-pattern", "run.json"), "utf8");
+    const events = await readFile(join(root, "runtime-pattern", "events.jsonl"), "utf8");
+    expect(saved + events).not.toMatch(/private-candidate-123|private-456|token=private/);
+    expect(events).toContain("Failed at http://fixture/resumes/:id");
+    expect(events).toContain("http://fixture/api/v1/resumes/:id");
+    expect(events).toContain("http://fixture/__redacted__");
+    expect(events).toContain('"urlPathEvidence":"declared"');
+  });
+
+  it("does not present an ambiguous route match as observed coverage", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-runtime-ambiguous-"));
+    await new ExecutionRunner(new EventAdapter([
+      { type: "response", payload: { method: "GET", status: 500, url: "http://fixture/resumes/private-123" } },
+    ]), {
+      evidenceDir: root,
+      webEvidenceOrigin: "http://fixture",
+      urlEvidenceTargets: [
+        { kind: "web", path: "/resumes/:id" },
+        { kind: "web", path: "/:section/:id" },
+      ],
+    }).run({
+      intent: "ambiguous route", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "deny", metadata: {},
+    }, "runtime-ambiguous");
+    const events = await readFile(join(root, "runtime-ambiguous", "events.jsonl"), "utf8");
+    expect(events).toContain('"url":"http://fixture/__redacted__","urlPathEvidence":"redacted"');
+    expect(events).not.toContain("private-123");
   });
 
   it("can fail a run on configured runtime signals", async () => {

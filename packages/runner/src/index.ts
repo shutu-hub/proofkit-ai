@@ -19,6 +19,7 @@ import type {
   Assertion,
   AssertionResult,
   OracleResult,
+  RouteCoverageTarget,
   RunEvent,
   RuntimeQualityPolicy,
   RunSummary,
@@ -144,6 +145,10 @@ export type ExecutionOptions = {
   attachmentLease?: (signal: AbortSignal) => Promise<LocalExecutionLease | undefined>;
   /** Classify adapter runtime signals without conflating them with business truth. */
   runtimeQuality?: z.input<typeof RuntimeQualityPolicySchema>;
+  /** Bounded route declarations used to project event URLs without path IDs. */
+  urlEvidenceTargets?: RouteCoverageTarget[];
+  /** The configured Web/Electron HTTP application origin for Web route patterns. */
+  webEvidenceOrigin?: string;
 };
 
 export class ExecutionRunner {
@@ -172,6 +177,8 @@ export class ExecutionRunner {
   private readonly runtimeAllowPatterns: RegExp[];
   private readonly runtimeIgnorePatterns: RegExp[];
   private readonly runtimeBlockConsolePatterns: RegExp[];
+  private readonly urlEvidenceTargets: RouteCoverageTarget[];
+  private readonly webEvidenceOrigin?: string;
 
   constructor(adapter: SurfaceAdapter, options: ExecutionOptions = {}) {
     this.adapter = adapter;
@@ -198,6 +205,8 @@ export class ExecutionRunner {
     this.signal = options.signal;
     this.timeoutMs = options.timeoutMs;
     this.integration = options.integration ? { name: options.integration.name, version: options.integration.version } : undefined;
+    this.urlEvidenceTargets = options.urlEvidenceTargets ?? [];
+    this.webEvidenceOrigin = options.webEvidenceOrigin;
     this.preflight = options.preflight;
     this.projectRoot = options.projectRoot;
     this.workspaceRoot = options.workspaceRoot;
@@ -591,22 +600,23 @@ export class ExecutionRunner {
 
   private async recordAdapterEvent(runId: string, event: AdapterEvent, summary: RunSummary): Promise<void> {
     const timestamp = event.timestamp ?? new Date().toISOString();
-    const safeEvent = { ...event, payload: sanitizeAdapterEventPayload(event.payload) };
+    const safeEvent = { ...event, payload: sanitizeAdapterEventPayload(event.payload, this.urlEvidenceTargets, this.webEvidenceOrigin) };
     const payload = { adapter: this.adapter.name, eventType: safeEvent.type, ...safeEvent.payload };
     await this.emit({ runId, timestamp, type: "adapter.event", payload });
-    const finding = this.runtimeFinding(runId, safeEvent, timestamp);
+    const finding = this.runtimeFinding(runId, event, safeEvent, timestamp);
     if (!finding) return;
     (summary.runtimeFindings ??= []).push(finding);
     await this.emit({ runId, timestamp, type: "finding.created", payload: { finding } });
   }
 
-  private runtimeFinding(runId: string, event: AdapterEvent, observedAt: string): RuntimeFinding | undefined {
+  private runtimeFinding(runId: string, rawEvent: AdapterEvent, event: AdapterEvent, observedAt: string): RuntimeFinding | undefined {
     const payload = event.payload;
-    const environmentBlocker = event.type === "console" && typeof payload.text === "string"
-      && this.runtimeBlockConsolePatterns.some((pattern) => pattern.test(payload.text as string));
+    const environmentBlocker = rawEvent.type === "console" && typeof rawEvent.payload.text === "string"
+      && this.runtimeBlockConsolePatterns.some((pattern) => pattern.test(rawEvent.payload.text as string));
     if (this.runtimeQuality.mode === "ignore" && !environmentBlocker) return undefined;
     const url = typeof payload.url === "string" && payload.url.length > 0 ? payload.url : undefined;
-    if (!matchesRuntimeUrl(url, this.runtimeAllowPatterns, this.runtimeIgnorePatterns)) return undefined;
+    const rawUrl = typeof rawEvent.payload.url === "string" ? rawEvent.payload.url : undefined;
+    if (!matchesRuntimeUrl(rawUrl, this.runtimeAllowPatterns, this.runtimeIgnorePatterns)) return undefined;
 
     let severity: RuntimeFinding["severity"];
     let message: string;
@@ -695,40 +705,52 @@ function compilePatterns(patterns: string[], label: string): RegExp[] {
   });
 }
 
-function sanitizeAdapterEventPayload(payload: AdapterEvent["payload"]): AdapterEvent["payload"] {
+function sanitizeAdapterEventPayload(payload: AdapterEvent["payload"], targets: readonly RouteCoverageTarget[], webOrigin?: string): AdapterEvent["payload"] {
   const sanitized = { ...payload };
+  const safeUrl = (value: string) => projectEvidenceUrl(value, targets, webOrigin).value;
   for (const key of ["text", "message", "errorText"] as const) {
-    if (typeof sanitized[key] === "string") sanitized[key] = sanitizeDiagnosticText(sanitized[key]);
+    if (typeof sanitized[key] === "string") sanitized[key] = sanitizeDiagnosticText(sanitized[key], safeUrl);
   }
   if (typeof payload.url !== "string") return sanitized;
+  const projection = projectEvidenceUrl(payload.url, targets, webOrigin);
+  return { ...sanitized, url: projection.value, urlPathEvidence: projection.pathEvidence };
+}
+
+/** Keep an exact declared route pattern, otherwise retain only the origin. */
+function projectEvidenceUrl(value: string, targets: readonly RouteCoverageTarget[], webOrigin?: string): {
+  value: string;
+  pathEvidence: "declared" | "redacted" | "root";
+} {
   try {
-    const url = new URL(payload.url);
-    url.username = "";
-    url.password = "";
-    url.search = "";
-    url.hash = "";
-    return { ...sanitized, url: url.toString() };
+    const url = new URL(value);
+    if (url.protocol === "data:") return { value: "data:[CONTENT REDACTED]", pathEvidence: "redacted" };
+    if (url.protocol === "blob:") return { value: "blob:[CONTENT REDACTED]", pathEvidence: "redacted" };
+    if (url.protocol === "file:") return { value: "file:[PATH REDACTED]", pathEvidence: "redacted" };
+    if (url.protocol !== "http:" && url.protocol !== "https:") return { value: "[URL REDACTED]", pathEvidence: "redacted" };
+    const matches = [...new Set(targets.filter((target) =>
+      (target.kind === "api" ? target.origin === url.origin : webOrigin === url.origin)
+      && routePathMatches(target.path, url.pathname)).map((target) => target.path))];
+    if (matches.length === 1) return { value: `${url.origin}${matches[0]}`, pathEvidence: "declared" };
+    if (url.pathname === "/") return { value: `${url.origin}/`, pathEvidence: "root" };
+    return { value: `${url.origin}/__redacted__`, pathEvidence: "redacted" };
   } catch {
-    return { ...sanitized, url: "[invalid URL]" };
+    return { value: "[invalid URL]", pathEvidence: "redacted" };
   }
 }
 
+function routePathMatches(pattern: string, observed: string): boolean {
+  const expected = pattern.split("/");
+  const actual = observed.split("/");
+  return expected.length === actual.length && expected.every((segment, index) =>
+    segment.startsWith(":") ? Boolean(actual[index]) : segment === actual[index]);
+}
+
 /** Browser diagnostics are untrusted free text, so persist only bounded, scrubbed context. */
-function sanitizeDiagnosticText(value: string): string {
+function sanitizeDiagnosticText(value: string, safeUrl: (value: string) => string): string {
   const limit = 4_096;
   let text = value.slice(0, limit);
-  text = text.replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/gi, (candidate) => {
-    try {
-      const url = new URL(candidate);
-      url.username = "";
-      url.password = "";
-      url.search = "";
-      url.hash = "";
-      return url.toString();
-    } catch {
-      return "[URL REDACTED]";
-    }
-  });
+  text = text.replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/gi, safeUrl);
+  text = text.replace(/\b(?:data:|blob:|file:)[^\s"'<>]+/gi, "[URL REDACTED]");
   text = text.replace(/\bBearer\s+[A-Za-z0-9._~+/-]+/gi, "Bearer [REDACTED]");
   text = text.replace(/\b(authorization|cookie|set-cookie|password|passwd|secret|token|access[_-]?key|api[_-]?key|phone|mobile)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[REDACTED]");
   text = text.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[REDACTED_EMAIL]");

@@ -287,7 +287,7 @@ describe("explicit release suites", () => {
   });
 
   it("requires matching API method, origin and successful responses in every required run", async () => {
-    for (const network of ["valid", "wrong-method", "wrong-origin", "bad-status", "missing-replay-response"] as const) {
+    for (const network of ["valid", "wrong-method", "wrong-origin", "bad-status", "missing-replay-response", "redacted"] as const) {
       const service = await createSuiteService();
       service.config.charters[0]!.routeTargets!.push({ kind: "api", method: "GET", path: "/api/v1/people", origin: "http://127.0.0.1:8765", source: "services/gateway/router.ts" });
       stubRuns(service, { network });
@@ -489,7 +489,7 @@ async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[];
   return LocalRunnerService.create({ root, workspaceRoot });
 }
 
-function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; wrongVisitedOrigin?: string; missingTargetBinding?: string; fileElectron?: boolean; wrongFileDocument?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-response" } = {}) {
+function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; wrongVisitedOrigin?: string; missingTargetBinding?: string; fileElectron?: boolean; wrongFileDocument?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-response" | "redacted" } = {}) {
   installMockRunEvidence(service);
   const summaries = new Map<string, RunSummary>();
   const started: Array<{ charterId: string; surface: LocalAdapterName; negativeCaseId?: string }> = [];
@@ -538,7 +538,7 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     await mkdir(runDir, { recursive: true });
     await writeFile(join(runDir, "events.jsonl"), `${JSON.stringify({
       runId: summary.runId, timestamp: summary.endedAt, type: "adapter.event",
-      payload: { adapter: surface, eventType: "response", method: options.network === "wrong-method" ? "POST" : "GET", status: options.network === "bad-status" ? 500 : 200, url: `${options.network === "wrong-origin" ? "http://127.0.0.1:9999" : "http://127.0.0.1:8765"}/api/v1/people?private=hidden` },
+      payload: { adapter: surface, eventType: "response", method: options.network === "wrong-method" ? "POST" : "GET", status: options.network === "bad-status" ? 500 : 200, url: `${options.network === "wrong-origin" ? "http://127.0.0.1:9999" : "http://127.0.0.1:8765"}/api/v1/people?private=hidden`, ...(options.network === "redacted" ? { urlPathEvidence: "redacted" } : {}) },
     })}\n`);
   };
   service.start = async (input) => {
