@@ -72,6 +72,29 @@ try {
   assert.equal(codexSetup.connection.serverName, onboarding.connection.serverName);
   assert.equal(codexSetup.skill.installation.status, "not-requested");
   assert.equal(codexSetup.connection.registration.command, "codex");
+  const hostCli = join(scratch, "mock-host-cli.js");
+  const hostState = join(scratch, "host-registration.json");
+  const hostEntry = { name: codexSetup.connection.serverName, transport: { type: "stdio",
+    command: codexSetup.connection.command, args: codexSetup.connection.args, env: codexSetup.connection.env } };
+  await writeFile(hostCli, `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const state = ${JSON.stringify(hostState)};
+if (args[0] !== 'mcp') process.exit(2);
+if (args[1] === 'get') {
+  if (fs.existsSync(state)) { console.log(${JSON.stringify(JSON.stringify(hostEntry))}); process.exit(0); }
+  console.error('No MCP server named ' + JSON.stringify(args.at(-1)) + ' found.');
+  process.exit(1);
+}
+if (args[1] === 'add') { fs.writeFileSync(state, JSON.stringify(args)); process.exit(0); }
+process.exit(3);
+`);
+  const registered = JSON.parse((await command(process.execPath, [cli, "agent", "setup", "--harness", "codex",
+    "--root", source, "--workspace", workspace, "--skills-dir", personalSkills,
+    "--register-host", "--host-cli", hostCli], scratch)).stdout);
+  assert.equal(registered.localConnection.status, "connected");
+  assert.equal(registered.hostRegistration.status, "registered");
+  assert.equal(registered.skill.installation.status, "reused");
+  assert.deepEqual(JSON.parse(await readFile(hostState, "utf8")), registered.connection.registration.args);
   const checkedSetup = JSON.parse((await command(process.execPath, [...setupArgs, "--check-connection"], scratch)).stdout);
   assert.equal(checkedSetup.connection.status, "not-checked");
   assert.equal(checkedSetup.localConnection.status, "connected");
@@ -220,7 +243,7 @@ try {
   assert.equal(workspaceFiles.includes("missions"), false);
   assert.equal(workspaceFiles.includes("runs"), false);
   assert.equal((await readdir(join(workspace, ".proofkit", "inspections"))).length, 2);
-  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-agent-skill-and-idempotent-setup", "codex-and-claude-native-config-export", "emitted-native-config-stdio-connection", "installed-cli-local-connection-check", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
+  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-agent-skill-and-idempotent-setup", "codex-and-claude-native-config-export", "emitted-native-config-stdio-connection", "installed-cli-local-connection-check", "isolated-host-registration", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
 } finally {
   if (environmentServer) {
     environmentServer.closeAllConnections();

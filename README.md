@@ -76,9 +76,11 @@ For host-agent use, generate the onboarding bundle and install its testing Skill
 ```bash
 proofkit agent setup --harness codex --root /path/to/your/project --workspace /path/to/test-workspace --install-skill
 # Alternatively: --harness claude-code
+# Optional one-command Skill installation, local MCP check and host registration:
+proofkit agent setup --harness codex --root /path/to/your/project --workspace /path/to/test-workspace --register-host
 ```
 
-The command returns an external bundle containing `proofkit-test/SKILL.md`, a Charter reference, a native `mcp.toml` or `mcp.json` fragment, and `setup.json`. `connection.registration` provides the host's registration command and argument array; run that command with those arguments, or merge the fragment through the host's supported MCP configuration workflow. Verify the host can call `inspect_test_scope` and confirm its `projectRoot` before testing. The Skill guides default `core` testing, independent business checks, evidence reporting and repair replay; it still relies on the host's reasoning. See [agent onboarding](docs/agent-integration.md#agent-onboarding) for discovery paths and limits.
+The command returns an external bundle containing `proofkit-test/SKILL.md`, a Charter reference, a native `mcp.toml` or `mcp.json` fragment, and `setup.json`. Without `--register-host`, use the returned `connection.registration` command and argument array, or merge the fragment through the host's supported MCP configuration workflow. With `--register-host`, inspect the separate `hostRegistration` result; existing entries are never overwritten. Verify the host can call `inspect_test_scope` and confirm its `projectRoot` before testing. The Skill guides default `core` testing, independent business checks, evidence reporting and repair replay; it still relies on the host's reasoning. See [agent onboarding](docs/agent-integration.md#agent-onboarding) for discovery paths and limits.
 
 Add `--check-connection` to `agent setup` to launch the emitted MCP server,
 verify its high-level tools and check its source/workspace binding. The result

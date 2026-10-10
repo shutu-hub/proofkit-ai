@@ -11,6 +11,25 @@ proofkit agent setup --harness codex --root /path/to/source --workspace /path/to
 proofkit agent setup --harness claude-code --root /path/to/source --workspace /path/to/test-workspace --install-skill
 ```
 
+For a one-command Codex or Claude Code setup, add `--register-host` instead of
+`--install-skill`. This installs the Skill, checks the generated local MCP
+connection, then asks the host CLI to register that server in the user's host
+configuration. Registration is an explicit opt-in; plain `agent setup` still
+only exports reviewable files. On Windows ProofKit invokes a native host
+executable or JavaScript entrypoint without a shell. Use `--host-cli <path>`
+when automatic discovery cannot find one. `generic` hosts continue to use
+their own documented registration method.
+
+The returned `hostRegistration` is `registered`, `review-required`, `blocked`,
+or `unverified`. An existing server name is `review-required` and is never
+overwritten, even if it appears similar. A timed-out or failed add is
+`unverified`; inspect the host configuration before retrying. A successful
+registration confirms that the host CLI reports the expected stdio command,
+arguments and source/workspace environment for its server entry, not that a live
+agent discovered the Skill, completed a tool call or tested the product.
+Start or refresh the host session, call `inspect_test_scope`, and check the
+project binding before running a scenario.
+
 Choose the command for the host you use. The external bundle lives under
 `.proofkit/agents/<harness>/<content-hash>/` and contains a portable
 `proofkit-test/SKILL.md`, `references/charter-authoring.md`, native `mcp.toml`
@@ -31,7 +50,7 @@ verify its discovery implementation.
 Use `connection.registration.command` and its **argument array** to register
 the server with the host, or merge the generated native fragment through the
 host's configuration workflow. The Claude registration uses user scope;
-Codex uses its native `mcp add`. Setup does not execute these commands or edit
+Codex uses its native `mcp add`. Plain setup does not execute these commands or edit
 host MCP settings. Avoid joining arguments into an unescaped shell string:
 paths and environment values can contain spaces or shell characters.
 Refresh the host's Skill discovery if required, then call `inspect_test_scope`

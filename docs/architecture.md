@@ -41,8 +41,11 @@ The public installation boundary is a single `proofkit-ai` npm tarball with `pro
 
 The CLI's `agent setup` composes the existing project initializer with embedded
 portable Skill templates and native Codex TOML/Claude-compatible JSON exports.
-It does not instantiate Local Runner, import connectors or execute host
-registration. All bundle artifacts are published in an external workspace;
+Plain setup does not instantiate Local Runner, import connectors or execute host
+registration. Explicit `--register-host` first checks the generated local MCP
+connection, then invokes the Codex or Claude Code CLI without a shell. It
+checks the reported launcher and binding after registration; an existing name
+is left for manual review. All bundle artifacts are published in an external workspace;
 optional personal Skill installation refuses conflicting or redirected trees.
 Source/workspace identity determines the server name; launcher/config/Skill
 content determines the immutable bundle directory. Structured registration

@@ -86,6 +86,10 @@ describe("Agent onboarding", () => {
     await expect(setupAgent({ ...f, harness: "codex", skillsDir: f.userHome }, f)).rejects.toThrow("requires --install-skill");
     await expect(setupAgent({ ...f, harness: "invented" as AgentHarness }, f)).rejects.toThrow("Harness must be");
     await expect(setupAgent({ ...f, harness: "codex" }, { serverPath: join(f.scratch, "missing.js") })).rejects.toThrow("entrypoint is missing");
+    await expect(createProgram().parseAsync(["node", "proofkit", "agent", "setup", "--harness", "generic",
+      "--root", f.root, "--workspace", f.workspaceRoot, "--register-host"])).rejects.toThrow("requires --harness codex or claude-code");
+    await expect(createProgram().parseAsync(["node", "proofkit", "agent", "setup", "--harness", "codex",
+      "--root", f.root, "--workspace", f.workspaceRoot, "--host-cli", f.serverPath])).rejects.toThrow("requires --register-host");
     expect(await readdir(f.scratch)).not.toContain("external workspace");
   });
 

@@ -84,7 +84,7 @@ Mission 采集 Run 证据时，业务事实、断言快照等 artifact 必须同
 
 源项目供扫描和应用启动；配置、用例、连接器、Mission 和证据默认放外部工作区。Electron 地址和窗口筛选配置一次，后续自然语言测试复用。业务写入使用声明的测试环境、权限与清理机制。
 
-`proofkit agent setup --harness codex|claude-code|generic` 生成便于宿主接入的配置与 `proofkit-test` Skill。配置采用当前安装的绝对 Node/MCP 路径，服务器名绑定源项目与外部工作区；可用 `--install-skill` 安装个人 Skill。Codex 默认 `~/.agents/skills`，Claude Code 默认 `~/.claude/skills`，generic 安装需显式指定宿主的 Skill 目录。接入产物使用内容摘要目录，重复生成复用，已有自定义 Skill 不覆盖。默认不加载连接器、不启动应用、不修改宿主 MCP 设置，返回未检查连接及 `not-asserted`；用户或宿主仍需注册配置并调用 `inspect_test_scope` 核对绑定。Skill 固化测试流程，实际模型执行质量仍需评测。
+`proofkit agent setup --harness codex|claude-code|generic` 生成便于宿主接入的配置与 `proofkit-test` Skill。配置采用当前安装的绝对 Node/MCP 路径，服务器名绑定源项目与外部工作区；可用 `--install-skill` 安装个人 Skill。Codex 默认 `~/.agents/skills`，Claude Code 默认 `~/.claude/skills`，generic 安装需显式指定宿主的 Skill 目录。接入产物使用内容摘要目录，重复生成复用，已有自定义 Skill 不覆盖。默认不加载连接器、不启动应用、不修改宿主 MCP 设置，返回未检查连接及 `not-asserted`；用户或宿主仍需注册配置并调用 `inspect_test_scope` 核对绑定。显式传入 `--register-host` 时，Codex/Claude Code 的 Skill 安装和本地 MCP 检查通过后，才调用宿主 CLI 注册；同名配置不覆盖，返回独立的注册状态。Skill 固化测试流程，实际模型执行质量仍需评测。
 
 可选 `--check-connection` 会启动刚生成的本地 MCP 服务，检查高层工具与源码/工作区绑定，返回独立的 `localConnection` 结果；它会加载可信连接器的注册代码，但不创建 Mission 或 Run。宿主注册、Skill 发现、模型执行与产品测试仍保持未检查。
 

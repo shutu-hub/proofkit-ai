@@ -11,6 +11,7 @@ import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runne
 import { initProject, loadConfig, resolveProjectContext, resolveWithinWorkspace, scanProject } from "@proofkit/project";
 import { setupAgent, type AgentHarness } from "./agent-setup.js";
 import { checkAgentConnection } from "./agent-connection.js";
+import { registerAgentHost } from "./agent-registration.js";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -21,23 +22,34 @@ export function createProgram(): Command {
 
   const agent = program.command("agent").description("Export host Agent Skills and native MCP onboarding configuration");
   agent.command("setup")
-    .description("Generate an external onboarding bundle; optionally install the portable testing Skill")
+    .description("Generate an external onboarding bundle; optionally install the Skill and register the host MCP server")
     .requiredOption("--harness <harness>", "codex, claude-code or generic")
     .option("--root <path>", "tested project root", ".")
     .option("--install-skill", "install the portable Skill in the host's personal discovery directory")
     .option("--skills-dir <path>", "explicit personal Skill directory; required for generic installation")
     .option("--allow-capability-writes", "emit operator opt-in for trusted test-environment write capabilities")
     .option("--check-connection", "launch the emitted MCP server and check tools and project binding")
+    .option("--register-host", "after a successful local check, install the Skill and register the MCP server with Codex or Claude Code")
+    .option("--host-cli <path>", "native host executable or JavaScript entrypoint for --register-host")
     .option("--check-timeout-ms <milliseconds>", "total local connection deadline (1000-60000)", "30000")
-    .action(async (options: RootOptions & { harness: AgentHarness; installSkill?: boolean; skillsDir?: string; allowCapabilityWrites?: boolean; checkConnection?: boolean; checkTimeoutMs: string }) => {
+    .action(async (options: RootOptions & { harness: AgentHarness; installSkill?: boolean; skillsDir?: string; allowCapabilityWrites?: boolean; checkConnection?: boolean; registerHost?: boolean; hostCli?: string; checkTimeoutMs: string }) => {
       const timeoutMs = Number(options.checkTimeoutMs);
       if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000) throw new Error("Agent connection timeout must be 1000–60000 milliseconds");
+      if (options.hostCli && !options.registerHost) throw new Error("--host-cli requires --register-host");
+      if (options.registerHost && options.harness === "generic") throw new Error("--register-host requires --harness codex or claude-code");
       const setup = await setupAgent({ root: options.root, workspaceRoot: options.workspace,
-        harness: options.harness, installSkill: options.installSkill, skillsDir: options.skillsDir,
+        harness: options.harness, installSkill: options.installSkill || options.registerHost, skillsDir: options.skillsDir,
         allowCapabilityWrites: options.allowCapabilityWrites });
-      const localConnection = options.checkConnection ? await checkAgentConnection(setup, timeoutMs) : undefined;
-      console.log(JSON.stringify({ ...setup, ...(localConnection ? { localConnection } : {}) }, null, 2));
-      if (localConnection?.status === "blocked") process.exitCode = 1;
+      const localConnection = options.checkConnection || options.registerHost ? await checkAgentConnection(setup, timeoutMs) : undefined;
+      const hostRegistration = options.registerHost
+        ? localConnection?.status === "connected"
+          ? await registerAgentHost(setup, { hostCliPath: options.hostCli, timeoutMs })
+          : { status: "not-attempted", issue: "local-connection-blocked" }
+        : undefined;
+      console.log(JSON.stringify({ ...setup, ...(hostRegistration?.status === "registered" ? { next: setup.next.slice(2) } : {}),
+        ...(localConnection ? { localConnection } : {}),
+        ...(hostRegistration ? { hostRegistration } : {}) }, null, 2));
+      if (localConnection?.status === "blocked" || hostRegistration && hostRegistration.status !== "registered") process.exitCode = 1;
     });
 
   program.command("init")
