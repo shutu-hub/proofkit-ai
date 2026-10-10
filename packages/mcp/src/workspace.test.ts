@@ -66,6 +66,9 @@ describe("MCP external workspace", () => {
       expect(fingerprint).toMatchObject({ sourceState: { method: "unavailable", complete: false }, workflowInventory: { status: "missing" } });
       const invalid = await client.callTool({ name: "inspect_test_scope", arguments: { limit: 51 } });
       expect(invalid.isError).toBe(true);
+      const conflicting = await client.callTool({ name: "run_test", arguments: { intent: "上线完整回归简历", charterId: "resume-core" } });
+      expect(conflicting.isError).toBe(true);
+      expect(JSON.stringify(conflicting.content)).toContain("intent indicates release but supplied selection is core");
       expect(connectSurface).not.toHaveBeenCalled();
       expect((await readdir(workspaceRoot)).sort()).toEqual([".proofkit"]);
       expect((await readdir(join(workspaceRoot, ".proofkit"))).sort()).toEqual(["charters", "config.yaml", "integration.mjs"]);

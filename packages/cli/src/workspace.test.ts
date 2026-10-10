@@ -99,6 +99,8 @@ describe("CLI workspace onboarding", () => {
     log.mockClear();
     await run("mission", "create", "verify ready", "--charter", "charters/ready.yml");
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ level: "quick", charter: { assertions: [{ kind: "text-visible", text: "ready" }] } });
+    await expect(run("mission", "create", "上线完整回归", "--charter", "charters/ready.yml"))
+      .rejects.toThrow("intent indicates release but supplied selection is quick");
     await expect(run("mission", "create", "verify ready", "--charter", "../outside.yml")).rejects.toThrow("within the ProofKit workspace");
     log.mockClear();
     await run("mission", "create", "verify ready", "--expect", "ready", "--level", "quick");

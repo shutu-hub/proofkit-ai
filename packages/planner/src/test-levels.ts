@@ -50,6 +50,18 @@ const PROFILES: Record<TestLevel, TestLevelProfile> = {
   },
 };
 
+const INTENT_LEVEL_CANDIDATES: Array<{ level: TestLevel; pattern: RegExp; reason: string }> = [
+  { level: "release", pattern: /(上线|发布|发版|全量|回归测试|release|regression|production|launch)/i, reason: "意图包含上线或发布门禁关键词" },
+  { level: "core", pattern: /(核心|关键链路|端到端|完整链路|critical|core|e2e|end.to.end)/i, reason: "意图包含核心模块或链路关键词" },
+  { level: "quick", pattern: /(快速|冒烟|sanity|smoke|quick)/i, reason: "意图包含快速反馈关键词" },
+];
+
+/** Return every intensity indicated by the request; multiple levels are ambiguous. */
+export function intentTestLevelHints(intent: string): TestLevel[] {
+  const normalized = intent.toLocaleLowerCase();
+  return INTENT_LEVEL_CANDIDATES.filter((candidate) => candidate.pattern.test(normalized)).map((candidate) => candidate.level);
+}
+
 export function getTestLevelProfile(level: TestLevel): TestLevelProfile {
   return PROFILES[TestLevelSchema.parse(level)];
 }
@@ -67,13 +79,8 @@ export function resolveTestLevel(intent: string, requested?: TestLevel): TestLev
     });
   }
 
-  const text = intent.toLocaleLowerCase();
-  const candidates: Array<{ level: TestLevel; pattern: RegExp; reason: string }> = [
-    { level: "release", pattern: /(上线|发布|发版|全量|回归测试|release|regression|production|launch)/i, reason: "意图包含上线或发布门禁关键词" },
-    { level: "core", pattern: /(核心|关键链路|端到端|完整链路|critical|core|e2e|end.to.end)/i, reason: "意图包含核心模块或链路关键词" },
-    { level: "quick", pattern: /(快速|冒烟|sanity|smoke|quick)/i, reason: "意图包含快速反馈关键词" },
-  ];
-  const match = candidates.find((candidate) => candidate.pattern.test(text));
+  const normalized = intent.toLocaleLowerCase();
+  const match = INTENT_LEVEL_CANDIDATES.find((candidate) => candidate.pattern.test(normalized));
   if (match) {
     return TestLevelSelectionSchema.parse({
       resolved: match.level,

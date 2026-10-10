@@ -377,6 +377,36 @@ describe("LocalRunnerService", () => {
     expect(mission.levelSelection).toMatchObject({ requested: "quick", resolved: "quick", source: "explicit" });
   });
 
+  it("rejects a supplied level that contradicts an unambiguous user intensity", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-intensity-conflict-"));
+    roots.push(root);
+    const config = ProofkitConfigSchema.parse({
+      charters: [
+        { id: "quick-login", path: "charters/quick-login.yml", aliases: ["登录"], level: "quick", surfaces: ["web"] },
+        ...["release-login", "release-profile"].map((id) => ({ id, path: `charters/${id}.yml`, aliases: [id], level: "release" as const, surfaces: ["web", "electron"] as Array<"web" | "electron"> })),
+      ],
+      suites: [{ id: "release-suite", aliases: ["完整回归"], level: "release", surfaces: ["web", "electron"], charterIds: ["release-login", "release-profile"] }],
+    });
+    const service = new LocalRunnerService({ root, workspaceRoot: root, config });
+    const charter: TestCharter = { intent: "check login", level: "quick", mode: "deterministic",
+      preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }],
+      sideEffectPolicy: "deny", metadata: {} };
+
+    await expect(service.createMission({ intent: "上线完整回归登录", surface: "web", charter }))
+      .rejects.toThrow("intent indicates release but supplied selection is quick");
+    await expect(service.createMission({ intent: "上线完整回归登录", surface: "web", level: "quick", charter }))
+      .rejects.toThrow("intent indicates release but supplied selection is quick");
+    await expect(service.createMission({ intent: "上线完整回归登录", surface: "web", charterId: "quick-login" }))
+      .rejects.toThrow("intent indicates release but supplied selection is quick");
+    await expect(service.createMission({ intent: "快速测试登录", surface: "web", suiteId: "release-suite" }))
+      .rejects.toThrow("intent indicates quick but supplied selection is release");
+
+    const ordinary = await service.createMission({ intent: "测试登录功能", surface: "web", charter });
+    expect(ordinary.level).toBe("quick");
+    const mixed = await service.createMission({ intent: "快速检查上线功能", surface: "web", charter });
+    expect(mixed.level).toBe("quick");
+  });
+
   it("runs and verifies the release matrix across Web and Electron with replay evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-release-matrix-"));
     roots.push(root);

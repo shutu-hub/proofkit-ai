@@ -585,6 +585,7 @@ environment in advance or use a separate read-only connector.
 | “在 Android 模拟器上测试登录” | `core` | Use the configured `mobile` W3C WebDriver surface with the same assertions, Oracles and evidence contract. |
 
 If the user does not specify a level, ProofKit selects `core`. An explicit `quick` request is never silently upgraded by the planner.
+Mission creation rejects a supplied `level`, inline Charter, catalog Charter or suite that conflicts with an unambiguous intensity in the user's wording. If the wording contains multiple intensity cues, the host should interpret them in context; ProofKit does not treat one keyword as a definitive conflict. A neutral request such as “测试登录功能” may use an explicitly selected Charter at its registered level.
 
 ## Choosing acceptance scope
 

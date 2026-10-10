@@ -5,7 +5,7 @@ import { z } from "zod";
 import { resolveTestLevel } from "./test-levels.js";
 import { assessPlanningCoverage, planningCoverageRequirements } from "./coverage.js";
 
-export { getTestLevelProfile, resolveTestLevel, type TestLevelProfile } from "./test-levels.js";
+export { getTestLevelProfile, intentTestLevelHints, resolveTestLevel, type TestLevelProfile } from "./test-levels.js";
 export const PlannerConstraintsSchema = z.object({
   url: z.string().url().optional(),
   expect: z.array(z.string().min(1)).optional(),

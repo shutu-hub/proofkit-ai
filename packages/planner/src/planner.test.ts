@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DeterministicPlannerProvider, IntentPlanner, OpenAICompatiblePlannerProvider, StructuredPlanner, assessPlanningQuality, resolveTestLevel } from "./index.js";
+import { DeterministicPlannerProvider, IntentPlanner, OpenAICompatiblePlannerProvider, StructuredPlanner, assessPlanningQuality, intentTestLevelHints, resolveTestLevel } from "./index.js";
 
 const projectMap = {
   root: ".", scripts: {}, workspaces: [], packages: [],
@@ -83,6 +83,9 @@ describe("IntentPlanner", () => {
     expect(resolveTestLevel("上线前完整回归").resolved).toBe("release");
     expect(resolveTestLevel("检查简历获取").resolved).toBe("core");
     expect(resolveTestLevel("上线前完整回归", "quick")).toMatchObject({ resolved: "quick", source: "explicit" });
+    expect(intentTestLevelHints("上线前完整回归")).toEqual(["release"]);
+    expect(intentTestLevelHints("快速检查上线功能")).toEqual(["release", "quick"]);
+    expect(intentTestLevelHints("测试登录功能")).toEqual([]);
   });
 
   it("validates provider output before it becomes executable", async () => {

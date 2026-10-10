@@ -9,7 +9,7 @@ import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contrac
 import { inspectEnvironment } from "./environment.js";
 import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionAcceptanceIntegrity, type MissionComparison, type MissionEvidenceIntegrity, type MissionProofClassification, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
-import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
+import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, intentTestLevelHints, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowInventory, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject, verifySourceLocationHints } from "@proofkit/project";
 import { BlockedError, CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
@@ -318,6 +318,11 @@ export class LocalRunnerService {
     if (input.charter && input.charterId) throw new Error("Supply either a Charter or charterId, not both");
     if (input.suiteId && (input.charter || input.charterId)) throw new Error("Supply either suiteId or a Charter, not both");
     const catalogLevel = input.charterId ? this.config.charters.find((entry) => entry.id === input.charterId)?.level : undefined;
+    const suppliedLevel = input.level ?? input.charter?.level ?? catalogLevel ?? (input.suiteId ? "release" : undefined);
+    const intentLevels = intentTestLevelHints(input.intent);
+    if (suppliedLevel && intentLevels.length === 1 && intentLevels[0] !== suppliedLevel) {
+      throw new Error(`Test level conflict: intent indicates ${intentLevels[0]} but supplied selection is ${suppliedLevel}; align the request and test selection`);
+    }
     const levelSelection = input.suiteId && !input.level
       ? TestLevelSelectionSchema.parse({ resolved: "release", source: "inferred", reason: `选定的测试套件 ${input.suiteId} 要求 release 级别`, confidence: 1 })
       : resolveTestLevel(input.intent, input.level ?? input.charter?.level ?? catalogLevel);
