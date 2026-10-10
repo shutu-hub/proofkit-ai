@@ -701,6 +701,9 @@ export class MissionAgent {
     let cancelledResult: MissionToolResult | undefined;
     try {
       const input = tool.inputSchema.parse(task.input);
+      // Cancellation can arrive while the started receipt is being saved or
+      // while a trusted schema validates input. Do not invoke the tool then.
+      throwIfAborted(toolController.signal);
       const result = await raceAbort(tool.execute(input, { mission: startedMission, task: runningTask, signal: toolController.signal }), toolController.signal, tool.cancellationGraceMs);
       if (toolController.signal.aborted) {
         cancelledResult = result;

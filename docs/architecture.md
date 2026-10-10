@@ -316,6 +316,11 @@ The Agent loop is deliberately narrow:
 5. Persist a new revision before selecting the next task.
 6. Reduce the terminal mission status and verdict without overwriting a failed or blocked result with `passed`.
 
+The loop rechecks the abort signal after input validation and immediately
+before invoking a tool. Cancellation received while persisting its started
+receipt or validating input closes the audit records without beginning a new
+tool operation.
+
 `TaskGraphSchema` rejects duplicate IDs, unknown or duplicate dependencies, cycles, missing terminals, and branches that do not reach a declared terminal. It caps a graph at 10,000 tasks. A recovered Mission with unfinished tasks but no dependency-ready task is blocked with a graph-stall Finding and first-failure boundary; it cannot be reduced to `passed` merely because the scheduler found nothing to run. This validation is also applied to future model-authored plans before a Mission is persisted.
 
 `MissionPolicy.timeoutMs` is the deadline for the complete Agent Loop,

@@ -160,6 +160,39 @@ describe("MissionAgent", () => {
     expect(result.agentSteps[0]?.status).toBe("cancelled");
   });
 
+  it("does not invoke a tool when cancellation arrives during input validation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-pre-tool-cancel-"));
+    const controller = new AbortController();
+    let invocations = 0;
+    const tools = new InMemoryMissionToolRegistry([{
+      name: "project.discover", description: "discover", sideEffect: "write", environments: ["test"],
+      timeoutMs: 1000,
+      inputSchema: z.object({}).transform((input) => {
+        controller.abort(new Error("cancel during input validation"));
+        return input;
+      }),
+      execute: async () => {
+        invocations++;
+        return {};
+      },
+    }]);
+    const agent = new MissionAgent({ store: new JsonMissionStore(root), tools });
+    const created = await agent.create({
+      intent: "cancel before tool execution", projectRoot: root, surface: "web",
+      policy: { requireApproval: false, sideEffectPolicy: "allow" },
+    });
+
+    const result = await agent.run(created.missionId, { signal: controller.signal });
+
+    expect(invocations).toBe(0);
+    expect(result.status).toBe("cancelled");
+    expect(result.verdict).toBe("cancelled");
+    expect(result.plan.graph.tasks[0]?.status).toBe("blocked");
+    expect(result.toolCalls[0]).toMatchObject({ status: "cancelled", endedAt: expect.any(String) });
+    expect(result.agentSteps[0]).toMatchObject({ status: "cancelled", endedAt: expect.any(String) });
+    expect(result.currentTaskId).toBeUndefined();
+  });
+
   it("bounds cleanup waiting and reports resources that may remain active", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-cleanup-timeout-"));
     const controller = new AbortController();
