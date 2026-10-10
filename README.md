@@ -345,11 +345,13 @@ pnpm build
 pnpm typecheck
 pnpm test
 pnpm test:smoke:suite
+pnpm test:smoke:target-continuity
 node tests/web-smoke.mjs
 node tests/electron-smoke.mjs
 ```
 
 The Electron smoke test uses an isolated temporary profile. The Web smoke test serves a local fixture page. Neither contacts a production system.
+On Windows, the target-continuity smoke starts two real Node listeners from a temporary Git checkout, uses Chrome for a core Mission, replaces the listener during its business Oracle, and verifies the Run, Mission, and report verdicts. It removes its temporary source and external test workspace afterward.
 
 For real file-input verification across Web and Electron, set
 `PROOFKIT_ELECTRON_PATH` to a local Electron executable and run

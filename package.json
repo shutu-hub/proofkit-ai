@@ -17,6 +17,7 @@
     "test:smoke:web": "pnpm build && node tests/web-smoke.mjs",
     "test:smoke:inspect": "pnpm build && node tests/inspection-smoke.mjs",
     "test:smoke:electron": "pnpm build && node tests/electron-smoke.mjs",
+    "test:smoke:target-continuity": "pnpm build && node tests/target-continuity-smoke.mjs",
     "test:smoke:electron:file": "pnpm build && node tests/electron-file-route-smoke.mjs",
     "test:smoke:mobile": "pnpm build && node tests/mobile-smoke.mjs",
     "test:smoke:local:web": "pnpm build && node tests/local-runner-aihr-smoke.mjs web",
