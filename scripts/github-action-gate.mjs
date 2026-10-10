@@ -22,9 +22,11 @@ try {
   const location = ["--root", projectRoot, "--workspace", workspaceRoot];
 
   if (!missionId) {
-    const createArgs = ["mission", "create", intent,
-      "--level", process.env.PROOFKIT_ACTION_LEVEL?.trim() || "core",
-      "--surface", process.env.PROOFKIT_ACTION_SURFACE?.trim() || "web"];
+    const createArgs = ["mission", "create", intent];
+    const level = process.env.PROOFKIT_ACTION_LEVEL?.trim();
+    const surface = process.env.PROOFKIT_ACTION_SURFACE?.trim();
+    if (level) createArgs.push("--level", level);
+    if (surface) createArgs.push("--surface", surface);
     const charterId = process.env.PROOFKIT_ACTION_CHARTER_ID?.trim();
     const url = process.env.PROOFKIT_ACTION_URL?.trim();
     const expectText = process.env.PROOFKIT_ACTION_EXPECT_TEXT?.trim();

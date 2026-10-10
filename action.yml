@@ -18,13 +18,11 @@ inputs:
     required: false
     default: run
   level:
-    description: Test intensity for a newly created Mission.
+    description: Test intensity for a newly created Mission; inferred from intent and defaults to core when omitted.
     required: false
-    default: core
   surface:
-    description: Initial surface for a newly created Mission.
+    description: Initial surface for a newly created Mission; inferred from explicit platform wording when omitted.
     required: false
-    default: web
   charter-id:
     description: Optional catalog Charter ID for a newly created Mission.
     required: false

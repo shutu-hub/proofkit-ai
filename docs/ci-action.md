@@ -27,7 +27,7 @@ steps:
       surface: web
 ```
 
-初次连通性测试可用 `level: quick`、`url` 和 `expect-text` 创建一个只检查页面文字的场景。复杂业务使用已审核 Charter 与独立 Oracle；一个 200 响应或页面文字不能代替业务终态。`charter-id` 与临时的 `url`、`expect-text`、`oracle-name` 输入互斥。要执行尚未结束的已创建 Mission，传 `mission-id`，不传 `intent`；已结束 Mission 只能用 `mode: check` 复核，不能借旧结果冒充新执行。默认 `mode: run`；`mode: check` 只接收现有 `mission-id`，不启动产品或导入工作区连接器。
+初次连通性测试可用 `level: quick`、`url` 和 `expect-text` 创建一个只检查页面文字的场景。省略 `level` 时按明确的快速、核心或上线词汇选择，未识别时默认 `core`；省略 `surface` 时按明确的平台词汇选择，未识别时默认 Web。Action 会让 CLI 校验实际执行矩阵是否覆盖指令点名的平台。复杂业务使用已审核 Charter 与独立 Oracle；一个 200 响应或页面文字不能代替业务终态。`charter-id` 与临时的 `url`、`expect-text`、`oracle-name` 输入互斥。要执行尚未结束的已创建 Mission，传 `mission-id`，不传 `intent`；已结束 Mission 只能用 `mode: check` 复核，不能借旧结果冒充新执行。默认 `mode: run`；`mode: check` 只接收现有 `mission-id`，不启动产品或导入工作区连接器。
 
 Action 默认在运行模式安装 Playwright Chromium。测试现有 Electron/CDP 会话或已提供浏览器时可设置 `install-browser: 'false'`。本地已有 Chrome/Chromium 时，Web 适配器可从 `PROOFKIT_BROWSER_PATH` 读取可执行文件路径；工作区 `surfaces.web.executablePath` 优先。这个环境变量使新建外部工作区的 quick 检查无需先写浏览器配置。Action 不负责启动被测应用、登录、配置数据库、创建真实业务账号或上传报告。需要写入型连接器时，必须显式设置 `allow-capability-writes: 'true'`，同时通过工作区、Charter 和连接器各自的测试环境门禁。
 

@@ -35,8 +35,7 @@ jobs:
         with:
           project-root: ${{ runner.temp }}/proofkit-action-source
           workspace-root: ${{ runner.temp }}/proofkit-action-workspace
-          intent: Verify the ProofKit Action fixture
-          level: quick
+          intent: Quick verify the ProofKit Action fixture
           url: 'data:text/html,%3Ch1%3EProofKit%20Action%20ready%3C%2Fh1%3E'
           expect-text: ProofKit Action ready
       - name: Re-audit the saved Mission through the Action

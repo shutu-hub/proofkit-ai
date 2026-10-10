@@ -29,7 +29,10 @@ try {
   const actionWorkflow = parseYaml(await readFile(resolve(".github/workflows/action-smoke.yml"), "utf8"));
   const localActionSteps = actionWorkflow.jobs["action-smoke"].steps.filter((step) => step.uses === "./");
   assert.equal(localActionSteps.length, 2);
-  assert.equal(localActionSteps[0].with.level, "quick");
+  assert.equal(localActionSteps[0].with.level, undefined);
+  assert.match(localActionSteps[0].with.intent, /Quick/);
+  assert.equal(action.inputs.level.default, undefined);
+  assert.equal(action.inputs.surface.default, undefined);
   assert.equal(localActionSteps[1].with.mode, "check");
   if (browserPath) assert.ok(existsSync(browserPath), `Browser not found: ${browserPath}`);
   await Promise.all([mkdir(source), mkdir(join(workspace, ".proofkit"), { recursive: true })]);
@@ -93,11 +96,15 @@ try {
   assert.match(await readFile(actionSummary, "utf8"), /Current test verdict \| passed/);
   const adHocRun = await actionCommand({
     PROOFKIT_ACTION_INTENT: "Quick fixture check", PROOFKIT_ACTION_MODE: "run",
-    PROOFKIT_ACTION_LEVEL: "quick", PROOFKIT_ACTION_URL: url,
+    PROOFKIT_ACTION_LEVEL: "", PROOFKIT_ACTION_SURFACE: "", PROOFKIT_ACTION_URL: url,
     PROOFKIT_ACTION_EXPECT_TEXT: "Fixture ready",
   }, actionOutput, actionSummary);
   assert.equal(adHocRun.code, 0, adHocRun.stderr || adHocRun.stdout);
-  assert.equal(JSON.parse(adHocRun.stdout).testVerdict, "passed");
+  const adHocResult = JSON.parse(adHocRun.stdout);
+  assert.equal(adHocResult.testVerdict, "passed");
+  const adHocSummary = JSON.parse(await readFile(adHocResult.summaryPath, "utf8"));
+  assert.equal(adHocSummary.level, "quick");
+  assert.deepEqual(adHocSummary.scope.surfaces, ["web"]);
   const freshWorkspace = join(scratch, "fresh-workspace");
   const firstUse = await actionCommand({
     PROOFKIT_ACTION_WORKSPACE_ROOT: freshWorkspace,
