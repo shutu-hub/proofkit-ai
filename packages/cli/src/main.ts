@@ -310,7 +310,7 @@ export function createProgram(): Command {
       const completed = await runner.waitMission(missionId);
       const evidence = await runner.missionEvidence(completed.missionId);
       console.log(JSON.stringify(evidence, null, 2));
-      if (completed.verdict !== "passed") process.exitCode = 1;
+      process.exitCode = missionExitCode(evidence.testVerdict);
     });
 
   mission.command("status <missionId>")
@@ -327,6 +327,27 @@ export function createProgram(): Command {
     .action(async (missionId: string, options: RootOptions) => {
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       console.log(JSON.stringify(await runner.missionEvidence(missionId), null, 2));
+    });
+
+  mission.command("check <missionId>")
+    .description("Audit saved evidence and return a CI exit code for the current test verdict")
+    .option("--root <path>", "project root", ".")
+    .action(async (missionId: string, options: RootOptions) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+      const evidence = await runner.missionEvidence(missionId);
+      console.log(JSON.stringify({
+        missionId: evidence.missionId,
+        status: evidence.status,
+        verdict: evidence.verdict,
+        testVerdict: evidence.testVerdict,
+        testVerdictReason: evidence.testVerdictReason,
+        acceptanceEvidenceIntegrity: evidence.acceptanceEvidenceIntegrity,
+        proofClassification: evidence.proofClassification,
+        summary: evidence.summary,
+        report: evidence.report,
+        reportUnavailable: evidence.reportUnavailable,
+      }, null, 2));
+      process.exitCode = missionExitCode(evidence.testVerdict);
     });
 
   mission.command("report <missionId>")
@@ -348,8 +369,8 @@ export function createProgram(): Command {
       const started = await runner.replayMission(missionId);
       const completed = await runner.waitMission(started.mission.missionId);
       const evidence = await runner.missionEvidence(completed.missionId);
-      console.log(JSON.stringify({ missionId: completed.missionId, replayOfMissionId: missionId, status: completed.status, verdict: completed.verdict, comparison: evidence.comparison, summary: evidence.summary, report: evidence.report, reportUnavailable: evidence.reportUnavailable }, null, 2));
-      if (completed.verdict !== "passed") process.exitCode = 1;
+      console.log(JSON.stringify({ missionId: completed.missionId, replayOfMissionId: missionId, status: completed.status, verdict: completed.verdict, testVerdict: evidence.testVerdict, testVerdictReason: evidence.testVerdictReason, comparison: evidence.comparison, summary: evidence.summary, report: evidence.report, reportUnavailable: evidence.reportUnavailable }, null, 2));
+      process.exitCode = missionExitCode(evidence.testVerdict);
     });
 
   mission.command("compare <baselineMissionId> <candidateMissionId>")
@@ -491,6 +512,13 @@ async function writeWorkspaceOutput(workspaceRoot: string, path: string, output:
 
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
+}
+
+/** A missing or unauditable acceptance claim is distinct from an observed failure. */
+function missionExitCode(testVerdict: string): number {
+  if (testVerdict === "passed") return 0;
+  if (testVerdict === "failed") return 1;
+  return 2;
 }
 
 export async function main(argv = process.argv): Promise<void> {
