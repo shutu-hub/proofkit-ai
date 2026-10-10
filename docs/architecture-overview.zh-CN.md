@@ -54,6 +54,8 @@ Runner 在执行页面步骤前原子保存资源登记日志。若进程退出�
 
 Electron 使用 `file:` 页面或没有 HTTP 页面地址时，环境检查和 Run 的源码关联改查其 CDP 监听端口；`DevToolsActivePort` 会在检查时解析，带路径或查询的 WebSocket 地址只取监听 origin。配置了 HTTP 页面地址时仍检查页面服务。项目 setup 后会重新检查可能由连接器启动的 Electron 进程。关联只依据本机进程代码路径，无法核对实际渲染文件字节；进程无法归属到单一 Git checkout 时保持 `unverified`。
 
+本机监听进程关联支持 Windows 和带有可用 `/proc` socket 表的 Linux。Linux 从监听 socket inode 查进程 fd，再查该进程实际的可执行文件和脚本路径；读取失败、归属不唯一或元数据超限均保持 `unverified`。Linux 解析器已通过单测，真实 `/proc` 烟测已配置到 Ubuntu CI，但尚未得到托管运行器结果；本机 WSL 1 不提供所需 socket 表。
+
 若连接页面前已识别到唯一监听 PID，`core` 与 `release` Run 在页面关闭前再次核对监听进程，断言或业务 Oracle 抛错时也执行；末次检查正常返回时保存独立证据。PID、checkout 或目标 origin 变化，以及末次检查无法确认，会把原本通过或失败的 Run 降为 `inconclusive`；取消与连接前阻断保留原状态。报告展示 `targetContinuity` 及可用证据，探测报错时为 `unverified`。`quick` 仅做前置检查。这是两个时点的关联证据，无法发现中途替换后恢复或 PID 复用。
 
 例如简历获取：页面操作只证明动作已执行；业务检查还需确认获取、解析、候选人和岗位关联以及筛选终态。具体不变量由外部工作区连接器表达，可由 AI 编写，无需往被测应用加入 ProofKit 代码。

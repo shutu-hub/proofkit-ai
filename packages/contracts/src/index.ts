@@ -305,7 +305,7 @@ export type StepResult = z.infer<typeof StepResultSchema>;
 /** A process-path association is useful evidence, but does not attest served bytes. */
 export const TargetBindingSchema = z.object({
   status: z.enum(["matching-process-path", "different-project", "unverified"]),
-  method: z.enum(["windows-listener-process", "unavailable"]),
+  method: z.enum(["windows-listener-process", "linux-proc-listener", "unavailable"]),
   expectedProjectRoot: z.string().min(1),
   targetOrigin: z.string().url().optional(),
   observedProjectRoot: z.string().min(1).optional(),

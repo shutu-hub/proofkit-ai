@@ -1,15 +1,16 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { open, readFile, readdir, readlink, realpath, stat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 import { TargetBindingSchema, type TargetBinding } from "@proofkit/contracts";
 import { sameProjectPath } from "./context.js";
 
 const execFileAsync = promisify(execFile);
 const CODE_EXTENSIONS = /\.(?:cjs|exe|jar|js|mjs|py)$/i;
-const GENERIC_RUNTIMES = new Set(["chrome.exe", "chromium.exe", "electron.exe", "java.exe", "msedge.exe", "node.exe", "python.exe", "python3.exe"]);
+const GENERIC_RUNTIMES = new Set(["chrome", "chrome.exe", "chromium", "chromium.exe", "electron", "electron.exe", "java", "java.exe", "msedge", "msedge.exe", "node", "node.exe", "python", "python.exe", "python3", "python3.exe"]);
 
-type ListenerProcess = { processId: number; executablePath?: string; commandLine?: string };
+type ListenerProcess = { processId: number; executablePath?: string; commandLine?: string; codePaths?: string[] };
 export type ProcessRootObservation = { processId: number; projectRoot?: string };
 
 /**
@@ -32,7 +33,7 @@ export async function inspectTargetBinding(projectRoot: string, targetUrl?: stri
     return unavailable("Only loopback HTTP targets support local listener inspection.");
   }
   if (!isLoopback(target.hostname)) return unavailable("Only loopback HTTP targets support local listener inspection.", target.origin);
-  if (process.platform !== "win32") {
+  if (process.platform !== "win32" && process.platform !== "linux") {
     return unavailable("Local listener process inspection is not yet supported on this platform.", target.origin);
   }
   const expectedGitRoot = await gitRoot(expectedProjectRoot, signal);
@@ -40,15 +41,17 @@ export async function inspectTargetBinding(projectRoot: string, targetUrl?: stri
     return unavailable("The selected source root is not a Git repository root.", target.origin);
   }
   try {
-    const listeners = await windowsListeners(Number(target.port || (target.protocol === "https:" ? 443 : 80)), signal);
+    const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
+    const listeners = process.platform === "win32" ? await windowsListeners(port, signal) : await linuxListeners(port, signal);
     if (listeners.length === 0) return unavailable("No local listener process was found for the target port.", target.origin);
     const observed: ProcessRootObservation[] = [];
     for (const listener of listeners) {
-      const roots = await Promise.all(runtimeCodePaths(listener).map((path) => gitRoot(dirname(path), signal)));
+      const roots = await Promise.all((listener.codePaths ?? runtimeCodePaths(listener)).map((path) => gitRoot(dirname(path), signal)));
       const distinct = uniqueRoots(roots.filter((root): root is string => Boolean(root)));
       observed.push({ processId: listener.processId, ...(distinct.length === 1 ? { projectRoot: distinct[0] } : {}) });
     }
-    return classifyTargetBinding(expectedProjectRoot, target.origin, observed, observedAt);
+    return classifyTargetBinding(expectedProjectRoot, target.origin, observed, observedAt,
+      process.platform === "linux" ? "linux-proc-listener" : "windows-listener-process");
   } catch {
     signal?.throwIfAborted();
     return unavailable("Local listener process inspection failed or exceeded its deadline.", target.origin);
@@ -56,8 +59,9 @@ export async function inspectTargetBinding(projectRoot: string, targetUrl?: stri
 }
 
 /** An ambiguous listener or process command line never proves a mismatch. */
-export function classifyTargetBinding(expectedProjectRoot: string, targetOrigin: string, observed: ProcessRootObservation[], observedAt = new Date().toISOString()): TargetBinding {
-  const base = { method: "windows-listener-process" as const, expectedProjectRoot: resolve(expectedProjectRoot), targetOrigin, observedAt };
+export function classifyTargetBinding(expectedProjectRoot: string, targetOrigin: string, observed: ProcessRootObservation[],
+  observedAt = new Date().toISOString(), method: "windows-listener-process" | "linux-proc-listener" = "windows-listener-process"): TargetBinding {
+  const base = { method, expectedProjectRoot: resolve(expectedProjectRoot), targetOrigin, observedAt };
   if (observed.length === 0 || observed.some((item) => !item.projectRoot)) {
     return TargetBindingSchema.parse({ ...base, status: "unverified", reason: "The listener's application code path could not be associated with one Git checkout." });
   }
@@ -103,6 +107,124 @@ async function windowsListeners(port: number, signal?: AbortSignal): Promise<Lis
       ...(typeof record.CommandLine === "string" ? { commandLine: record.CommandLine } : {}),
     }];
   });
+}
+
+/** Match listening socket inodes before inspecting processes. No command line is persisted. */
+async function linuxListeners(port: number, signal?: AbortSignal): Promise<ListenerProcess[]> {
+  const tables = await Promise.all(["/proc/net/tcp", "/proc/net/tcp6"].map(async (path) => {
+    try { return await readLinuxSocketTable(path, signal); }
+    catch (error) { if (vanished(error)) return undefined; throw error; }
+  }));
+  if (tables.every((table) => table === undefined)) throw new Error("Linux socket tables are unavailable");
+  const ownUid = process.getuid?.();
+  const inodes = parseLinuxListeningInodes(tables.filter((table): table is string => table !== undefined), port, ownUid);
+  if (inodes.size === 0) return [];
+
+  const deadline = Date.now() + 8_000;
+  const entries = (await readdir("/proc", { withFileTypes: true })).filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name));
+  if (entries.length > 4_096) throw new Error("Linux process inspection exceeds its bound");
+  const listeners: ListenerProcess[] = [];
+  let inspectedFds = 0;
+  for (const entry of entries) {
+    signal?.throwIfAborted();
+    if (Date.now() > deadline) throw new Error("Linux process inspection exceeded its deadline");
+    const pid = Number(entry.name);
+    const procDir = `/proc/${entry.name}`;
+    try {
+      if (ownUid !== undefined && ownUid !== 0 && (await stat(procDir)).uid !== ownUid) continue;
+    } catch (error) {
+      if (vanished(error)) continue;
+      throw error;
+    }
+    let fds: string[];
+    try { fds = await readdir(`${procDir}/fd`); }
+    catch (error) { if (vanished(error)) continue; throw error; }
+    if (fds.length > 4_096 || (inspectedFds += fds.length) > 131_072) {
+      throw new Error("Linux file descriptor inspection exceeds its bound");
+    }
+    let ownsSocket = false;
+    for (let index = 0; index < fds.length && !ownsSocket; index += 32) {
+      signal?.throwIfAborted();
+      if (Date.now() > deadline) throw new Error("Linux process inspection exceeded its deadline");
+      const links = await Promise.allSettled(fds.slice(index, index + 32).map((fd) => readlink(`${procDir}/fd/${fd}`)));
+      for (const link of links) {
+        if (link.status === "rejected") { if (!vanished(link.reason)) throw link.reason; continue; }
+        const match = /^socket:\[(\d+)\]$/.exec(link.value);
+        if (match && inodes.has(match[1]!)) ownsSocket = true;
+      }
+    }
+    if (ownsSocket) listeners.push({ processId: pid, codePaths: await linuxRuntimeCodePaths(procDir) });
+  }
+  return listeners;
+}
+
+async function readLinuxSocketTable(path: string, signal?: AbortSignal): Promise<string> {
+  const handle = await open(path, "r");
+  const chunks: Buffer[] = [];
+  const buffer = Buffer.allocUnsafe(65_536);
+  let bytes = 0;
+  try {
+    for (;;) {
+      signal?.throwIfAborted();
+      const result = await handle.read(buffer, 0, buffer.length, null);
+      if (result.bytesRead === 0) break;
+      bytes += result.bytesRead;
+      if (bytes > 8 * 1024 * 1024) throw new Error("Linux socket table exceeds its read bound");
+      chunks.push(Buffer.from(buffer.subarray(0, result.bytesRead)));
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  } finally { await handle.close(); }
+}
+
+/** Pure parser for /proc/net/tcp{,6}; unknown or foreign owners cannot prove one local target. */
+export function parseLinuxListeningInodes(tables: string[], port: number, ownUid?: number): Set<string> {
+  const inodes = new Set<string>();
+  for (const table of tables) {
+    for (const line of table.split("\n").slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      const localPort = Number.parseInt(fields[1]?.split(":").at(-1) ?? "", 16);
+      if (fields[3] !== "0A" || localPort !== port) continue;
+      const uid = Number(fields[7]);
+      if (!Number.isInteger(uid) || !/^\d+$/.test(fields[9] ?? "")) throw new Error("Linux listener socket metadata is incomplete");
+      if (ownUid !== undefined && ownUid !== 0 && uid !== ownUid) throw new Error("Linux listener socket belongs to another user");
+      inodes.add(fields[9]!);
+    }
+  }
+  return inodes;
+}
+
+async function linuxRuntimeCodePaths(procDir: string): Promise<string[]> {
+  let argv: string[];
+  let cwd: string | undefined;
+  let executable: string | undefined;
+  try {
+    const [rawArgv, rawCwd, rawExecutable] = await Promise.all([
+      readFile(`${procDir}/cmdline`), readlink(`${procDir}/cwd`), readlink(`${procDir}/exe`),
+    ]);
+    if (rawArgv.length > 65_536) throw new Error("Linux process command line exceeds its bound");
+    argv = rawArgv.toString("utf8").split("\0").filter(Boolean);
+    cwd = rawCwd;
+    executable = rawExecutable;
+  } catch (error) {
+    if (vanished(error)) return [];
+    throw error;
+  }
+  const rawPaths = [executable, ...argv.filter((arg) => CODE_EXTENSIONS.test(arg))].filter((path): path is string => Boolean(path));
+  const paths: string[] = [];
+  for (const candidate of rawPaths) {
+    if (GENERIC_RUNTIMES.has(basename(candidate).toLowerCase())) continue;
+    if (!isAbsolute(candidate) && !cwd) continue;
+    try {
+      const path = await realpath(isAbsolute(candidate) ? candidate : resolve(cwd!, candidate));
+      if ((await stat(path)).isFile() && !paths.includes(path)) paths.push(path);
+    } catch (error) { if (!vanished(error)) throw error; }
+    if (paths.length > 8) throw new Error("Linux process code-path inspection exceeds its bound");
+  }
+  return paths;
+}
+
+function vanished(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === "ENOENT" || (error as NodeJS.ErrnoException)?.code === "ESRCH";
 }
 
 async function gitRoot(path: string, signal?: AbortSignal): Promise<string | undefined> {

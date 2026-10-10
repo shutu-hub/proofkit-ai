@@ -20,6 +20,10 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
+      - name: Verify Linux listener binding
+        run: node tests/linux-target-binding-smoke.mjs
+        env:
+          PROOFKIT_REQUIRE_LINUX_PROC: '1'
 
   target-continuity-windows:
     runs-on: windows-latest
