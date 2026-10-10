@@ -36,6 +36,34 @@ worker 验收尚未完成。同摘要版本可以合法复用 ID 并改绑文件
 
 ### 桌面端采集/上传
 
+真实的“立即运行”入口不是普通上传参考 Charter 所执行的网关调用。源码链路为：
+
+```text
+apps/micro-resume-collection/src/App.vue 选择 BOSS 页签
+  → BossResumeCollection.vue 的“立即运行”按钮
+  → buildUploadConfig 检查登录令牌和工作空间
+  → Pinia store.runNow
+  → preload.cts 的 resume-channel:boss:runNow IPC
+  → zhipinStandaloneManager.runNow
+  → 可选的运行风险确认 / startRun / 子进程 worker
+  → ShellHome 注册的 backend bridge 在 shell renderer 调用网关
+```
+
+按钮点击和 IPC 返回只证明启动请求已发出。`runNow` 可能因风险确认、更新中、
+已有任务、手动浏览器接管、时间策略、账号状态、缺失鉴权或运行环境而没有启动 worker；
+页面的“任务进度”、上传计数和 `completed` 文案也不能单独证明候选人、岗位、评估终态。
+主进程创建 `clientRunId`，但 `getState()` 及公开的 collection-run 列表摘要均不返回它；
+公开列表只返回按企业/工作空间限定的 `run_id`、来源、状态、时间与计数。
+
+ProofKit 当前 `captureResponse` 只接纳所连接页面主 frame、动作时间窗内的唯一请求。
+AIHR 网关请求由 shell renderer 的 backend bridge 发起；能否在实际连接的 Electron 页面
+观察到 `POST /resume-collection/runs`，以及它是否发生在合理的动作窗口内，必须先用
+隔离 CDP 运行核实。不能从源码直接认定该捕获可用，也不能把连接器自己创建的 run
+冒充“立即运行”产生的 run。若使用公开列表的前后差集关联本次 run，测试工作空间须独占、
+自动调度须停止，并要求仅出现一个符合来源与时间的新增 run；零个或多个均为
+`inconclusive`。即使唯一，仍需该 run 下新文件与独立业务 reader 的一致身份，
+并保留前后读取证据；列表差集只是受隔离约束的关联线索，不是单独的因果证明。
+
 ```text
 Electron/CDP 或 micro-resume-collection
   → POST /api/v1/resume-collection/runs
@@ -153,6 +181,26 @@ $env:VITE_API_BASE_URL = "http://127.0.0.1:9/api/v1"
 pnpm --filter @aihr/micro-resume-collection exec vite --mode devlocal --host 127.0.0.1 --port 5274 --strictPort
 ```
 
+### 2026-10-11 源码与部署归属复核
+
+再次运行 `proofkit environment`，外部工作区仍指向已停止的
+`http://127.0.0.1:5274/`，结果为 `blocked`、`testVerdict: not-asserted`；
+证据文件为 `.proofkit/aihr-local-workspace/.proofkit/inspections/environment-20261010175406-eca7a02e.json`
+（UTC 时间）。此检查未启动应用、浏览器或业务写入。
+
+只读查询显示 `aihr-test` namespace 的 gateway、resume-collection、candidate、job、
+assessment-service 和 assessment-worker Deployment 均有就绪副本，但镜像标签并不等于
+当前本地 checkout `dc781c3763933d3062d4b3bd33491e38c2a82a44`：例如 gateway 为
+`test-886a6bba634d`、resume-collection 为 `test-b299ae964fdc`、assessment-worker 为
+`test-7772b1566cab`。本地 checkout 另有其他任务的未提交修改。此前用空闲端口 28080
+临时转发 test gateway，`/healthz` 与 `/api/v1/gateway/status` 返回 200，转发随后停止；
+这仅证明当时网关可达。`/api/v1/gateway/status` 当前源码返回 service、role、status、
+routes 和 upstreams 数量，不含提交 SHA 或镜像 digest，不能用它证明部署版本。
+此前只读排查发现本机 18080 被另一份 checkout 的进程占用，不可把该端口的响应当作 test gateway 证据。
+上述部署观察均为环境事实，不是当前源码的产品验收。
+
+## 隔离业务验收的接入配置
+
 在隔离 test/local 环境设置：
 
 ```powershell
@@ -216,8 +264,8 @@ pnpm test
 
 ## 下一阶段
 
-1. 把普通上传 Charter 接入真实 Electron/CDP surface，并把 UI 操作与上述业务 Oracle 绑定到同一个 Run。
-2. 在真实隔离环境中验证 `collection_run → file → extract → parse → assessment`。
-3. 增加重试、重复提交、计费幂等和取消恢复场景。
-4. 在外部工作区登记经过验证的 Charter，让自然语言请求直接选中它，不向 AIHR 源码写入 ProofKit 文件。
+1. 在与所选源码版本对应的隔离 Electron、网关和 worker 环境中侦察 BOSS 页签、风险确认和 `POST /runs` 的真实 CDP 可见性，冻结动作定位与响应身份策略。
+2. 将“立即运行”设计为独立的 UI Charter，不在同一 Charter 中由 capability 代替用户点击；把本次 backend run、文件、候选人、岗位和评估事实绑定到同一 Run 的 Oracle。
+3. 在真实隔离环境中验证 `collection_run → file → extract → parse → assessment`，并分别处理零结果、待处理、风险确认和明确失败。
+4. 增加重试、重复提交、计费幂等和取消恢复场景；登记经过验证的 Charter 供自然语言选择，不向 AIHR 源码写入 ProofKit 文件。
 5. 继续改进基于代码/路由的测试建议，保持类型化动作、capability allowlist 和副作用权限校验。
