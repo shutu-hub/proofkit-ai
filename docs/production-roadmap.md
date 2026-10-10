@@ -320,6 +320,7 @@ Mission evidence now includes a bounded result projection and a static HTML/JSON
 
 - GitHub Action and machine-readable result contract.
 - Retry and flake classification based on repeated evidence, not blind reruns.
+- A first reporting slice now pairs already executed release primary/replay Runs by Charter and platform. The Mission JSON/MCP summary and HTML report show saved verdict agreement, divergence and unverified pairs, requiring the replay source link and Run-owned hashed evidence. A real Web/Electron suite smoke seeds one failed primary followed by a passing replay; the saved result reports one divergent pair across four compared pairs with intact Mission evidence. Divergence is an investigation signal, not a calibrated flake diagnosis; controlled repeated-run policy and root-cause classification remain open.
 - Parallel run isolation and retention policies.
 - Optional result aggregation; no hosted service required for the core product.
 

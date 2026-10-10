@@ -84,6 +84,30 @@ describe("Mission result projection", () => {
     expect(result.runs).toHaveLength(6);
     expect(result.runs.find((run) => run.taskId === "replay-charter-electron")).toMatchObject({ surface: "electron", runKind: "replay", taskStatus: "skipped", issue: "No saved run observation for this task." });
     expect(result.runs.filter((run) => !run.runId)).toHaveLength(5);
+    expect(result.replayConsistency).toMatchObject({ status: "unverified", expectedPairs: 2, comparedPairs: 0 });
+  });
+
+  it("reports evidenced primary/replay verdict divergence without calling it flakiness", async () => {
+    const mission = await fixture("release");
+    const run = (surface: "web" | "electron", kind: "primary" | "replay", verdict: "passed" | "failed") => {
+      const runId = `${surface}-${kind}`;
+      return ObservationSchema.parse({ ...observed({ surface, runKind: kind, runId, verdict,
+        ...(kind === "replay" ? { sourceRunId: `${surface}-primary` } : {}) }),
+        evidence: [{ evidenceId: `${runId}:report`, kind: "report", path: `${runId}/report.html`, sha256: "a".repeat(64), capturedAt: now }] });
+    };
+    mission.observations = [run("electron", "replay", "passed"), run("web", "primary", "passed"),
+      run("web", "replay", "failed"), run("electron", "primary", "passed")];
+    const divergent = projectMissionResult(mission, options).replayConsistency;
+    expect(divergent).toMatchObject({ status: "diverge", expectedPairs: 2, comparedPairs: 2, divergentPairs: 1, unverifiedPairs: 0 });
+    expect(divergent?.pairs).toContainEqual(expect.objectContaining({ surface: "web", primaryRunId: "web-primary", replayRunId: "web-replay", agreement: "diverge" }));
+
+    const webReplay = mission.observations.find((item) => item.data.runId === "web-replay")!;
+    webReplay.evidence = [{ ...webReplay.evidence[0]!, evidenceId: "another-run:report" }];
+    expect(projectMissionResult(mission, options).replayConsistency).toMatchObject({ status: "unverified", comparedPairs: 1, unverifiedPairs: 1 });
+    webReplay.evidence = [];
+    expect(projectMissionResult(mission, options).replayConsistency).toMatchObject({ status: "unverified", comparedPairs: 1, unverifiedPairs: 1 });
+    mission.observations.push(run("electron", "replay", "passed"));
+    expect(projectMissionResult(mission, options).replayConsistency).toMatchObject({ status: "unverified", comparedPairs: 0, unverifiedPairs: 2 });
   });
 
   it("explains unexecuted downstream slots after an earlier Run blocks the Mission", async () => {

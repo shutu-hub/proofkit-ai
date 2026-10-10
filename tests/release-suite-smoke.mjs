@@ -32,6 +32,7 @@ await mkdir(dirname(apiRouteFile), { recursive: true });
 await writeFile(apiRouteFile, apiRouteSource);
 
 let defect = false;
+let transientResumeFailures = 0;
 const state = { resume: "pending", login: "pending" };
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
@@ -49,7 +50,9 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (request.method === "POST" && endpoint === "start" && flow in state) {
-    state[flow] = defect && flow === "resume" ? "wrong" : "done";
+    const transientFailure = flow === "resume" && transientResumeFailures > 0;
+    if (transientFailure) transientResumeFailures--;
+    state[flow] = flow === "resume" && (defect || transientFailure) ? "wrong" : "done";
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ code: "SUCCESS", data: { accepted: true } }));
     return;
@@ -122,6 +125,9 @@ try {
 
   const good = await runSuite(client);
   assert.equal(good.status.mission.verdict, "passed", JSON.stringify(good.status.mission.findings));
+  assert.deepEqual({ status: good.evidence.summary.replayConsistency.status,
+    expected: good.evidence.summary.replayConsistency.expectedPairs,
+    compared: good.evidence.summary.replayConsistency.comparedPairs }, { status: "agree", expected: 4, compared: 4 });
   assert.equal(good.evidence.suiteScope.results.length, 4);
   assert.ok(good.evidence.suiteScope.results.every((item) => item.verdict === "passed" && item.replay.sourceRunId === item.primary.runId));
   assert.deepEqual({ candidates: good.evidence.suiteScope.routeCoverage.candidateRoutes, mapped: good.evidence.suiteScope.routeCoverage.mappedCandidates, observed: good.evidence.suiteScope.routeCoverage.observedCandidates }, { candidates: 5, mapped: 4, observed: 4 });
@@ -140,9 +146,22 @@ try {
   assert.ok(good.evidence.evidence.some((item) => item.kind === "network"));
   for (const item of good.evidence.evidence.filter((evidence) => ["business", "report", "network"].includes(evidence.kind))) await readFile(item.path);
 
+  transientResumeFailures = 1;
+  const divergent = await runSuite(client);
+  assert.equal(divergent.status.mission.verdict, "failed");
+  assert.deepEqual({ status: divergent.evidence.summary.replayConsistency.status,
+    compared: divergent.evidence.summary.replayConsistency.comparedPairs,
+    divergent: divergent.evidence.summary.replayConsistency.divergentPairs }, { status: "diverge", compared: 4, divergent: 1 });
+  assert.ok(divergent.evidence.summary.replayConsistency.pairs.some((pair) => pair.charterId === "resume"
+    && pair.surface === "web" && pair.primaryVerdict === "failed" && pair.replayVerdict === "passed"));
+  assert.ok((await readFile(divergent.evidence.report, "utf8")).includes("Primary and replay verdicts differ"));
+
   defect = true;
   const bad = await runSuite(client);
   assert.equal(bad.status.mission.verdict, "failed");
+  assert.deepEqual({ status: bad.evidence.summary.replayConsistency.status,
+    expected: bad.evidence.summary.replayConsistency.expectedPairs,
+    compared: bad.evidence.summary.replayConsistency.comparedPairs }, { status: "agree", expected: 4, compared: 4 });
   assert.equal(bad.status.mission.firstFailure.kind, "business-oracle");
   assert.ok(bad.evidence.suiteScope.results.filter((item) => item.charterId === "resume").every((item) => item.verdict === "failed"));
   assert.ok(bad.evidence.suiteScope.results.filter((item) => item.charterId === "login").every((item) => item.verdict === "passed"));
@@ -296,7 +315,7 @@ try {
   assert.equal(quickEvidence.proofClassification.businessOracles, 0);
   assert.ok(quickEvidence.suiteScope.routeCoverage.gaps.every((item) => item.kind !== "api" || item.status === "mapped-unobserved"));
   assert.equal((await captureSourceState(sourceRoot)).worktreeSha256, source.worktreeSha256);
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
   await quickClient?.close();
   await quickMcpServer?.close();
@@ -345,11 +364,12 @@ async function verifyMissionReports(results) {
       await page.setViewportSize({ width: 1365, height: 950 });
       await page.goto(url);
       assert.equal(await page.locator("tbody tr").count(), 8);
+      assert.ok((await page.locator(".comparison").allInnerTexts()).some((text) => text.includes("Observed replay verdicts agree")));
       assert.ok((await page.locator(".scope").innerText()).includes("Whole-project workflow coverage has not been measured"));
       assert.ok((await page.locator("footer").innerText()).includes(`revision ${result.summary.revision}`));
       assert.equal(await page.locator(".unavailable").count(), 0);
       if (result.verdict === "failed") assert.ok((await page.locator("#first-failure").innerText()).length > 0);
-      if (result.summary.comparison) assert.ok((await page.locator(".comparison").innerText()).includes("Original defect not reproduced in tested scope"));
+      if (result.summary.comparison) assert.ok((await page.locator(".comparison").allInnerTexts()).some((text) => text.includes("Original defect not reproduced in tested scope")));
       await page.screenshot({ path: join(reviewRoot, `${result.verdict}-${result.summary.comparison ? "replay" : "initial"}-desktop.png`), fullPage: true });
       const reportLink = page.getByRole("link", { name: "Run report", exact: true }).first();
       const expectedUrl = new URL(await reportLink.getAttribute("href"), url).href;

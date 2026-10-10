@@ -367,6 +367,9 @@ describe("Mission report", () => {
         outcome: "not-reproduced", baselineEvidence: [baseline, relation], candidateEvidence: [candidate] }],
       omittedDefects: 0, comparedAt: now,
     };
+    input.replayConsistency = { status: "diverge", expectedPairs: 1, comparedPairs: 1, divergentPairs: 1,
+      unverifiedPairs: 0, pairs: [{ surface: "web", primaryRunId: "run-1", replayRunId: "run-2",
+        primaryVerdict: "failed", replayVerdict: "passed", agreement: "diverge" }], omittedPairs: 0 };
     const store = new MissionReportStore(workspace);
     const intact = await store.writeReportSnapshot(input);
     expect(intact.integrity).toMatchObject({ status: "intact", comparison: "intact",
@@ -375,6 +378,8 @@ describe("Mission report", () => {
     const intactHtml = await readFile(intact.path, "utf8");
     expect(intactHtml).toContain('href="../../runs/run-2/artifacts/candidate.json"');
     expect(intactHtml).toContain("Baseline source: stable · Candidate source: stable");
+    expect(intactHtml).toContain("Primary and replay verdicts differ");
+    expect(intactHtml).toContain("two runs alone do not establish flakiness");
 
     input.comparison.defects[0]!.baselineEvidence = [candidate];
     const misbound = await store.writeReportSnapshot(input);

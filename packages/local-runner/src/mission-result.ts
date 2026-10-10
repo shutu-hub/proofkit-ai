@@ -1,4 +1,4 @@
-import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, SourceStateSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionProofClassification, type MissionResult, type MissionRunResult, type Observation, type TaskNode, type TestMission, type WorkflowExecutionCoverage } from "@proofkit/contracts";
+import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, ReplayConsistencySchema, SourceStateSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionProofClassification, type MissionResult, type MissionRunResult, type MissionSurface, type Observation, type ReplayConsistency, type TaskNode, type TestMission, type WorkflowExecutionCoverage } from "@proofkit/contracts";
 import type { SuiteScopeSummary } from "./suite-verifier.js";
 
 type RunKind = MissionRunResult["runKind"];
@@ -100,6 +100,7 @@ export function projectMissionResult(mission: TestMission, options: {
     observedRuns: observations.length,
     runs: rows.slice(0, 200),
     omittedRunResults: Math.max(0, rows.length - 200),
+    ...(mission.plan.executionProfile.requireReplay ? { replayConsistency: projectReplayConsistency(mission, surfaceTasks, rows, observations) } : {}),
     findings: findings.slice(0, 20),
     omittedFindings: Math.max(0, findings.length - 20),
     confirmedProductFindings: mission.findings.filter((finding) => finding.category === "product" && finding.status === "confirmed").length,
@@ -110,6 +111,51 @@ export function projectMissionResult(mission: TestMission, options: {
     omittedRepairSuggestions: Math.max(0, mission.repairSuggestions.length - 10),
     comparison: options.comparison,
     comparisonUnavailable: options.comparisonUnavailable,
+  });
+}
+
+function projectReplayConsistency(mission: TestMission, tasks: TaskNode[], rows: MissionRunResult[], observations: Observation[]): ReplayConsistency {
+  type PairTasks = { charterId?: string; surface: MissionSurface; primary: TaskNode[]; replay: TaskNode[] };
+  const pairs = new Map<string, PairTasks>();
+  for (const task of tasks) {
+    if (task.tool !== "surface.run-charter" && task.tool !== "surface.replay-charter") continue;
+    const parsedSurface = MissionSurfaceSchema.safeParse(task.input.adapter ?? mission.surface);
+    const surface = parsedSurface.success ? parsedSurface.data : mission.surface;
+    const charterId = task.charterId ?? stringValue(task.input.charterId) ?? singleCharterId(mission);
+    const key = JSON.stringify([charterId ?? null, surface]);
+    const pair = pairs.get(key) ?? { charterId, surface, primary: [], replay: [] };
+    pair[task.tool === "surface.run-charter" ? "primary" : "replay"].push(task);
+    pairs.set(key, pair);
+  }
+  const results: ReplayConsistency["pairs"] = [];
+  for (const pair of pairs.values()) {
+    const primaryRows = pair.primary.length === 1 ? rows.filter((row) => row.taskId === pair.primary[0]!.taskId && row.runKind === "primary") : [];
+    const replayRows = pair.replay.length === 1 ? rows.filter((row) => row.taskId === pair.replay[0]!.taskId && row.runKind === "replay") : [];
+    const primary = primaryRows.length === 1 ? primaryRows[0] : undefined;
+    const replay = replayRows.length === 1 ? replayRows[0] : undefined;
+    const replayObservation = observations.filter((item) => item.data.runId === replay?.runId && item.data.runKind === "replay"
+      && item.charterId === pair.charterId && item.data.surface === pair.surface);
+    const hasOwnHashedEvidence = (row: MissionRunResult | undefined) => Boolean(row?.runId && row.evidence.some((ref) =>
+      Boolean(ref.sha256) && ref.evidenceId.startsWith(`${row.runId}:`)));
+    const comparable = primary?.runId && replay?.runId && replayObservation.length === 1
+      && replayObservation[0]!.data.sourceRunId === primary.runId
+      && ["passed", "failed"].includes(primary.verdict ?? "") && ["passed", "failed"].includes(replay.verdict ?? "")
+      && hasOwnHashedEvidence(primary) && hasOwnHashedEvidence(replay);
+    const agreement = comparable ? primary!.verdict === replay!.verdict ? "agree" : "diverge" : "unverified";
+    results.push({ charterId: pair.charterId, surface: pair.surface,
+      primaryRunId: primary?.runId, replayRunId: replay?.runId,
+      primaryVerdict: primary?.verdict, replayVerdict: replay?.verdict, agreement });
+  }
+  const divergentPairs = results.filter((item) => item.agreement === "diverge").length;
+  const unverifiedPairs = results.filter((item) => item.agreement === "unverified").length;
+  return ReplayConsistencySchema.parse({
+    status: divergentPairs ? "diverge" : unverifiedPairs || results.length === 0 ? "unverified" : "agree",
+    expectedPairs: results.length,
+    comparedPairs: results.length - unverifiedPairs,
+    divergentPairs,
+    unverifiedPairs,
+    pairs: results.slice(0, 20),
+    omittedPairs: Math.max(0, results.length - 20),
   });
 }
 

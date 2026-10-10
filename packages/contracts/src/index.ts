@@ -1338,6 +1338,26 @@ export const MissionRunResultSchema = z.object({
 });
 export type MissionRunResult = z.infer<typeof MissionRunResultSchema>;
 
+/** Saved primary/replay verdict agreement; divergence alone does not establish flakiness. */
+export const ReplayConsistencySchema = z.object({
+  status: z.enum(["agree", "diverge", "unverified"]),
+  expectedPairs: z.number().int().nonnegative(),
+  comparedPairs: z.number().int().nonnegative(),
+  divergentPairs: z.number().int().nonnegative(),
+  unverifiedPairs: z.number().int().nonnegative(),
+  pairs: z.array(z.object({
+    charterId: CatalogIdSchema.optional(),
+    surface: MissionSurfaceSchema,
+    primaryRunId: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional(),
+    replayRunId: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional(),
+    primaryVerdict: VerdictSchema.optional(),
+    replayVerdict: VerdictSchema.optional(),
+    agreement: z.enum(["agree", "diverge", "unverified"]),
+  })).max(20),
+  omittedPairs: z.number().int().nonnegative(),
+});
+export type ReplayConsistency = z.infer<typeof ReplayConsistencySchema>;
+
 /** Current readability of the bounded Mission presentation, separate from its saved acceptance verdict. */
 export const MissionEvidenceIntegritySchema = z.object({
   status: z.enum(["intact", "degraded", "partial", "no-evidence"]),
@@ -1461,6 +1481,7 @@ export const MissionResultSchema = z.object({
   observedRuns: z.number().int().nonnegative(),
   runs: z.array(MissionRunResultSchema).max(200),
   omittedRunResults: z.number().int().nonnegative(),
+  replayConsistency: ReplayConsistencySchema.optional(),
   findings: z.array(FindingSchema).max(20),
   omittedFindings: z.number().int().nonnegative(),
   confirmedProductFindings: z.number().int().nonnegative(),

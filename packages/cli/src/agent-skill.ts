@@ -95,6 +95,11 @@ plus any missing acceptance obligations. Distinguish failed business facts from
 blocked access/environment, cancelled work and inconclusive evidence. A console
 error alone is not a confirmed product defect. Cite evidence for a diagnosis;
 inspect the relevant source before proposing a change.
+For release Missions, inspect summary.replayConsistency. A divergent primary
+and replay verdict is an observed difference to investigate, not proof of
+flakiness. An unverified pair may lack a Run, a replay source link or hashed
+evidence. Check the Run links and current evidence integrity before reporting
+the saved comparison.
 Check get_mission_evidence.evidenceIntegrity.status before presenting a saved
 confirmed finding or repair as currently supported. "degraded" means one or
 more presented references or confirmed findings lack verifiable bytes;
