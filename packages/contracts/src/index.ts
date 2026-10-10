@@ -1298,6 +1298,7 @@ export const MissionComparisonSchema = z.object({
   baselineSourceState: SourceStateSchema.optional(),
   candidateSourceState: SourceStateSchema.optional(),
   sourceChange: z.enum(["changed", "unchanged", "unknown"]),
+  baselineSourceStability: z.enum(["stable", "changed-during-run", "unknown"]).optional(),
   candidateSourceStability: z.enum(["stable", "changed-during-run", "unknown"]),
   status: z.enum(["verified-in-scope", "defect-reproduced", "inconclusive"]),
   reason: z.string().min(1),

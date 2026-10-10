@@ -196,6 +196,25 @@ describe("Mission repair comparison", () => {
     expect(result.gaps).toContain("Candidate source changed while the Mission was executing.");
   });
 
+  it("refuses repair verification when the baseline source changed during its Run", async () => {
+    const fixture = await createFixture();
+    const now = new Date().toISOString();
+    const source = (kind: "project.source-state" | "project.source-state-final", headSha: string, digest: string) => ({
+      observationId: `baseline-${kind}`, source: "planner" as const, kind,
+      data: { method: "git", headSha, worktreeSha256: digest, complete: true, capturedAt: now },
+      evidence: [], observedAt: now,
+    });
+    fixture.baseline.observations.push(source("project.source-state", "a".repeat(40), "b".repeat(64)));
+    fixture.baseline.observations.push(source("project.source-state-final", "c".repeat(40), "b".repeat(64)));
+    const changed = await fixture.compare();
+    expect(changed).toMatchObject({ status: "inconclusive", baselineSourceStability: "changed-during-run" });
+    expect(changed.gaps).toContain("Baseline source changed while the Mission was executing.");
+
+    fixture.baseline.observations.at(-1)!.data.headSha = "a".repeat(40);
+    const stable = await fixture.compare();
+    expect(stable).toMatchObject({ status: "verified-in-scope", baselineSourceStability: "stable" });
+  });
+
   it("does not verify a repair across a changed or differently owned target", async () => {
     const fixture = await createFixture();
     const expected = fixture.root;

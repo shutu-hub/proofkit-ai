@@ -35,18 +35,14 @@ export async function compareMissionRecords(
   const baselineScopeHash = scopeHash(baseline);
   const candidateScopeHash = scopeHash(candidate);
   const baselineSourceState = sourceStateFor(baseline);
+  const baselineFinalSourceState = sourceStateFor(baseline, "project.source-state-final");
   const candidateSourceState = sourceStateFor(candidate);
   const candidateFinalSourceState = sourceStateFor(candidate, "project.source-state-final");
-  const sourceChange: MissionComparison["sourceChange"] = baselineSourceState?.complete && candidateSourceState?.complete
-    && baselineSourceState.method === "git" && candidateSourceState.method === "git"
-    && baselineSourceState.worktreeSha256 && candidateSourceState.worktreeSha256
-    ? baselineSourceState.worktreeSha256 === candidateSourceState.worktreeSha256 ? "unchanged" : "changed"
+  const sourceChange: MissionComparison["sourceChange"] = completeGitSource(baselineSourceState) && completeGitSource(candidateSourceState)
+    ? sameGitSource(baselineSourceState, candidateSourceState) ? "unchanged" : "changed"
     : "unknown";
-  const candidateSourceStability: MissionComparison["candidateSourceStability"] = candidateSourceState?.complete && candidateFinalSourceState?.complete
-    && candidateSourceState.method === "git" && candidateFinalSourceState.method === "git"
-    && candidateSourceState.worktreeSha256 && candidateFinalSourceState.worktreeSha256
-    ? candidateSourceState.worktreeSha256 === candidateFinalSourceState.worktreeSha256 ? "stable" : "changed-during-run"
-    : "unknown";
+  const baselineSourceStability = sourceStability(baselineSourceState, baselineFinalSourceState);
+  const candidateSourceStability = sourceStability(candidateSourceState, candidateFinalSourceState);
   const scopeMatched = baselineScopeHash === candidateScopeHash;
   const gaps: string[] = [];
   if (baseline.missionId === candidate.missionId) gaps.push("A Mission cannot be compared with itself.");
@@ -55,6 +51,7 @@ export async function compareMissionRecords(
   if (!terminal(baseline)) gaps.push("Baseline Mission has not reached a terminal state.");
   if (!terminal(candidate)) gaps.push("Candidate Mission has not reached a terminal state.");
   if (baseline.verdict !== "failed") gaps.push("Baseline Mission did not record a failed verdict for its confirmed product defect.");
+  if (baselineSourceStability === "changed-during-run") gaps.push("Baseline source changed while the Mission was executing.");
   if (candidateSourceStability === "changed-during-run") gaps.push("Candidate source changed while the Mission was executing.");
 
   const slots = slotsFor(baseline);
@@ -178,6 +175,7 @@ export async function compareMissionRecords(
     baselineSourceState,
     candidateSourceState,
     sourceChange,
+    baselineSourceStability,
     candidateSourceStability,
     status,
     reason,
@@ -230,6 +228,20 @@ function sourceStateFor(mission: TestMission, kind = "project.source-state"): So
   const observed = [...mission.observations].reverse().find((item) => item.kind === kind);
   const parsed = SourceStateSchema.safeParse(observed?.data);
   return parsed.success ? parsed.data : undefined;
+}
+
+function completeGitSource(state: SourceState | undefined): state is SourceState & { method: "git"; headSha: string; worktreeSha256: string } {
+  return state?.complete === true && state.method === "git" && Boolean(state.headSha && state.worktreeSha256);
+}
+
+function sameGitSource(left: SourceState & { headSha: string; worktreeSha256: string }, right: SourceState & { headSha: string; worktreeSha256: string }): boolean {
+  return left.headSha === right.headSha && left.worktreeSha256 === right.worktreeSha256;
+}
+
+function sourceStability(start: SourceState | undefined, end: SourceState | undefined): "stable" | "changed-during-run" | "unknown" {
+  return completeGitSource(start) && completeGitSource(end)
+    ? sameGitSource(start, end) ? "stable" : "changed-during-run"
+    : "unknown";
 }
 
 function scopeHash(mission: TestMission): string {

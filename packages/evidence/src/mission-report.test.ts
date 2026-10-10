@@ -360,7 +360,7 @@ describe("Mission report", () => {
     input.comparison = {
       baselineMissionId: "baseline-mission", candidateMissionId: "candidate-mission",
       baselineScopeHash: "a".repeat(64), candidateScopeHash: "a".repeat(64), scopeMatched: true,
-      sourceChange: "changed", candidateSourceStability: "stable", status: "verified-in-scope",
+      sourceChange: "changed", baselineSourceStability: "stable", candidateSourceStability: "stable", status: "verified-in-scope",
       reason: "Saved comparison", gaps: [], runs: [{ surface: "web", runKind: "primary", baselineRunId: "run-3",
         baselineBusinessFacts: 1, candidateBusinessFacts: 0, baselineEvidence: [rowFact], candidateEvidence: [] }], omittedRuns: 0,
       defects: [{ surface: "web", oracleName: "relation", baselineRunId: "run-1", candidateRunId: "run-2",
@@ -372,7 +372,9 @@ describe("Mission report", () => {
     expect(intact.integrity).toMatchObject({ status: "intact", comparison: "intact",
       references: { total: 4, intact: 4 },
       visibleConfirmedFindings: { supported: 1 } });
-    expect(await readFile(intact.path, "utf8")).toContain('href="../../runs/run-2/artifacts/candidate.json"');
+    const intactHtml = await readFile(intact.path, "utf8");
+    expect(intactHtml).toContain('href="../../runs/run-2/artifacts/candidate.json"');
+    expect(intactHtml).toContain("Baseline source: stable · Candidate source: stable");
 
     input.comparison.defects[0]!.baselineEvidence = [candidate];
     const misbound = await store.writeReportSnapshot(input);

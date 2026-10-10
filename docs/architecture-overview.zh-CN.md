@@ -96,7 +96,7 @@ Web 路由覆盖要求本次 Run 的页面 URL 与配置的 HTTP origin 一致�
 
 结果分为 `passed`、`failed`、`blocked`、`cancelled`、`inconclusive`。产品缺陷需有证据支持；登录、环境或覆盖缺口按实际原因报告。修复比较只确认原缺陷在相同测试范围内未再复现。
 
-Mission 开始和结束时的完整 Git 源码指纹若不同，当前审计后的 `testVerdict` 对历史通过或失败降为 `inconclusive`，原 `verdict` 和 Run 证据仍保留。没有完整 Git 指纹时标为 `sourceStability: unverified`，不单凭缺失指纹否定已声明场景的测试；指纹不覆盖生成产物，也不能证明页面实际提供的字节。
+Mission 开始和结束时的完整 Git 源码指纹若不同，当前审计后的 `testVerdict` 对历史通过或失败降为 `inconclusive`，原 `verdict` 和 Run 证据仍保留。修复比较也分别核对基线和候选 Mission 的首尾源码指纹；任一方在运行期间发生可证实变化，就不提供 `verified-in-scope`。没有完整 Git 指纹时标为 `sourceStability: unverified`，不单凭缺失指纹否定已声明场景的测试；指纹不覆盖生成产物，也不能证明页面实际提供的字节。
 
 Runner 会在每条页面断言执行后立即保存页面快照，并尽力保存截图，把这些文件直接关联到该断言。断言观察文件均无法保存时，该次页面检查为 `inconclusive`；诊断器不会拿此前成功步骤的快照补作缺陷证据。截图或快照只记录断言附近的页面状态，仍需结合断言语义和业务 Oracle 判断影响。
 
