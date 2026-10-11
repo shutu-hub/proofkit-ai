@@ -81,7 +81,8 @@ try {
     app.commandLine.appendSwitch('remote-debugging-port','0');
     let window;app.whenReady().then(()=>{window=new BrowserWindow({show:false,webPreferences:{contextIsolation:true,nodeIntegration:false,offscreen:true,backgroundThrottling:false}});window.loadURL(${JSON.stringify(`${baseUrl}/resume`)});});
     app.on('window-all-closed',()=>app.quit());`, "utf8");
-  const executable = process.env.PROOFKIT_ELECTRON_PATH ?? resolve(repoRoot, "../Python/AIHR-Microservices/node_modules/.pnpm/electron@28.3.3/node_modules/electron/dist/electron.exe");
+  const executable = process.env.PROOFKIT_ELECTRON_PATH;
+  if (!executable) throw new Error("Set PROOFKIT_ELECTRON_PATH to a local Electron executable for the release suite smoke test");
   electron = spawn(executable, [appPath], { stdio: "ignore", windowsHide: true });
   let spawnError;
   electron.on("error", (error) => { spawnError = error; });
@@ -161,7 +162,7 @@ try {
     intent: "测试简历上线完整回归", charterId: "resume", surface: "web",
   } }));
   const singleStatus = await waitForMission(client, singleStarted.missionId);
-  const singleEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: singleStarted.missionId } }));
+  const singleEvidence = await fullEvidence(client, singleStarted.missionId);
   assert.equal(singleStatus.mission.verdict, "failed");
   assert.equal(singleEvidence.testVerdict, "failed");
   assert.equal(singleEvidence.summary.runs.length, 4);
@@ -202,7 +203,7 @@ try {
   assert.equal(comparison.status, "verified-in-scope", JSON.stringify(comparison.gaps));
   assert.ok(comparison.defects.length >= 2 && comparison.defects.every((item) => item.outcome === "not-reproduced" && item.charterId === "resume"));
   assert.equal(comparison.runs.length, 8);
-  const replayEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: replayStarted.mission.missionId } }));
+  const replayEvidence = await fullEvidence(client, replayStarted.mission.missionId);
   assert.equal(replayEvidence.summary.comparison.status, "verified-in-scope");
   const verifiedCompare = await cliCommand("mission", "compare", bad.started.missionId, replayStarted.mission.missionId,
     "--root", sourceRoot, "--workspace", workspaceRoot);
@@ -231,7 +232,7 @@ try {
     assert.ok(started.planning.coverage.gaps.includes("project-map-truncated"));
     const status = await waitForMission(client, started.missionId);
     assert.equal(status.mission.verdict, "passed", JSON.stringify(status.mission.findings));
-    const evidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
+    const evidence = await fullEvidence(client, started.missionId);
     assert.deepEqual(evidence.planning.coverage, started.planning.coverage);
     assert.equal(evidence.summary.planning.coverage.inventory, "partial");
     assert.ok((await readFile(evidence.report, "utf8")).includes("source inventory is partial"));
@@ -254,7 +255,7 @@ try {
   assert.equal(wholeSuite.planning.coverage.requested, "project");
   const wholeStatus = await waitForMission(client, wholeSuite.missionId);
   assert.equal(wholeStatus.mission.verdict, "inconclusive");
-  const wholeEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: wholeSuite.missionId } }));
+  const wholeEvidence = await fullEvidence(client, wholeSuite.missionId);
   assert.deepEqual({ status: wholeEvidence.workflowExecution.status, requiredChecks: wholeEvidence.workflowExecution.requiredChecks,
     evidencedChecks: wholeEvidence.workflowExecution.evidencedChecks }, { status: "all-declared-evidenced", requiredChecks: 4, evidencedChecks: 4 });
   assert.ok((await readFile(wholeEvidence.report, "utf8")).includes("Declared workflow execution: 4/4"));
@@ -284,7 +285,7 @@ try {
   assert.deepEqual(directProject.taskSummary.filter((task) => task.tool === "surface.run-charter").map((task) => task.charterId), ["resume", "login"]);
   const directStatus = await waitForMission(client, directProject.missionId);
   assert.equal(directStatus.mission.verdict, "inconclusive");
-  const directEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: directProject.missionId } }));
+  const directEvidence = await fullEvidence(client, directProject.missionId);
   assert.deepEqual(directEvidence.suiteScope.results.map((item) => `${item.charterId}/${item.surface}`), ["resume/web", "login/electron"]);
   assert.ok(directEvidence.suiteScope.results.every((item) => item.verdict === "passed" && item.replay.sourceRunId === item.primary.runId));
   assert.deepEqual({ status: directEvidence.workflowExecution.status, required: directEvidence.workflowExecution.requiredChecks,
@@ -330,7 +331,7 @@ try {
   assert.equal(quickProject.readiness.ready, true);
   const quickStatus = await waitForMission(quickClient, quickProject.missionId);
   assert.equal(quickStatus.mission.verdict, "inconclusive");
-  const quickEvidence = payload(await quickClient.callTool({ name: "get_mission_evidence", arguments: { missionId: quickProject.missionId } }));
+  const quickEvidence = await fullEvidence(quickClient, quickProject.missionId);
   assert.equal(quickEvidence.summary.expectedRuns, 2);
   assert.equal(quickEvidence.summary.observedRuns, 2);
   assert.deepEqual(quickEvidence.suiteScope.results.map((item) => `${item.charterId}/${item.surface}`), ["resume/web", "login/electron"]);
@@ -340,7 +341,7 @@ try {
   assert.equal(quickEvidence.proofClassification.businessOracles, 0);
   assert.ok(quickEvidence.suiteScope.routeCoverage.gaps.every((item) => item.kind !== "api" || item.status === "mapped-unobserved"));
   assert.equal((await captureSourceState(sourceRoot)).worktreeSha256, source.worktreeSha256);
-  const acceptedAgain = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } }));
+  const acceptedAgain = await fullEvidence(client, good.started.missionId);
   assert.equal(acceptedAgain.testVerdict, "passed");
   assert.equal(acceptedAgain.summary.executionAudit.status, "complete");
   const savedMissionPath = join(workspaceRoot, ".proofkit", "missions", `${good.started.missionId}.json`);
@@ -351,7 +352,7 @@ try {
   assert.ok(webReplayObservation);
   webReplayObservation.data.sourceRunId = "unrelated-run";
   await writeFile(savedMissionPath, JSON.stringify(wrongReplaySource));
-  const wrongReplayEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } }));
+  const wrongReplayEvidence = await fullEvidence(client, good.started.missionId);
   assert.equal(wrongReplayEvidence.verdict, "passed");
   assert.equal(wrongReplayEvidence.testVerdict, "inconclusive");
   assert.ok(wrongReplayEvidence.summary.executionAudit.issues.some((issue) => issue.includes("replay source")));
@@ -370,7 +371,7 @@ try {
   assert.ok(primaryObservation);
   duplicateMission.observations.push({ ...primaryObservation, observationId: `duplicate-${primaryObservation.observationId}` });
   await writeFile(savedMissionPath, JSON.stringify(duplicateMission));
-  const duplicateEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } }));
+  const duplicateEvidence = await fullEvidence(client, good.started.missionId);
   assert.equal(duplicateEvidence.testVerdict, "inconclusive");
   assert.ok(duplicateEvidence.summary.executionAudit.issues.some((issue) => issue.includes("expected one Run observation, found 2")));
   const borrowedMission = JSON.parse(savedMissionBytes);
@@ -383,7 +384,7 @@ try {
   assert.ok(borrowedReport);
   borrower.evidence.push(borrowedReport);
   await writeFile(savedMissionPath, JSON.stringify(borrowedMission));
-  const borrowedEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } }));
+  const borrowedEvidence = await fullEvidence(client, good.started.missionId);
   assert.equal(borrowedEvidence.acceptanceEvidenceIntegrity.status, "intact");
   assert.equal(borrowedEvidence.testVerdict, "inconclusive");
   assert.ok(borrowedEvidence.summary.executionAudit.issues.some((issue) => issue.includes("does not belong to its Run")));
@@ -402,12 +403,12 @@ try {
     [webTask.output.runId, desktopTask.output.runId] = [desktopTask.output.runId, webTask.output.runId];
   }
   await writeFile(savedMissionPath, JSON.stringify(swappedMission));
-  const wrongAdapterEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } }));
+  const wrongAdapterEvidence = await fullEvidence(client, good.started.missionId);
   assert.equal(wrongAdapterEvidence.acceptanceEvidenceIntegrity.status, "intact");
   assert.equal(wrongAdapterEvidence.testVerdict, "inconclusive");
   assert.ok(wrongAdapterEvidence.summary.executionAudit.issues.some((issue) => issue.includes("saved Run adapter")));
   await writeFile(savedMissionPath, savedMissionBytes);
-  assert.equal(payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } })).testVerdict, "passed");
+  assert.equal((await fullEvidence(client, good.started.missionId)).testVerdict, "passed");
   const baselineBusinessRef = bad.status.mission.findings.flatMap((finding) => finding.evidence)
     .find((ref) => ref.kind === "business" && ref.sha256);
   assert.ok(baselineBusinessRef?.path, "Seeded defect needs a saved business source fact");
@@ -459,12 +460,16 @@ try {
   if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
+async function fullEvidence(mcpClient, missionId) {
+  return payload(await mcpClient.callTool({ name: "get_mission_evidence", arguments: { missionId, detail: "full" } }));
+}
+
 async function runSuite(mcpClient) {
   const started = payload(await mcpClient.callTool({ name: "run_test", arguments: { intent: "上线完整回归", suiteId: "release-critical", surface: "web" } }));
   assert.equal(started.readiness.ready, true);
   assert.equal(started.suiteId, "release-critical");
   const status = await waitForMission(mcpClient, started.missionId);
-  const evidence = payload(await mcpClient.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
+  const evidence = await fullEvidence(mcpClient, started.missionId);
   assert.equal(evidence.verdict, status.mission.verdict);
   return { started, status, evidence };
 }

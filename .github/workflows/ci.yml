@@ -69,3 +69,37 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test:smoke:target-continuity
       - run: pnpm test:smoke:ci-gate
+
+  release-suite-windows:
+    name: Web and Electron release matrix
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Install isolated Electron fixture runtime
+        shell: pwsh
+        run: |
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP 'proofkit-electron'
+          npm install --prefix $fixtureRoot --no-save --no-audit --no-fund electron@28.3.3
+          if ($LASTEXITCODE -ne 0) { throw 'Electron fixture installation failed' }
+          $executable = Join-Path $fixtureRoot 'node_modules\electron\dist\electron.exe'
+          if (-not (Test-Path -LiteralPath $executable)) { throw 'Electron fixture executable is missing' }
+          Add-Content -Path $env:GITHUB_ENV -Value "PROOFKIT_ELECTRON_PATH=$executable"
+      - name: Verify Web and Electron release evidence
+        run: node tests/release-suite-smoke.mjs
+      - name: Preserve synthetic evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proofkit-release-suite-windows
+          path: .proofkit/local-runner-smoke/release-suite-*/test-workspace/.proofkit/
+          if-no-files-found: ignore
