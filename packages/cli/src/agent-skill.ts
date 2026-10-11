@@ -183,8 +183,11 @@ For a saved failure, do not claim a current product defect when its cited
 evidence is missing, changed or lacks an explicitly classified failing business Oracle.
 In that case testVerdict is inconclusive while verdict remains historical.
 
-For an authorized fix, use replay_mission on the original Mission with the
-same scope and fixture bytes, then compare_missions after the replay finishes.
+For an authorized fix, review the original Mission's scope and side effects,
+then call replay_mission with approve=true to authorize this new execution.
+Without that flag, a replay that requires approval remains awaiting-approval;
+use approve_test_plan and start_mission after review. Preserve the original
+scope and fixture bytes, then compare_missions after the replay finishes.
 Report verified-in-scope only when the comparison says so. A different scenario
 or passing page cannot certify the original defect or the entire project.
 Read the comparison again when reporting: candidateSourceFreshness changed or

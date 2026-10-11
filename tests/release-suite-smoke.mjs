@@ -184,7 +184,7 @@ try {
   assert.equal(bad.evidence.suiteScope.routeCoverage.observedCandidates, 2);
   assert.ok(bad.status.mission.findings.some((item) => item.category === "product" && item.status === "confirmed" && item.charterId === "resume" && item.evidence.length > 0));
   defect = false;
-  const replayStarted = payload(await client.callTool({ name: "replay_mission", arguments: { missionId: bad.started.missionId } }));
+  const replayStarted = payload(await client.callTool({ name: "replay_mission", arguments: { missionId: bad.started.missionId, approve: true } }));
   assert.equal(replayStarted.mission.replayOfMissionId, bad.started.missionId);
   let replayStatus;
   for (let attempt = 0; attempt < 500; attempt++) {
@@ -425,7 +425,7 @@ try {
     assert.ok(finding);
     finding.evidence = [];
     await writeFile(badMissionPath, JSON.stringify(unlinkedBaseline));
-    const unverifiedReplay = await cliCommand("mission", "replay", bad.started.missionId,
+    const unverifiedReplay = await cliCommand("mission", "replay", bad.started.missionId, "--approve",
       "--root", sourceRoot, "--workspace", workspaceRoot);
     assert.equal(unverifiedReplay.code, 2, unverifiedReplay.stderr || JSON.parse(unverifiedReplay.stdout).comparison?.reason);
     const replayResult = JSON.parse(unverifiedReplay.stdout);

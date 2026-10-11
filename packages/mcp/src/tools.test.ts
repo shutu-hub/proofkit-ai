@@ -77,6 +77,19 @@ describe("ProofKit MCP tools", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  it("requires an explicit replay approval flag at the MCP boundary", async () => {
+    const mission = fixtureMission("awaiting-approval");
+    const runner = { replayMission: vi.fn(async () => ({ mission, running: false })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const pending = await client.callTool({ name: "replay_mission", arguments: { missionId: "mission-before" } });
+      expect(JSON.parse(textContent(pending))).toMatchObject({ mission: { status: "awaiting-approval" }, running: false });
+      expect(runner.replayMission).toHaveBeenCalledWith("mission-before", { approve: false });
+      await client.callTool({ name: "replay_mission", arguments: { missionId: "mission-before", approve: true } });
+      expect(runner.replayMission).toHaveBeenLastCalledWith("mission-before", { approve: true });
+    } finally { await client.close(); await server.close(); }
+  });
+
   it("exposes bounded configured environment observations independently of test planning", async () => {
     const runner = { inspectEnvironment: vi.fn(async () => ({ status: "incomplete", testVerdict: "not-asserted", notChecked: ["business-terminal"] })) } as unknown as LocalRunnerService;
     const { client, server } = await connectedClient(runner);

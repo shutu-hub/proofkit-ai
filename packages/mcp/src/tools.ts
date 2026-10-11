@@ -166,9 +166,9 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "replay_mission",
-    "Create a new mission from a previous mission charter and execute it for regression verification.",
-    { missionId: z.string().min(1) },
-    async ({ missionId }) => result(await runner.replayMission(missionId)),
+    "Create a new mission from a previous mission charter. When the saved policy requires approval or the scenario has side effects, approve=true explicitly authorizes this new execution; otherwise the replay remains awaiting approval for review.",
+    { missionId: z.string().min(1), approve: z.boolean().default(false) },
+    async ({ missionId, approve }) => result(await runner.replayMission(missionId, { approve })),
   );
 
   server.tool(

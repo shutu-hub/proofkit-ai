@@ -192,7 +192,7 @@ try {
   assert.deepEqual(fixtureErrors, []);
   for (const evidence of [...success.evidence, ...failed.evidence]) await readFile(evidence.path);
   mode = "success";
-  const replayStarted = mcpPayload(await mcpClient.callTool({ name: "replay_mission", arguments: { missionId: failed.missionId } }));
+  const replayStarted = mcpPayload(await mcpClient.callTool({ name: "replay_mission", arguments: { missionId: failed.missionId, approve: true } }));
   assert.equal(replayStarted.mission.replayOfMissionId, failed.missionId);
   let replayStatus;
   for (let attempt = 0; attempt < 100; attempt++) {

@@ -433,12 +433,13 @@ export function createProgram(): Command {
     });
 
   mission.command("replay <missionId>")
-    .description("Replay a mission charter and wait for its final verdict")
+    .description("Create a replay Mission; use --approve to authorize its execution when approval is required")
     .option("--root <path>", "project root", ".")
+    .option("--approve", "approve this new replay execution after reviewing its scope and side effects")
     .option("--allow-capability-writes", "allow approved test-environment write capabilities")
-    .action(async (missionId: string, options: RootOptions & { allowCapabilityWrites?: boolean }) => {
+    .action(async (missionId: string, options: RootOptions & { approve?: boolean; allowCapabilityWrites?: boolean }) => {
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace, allowCapabilityWrites: options.allowCapabilityWrites });
-      const started = await runner.replayMission(missionId);
+      const started = await runner.replayMission(missionId, { approve: options.approve });
       const completed = await runner.waitMission(started.mission.missionId);
       const evidence = await runner.missionEvidence(completed.missionId);
       console.log(JSON.stringify({ missionId: completed.missionId, replayOfMissionId: missionId, status: completed.status, verdict: completed.verdict, testVerdict: evidence.testVerdict, testVerdictReason: evidence.testVerdictReason, comparison: evidence.comparison, summary: evidence.summary, report: evidence.report, reportUnavailable: evidence.reportUnavailable }, null, 2));

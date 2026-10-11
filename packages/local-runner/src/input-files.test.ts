@@ -13,7 +13,7 @@ describe("Mission file replay association", () => {
   it("pairs primary and negative inputs with their own baseline Run", async () => {
     const { service, calls, summaries, missionId } = await baseline();
     const firstCalls = [...calls];
-    const replay = await service.replayMission(missionId);
+    const replay = await service.replayMission(missionId, { approve: true });
     expect((await service.waitMission(replay.mission.missionId)).verdict).toBe("passed");
     expect(calls.slice(2).map((input) => input.replayOfRunId)).toEqual(["run-1", "run-2"]);
     expect(firstCalls.every((input) => input.replayOfRunId === undefined)).toBe(true);
@@ -36,7 +36,7 @@ describe("Mission file replay association", () => {
       }
       return started;
     };
-    const replay = await service.replayMission(missionId);
+    const replay = await service.replayMission(missionId, { approve: true });
     const result = await service.waitMission(replay.mission.missionId);
     expect(result.verdict).toBe("failed");
     const negative = result.observations.find((item) => item.data.runKind === "negative");

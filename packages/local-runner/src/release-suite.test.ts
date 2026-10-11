@@ -19,6 +19,24 @@ afterEach(async () => {
 });
 
 describe("explicit release suites", () => {
+  it("requires fresh approval when a suite has an interactive negative case under deny-policy Charters", async () => {
+    const service = await createSuiteService();
+    const charterPath = join(service.workspaceRoot, ".proofkit", "charters", "login.yml");
+    const charter = TestCharterSchema.parse(JSON.parse(await readFile(charterPath, "utf8")));
+    await writeFile(charterPath, JSON.stringify({ ...charter, negativeCases: [{ ...charter.negativeCases![0],
+      actions: [{ kind: "click", selector: "#retry" }], sideEffectPolicy: "allow" }] }));
+    const original = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical",
+      policy: { requireApproval: false } });
+    expect(original.policy).toMatchObject({ requireApproval: false, sideEffectPolicy: "deny" });
+    const path = join(service.workspaceRoot, ".proofkit", "missions", `${original.missionId}.json`);
+    await writeFile(path, JSON.stringify({ ...original, status: "completed", verdict: "passed" }));
+
+    const replay = await service.replayMission(original.missionId);
+    expect(replay).toMatchObject({ running: false, mission: { status: "awaiting-approval",
+      replayOfMissionId: original.missionId, policy: { requireApproval: true, sideEffectPolicy: "deny" } } });
+    expect((await service.missionStatus(replay.mission.missionId)).mission.status).toBe("awaiting-approval");
+  });
+
   it.each(["primary", "replay", "negative"] as const)("rechecks %s cleanup instead of trusting a saved passing outcome", async (runKind) => {
     const service = await createSuiteService();
     stubRuns(service);
@@ -68,7 +86,7 @@ describe("explicit release suites", () => {
       expect(result.negativeCases).toHaveLength(1);
     }
 
-    const replayedMission = await service.replayMission(mission.missionId);
+    const replayedMission = await service.replayMission(mission.missionId, { approve: true });
     const replayed = await service.waitMission(replayedMission.mission.missionId);
     expect(replayed.replayOfMissionId).toBe(mission.missionId);
     expect(replayed.suite?.suiteId).toBe("release-critical");
@@ -165,7 +183,7 @@ describe("explicit release suites", () => {
     expect(evidence.suiteScope?.results.every((item) => item.verdict === "passed")).toBe(true);
     expect(evidence.planning?.evidenceGaps).toContain("project-workflow-coverage");
 
-    const replay = await service.replayMission(whole.missionId);
+    const replay = await service.replayMission(whole.missionId, { approve: true });
     const replayed = await service.waitMission(replay.mission.missionId);
     expect(replayed.verdict).toBe("inconclusive");
     expect(replayed.plan.planning?.coverage).toEqual(whole.plan.planning?.coverage);

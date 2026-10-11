@@ -193,7 +193,7 @@ describe("external test workspace", () => {
       omittedEvidenceReferences,
     });
     expect((await restarted.evidenceFor(started.runId, "report")).content).toContain("Oracle checks");
-    const replay = await restarted.replayMission(mission.missionId);
+    const replay = await restarted.replayMission(mission.missionId, { approve: true });
     expect((await restarted.waitMission(replay.mission.missionId)).verdict).toBe("passed");
     const business = acceptedEvidence.evidence.find((ref) => ref.kind === "business");
     expect(business?.sha256).toMatch(/^[a-f0-9]{64}$/);

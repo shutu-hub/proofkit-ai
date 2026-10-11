@@ -18,6 +18,30 @@ afterEach(async () => {
 });
 
 describe("LocalRunnerService", () => {
+  it.each([
+    { sideEffectPolicy: "allow" as const, requireApproval: false },
+    { sideEffectPolicy: "deny" as const, requireApproval: true },
+    { sideEffectPolicy: "deny" as const, requireApproval: false, negativeMayInteract: true },
+  ])("keeps a $sideEffectPolicy replay awaiting fresh approval when the original required it or a scenario could interact", async ({ sideEffectPolicy, requireApproval, negativeMayInteract }) => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-replay-approval-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ root, workspaceRoot: root });
+    const charter: TestCharter = { intent: "review repeated execution", level: "quick", mode: "deterministic",
+      preconditions: [], actions: sideEffectPolicy === "allow" ? [{ kind: "click", selector: "#submit" }] : [{ kind: "observe" }],
+      assertions: [{ kind: "text-visible", text: "Ready" }], sideEffectPolicy, metadata: {},
+      ...(negativeMayInteract ? { negativeCases: [{ caseId: "retry", title: "retry rejected input", actions: [{ kind: "click", selector: "#retry" }],
+        assertions: [], oracles: [], sideEffectPolicy: "allow" as const, metadata: {} }] } : {}) };
+    const original = await service.createMission({ intent: charter.intent, surface: "web", charter,
+      policy: { requireApproval } });
+    const path = join(root, ".proofkit", "missions", `${original.missionId}.json`);
+    await writeFile(path, JSON.stringify({ ...original, status: "completed", verdict: "passed" }));
+    const replay = await service.replayMission(original.missionId);
+    expect(replay).toMatchObject({ running: false, mission: { status: "awaiting-approval",
+      replayOfMissionId: original.missionId, policy: { requireApproval: true, sideEffectPolicy } } });
+    expect((await service.missionStatus(replay.mission.missionId)).mission.status).toBe("awaiting-approval");
+    expect((await service.approveMission(replay.mission.missionId)).status).toBe("approved");
+  });
+
   it("reports the first UI boundary and the later evidenced business defect separately", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-first-boundary-"));
     roots.push(root);

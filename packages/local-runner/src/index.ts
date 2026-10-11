@@ -892,12 +892,15 @@ export class LocalRunnerService {
     return auditComparisonCurrentSource(savedComparison, finalSourceState, current);
   }
 
-  async replayMission(missionId: string): Promise<MissionStatus> {
+  async replayMission(missionId: string, options: { approve?: boolean } = {}): Promise<MissionStatus> {
     const previous = await this.missionAgent.load(validateMissionId(missionId));
     if (!["completed", "failed", "blocked", "cancelled"].includes(previous.status)) {
       throw new Error("Only a terminal Mission can be replayed");
     }
     await this.ensureWorkspace();
+    const replayCharters = previous.charter ? [previous.charter] : previous.suite?.charters.map((item) => item.charter) ?? [];
+    const scenarioRequiresApproval = replayCharters.some((charter) => charter.sideEffectPolicy !== "deny"
+      || charter.negativeCases?.some((negativeCase) => negativeCase.sideEffectPolicy !== "deny"));
     const replay = await this.missionAgent.create({
       replayOfMissionId: previous.missionId,
       intent: previous.intent,
@@ -911,9 +914,13 @@ export class LocalRunnerService {
       workflowReview: previous.workflowReview,
       workflowReviewAdmission: previous.workflowReviewAdmission,
       levelSelection: previous.levelSelection,
-      policy: { ...previous.policy, requireApproval: false },
+      // A prior approval covers one execution, not an unbounded series of
+      // writes or UI interactions against the same test environment.
+      policy: { ...previous.policy, requireApproval: previous.policy.requireApproval
+        || previous.policy.sideEffectPolicy !== "deny" || scenarioRequiresApproval },
     });
-    return this.startMission(replay.missionId, { approve: true });
+    if (replay.policy.requireApproval && options.approve !== true) return { mission: replay, running: false };
+    return this.startMission(replay.missionId, { approve: options.approve === true });
   }
 
   private createMissionTools(): MissionTool[] {

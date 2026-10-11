@@ -118,7 +118,7 @@ describe("MCP response capture policy and Mission evidence", () => {
     const mission = await service.createMission({ intent: plan.intent, charter: negativePlan("failed") });
     await service.startMission(mission.missionId, { approve: true });
     expect((await service.waitMission(mission.missionId)).verdict).toBe("passed");
-    const replay = await service.replayMission(mission.missionId);
+    const replay = await service.replayMission(mission.missionId, { approve: true });
     expect((await service.waitMission(replay.mission.missionId)).verdict).toBe("passed");
     const facts = [...summaries.values()].map((run) => run.steps[0]?.response?.fields.fileId);
     expect(facts).toEqual(["1", "2", "3", "4"]);

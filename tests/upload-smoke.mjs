@@ -235,7 +235,7 @@ async function run(plan, surface) {
   return collect(started, started.missionId);
 }
 async function replay(missionId) {
-  const started = await call("replay_mission", { missionId });
+  const started = await call("replay_mission", { missionId, approve: true });
   return collect(started, started.mission.missionId);
 }
 async function collect(started, missionId) {

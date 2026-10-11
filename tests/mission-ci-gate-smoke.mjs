@@ -65,7 +65,11 @@ try {
   const checked = await command("mission", "check", created.missionId, ...location);
   assert.equal(checked.code, 0, checked.stderr || checked.stdout);
   assert.equal(JSON.parse(checked.stdout).testVerdict, "passed");
-  const replay = await command("mission", "replay", created.missionId, ...location);
+  const pendingReplay = await command("mission", "replay", created.missionId, ...location);
+  assert.equal(pendingReplay.code, 2);
+  assert.equal(JSON.parse(pendingReplay.stdout).status, "awaiting-approval");
+  assert.equal(JSON.parse(pendingReplay.stdout).testVerdict, "not-asserted");
+  const replay = await command("mission", "replay", created.missionId, "--approve", ...location);
   assert.equal(replay.code, 0, replay.stderr || replay.stdout);
   assert.equal(JSON.parse(replay.stdout).testVerdict, "passed");
 
