@@ -796,6 +796,8 @@ export class MissionAgent {
         ...(failedVerdict ? { error: `Tool returned verdict ${result.verdict}` } : {}),
       });
       const taskUpdate = updateTask(startedMission, { ...runningTask, status: taskStatus, output, ...(failedVerdict ? { error: `Tool returned verdict ${result.verdict}` } : {}) }, { currentTaskId: undefined });
+      const diagnosis = preferredDiagnosis(startedMission.diagnosis, startedMission.findings,
+        result.diagnosis ? DiagnosisSchema.parse(result.diagnosis) : undefined, result.findings ?? []);
       return this.save({
         ...taskUpdate,
         agentSteps: replaceAgentStep(startedMission.agentSteps, agentStep),
@@ -804,7 +806,7 @@ export class MissionAgent {
         evidence: [...startedMission.evidence, ...(result.evidence ?? [])],
         findings: [...startedMission.findings, ...(result.findings ?? []).map((item) => FindingSchema.parse(item))],
         ...(!startedMission.firstFailure && result.firstFailure ? { firstFailure: FailureBoundarySchema.parse(result.firstFailure) } : {}),
-        ...(result.diagnosis ? { diagnosis: DiagnosisSchema.parse(result.diagnosis) } : {}),
+        ...(diagnosis ? { diagnosis } : {}),
         repairSuggestions: [...startedMission.repairSuggestions, ...(result.repairSuggestions ?? []).map((item) => RepairSuggestionSchema.parse(item))],
         verdict: startedMission.verdict === "failed" && result.verdict === "passed" ? "failed" : result.verdict,
         ...(failedVerdict ? { status: taskStatus === "blocked" ? result.verdict === "cancelled" ? "cancelled" : "blocked" : startedMission.plan.executionProfile.collectAllResults ? "running" : "failed" } : {}),
@@ -1004,6 +1006,18 @@ class MissionToolTimeoutError extends Error {
     super(`Mission tool ${toolName} timed out`);
     this.name = "MissionToolTimeoutError";
   }
+}
+
+/** Keep the first independently confirmed product diagnosis as the Mission headline. */
+function preferredDiagnosis(previous: Diagnosis | undefined, previousFindings: Finding[],
+  incoming: Diagnosis | undefined, incomingFindings: Finding[]): Diagnosis | undefined {
+  if (!incoming) return previous;
+  const confirmedProduct = (diagnosis: Diagnosis | undefined, findings: Finding[]) => Boolean(diagnosis?.findingId
+    && findings.some((finding) => finding.findingId === diagnosis.findingId
+      && finding.category === "product" && finding.status === "confirmed"));
+  if (confirmedProduct(previous, previousFindings)) return previous;
+  if (confirmedProduct(incoming, incomingFindings)) return incoming;
+  return previous ?? incoming;
 }
 
 function isMissionToolTimeout(reason: unknown): reason is MissionToolTimeoutError {

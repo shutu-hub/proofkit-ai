@@ -62,6 +62,8 @@ describe("analyzeRun", () => {
     expect(result.finding?.category).toBe("product");
     expect(result.diagnosis).toBeDefined();
     expect(result.repairSuggestion?.status).toBe("proposed");
+    expect(result.diagnosis?.findingId).toBe(result.finding?.findingId);
+    expect(result.repairSuggestion?.findingId).toBe(result.finding?.findingId);
   });
 
   it("does not diagnose a product defect when gateway continuity invalidates its source", () => {
@@ -292,6 +294,8 @@ describe("analyzeRun", () => {
     expect(result.finding?.category).toBe("unknown");
     expect(result.diagnosis?.likelyOwner).toContain("undetermined");
     expect(result.repairSuggestion?.title).toContain("Investigate");
+    expect(result.diagnosis?.findingId).toBe(result.finding?.findingId);
+    expect(result.repairSuggestion?.findingId).toBe(result.finding?.findingId);
   });
 
   it("does not promote an observed error page to a product defect when an auth signal is only suspected", () => {

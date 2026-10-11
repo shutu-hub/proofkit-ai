@@ -821,6 +821,49 @@ describe("MissionAgent", () => {
     expect(result.plan.graph.tasks.find((task) => task.taskId === "execute-charter")?.status).toBe("failed");
   });
 
+  it("keeps the first confirmed product diagnosis while retaining each scenario's repair finding", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-multi-diagnosis-"));
+    const now = new Date().toISOString();
+    let runIndex = 0;
+    const tools = new InMemoryMissionToolRegistry([
+      { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000,
+        inputSchema: z.object({}), execute: async () => ({}) },
+      ...["surface.run-charter", "surface.replay-charter"].map((name) => ({
+        name, description: name, sideEffect: "read" as const, environments: ["test" as const], timeoutMs: 1000,
+        inputSchema: z.object({}).passthrough(), execute: async () => {
+          runIndex += 1;
+          if (runIndex === 4) return { verdict: "passed" as const };
+          const findingId = `finding-${runIndex}`;
+          return {
+            verdict: "failed" as const,
+            findings: [{ findingId, severity: "high" as const, category: runIndex === 1 ? "unknown" as const : "product" as const,
+              status: "confirmed" as const, title: `Scenario ${runIndex}`, message: "Observed mismatch", evidence: [], createdAt: now }],
+            diagnosis: { diagnosisId: `diagnosis-${runIndex}`, findingId, summary: `Diagnosis ${runIndex}`,
+              confidence: 0.5, sourceLocations: [], evidence: [], createdAt: now },
+            repairSuggestions: [{ suggestionId: `repair-${runIndex}`, findingId, title: `Proposal ${runIndex}`,
+              rationale: "Inspect the observed boundary", changes: ["Trace the failing flow"], confidence: 0.5,
+              evidence: [], status: "proposed" as const }],
+          };
+        },
+      })),
+      { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000,
+        inputSchema: z.object({}), execute: async () => ({ verdict: "passed" as const }) },
+    ]);
+    const agent = new MissionAgent({ store: new JsonMissionStore(root), tools });
+    const created = await agent.create({ intent: "collect cross-surface failures", projectRoot: root, surface: "web",
+      policy: { level: "release", requireApproval: false },
+      charter: { intent: "collect failures", level: "release", mode: "deterministic", preconditions: [], actions: [],
+        assertions: [{ kind: "text-visible", text: "Ready" }], oracles: ["business-terminal"], sideEffectPolicy: "deny", metadata: {} } });
+
+    const result = await agent.run(created.missionId);
+    expect(result.status).toBe("failed");
+    expect(runIndex).toBe(4);
+    expect(result.diagnosis).toMatchObject({ diagnosisId: "diagnosis-2", findingId: "finding-2" });
+    expect(result.repairSuggestions.map((suggestion) => [suggestion.suggestionId, suggestion.findingId])).toEqual([
+      ["repair-1", "finding-1"], ["repair-2", "finding-2"], ["repair-3", "finding-3"],
+    ]);
+  });
+
   it("rejects duplicate negative case identifiers before task creation", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-negative-duplicate-"));
     const planner = new DeterministicMissionPlanner();

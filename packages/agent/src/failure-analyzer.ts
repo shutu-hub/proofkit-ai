@@ -163,23 +163,24 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
       observedAt: failedAssertion.recordedAt ?? summary.endedAt ?? summary.startedAt,
     });
     const confirmed = assertionEvidence.length > 0;
+    const finding = FindingSchema.parse({
+      findingId: `finding-${summary.runId}-assertion`,
+      severity: confirmed ? "high" : "medium",
+      // The observation proves a Charter mismatch, not whether product code,
+      // authentication, environment setup, or the test expectation caused it.
+      category: "unknown",
+      status: confirmed ? "confirmed" : "unverified",
+      title: confirmed ? "Surface assertion mismatch observed" : "Assertion failed without evidence",
+      message: failedAssertion.message,
+      evidence: assertionEvidence,
+      createdAt: boundary.observedAt,
+    });
     return {
       boundary,
-      finding: FindingSchema.parse({
-        findingId: `finding-${summary.runId}-assertion`,
-        severity: confirmed ? "high" : "medium",
-        // The observation proves a Charter mismatch, not whether product code,
-        // authentication, environment setup, or the test expectation caused it.
-        category: "unknown",
-        status: confirmed ? "confirmed" : "unverified",
-        title: confirmed ? "Surface assertion mismatch observed" : "Assertion failed without evidence",
-        message: failedAssertion.message,
-        evidence: assertionEvidence,
-        createdAt: boundary.observedAt,
-      }),
+      finding,
       ...(confirmed
         ? (() => {
-            const diagnosis = createDiagnosis(summary, boundary, undefined, input.verifiedSourceLocations);
+            const diagnosis = createDiagnosis(summary, boundary, finding, input.verifiedSourceLocations);
             return { diagnosis, repairSuggestion: createRepairSuggestion(summary, boundary, diagnosis) };
           })()
         : {}),
@@ -324,6 +325,7 @@ function createDiagnosis(summary: RunSummary, boundary: FailureBoundary, finding
   const surfaceMismatch = boundary.kind === "assertion";
   return {
     diagnosisId: `diagnosis-${summary.runId}`,
+    ...(finding ? { findingId: finding.findingId } : {}),
     summary: finding
       ? `${finding.title}: ${boundary.message}`
       : `A surface assertion failed: ${boundary.message}`,
@@ -339,6 +341,7 @@ function createDiagnosis(summary: RunSummary, boundary: FailureBoundary, finding
 function createRepairSuggestion(summary: RunSummary, boundary: FailureBoundary, diagnosis: Diagnosis): RepairSuggestion {
   if (boundary.kind === "assertion") return {
     suggestionId: `repair-${summary.runId}`,
+    findingId: diagnosis.findingId,
     title: "Investigate the observed UI mismatch",
     rationale: "The linked page observation confirms the assertion mismatch, but does not identify a product defect or its cause. Check authentication, test configuration, and expected UI state before changing product code.",
     changes: [
@@ -355,6 +358,7 @@ function createRepairSuggestion(summary: RunSummary, boundary: FailureBoundary, 
     : "Trace the implementation boundary named by the linked business or surface evidence; the source-level cause is unverified.";
   return {
     suggestionId: `repair-${summary.runId}`,
+    findingId: diagnosis.findingId,
     title: "Repair the failing product boundary and add a regression check",
     rationale: `${owner} The linked evidence establishes the observed failure, not the code change needed to fix it. Replay the mission after any repair.`,
     changes: [

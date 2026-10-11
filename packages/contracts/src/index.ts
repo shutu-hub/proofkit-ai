@@ -1224,6 +1224,8 @@ export type Finding = z.infer<typeof FindingSchema>;
 
 export const DiagnosisSchema = z.object({
   diagnosisId: z.string().min(1),
+  /** Explicit Finding ownership for new diagnoses; absent on historical Missions. */
+  findingId: z.string().min(1).optional(),
   charterId: CatalogIdSchema.optional(),
   surface: z.enum(["web", "electron", "mobile"]).optional(),
   summary: z.string().min(1),
@@ -1237,6 +1239,8 @@ export type Diagnosis = z.infer<typeof DiagnosisSchema>;
 
 export const RepairSuggestionSchema = z.object({
   suggestionId: z.string().min(1),
+  /** The observed Finding that motivated this proposal; absent on historical Missions. */
+  findingId: z.string().min(1).optional(),
   charterId: CatalogIdSchema.optional(),
   surface: z.enum(["web", "electron", "mobile"]).optional(),
   title: z.string().min(1),

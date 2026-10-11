@@ -349,9 +349,9 @@ describe("Mission report", () => {
     input.confirmedProductFindings = 1;
     input.findings = [{ findingId: "binding", category: "product", status: "confirmed", severity: "high",
       title: "Wrong binding", message: "Current candidate relation is wrong", evidence: [source], createdAt: now }];
-    input.diagnosis = { diagnosisId: "diagnosis-1", summary: "Inspect candidate relation", confidence: 0.8,
+    input.diagnosis = { diagnosisId: "diagnosis-1", findingId: "binding", summary: "Inspect candidate relation", confidence: 0.8,
       sourceLocations: [], evidence: [source], createdAt: now };
-    input.repairSuggestions = [{ suggestionId: "repair-1", title: "Repair candidate relation",
+    input.repairSuggestions = [{ suggestionId: "repair-1", findingId: "binding", title: "Repair candidate relation",
       rationale: "The observed relation is wrong", changes: ["Trace the relation writer"], confidence: 0.4,
       evidence: [source], status: "proposed" }];
     const store = new MissionReportStore(workspace);
@@ -359,6 +359,24 @@ describe("Mission report", () => {
     expect(intact.integrity.diagnosticSupport).toMatchObject({ diagnosis: { status: "supported" },
       repairSuggestions: [{ suggestionId: "repair-1", status: "supported" }] });
     expect(intact.result.testVerdict).toBe("failed");
+    expect(await readFile(intact.path, "utf8")).toContain("For finding: Wrong binding");
+
+    input.acceptanceEvidenceIntegrity = await store.inspectMissionEvidence([source], new Set(["run-1"]));
+    input.repairSuggestions[0]!.findingId = "another-finding";
+    const wrongFinding = await store.writeReportSnapshot(input);
+    expect(wrongFinding.integrity.diagnosticSupport?.repairSuggestions[0])
+      .toMatchObject({ status: "unsupported", reason: "unlinked-failure" });
+    expect(wrongFinding.result.testVerdict).toBe("failed");
+    expect(await readFile(wrongFinding.path, "utf8")).toContain("Finding link unavailable");
+    input.repairSuggestions[0]!.findingId = "binding";
+
+    delete input.diagnosis.findingId;
+    delete input.repairSuggestions[0]!.findingId;
+    const historical = await store.writeReportSnapshot(input);
+    expect(historical.integrity.diagnosticSupport).toMatchObject({ diagnosis: { status: "supported" },
+      repairSuggestions: [{ status: "supported" }] });
+    input.diagnosis.findingId = "binding";
+    input.repairSuggestions[0]!.findingId = "binding";
 
     input.runs.push({ title: "Other Run", surface: "web", runKind: "primary", runId: "run-2",
       verdict: "passed", evidence: [other], omittedEvidence: 0 });

@@ -572,6 +572,8 @@ An Oracle result is validated against its registered name and schema. The Runner
 
 New Run summaries record Runner-owned `recordedAt` times for assertions and Oracles. The first-failure boundary follows actual execution order: actions, then assertions, then Oracles; a connector-supplied `observedAt` cannot move a later Oracle ahead of an earlier UI mismatch. The primary Finding and repair proposal instead use the first independently evidenced failing business Oracle, even when an earlier Oracle lacked source facts. Source-location hints are checked only from that selected Oracle, so an unrelated failed reader cannot steer the repair. The report can therefore show an earlier UI mismatch beside a later confirmed business defect without treating the UI observation as proof of the product cause. Existing Run summaries without `recordedAt` remain readable; they do not gain a retroactively verified timestamp.
 
+Each new Diagnosis and RepairSuggestion records the Finding that motivated it. A release Mission can collect several failed Web/Electron Runs: its single headline Diagnosis keeps the first confirmed product Finding, while every saved repair proposal retains its own Finding link. The report audits a linked proposal only against that Finding's evidence from the same Run and labels a missing or mismatched link unsupported. Historical Missions without Finding links remain readable and use the earlier failure-evidence matching rule. A proposal's evidence status does not establish that its suggested code change is correct; the confirmed product verdict is audited separately from the proposal.
+
 ## Verdict model
 
 - `passed`: all declared assertions pass.
