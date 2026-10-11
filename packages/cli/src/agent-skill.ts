@@ -157,6 +157,9 @@ For an authorized fix, use replay_mission on the original Mission with the
 same scope and fixture bytes, then compare_missions after the replay finishes.
 Report verified-in-scope only when the comparison says so. A different scenario
 or passing page cannot certify the original defect or the entire project.
+Read the comparison again when reporting: candidateSourceFreshness changed or
+unavailable withdraws a saved repair or reproduced-defect claim to inconclusive.
+historicalStatus describes the saved result, not the current checkout.
 Mobile inspect_surface returns a bounded driver-label snapshot and evidence with
 testVerdict not-asserted; it does not provide validated selector hints or a
 device-backed acceptance claim. File selection and response capture currently

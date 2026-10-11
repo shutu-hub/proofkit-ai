@@ -19,6 +19,7 @@ import { sameProjectPath } from "@proofkit/project";
 import { sameInputFileFacts } from "@proofkit/runner";
 import { hasCompleteCleanupEvidence } from "./cleanup-evidence.js";
 import { materializedRunArtifact } from "./run-evidence.js";
+import { compareCurrentSource } from "./mission-result.js";
 
 type Surface = "web" | "electron" | "mobile";
 type RunKind = "primary" | "replay" | "negative";
@@ -185,6 +186,31 @@ export async function compareMissionRecords(
     defects: defects.slice(0, 25),
     omittedDefects: Math.max(0, defects.length - 25),
     comparedAt: new Date().toISOString(),
+  });
+}
+
+/** Withdraw a saved comparison's current claim when the candidate checkout no longer matches its final snapshot. */
+export function auditComparisonCurrentSource(
+  comparison: MissionComparison,
+  candidateFinalSourceState: SourceState | undefined,
+  candidateCurrentSourceState: SourceState | undefined,
+): MissionComparison {
+  const candidateSourceFreshness = compareCurrentSource(candidateFinalSourceState, candidateCurrentSourceState);
+  const gap = candidateSourceFreshness === "changed"
+    ? "Candidate Git source changed after the replay Mission ended."
+    : candidateSourceFreshness === "unavailable"
+      ? "Candidate Git source was verifiable after replay but cannot be rechecked now."
+      : undefined;
+  const withdraw = gap !== undefined && comparison.status !== "inconclusive";
+  return MissionComparisonSchema.parse({
+    ...comparison,
+    candidateFinalSourceState,
+    candidateCurrentSourceState,
+    candidateSourceFreshness,
+    ...(withdraw ? { historicalStatus: comparison.status, status: "inconclusive",
+      reason: `${gap} The saved replay comparison does not establish the current repair or defect state.` }
+      : gap ? { reason: `${gap} ${comparison.reason}` } : {}),
+    ...(gap ? { gaps: [...new Set([...comparison.gaps, gap])].slice(0, 30) } : {}),
   });
 }
 

@@ -1,15 +1,68 @@
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { JsonMissionStore } from "@proofkit/agent";
 import { RunSummarySchema, TestCharterSchema, TestMissionSchema, type EvidenceRef, type RunSummary, type TestCharter, type TestMission, type Verdict } from "@proofkit/contracts";
-import { compareMissionRecords } from "./mission-comparison.js";
+import { auditComparisonCurrentSource, compareMissionRecords } from "./mission-comparison.js";
 import { sha256 } from "@proofkit/evidence";
+import { captureSourceState } from "@proofkit/project";
+import { LocalRunnerService } from "./index.js";
 
+const execFileAsync = promisify(execFile);
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 describe("Mission repair comparison", () => {
+  it("withdraws a historical repair claim after candidate source drift or an unavailable recheck", async () => {
+    const fixture = await createFixture();
+    const saved = await fixture.compare();
+    expect(saved.status).toBe("verified-in-scope");
+    const final = { method: "git" as const, complete: true, headSha: "a".repeat(40), worktreeSha256: "b".repeat(64),
+      trackedDiffBytes: 0, untrackedFiles: 0, capturedAt: new Date().toISOString() };
+    const matching = auditComparisonCurrentSource(saved, final, final);
+    expect(matching).toMatchObject({ status: "verified-in-scope", candidateSourceFreshness: "matching" });
+    const changed = auditComparisonCurrentSource(saved, final, { ...final, worktreeSha256: "c".repeat(64) });
+    expect(changed).toMatchObject({ status: "inconclusive", historicalStatus: "verified-in-scope",
+      candidateSourceFreshness: "changed", candidateFinalSourceState: final });
+    expect(changed.reason).toContain("does not establish the current repair");
+    const unavailable = auditComparisonCurrentSource(saved, final, { method: "unavailable", complete: false,
+      trackedDiffBytes: 0, untrackedFiles: 0, capturedAt: final.capturedAt });
+    expect(unavailable).toMatchObject({ status: "inconclusive", historicalStatus: "verified-in-scope",
+      candidateSourceFreshness: "unavailable" });
+    expect(auditComparisonCurrentSource(saved, undefined, undefined)).toMatchObject({
+      status: "verified-in-scope", candidateSourceFreshness: "unverified" });
+  });
+
+  it("rechecks a persisted replay from the service entry point after a Git source edit", async () => {
+    const fixture = await createFixture();
+    await writeFile(join(fixture.root, "app.ts"), "export const ready = true;\n");
+    await execFileAsync("git", ["init", "-q"], { cwd: fixture.root });
+    await execFileAsync("git", ["add", "app.ts"], { cwd: fixture.root });
+    await execFileAsync("git", ["-c", "user.name=ProofKit", "-c", "user.email=proofkit@example.invalid", "commit", "-qm", "fixture"], { cwd: fixture.root });
+    const final = await captureSourceState(fixture.root);
+    expect(final).toMatchObject({ method: "git", complete: true });
+    const now = new Date().toISOString();
+    fixture.candidate.observations.push({ observationId: "candidate-source-start", source: "planner", kind: "project.source-state",
+      data: final, evidence: [], observedAt: now });
+    fixture.candidate.observations.push({ observationId: "candidate-source-final", source: "planner", kind: "project.source-state-final",
+      data: final, evidence: [], observedAt: now });
+    const store = new JsonMissionStore(join(fixture.root, ".proofkit", "missions"));
+    await store.save(fixture.baseline);
+    await store.save(fixture.candidate);
+    const service = new LocalRunnerService({ root: fixture.root, workspaceRoot: fixture.root });
+    expect(await service.compareMissions(fixture.baseline.missionId, fixture.candidate.missionId)).toMatchObject({
+      status: "verified-in-scope", candidateSourceFreshness: "matching" });
+    await writeFile(join(fixture.root, "app.ts"), "export const ready = false;\n");
+    const direct = await service.compareMissions(fixture.baseline.missionId, fixture.candidate.missionId);
+    expect(direct).toMatchObject({ status: "inconclusive", historicalStatus: "verified-in-scope", candidateSourceFreshness: "changed" });
+    const evidence = await service.missionEvidence(fixture.candidate.missionId);
+    expect(evidence.summary.comparison).toMatchObject({ status: "inconclusive", historicalStatus: "verified-in-scope",
+      candidateSourceFreshness: "changed" });
+  });
+
   it.each(["failed", "unverified", "missing", "tampered", "wrong-scope", "wrong-run", "unlisted", "cross-run-link", "before-release"] as const)("rejects repair certification with %s cleanup evidence", async (mode) => {
     const fixture = await createFixture();
     const path = "after-primary/artifacts/integration-cleanup.json";

@@ -441,9 +441,22 @@ describe("Mission report", () => {
       visibleConfirmedFindings: { supported: 1 } });
     const intactHtml = await readFile(intact.path, "utf8");
     expect(intactHtml).toContain('href="../../runs/run-2/artifacts/candidate.json"');
-    expect(intactHtml).toContain("Baseline source: stable · Candidate source: stable");
+    expect(intactHtml).toContain("Baseline source: stable · Candidate source during replay: stable · Candidate source now: unverified");
     expect(intactHtml).toContain("Primary and replay verdicts differ");
     expect(intactHtml).toContain("two runs alone do not establish flakiness");
+
+    input.comparison.status = "inconclusive";
+    input.comparison.historicalStatus = "verified-in-scope";
+    input.comparison.candidateSourceFreshness = "changed";
+    input.comparison.reason = "Candidate source changed after replay.";
+    const staleHtml = await readFile((await store.writeReportSnapshot(input)).path, "utf8");
+    expect(staleHtml).toContain("Repair replay · current check");
+    expect(staleHtml).toContain("Saved comparison before current source recheck: Original defect not reproduced in tested scope.");
+    expect(staleHtml).toContain("Candidate source now: changed");
+    input.comparison.status = "verified-in-scope";
+    delete input.comparison.historicalStatus;
+    delete input.comparison.candidateSourceFreshness;
+    input.comparison.reason = "Saved comparison";
 
     input.comparison.defects[0]!.baselineEvidence = [candidate];
     const misbound = await store.writeReportSnapshot(input);

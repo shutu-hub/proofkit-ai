@@ -14,7 +14,7 @@ import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowI
 import { BlockedError, CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
-import { compareMissionRecords } from "./mission-comparison.js";
+import { auditComparisonCurrentSource, compareMissionRecords } from "./mission-comparison.js";
 import { hasCompleteCleanupEvidence } from "./cleanup-evidence.js";
 import { ProjectMissionStore } from "./mission-store.js";
 import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from "./suite-verifier.js";
@@ -730,15 +730,6 @@ export class LocalRunnerService {
     const mission = await this.missionAgent.load(validateMissionId(missionId));
     const sourceState = SourceStateSchema.safeParse([...mission.observations].reverse().find((item) => item.kind === "project.source-state")?.data);
     const finalSourceState = SourceStateSchema.safeParse([...mission.observations].reverse().find((item) => item.kind === "project.source-state-final")?.data);
-    let comparison: MissionComparison | undefined;
-    let comparisonUnavailable: string | undefined;
-    if (mission.replayOfMissionId && ["completed", "failed", "blocked", "cancelled"].includes(mission.status)) {
-      try {
-        comparison = await this.compareMissions(mission.replayOfMissionId, mission.missionId);
-      } catch {
-        comparisonUnavailable = "The replay source Mission could not be loaded or compared in this workspace.";
-      }
-    }
     const running = await this.missionAgent.isRunning(mission.missionId);
     const suiteScope = summarizeSuiteScope(mission, this.evidenceDir);
     const workflowExecution = summarizeWorkflowExecution(mission, suiteScope);
@@ -772,6 +763,15 @@ export class LocalRunnerService {
       && finalSourceState.success && finalSourceState.data.complete && finalSourceState.data.method === "git"
       ? await captureSourceState(this.root) : undefined;
     const sourceFreshness = compareCurrentSource(finalSourceState.success ? finalSourceState.data : undefined, currentSourceState);
+    let comparison: MissionComparison | undefined;
+    let comparisonUnavailable: string | undefined;
+    if (mission.replayOfMissionId && ["completed", "failed", "blocked", "cancelled"].includes(mission.status)) {
+      try {
+        comparison = await this.compareMissions(mission.replayOfMissionId, mission.missionId, currentSourceState);
+      } catch {
+        comparisonUnavailable = "The replay source Mission could not be loaded or compared in this workspace.";
+      }
+    }
     let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, workflowReviewAudit, comparison, comparisonUnavailable, proofClassification, executionAudit, sourceFreshness, currentSourceState }), acceptanceEvidenceIntegrity };
     let report: string | undefined;
     let reportUnavailable: string | undefined;
@@ -846,12 +846,17 @@ export class LocalRunnerService {
     };
   }
 
-  async compareMissions(baselineMissionId: string, candidateMissionId: string): Promise<MissionComparison> {
+  async compareMissions(baselineMissionId: string, candidateMissionId: string, currentSourceState?: SourceState): Promise<MissionComparison> {
     const [baseline, candidate] = await Promise.all([
       this.missionAgent.load(validateMissionId(baselineMissionId)),
       this.missionAgent.load(validateMissionId(candidateMissionId)),
     ]);
-    return compareMissionRecords(baseline, candidate, this.evidenceDir, (runId) => this.wait(runId));
+    const savedComparison = await compareMissionRecords(baseline, candidate, this.evidenceDir, (runId) => this.wait(runId));
+    const candidateFinal = SourceStateSchema.safeParse([...candidate.observations].reverse().find((item) => item.kind === "project.source-state-final")?.data);
+    const finalSourceState = candidateFinal.success ? candidateFinal.data : undefined;
+    const current = currentSourceState ?? ((candidate.verdict === "passed" || candidate.verdict === "failed")
+      && finalSourceState?.complete && finalSourceState.method === "git" ? await captureSourceState(this.root) : undefined);
+    return auditComparisonCurrentSource(savedComparison, finalSourceState, current);
   }
 
   async replayMission(missionId: string): Promise<MissionStatus> {
