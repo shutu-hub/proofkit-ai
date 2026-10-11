@@ -54,6 +54,17 @@ See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for
 
 Requirements for source development: Node.js 22 or newer and pnpm 10.
 
+Until the registry release, install directly from the public GitHub repository with Node.js 22+ and npm:
+
+```bash
+npm install -g github:shutu-hub/proofkit-ai
+proofkit --version
+```
+
+Git installation builds the CLI and MCP bundle from the selected commit and can take several minutes. Pin a commit SHA after `#` for a repeatable installation. It installs its own build-time pnpm dependency; users do not need pnpm beforehand. Then run `proofkit agent setup` with `--harness codex` or `--harness claude-code`, the source and external workspace paths, and `--register-host`. This connection step does not run a product test.
+
+For source development:
+
 ```bash
 pnpm install
 pnpm build
@@ -71,6 +82,7 @@ proofkit --version
 ```
 
 The distribution test packs the project, installs only that tarball in a fresh temporary directory, runs CLI onboarding, and calls the installed MCP server over stdio. A registry release can later use `npm install -g proofkit-ai` with the same two commands.
+`pnpm test:git-install` separately installs the current committed source through npm's Git dependency path and checks the installed CLI and MCP connection.
 
 The tarball also carries the AIHR reference connector and five example Charters. Select it explicitly during first host setup in a separate test workspace:
 
