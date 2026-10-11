@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   MissionComparisonSchema,
   SourceStateSchema,
@@ -85,6 +86,15 @@ export async function compareMissionRecords(
     }
   }
   const structuralIssue = gaps.length > 0;
+  let baselineBoundaryComplete = true;
+  for (const slot of slots) {
+    const before = baselineRecords.get(slotKey(slot));
+    if (!before) continue;
+    for (const gap of runBoundaryGaps(before, evidenceDir)) {
+      baselineBoundaryComplete = false;
+      gaps.push(`Baseline ${slotLabel(slot)} ${gap}`);
+    }
+  }
 
   const defects: MissionComparisonDefect[] = [];
   const failingOracleFacts = new Map<string, Slot[]>();
@@ -123,6 +133,7 @@ export async function compareMissionRecords(
     return true;
   });
 
+  let reproductionEligible = candidate.status === "failed" && candidate.verdict === "failed";
   let candidateComplete = candidate.status === "completed" && candidate.verdict === "passed"
     && candidate.plan.graph.tasks.every((task) => task.status === "passed")
     && !candidate.findings.some((finding) => finding.category === "product" && finding.status === "confirmed");
@@ -134,11 +145,10 @@ export async function compareMissionRecords(
       gaps.push(`Candidate is missing ${slotLabel(slot)}.`);
       continue;
     }
-    const candidateEvidence = after.observation.evidence.filter((ref) => after.summary.artifacts.some((path) => ref.evidenceId === `${after.runId}:${path}`));
-    if (!hasCompleteCleanupEvidence(after.summary.integrationCleanup, after.runId, candidateEvidence, evidenceDir)
-      || !hasCompleteCleanupEvidence(after.observation.data.integrationCleanup, after.runId, candidateEvidence, evidenceDir)) {
+    for (const gap of runBoundaryGaps(after, evidenceDir)) {
       candidateComplete = false;
-      gaps.push(`Candidate ${slotLabel(slot)} did not establish test resource cleanup.`);
+      reproductionEligible = false;
+      gaps.push(`Candidate ${slotLabel(slot)} ${gap}`);
     }
     if (slot.runKind === "negative") {
       const expected = slot.expectedVerdict ?? "passed";
@@ -169,15 +179,18 @@ export async function compareMissionRecords(
 
   const reproduced = defects.some((item) => item.outcome === "reproduced");
   const allNotReproduced = defects.length > 0 && defects.every((item) => item.outcome === "not-reproduced");
-  const status: MissionComparison["status"] = structuralIssue || baselineFindingIssue
+  const status: MissionComparison["status"] = structuralIssue || baselineFindingIssue || !baselineBoundaryComplete
     ? "inconclusive"
-    : reproduced ? "defect-reproduced"
+    : reproduced && reproductionEligible ? "defect-reproduced"
       : candidateComplete && allNotReproduced ? "verified-in-scope" : "inconclusive";
   const reason = status === "verified-in-scope"
     ? `The original evidenced business defect was not reproduced by a complete replay of the same configured test scope. ${sourceChange === "unchanged" ? "The captured source fingerprint did not change; product or environment state may explain the difference." : sourceChange === "changed" ? "The source fingerprint changed, but this does not establish which edit caused the outcome." : "Source change could not be established."}`
     : status === "defect-reproduced"
       ? "At least one original business Oracle still fails with independent source facts in the replay."
-      : gaps[0] ?? "The evidence is insufficient to verify the original defect after replay.";
+      : reproduced && !reproductionEligible && !structuralIssue && baselineBoundaryComplete && !baselineFindingIssue
+        ? gaps.find((gap) => gap.startsWith("Candidate ") && (gap.includes("cleanup") || gap.includes("continuity gap")))
+          ?? "Candidate did not finish as an evidenced failed Mission."
+        : gaps[0] ?? "The evidence is insufficient to verify the original defect after replay.";
   return MissionComparisonSchema.parse({
     baselineMissionId: baseline.missionId,
     candidateMissionId: candidate.missionId,
@@ -225,6 +238,21 @@ export function auditComparisonCurrentSource(
       : gap ? { reason: `${gap} ${comparison.reason}` } : {}),
     ...(gap ? { gaps: [...new Set([...comparison.gaps, gap])].slice(0, 30) } : {}),
   });
+}
+
+function runBoundaryGaps(record: RunRecord, evidenceDir: string): string[] {
+  const gaps: string[] = [];
+  const evidence = record.observation.evidence.filter((ref) => record.summary.artifacts.some((path) => ref.evidenceId === `${record.runId}:${path}`));
+  if (!hasCompleteCleanupEvidence(record.summary.integrationCleanup, record.runId, evidence, evidenceDir)
+    || !hasCompleteCleanupEvidence(record.observation.data.integrationCleanup, record.runId, evidence, evidenceDir)) {
+    gaps.push("did not establish test resource cleanup.");
+  }
+  if (["changed", "unverified"].includes(record.summary.targetContinuity ?? "")
+    || ["changed", "unverified"].includes(record.summary.applicationContinuity ?? "")
+    || record.summary.integrationPostRunCheck?.passed === false) {
+    gaps.push("has an environment continuity gap.");
+  }
+  return gaps;
 }
 
 function compareInputFiles(baseline: RunSummary, candidate: RunSummary, slot: Slot, gaps: string[]): void {
@@ -345,6 +373,15 @@ async function recordFor(mission: TestMission, slot: Slot, loadRun: (runId: stri
     const summary = await loadRun(runId);
     if (summary.runId !== runId || summary.status !== "completed" || !summary.endedAt || summary.verdict !== observation.data.verdict) {
       gaps.push(`${side} ${slotLabel(slot)} Run summary conflicts with the Mission observation.`);
+      return undefined;
+    }
+    if (summary.execution?.adapter !== slot.surface
+      || summary.execution.replayOfRunId !== observation.data.sourceRunId
+      || !isDeepStrictEqual(summary.integrationCleanup, observation.data.integrationCleanup)
+      || !isDeepStrictEqual(summary.integrationPostRunCheck, observation.data.integrationPostRunCheck)
+      || summary.targetContinuity !== observation.data.targetContinuity
+      || summary.applicationContinuity !== observation.data.applicationContinuity) {
+      gaps.push(`${side} ${slotLabel(slot)} Run execution or continuity facts conflict with the Mission observation.`);
       return undefined;
     }
     if (slot.runKind !== "negative" && canonical(summary.charter) !== canonical(slot.charter)) {

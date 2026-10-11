@@ -200,6 +200,52 @@ describe("Mission repair comparison", () => {
     expect(result.defects[0]?.outcome).toBe("reproduced");
   });
 
+  it.each(["cleanup", "continuity", "observation", "adapter"] as const)(
+    "does not claim a reproduced product defect with %s evidence gap", async (gap) => {
+      const fixture = await createFixture({ candidateVerdict: "failed" });
+      const path = join(fixture.evidenceDir, "after-primary", "run.json");
+      const summary = RunSummarySchema.parse(JSON.parse(await readFile(path, "utf8")));
+      const observed = fixture.candidate.observations[0]!;
+      if (gap === "cleanup") {
+        summary.integrationCleanup = { status: "failed", declaredResources: 1, verifiedResources: 0 };
+        observed.data.integrationCleanup = summary.integrationCleanup;
+      } else if (gap === "continuity") {
+        summary.targetContinuity = "changed";
+        observed.data.targetContinuity = "changed";
+      } else if (gap === "observation") {
+        observed.data.targetContinuity = "stable";
+      } else {
+        summary.execution = { adapter: "electron" };
+      }
+      await writeFile(path, JSON.stringify(summary));
+      const result = await fixture.compare();
+      expect(result.status).toBe("inconclusive");
+      expect(result.gaps.some((item) => item.includes(gap === "cleanup" ? "test resource cleanup"
+        : gap === "continuity" ? "environment continuity gap" : "execution or continuity facts"))).toBe(true);
+      if (gap === "cleanup" || gap === "continuity") expect(result.reason).toContain(gap === "cleanup"
+        ? "test resource cleanup" : "environment continuity gap");
+    });
+
+  it.each(["cleanup", "continuity"] as const)(
+    "does not certify a repair from a baseline with %s evidence gap", async (gap) => {
+      const fixture = await createFixture();
+      const path = join(fixture.evidenceDir, "before-primary", "run.json");
+      const summary = RunSummarySchema.parse(JSON.parse(await readFile(path, "utf8")));
+      const observed = fixture.baseline.observations[0]!;
+      if (gap === "cleanup") {
+        summary.integrationCleanup = { status: "failed", declaredResources: 1, verifiedResources: 0 };
+        observed.data.integrationCleanup = summary.integrationCleanup;
+      } else {
+        summary.targetContinuity = "unverified";
+        observed.data.targetContinuity = "unverified";
+      }
+      await writeFile(path, JSON.stringify(summary));
+      const result = await fixture.compare();
+      expect(result.status).toBe("inconclusive");
+      expect(result.gaps.some((item) => item.startsWith("Baseline ") && item.includes(gap === "cleanup"
+        ? "test resource cleanup" : "environment continuity gap"))).toBe(true);
+    });
+
   it("requires identical saved input bytes even when the candidate business Oracle passes", async () => {
     const fixture = await createFixture();
     const action = { kind: "setInputFiles" as const, selector: "#resume", files: [".proofkit/fixtures/resume.pdf"] };
@@ -397,7 +443,7 @@ async function writeRun(evidenceDir: string, charter: TestCharter, runId: string
   await writeFile(join(runDir, "artifacts", "oracle-source.json"), source);
   const now = new Date().toISOString();
   const summary: RunSummary = {
-    runId, startedAt: now, endedAt: now, status: "completed", verdict,
+    runId, execution: { adapter: "web" }, startedAt: now, endedAt: now, status: "completed", verdict,
     charter: options.negativeCaseId ? { ...charter, metadata: { ...charter.metadata, negativeCaseId: options.negativeCaseId }, assertions: [] } : charter,
     steps: [], assertions: options.negativeCaseId ? [] : [{ assertion: charter.assertions[0]!, passed: true, message: "visible", evidence: [] }],
     oracles: [{ name: "resume-binding", passed: verdict === "passed", message: verdict === "passed" ? "correct candidate" : "wrong candidate", evidence: [path], sourceEvidenceCount: 1, sourceEvidenceArtifacts: [path], observedAt: now }],
