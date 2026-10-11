@@ -159,9 +159,12 @@ For a concrete repair hypothesis, connect the independent failed business fact
 to a specific code branch or contract and cite both the evidence artifact and
 the current source location. If that connection cannot be established, say what
 remains unknown instead of presenting the generic saved suggestion as a fix.
+The default get_mission_evidence view is brief. It retains the audited verdict,
+key cited artifacts and omission counts; use detail=full when a cited link or
+per-Run fact is missing from that view. Do not treat omitted links as inspected.
 For a multi-scenario Mission, read diagnoses and diagnosticSupport.diagnoses per
-Finding, not only the singular diagnosis headline. summary.diagnoses is bounded;
-if summary.omittedDiagnoses is positive, inspect the saved Mission before
+Finding, not only the singular diagnosis headline. The brief diagnoses list is
+bounded; if omittedDiagnoses is positive, request detail=full before
 claiming that every diagnosis has been reviewed.
 For release Missions, inspect summary.replayConsistency. A divergent primary
 and replay verdict is an observed difference to investigate, not proof of

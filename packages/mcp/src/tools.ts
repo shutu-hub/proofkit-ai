@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestMission } from "@proofkit/contracts";
 import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
+import { briefMissionEvidence, briefMissionResult } from "./mission-evidence-brief.js";
 
 // MCP annotations are host scheduling hints, not authorization. Only operations
 // that read existing source/config/Mission state receive a read-only hint.
@@ -149,11 +150,13 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "get_mission_evidence",
-    "Read traceable Mission evidence, full acceptance and presented-evidence integrity, per-diagnosis and per-proposal support, Oracle proof classification, a bounded summary and local HTML report. testVerdict is downgraded to inconclusive when a saved pass lacks required current proof; verdict retains the historical value.",
-    { missionId: z.string().min(1) },
-    async ({ missionId }) => {
+    "Read the current audited verdict, key findings and evidence links, and local HTML report. The default brief view includes omission counts; use detail=full for all saved traces and references. testVerdict can be inconclusive even when the historical verdict passed.",
+    { missionId: z.string().min(1), detail: z.enum(["brief", "full"]).default("brief") },
+    async ({ missionId, detail }) => {
       const evidence = await runner.missionEvidence(missionId);
-      return result({ ...evidence, testVerdict: evidence.testVerdict ?? evidence.verdict ?? "not-asserted" });
+      return result(detail === "full"
+        ? { ...evidence, testVerdict: evidence.testVerdict ?? "not-asserted" }
+        : briefMissionEvidence(evidence));
     },
   );
 
@@ -327,9 +330,9 @@ async function awaitTestResult(runner: LocalRunnerService, missionId: string, ti
       signal?.throwIfAborted();
       if (!evidence.running && ["completed", "failed", "blocked", "cancelled"].includes(evidence.status)) {
         return { state: "terminal" as const, missionId, status: evidence.status, verdict: evidence.verdict,
-          testVerdict: evidence.testVerdict,
+          testVerdict: evidence.testVerdict ?? "not-asserted",
           testVerdictReason: evidence.testVerdictReason,
-          level: evidence.level, summary: evidence.summary, evidenceIntegrity: evidence.evidenceIntegrity,
+          level: evidence.level, summary: briefMissionResult(evidence.summary), evidenceIntegrity: evidence.evidenceIntegrity,
           acceptanceEvidenceIntegrity: evidence.acceptanceEvidenceIntegrity,
           proofClassification: evidence.proofClassification,
           firstFailure: evidence.firstFailure, report: evidence.report, reportUnavailable: evidence.reportUnavailable,

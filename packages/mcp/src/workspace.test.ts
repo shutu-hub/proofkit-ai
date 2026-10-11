@@ -178,7 +178,8 @@ describe("MCP external workspace", () => {
       expect(evidence.testVerdict).toBe("passed");
       expect(evidence.proofClassification).toMatchObject({ status: "explicit", legacyOracles: 0 });
       expect(evidence.evidence).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "business" })]));
-      const omittedEvidenceReferences = evidence.summary.runs.reduce((count: number, run: { omittedEvidence: number }) => count + run.omittedEvidence, 0);
+      const full = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId, detail: "full" } }));
+      const omittedEvidenceReferences = full.summary.runs.reduce((count: number, run: { omittedEvidence: number }) => count + run.omittedEvidence, 0);
       expect(evidence.evidenceIntegrity).toMatchObject({
         status: omittedEvidenceReferences ? "partial" : "intact",
         scope: "presented-result",

@@ -265,7 +265,7 @@ describe("ProofKit MCP tools", () => {
       .mockResolvedValueOnce({ mission: running, running: true })
       .mockResolvedValue({ mission: completed, running: false });
     const missionEvidence = vi.fn(async () => ({ missionId: "mission-test", status: "completed", running: false,
-      verdict: "passed", testVerdict: "inconclusive", testVerdictReason: "Legacy Oracle proof is unverified", level: "core", summary: { missionId: "mission-test", verdict: "passed" },
+      verdict: "passed", testVerdict: "inconclusive", testVerdictReason: "Legacy Oracle proof is unverified", level: "core", summary: { missionId: "mission-test", verdict: "passed", runs: [{ runId: "run-1", large: "repeated detail" }] },
       evidenceIntegrity: { status: "intact" }, proofClassification: { status: "unverified", legacyOracles: 1 },
       acceptanceEvidenceIntegrity: { status: "intact", scope: "mission-evidence", references: { total: 1, intact: 1, unavailable: 0, legacy: 0, omitted: 0 } },
       report: "C:/workspace/report.html" }));
@@ -280,6 +280,7 @@ describe("ProofKit MCP tools", () => {
         testVerdictReason: "Legacy Oracle proof is unverified",
         report: "C:/workspace/report.html", next: ["get_mission_evidence"] });
       expect(missionStatus).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(textContent(response)).summary.runs).toBeUndefined();
       expect(missionEvidence).toHaveBeenCalledWith("mission-test");
       expect(runner.startMission).not.toHaveBeenCalled();
     } finally { await client.close(); await server.close(); }
@@ -371,11 +372,13 @@ describe("ProofKit MCP tools", () => {
 
   it("labels an unexecuted Mission evidence snapshot as not-asserted", async () => {
     const runner = { missionEvidence: vi.fn(async () => ({ missionId: "mission-test", status: "awaiting-approval",
-      summary: { verdict: undefined }, report: "C:/workspace/planning-report.html" })) } as unknown as LocalRunnerService;
+      verdict: "passed", summary: { verdict: "passed" }, report: "C:/workspace/planning-report.html" })) } as unknown as LocalRunnerService;
     const { client, server } = await connectedClient(runner);
     try {
       const response = await client.callTool({ name: "get_mission_evidence", arguments: { missionId: "mission-test" } });
       expect(JSON.parse(textContent(response))).toMatchObject({ status: "awaiting-approval", testVerdict: "not-asserted" });
+      const full = await client.callTool({ name: "get_mission_evidence", arguments: { missionId: "mission-test", detail: "full" } });
+      expect(JSON.parse(textContent(full))).toMatchObject({ status: "awaiting-approval", testVerdict: "not-asserted" });
     } finally { await client.close(); await server.close(); }
   });
 
@@ -558,11 +561,17 @@ describe("ProofKit MCP tools", () => {
       running: false,
       verdict: "passed",
       level: "core",
-      agentSteps: [],
+      detail: "brief",
       summary: { missionId: "mission-test", verdict: "passed", expectedRuns: 1, observedRuns: 1 },
       report: "test-workspace/.proofkit/missions/mission-test/report.html",
       evidence: [expect.objectContaining({ kind: "business" })],
     });
+    expect(payload.agentSteps).toBeUndefined();
+    expect(payload.fullDetail).toEqual({ tool: "get_mission_evidence", arguments: { missionId: "mission-test", detail: "full" } });
+    const full = JSON.parse(textContent(await client.callTool({ name: "get_mission_evidence", arguments: {
+      missionId: mission.missionId, detail: "full" } })));
+    expect(full.agentSteps).toEqual([]);
+    expect(full.detail).toBeUndefined();
 
     await client.close();
     await server.close();

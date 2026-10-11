@@ -46,7 +46,7 @@ async function evaluate(fixture, expected) {
     let result;
     try { result = body ? JSON.parse(body) : undefined; } catch { /* retain MCP error */ }
     calls.push({ tool, arguments: arguments_, status: response.isError ? "failed" : "completed",
-      isError: Boolean(response.isError), result });
+      isError: Boolean(response.isError), result, resultBytes: Buffer.byteLength(body ?? "", "utf8") });
     if (response.isError) throw new Error(`${tool}: ${body?.slice(0, 500) ?? "MCP error"}`);
     return result;
   };
@@ -83,9 +83,18 @@ async function evaluate(fixture, expected) {
       if (!started.running) throw new Error(`Expected a started Mission: ${JSON.stringify(started.readiness)}`);
       const terminal = await waitForMission(call, started.missionId);
       const evidence = await call("get_mission_evidence", { missionId: started.missionId });
+      const fullEvidence = await call("get_mission_evidence", { missionId: started.missionId, detail: "full" });
+      const fullPaths = new Set([...(fullEvidence.evidence ?? []), ...(fullEvidence.firstFailure?.evidence ?? []),
+        ...(fullEvidence.findings ?? []).flatMap((finding) => finding.evidence ?? []),
+        ...(fullEvidence.diagnosis?.evidence ?? []),
+        ...(fullEvidence.repairSuggestions ?? []).flatMap((suggestion) => suggestion.evidence ?? [])].map((ref) => ref.path));
       const savedSummary = JSON.parse(await readFile(join(dirname(evidence.report), "summary.json"), "utf8"));
       if (terminal.verdict !== evidence.summary?.verdict
         || terminal.testVerdict !== evidence.testVerdict
+        || evidence.detail !== "brief"
+        || fullEvidence.testVerdict !== evidence.testVerdict
+        || fullEvidence.summary?.verdict !== evidence.summary?.verdict
+        || (evidence.evidence ?? []).some((item) => !fullPaths.has(item.path))
         || evidence.summary?.testVerdict !== evidence.testVerdict
         || savedSummary.testVerdict !== evidence.testVerdict
         || savedSummary.verdict !== evidence.verdict
@@ -98,7 +107,7 @@ async function evaluate(fixture, expected) {
       if (evidence.testVerdict !== expected.verdict) {
         throw new Error(`Current audited verdict ${evidence.testVerdict} differs from expected ${expected.verdict}`);
       }
-      const issues = (evidence.summary?.runs ?? []).flatMap((row) => row.issue ? [row.issue] : []);
+      const issues = (fullEvidence.summary?.runs ?? []).flatMap((row) => row.issue ? [row.issue] : []);
       if (terminal.firstFailure?.message) issues.push(terminal.firstFailure.message);
       answer = { missionId: started.missionId, verdict: evidence.testVerdict,
         level: started.level, coverage: started.planning?.coverage?.requested, surface: expected.surface,
@@ -116,7 +125,7 @@ async function evaluate(fixture, expected) {
     workspace: fixture.workspace, sourceUnchanged: await fixture.sourceUnchanged(),
     workspaceContractsUnchanged: await fixture.workspaceContractsUnchanged() });
   return { caseId: expected.id, expected: { verdict: expected.verdict, level: expected.level, coverage: expected.coverage, surface: expected.surface },
-    answer, tools: calls.map(({ tool, status }) => ({ tool, status })),
+    answer, tools: calls.map(({ tool, status, resultBytes }) => ({ tool, status, resultBytes })),
     missionIds: missions.map((item) => item.missionId), evidenceRoot: fixture.workspace, validation };
 }
 
