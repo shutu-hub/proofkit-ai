@@ -960,6 +960,19 @@ export const TestScopeSchema = z.object({
     total: ScopeCountSchema, matched: ScopeCountSchema, omitted: ScopeCountSchema,
     items: z.array(z.object({ name: z.string(), kind: z.enum(["registered", "configured-http"]) })),
   }),
+  /** Additive planning guidance; older saved scope snapshots remain readable. */
+  planningReadiness: z.object({
+    status: z.enum(["catalog-ready", "authoring-needed", "inspection-incomplete"]),
+    compatibleMatched: ScopeCountSchema,
+    compatibleChecked: ScopeCountSchema,
+    compatibleReady: ScopeCountSchema,
+    compatibleOmitted: ScopeCountSchema,
+    gaps: z.array(z.object({
+      code: z.enum(["no-compatible-plan", "intensity-mismatch", "surface-mismatch", "plan-invalid", "catalog-omitted", "source-focus-unresolved", "oracle-name-unmatched", "no-registered-oracle"]),
+      relatedIds: z.array(CatalogIdSchema).max(5),
+      guidance: z.string().min(1).max(240),
+    })).max(8),
+  }).optional(),
   limitations: z.array(z.string()),
   next: z.array(z.string()),
   generatedAt: z.string(),

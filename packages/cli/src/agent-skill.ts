@@ -38,6 +38,14 @@ projectRoot against the checkout the user asked to test; select the matching
 ProofKit server when multiple bindings exist. A focus is a literal module or
 source-path substring, not the full natural-language sentence. The returned
 routes are static candidates; counts, omissions and truncation are scope limits.
+Read planningReadiness before selecting a scenario. catalog-ready means only a
+saved plan passed structural checks; it is not runtime readiness. If a quick
+Charter matches a core request, keep core and author or register core proof.
+For inspection-incomplete, refine the literal focus or raise the bounded limit
+before concluding no plan exists. A source-focus-unresolved gap means the
+literal term missed retained source hints, not that the feature is absent.
+An oracle-name-unmatched gap likewise requires inspecting the registered
+readers; it does not prove that no business reader applies.
 
 ## Reuse or author a scenario
 

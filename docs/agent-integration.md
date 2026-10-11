@@ -185,6 +185,8 @@ Discovery/configuration references:
 
 ## Recommended connection
 
+Read `inspect_test_scope.planningReadiness` before choosing a Charter. Its bounded gaps distinguish level and surface mismatch, invalid or omitted plans, and literal source or Oracle-name misses. `inspection-incomplete` calls for refining the focus or limit; `authoring-needed` calls for a compatible scenario. Neither status is a product verdict, and a matching quick Charter never substitutes for requested core proof.
+
 Register one local MCP server for the project root. Clients with MCP support, including Codex and Claude Code, use the same high-level tools. DeepSeek Harness can use this interface when its harness supports MCP, or invoke the CLI otherwise:
 
 ```text

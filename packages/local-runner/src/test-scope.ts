@@ -1,11 +1,12 @@
 import { TestScopeSchema, type CharterCatalogEntry, type ProofkitConfig, type ProjectMap, type SourceState, type SuiteCatalogEntry, type TestScope, type TestScopeInputSchema, type WorkflowInventoryInspection } from "@proofkit/contracts";
-import { requiredCatalogSurfaces, supportsCatalogCharter, supportsCatalogSuite } from "@proofkit/planner";
+import { getTestLevelProfile, requiredCatalogSurfaces, supportsCatalogCharter, supportsCatalogSuite } from "@proofkit/planner";
 import { reconcileRouteDeclarations } from "@proofkit/project";
 import { z, type BusinessOracle, type CapabilityDefinition, type ProjectIntegration } from "@proofkit/runner";
 import { describeInputShape } from "./schema-hints.js";
 
 type Request = z.output<typeof TestScopeInputSchema>;
 type Check = TestScope["catalog"]["items"][number]["check"];
+type PlanningGap = NonNullable<TestScope["planningReadiness"]>["gaps"][number];
 export type ScopeContext = {
   project: ProjectMap;
   workspaceRoot: string;
@@ -23,6 +24,7 @@ export type ScopeContext = {
 export async function inspectTestScope(context: ScopeContext, request: Request): Promise<TestScope> {
   const { project, config } = context;
   const { level, surface, limit } = request;
+  const requiredSurfaces = requiredCatalogSurfaces(level, surface);
   const focus = request.focus?.normalize("NFKC").toLowerCase();
   const matches = (...values: Array<string | undefined>) => !focus || values.some((value) => value?.normalize("NFKC").toLowerCase().includes(focus));
   const eligibleCharters = config.charters.filter((entry) => supportsCatalogCharter(entry, level, surface));
@@ -80,16 +82,49 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   limitations.push(context.workflowInventory.reviewAuthentication?.status === "verified"
     ? "A trusted key authenticated the saved workflow review; semantic completeness and actual execution remain unverified"
     : "A workflow inventory is a reviewable claim only; reviewer identity, completeness and actual execution remain unverified");
-  const readyCatalog = catalogItems.some((entry) => entry.check.planReady);
+  const compatibleCharters = selectedCharters.filter((entry) => eligibleIds.has(entry.id));
+  const compatibleSuites = suites.filter((entry) => suiteIds.has(entry.id));
+  const compatibleChecked = catalogItems.filter((entry) => entry.check.eligible).length + suiteItems.filter((entry) => entry.check.eligible).length;
+  const compatibleReady = catalogItems.filter((entry) => entry.check.planReady).length + suiteItems.filter((entry) => entry.check.planReady).length;
+  const compatibleMatched = compatibleCharters.length + compatibleSuites.length;
+  const compatibleOmitted = compatibleMatched - compatibleChecked;
+  const focusUnresolved = Boolean(focus && !selectedCharters.length && !suites.length && !routes.length && !entries.length && !capabilityMatches.length && !oracleMatches.length);
+  const planningStatus: NonNullable<TestScope["planningReadiness"]>["status"] = compatibleReady ? "catalog-ready"
+    : compatibleOmitted || focusUnresolved ? "inspection-incomplete" : "authoring-needed";
+  const gaps: PlanningGap[] = [];
+  const gap = (code: PlanningGap["code"], relatedIds: string[], guidance: string) => gaps.push({ code, relatedIds: relatedIds.slice(0, 5), guidance });
+  const wrongLevel = selectedCharters.filter((entry) => entry.level !== level);
+  if (!compatibleReady && wrongLevel.length) gap("intensity-mismatch", wrongLevel.map((entry) => entry.id),
+    `Matching Charter level differs from requested ${level}; do not lower test intensity to reuse a weaker plan.`);
+  const wrongSurface = selectedCharters.filter((entry) => entry.level === level && !requiredSurfaces.every((required) => entry.surfaces.includes(required)));
+  if (!compatibleReady && wrongSurface.length) gap("surface-mismatch", wrongSurface.map((entry) => entry.id),
+    `Matching Charter does not cover the required ${requiredSurfaces.join(" + ")} surface matrix.`);
+  const invalidPlans = [...catalogItems, ...suiteItems].filter((entry) => entry.check.eligible && !entry.check.planReady);
+  if (invalidPlans.length) gap("plan-invalid", invalidPlans.map((entry) => entry.id),
+    "One or more compatible plans failed validation; inspect their returned issues before execution.");
+  if (compatibleOmitted) gap("catalog-omitted", [],
+    "Compatible catalog details exceeded the response limit; inspect a narrower focus or raise the bounded limit before concluding no plan is ready.");
+  if (!compatibleMatched) gap("no-compatible-plan", [],
+    getTestLevelProfile(level).evidencePolicy.requireBusinessOracle
+      ? `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive assertion and independent business Oracle.`
+      : `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive surface assertion.`);
+  if (!compatibleReady && focus && !routes.length && !entries.length) gap("source-focus-unresolved", [],
+    "The literal focus matched no retained source entry or route; inspect the owning paths or try a source-language term before claiming absence.");
+  if (!compatibleReady && getTestLevelProfile(level).evidencePolicy.requireBusinessOracle) {
+    if (!allOracles.length) gap("no-registered-oracle", [],
+      "No business Oracle is registered; inspect a read-only terminal API for an inline reader or add a trusted workspace connector.");
+    else if (focus && !oracleMatches.length) gap("oracle-name-unmatched", [],
+      "No registered Oracle name literally matches this focus; inspect the existing readers and business contract before choosing one.");
+  }
   const next = [
     "inspect_test_environment",
     "inspect_surface",
-    readyCatalog ? "run_test" : "plan_test",
+    compatibleReady ? "run_test" : planningStatus === "inspection-incomplete" ? "inspect_test_scope" : "plan_test",
   ];
   return TestScopeSchema.parse({
     schemaVersion: 1, testVerdict: "not-asserted", executionChecks: "not-run",
     projectRoot: project.root, workspaceRoot: context.workspaceRoot, sourceState: context.sourceState, workflowInventory: context.workflowInventory,
-    selection: { ...request, requiredSurfaces: requiredCatalogSurfaces(level, surface) }, inventory,
+    selection: { ...request, requiredSurfaces }, inventory,
     entryPoints: { total: project.inventory.entryPoints.length, matched: entries.length, items: entries.slice(0, limit), omitted: Math.max(0, entries.length - limit) },
     routes: {
       total: mapping.routes.length, matched: routes.length, declaredTargets: mapping.declaredTargets,
@@ -106,6 +141,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
       inputShape: describeInputShape(item.inputSchema),
     })) },
     oracles: { total: allOracles.length, matched: oracleMatches.length, omitted: Math.max(0, oracleMatches.length - limit), items: oracleMatches.slice(0, limit) },
+    planningReadiness: { status: planningStatus, compatibleMatched, compatibleChecked, compatibleReady, compatibleOmitted, gaps },
     limitations, next, generatedAt: project.generatedAt,
   });
 }

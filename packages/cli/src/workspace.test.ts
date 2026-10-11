@@ -87,7 +87,8 @@ describe("CLI workspace onboarding", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const run = (...args: string[]) => createProgram().parseAsync(["node", "proofkit", "scope", "--root", root, "--workspace", workspace, ...args]);
     await run();
-    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ testVerdict: "not-asserted", executionChecks: "not-run", selection: { level: "core", surface: "web" }, routes: { total: 2, mapped: 0, unmapped: 2 } });
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ testVerdict: "not-asserted", executionChecks: "not-run", selection: { level: "core", surface: "web" }, routes: { total: 2, mapped: 0, unmapped: 2 },
+      planningReadiness: { status: "authoring-needed", compatibleReady: 0, gaps: expect.arrayContaining([expect.objectContaining({ code: "no-compatible-plan" })]) } });
     log.mockClear();
     await run("--level", "release", "--surface", "electron", "--limit", "1");
     const limited = JSON.parse(String(log.mock.calls[0]?.[0]));

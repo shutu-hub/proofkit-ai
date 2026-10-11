@@ -61,6 +61,7 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     expect(TestScopeSchema.safeParse(scope).success).toBe(true);
     expect(scope).toMatchObject({ testVerdict: "not-asserted", executionChecks: "not-run", selection: { level: "core", requiredSurfaces: ["web"] } });
     expect(scope.catalog.items.find((item) => item.id === "resume-core")?.check).toEqual({ eligible: true, planReady: true, issues: [] });
+    expect(scope.planningReadiness).toMatchObject({ status: "catalog-ready", compatibleReady: 1 });
     expect(scope.next).toEqual(["inspect_test_environment", "inspect_surface", "run_test"]);
     expect(scope.routes).toMatchObject({ total: 5, mapped: 1, unmapped: 4 });
     expect(scope.routes.items.find((item) => item.path === "/resume")).toMatchObject({ source: "apps/web/src/router.ts", line: 3, status: "declared", charterIds: ["resume-core"] });
@@ -101,6 +102,13 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     expect(release.catalog.eligible).toBe(2);
     expect(release.catalog.items.find((item) => item.id === "release-web-only")?.check).toMatchObject({ eligible: false, planReady: false });
     expect(release.suites.items[0]?.check.planReady).toBe(true);
+    const suiteOnlyFocus = await runner.inspectTestScope({ level: "release", surface: "web", focus: "上线" });
+    expect(suiteOnlyFocus.catalog.matched).toBe(0);
+    expect(suiteOnlyFocus.planningReadiness).toMatchObject({ status: "catalog-ready", compatibleReady: 1 });
+    expect(suiteOnlyFocus.next.at(-1)).toBe("run_test");
+    const missingSurface = await runner.inspectTestScope({ level: "release", surface: "web", focus: "release-web-only" });
+    expect(missingSurface.planningReadiness).toMatchObject({ status: "authoring-needed",
+      gaps: expect.arrayContaining([expect.objectContaining({ code: "surface-mismatch", relatedIds: ["release-web-only"] })]) });
     const mobile = await runner.inspectTestScope({ level: "release", surface: "mobile" });
     expect(mobile.selection.requiredSurfaces).toEqual(["mobile"]);
     expect(mobile.next[0]).toBe("inspect_test_environment");
@@ -130,6 +138,7 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     await writeCharter(runner.workspaceRoot, "resume-core", { planning: { source: "catalog", confidence: 1, assumptions: [], missingInputs: [], evidenceGaps: ["project-map-truncated"] } });
     const gaps = await runner.inspectTestScope();
     expect(gaps.catalog.items.find((item) => item.id === "resume-core")?.check).toMatchObject({ planReady: false, issues: [expect.stringContaining("planning evidence gaps")] });
+    expect(gaps.planningReadiness?.gaps).toContainEqual(expect.objectContaining({ code: "plan-invalid" }));
   });
 
   it("preserves method-qualified API declarations and distinguishes fragments from composed routes", async () => {
@@ -166,7 +175,9 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     const empty = await runner.inspectTestScope({ focus: "no-such-workflow" });
     expect(empty.routes.matched).toBe(0);
     expect(empty.catalog.matched).toBe(0);
-    expect(empty.next).toEqual(["inspect_test_environment", "inspect_surface", "plan_test"]);
+    expect(empty.planningReadiness).toMatchObject({ status: "inspection-incomplete", compatibleMatched: 0,
+      gaps: expect.arrayContaining([expect.objectContaining({ code: "source-focus-unresolved" })]) });
+    expect(empty.next).toEqual(["inspect_test_environment", "inspect_surface", "inspect_test_scope"]);
     await expect(runner.inspectTestScope({ limit: 0 })).rejects.toThrow();
     await expect(runner.inspectTestScope({ level: "unknown" as "core" })).rejects.toThrow();
   });
@@ -177,8 +188,40 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     const scope = await bare.inspectTestScope();
     expect(scope.catalog).toMatchObject({ total: 0, eligible: 0, items: [] });
     expect(scope.oracles.total).toBe(0);
+    expect(scope.planningReadiness).toMatchObject({ status: "authoring-needed",
+      gaps: expect.arrayContaining([expect.objectContaining({ code: "no-registered-oracle" })]) });
     expect(scope.routes).toMatchObject({ mapped: 0, unmapped: 5 });
     expect(scope.testVerdict).toBe("not-asserted");
+  });
+
+  it("explains an AIHR-like core focus without treating a matching quick Charter as core coverage", async () => {
+    const { runner } = await fixture();
+    runner.config.charters = [{ id: "resume-ui-quick", path: "charters/quick-check.yml",
+      aliases: ["简历获取页面"], level: "quick", surfaces: ["web"] }];
+    const scope = await runner.inspectTestScope({ level: "core", surface: "web", focus: "简历获取" });
+    expect(scope.catalog.items).toEqual([expect.objectContaining({ id: "resume-ui-quick", level: "quick",
+      check: expect.objectContaining({ eligible: false, planReady: false }) })]);
+    expect(scope.planningReadiness).toMatchObject({ status: "authoring-needed", compatibleMatched: 0, compatibleReady: 0,
+      gaps: expect.arrayContaining([
+        expect.objectContaining({ code: "intensity-mismatch", relatedIds: ["resume-ui-quick"] }),
+        expect.objectContaining({ code: "no-compatible-plan" }),
+        expect.objectContaining({ code: "source-focus-unresolved" }),
+        expect.objectContaining({ code: "oracle-name-unmatched" }),
+      ]) });
+    expect(scope.next.at(-1)).toBe("plan_test");
+    expect(scope.testVerdict).toBe("not-asserted");
+  });
+
+  it("leaves catalog readiness unverified when the response limit hides compatible plans", async () => {
+    const { runner } = await fixture();
+    runner.config.charters.push({ id: "a-invalid-core", path: "charters/missing.yml", aliases: ["简历"],
+      level: "core", surfaces: ["web"] });
+    const scope = await runner.inspectTestScope({ level: "core", surface: "web", focus: "简历", limit: 1 });
+    expect(scope.catalog.items).toEqual([expect.objectContaining({ id: "a-invalid-core", check: expect.objectContaining({ planReady: false }) })]);
+    expect(scope.planningReadiness).toMatchObject({ status: "inspection-incomplete", compatibleMatched: 2, compatibleChecked: 1,
+      compatibleReady: 0, compatibleOmitted: 1,
+      gaps: expect.arrayContaining([expect.objectContaining({ code: "catalog-omitted" })]) });
+    expect(scope.next.at(-1)).toBe("inspect_test_scope");
   });
 
   it("exposes a workspace workflow claim and freezes it on a whole-project Mission without clearing the coverage gate", async () => {

@@ -120,6 +120,8 @@ MCP clients use `inspect_test_scope` for the same view, then `inspect_test_envir
 
 High-level Mission creation infers an omitted surface only from explicit Web, Electron/desktop, or mobile wording in the intent; otherwise it uses Web. It rejects a Mission whose actual execution matrix omits a platform named in the request. A multi-surface `core` request therefore needs a project workflow inventory with those platform checks, while a `release` Charter or suite can use its declared Web/Electron matrix. The low-level Run and inspection tools retain their explicit Web defaults.
 
+`planningReadiness` summarizes only checked catalog candidates. It separates a usable saved plan from authoring work and incomplete inspection, with bounded gap codes for intensity/surface mismatch, invalid or omitted plans, unmatched source focus and business reader names. A `quick` match never satisfies a `core` request; an unmatched literal focus never proves the feature is absent. A ready plan still needs environment, surface and business execution evidence.
+
 Observe configured endpoints or a one-time Web candidate before attaching to a page:
 
 ```bash
