@@ -1,4 +1,4 @@
-import { IntegrationCheckResultSchema, IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, ReplayConsistencySchema, SourceStateSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionExecutionAudit, type MissionProofClassification, type MissionResult, type MissionRunResult, type MissionSurface, type Observation, type ReplayConsistency, type SourceState, type TaskNode, type TestMission, type WorkflowExecutionCoverage, type WorkflowReviewAudit } from "@proofkit/contracts";
+import { IntegrationCheckResultSchema, IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, ReplayConsistencySchema, SourceStateSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionAgentTraceAudit, type MissionComparison, type MissionExecutionAudit, type MissionProofClassification, type MissionResult, type MissionRunResult, type MissionSurface, type Observation, type ReplayConsistency, type SourceState, type TaskNode, type TestMission, type WorkflowExecutionCoverage, type WorkflowReviewAudit } from "@proofkit/contracts";
 import type { SuiteScopeSummary } from "./suite-verifier.js";
 
 type RunKind = MissionRunResult["runKind"];
@@ -20,6 +20,7 @@ export function projectMissionResult(mission: TestMission, options: {
   comparisonUnavailable?: string;
   proofClassification?: MissionProofClassification;
   executionAudit?: MissionExecutionAudit;
+  agentTraceAudit?: MissionAgentTraceAudit;
   sourceFreshness?: "matching" | "changed" | "unavailable" | "unverified";
   currentSourceState?: SourceState;
 }): MissionResult {
@@ -106,6 +107,7 @@ export function projectMissionResult(mission: TestMission, options: {
     expectedRuns: surfaceTasks.length,
     observedRuns: observations.length,
     executionAudit: options.executionAudit,
+    agentTraceAudit: options.agentTraceAudit,
     runs: rows.slice(0, 200),
     omittedRunResults: Math.max(0, rows.length - 200),
     ...(mission.plan.executionProfile.requireReplay ? { replayConsistency: projectReplayConsistency(mission, surfaceTasks, rows, observations) } : {}),

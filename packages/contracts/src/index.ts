@@ -1600,6 +1600,17 @@ export const MissionExecutionAuditSchema = z.object({
 });
 export type MissionExecutionAudit = z.infer<typeof MissionExecutionAuditSchema>;
 
+/** Recomputed from the persisted AgentStep -> ToolCall -> Observation chain. */
+export const MissionAgentTraceAuditSchema = z.object({
+  status: z.enum(["complete", "incomplete", "unverified"]),
+  checkedSteps: z.number().int().nonnegative(),
+  checkedCalls: z.number().int().nonnegative(),
+  checkedObservations: z.number().int().nonnegative(),
+  issues: z.array(z.string().min(1)).max(20),
+  omittedIssues: z.number().int().nonnegative(),
+});
+export type MissionAgentTraceAudit = z.infer<typeof MissionAgentTraceAuditSchema>;
+
 export const MissionResultSchema = z.object({
   schemaVersion: z.literal("1"),
   missionId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
@@ -1651,6 +1662,7 @@ export const MissionResultSchema = z.object({
   expectedRuns: z.number().int().nonnegative(),
   observedRuns: z.number().int().nonnegative(),
   executionAudit: MissionExecutionAuditSchema.optional(),
+  agentTraceAudit: MissionAgentTraceAuditSchema.optional(),
   runs: z.array(MissionRunResultSchema).max(200),
   omittedRunResults: z.number().int().nonnegative(),
   replayConsistency: ReplayConsistencySchema.optional(),

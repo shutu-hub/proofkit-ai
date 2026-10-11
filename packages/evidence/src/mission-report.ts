@@ -131,6 +131,9 @@ export class MissionReportStore {
 export function auditMissionVerdict(result: MissionResult, integrity: MissionEvidenceIntegrity): Pick<MissionResult, "testVerdict" | "testVerdictReason"> {
   const saved = result.verdict ?? "not-asserted";
   if (saved !== "passed" && saved !== "failed") return { testVerdict: saved };
+  if (result.agentTraceAudit?.status !== "complete") {
+    return { testVerdict: "inconclusive", testVerdictReason: "Saved AgentStep, ToolCall and Observation ownership is missing or inconsistent; rerun or review the trace before trusting this result." };
+  }
   if (saved === "passed" && result.planning?.coverage?.requested === "project"
     && result.scope.workflowReviewAudit?.status !== "verified") {
     return { testVerdict: "inconclusive", testVerdictReason: "The saved whole-project pass lacks a currently verified reviewed source scope and matching workflow Runs." };
@@ -195,6 +198,7 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
   const workflowExecution = result.scope.workflowExecution;
   const workflowReviewAudit = result.scope.workflowReviewAudit;
   const executionAudit = result.executionAudit;
+  const agentTraceAudit = result.agentTraceAudit;
   const unavailable = [...links.values()].filter((link) => !link.href).length;
   const unverified = [...new Map(collectEvidence(result).map((ref) => [evidenceKey(ref), ref])).values()].filter((ref) => !ref.sha256).length;
   const savedConfirmed = result.findings.filter((finding) => finding.category === "product" && finding.status === "confirmed");
@@ -225,6 +229,9 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
     result.acceptanceEvidenceIntegrity ? `Current Mission evidence integrity: ${result.acceptanceEvidenceIntegrity.status}; ${result.acceptanceEvidenceIntegrity.references.intact}/${result.acceptanceEvidenceIntegrity.references.total} saved reference(s) verified, ${result.acceptanceEvidenceIntegrity.references.omitted} beyond the audit limit. This does not prove whole-project coverage or application state after the Run.` : undefined,
     result.testVerdictReason,
     executionAudit ? `Execution slots: ${executionAudit.matchedSlots}/${executionAudit.expectedSlots} uniquely matched; ${executionAudit.unexpectedObservations} unexpected Run observation(s).` : undefined,
+    agentTraceAudit ? `Agent trace: ${agentTraceAudit.status}; ${agentTraceAudit.checkedSteps} step(s), ${agentTraceAudit.checkedCalls} call(s), ${agentTraceAudit.checkedObservations} observation(s) checked.` : undefined,
+    ...(agentTraceAudit?.issues ?? []).map((issue) => `Agent trace gap: ${issue}`),
+    agentTraceAudit?.omittedIssues ? `${agentTraceAudit.omittedIssues} additional Agent trace gaps are omitted from this report.` : undefined,
     ...(executionAudit?.issues ?? []).map((issue) => `Execution slot gap: ${issue}`),
     executionAudit?.omittedIssues ? `${executionAudit.omittedIssues} additional execution slot gaps are omitted from this report.` : undefined,
     result.scope.sourceStability ? `Git source stability during this Mission: ${result.scope.sourceStability}. This fingerprint excludes generated output and does not attest served bytes.` : undefined,

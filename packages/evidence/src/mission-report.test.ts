@@ -22,6 +22,7 @@ function result(workspaceRoot: string, evidence: EvidenceRef[] = []): MissionRes
   return MissionResultSchema.parse({ schemaVersion: "1", missionId: "mission-report", projectRoot: "/source", workspaceRoot, intent: "Test resume", status: "completed", running: false, verdict: "inconclusive", level: "core", revision: 7, updatedAt: now, generatedAt: now,
     scope: { surfaces: ["web"], charterCount: 1, uncoveredCharterIds: [] }, tasks: { total: 3, settled: 3, failed: 0, blocked: 0, skipped: 0 }, expectedRuns: 1, observedRuns: 1,
     executionAudit: { status: "complete", expectedSlots: 1, matchedSlots: 1, unexpectedObservations: 0, issues: [], omittedIssues: 0 },
+    agentTraceAudit: { status: "complete", checkedSteps: 3, checkedCalls: 3, checkedObservations: 2, issues: [], omittedIssues: 0 },
     runs: [{ title: "Resume", surface: "web", runKind: "primary", runId: "run-1", verdict: "passed", evidence, omittedEvidence: 0 }], omittedRunResults: 0, findings: [], omittedFindings: 0, confirmedProductFindings: 0, repairSuggestions: [], omittedRepairSuggestions: 0 });
 }
 
@@ -45,6 +46,21 @@ async function file(path: string, content = "fact"): Promise<string> {
 }
 
 describe("Mission report", () => {
+  it("withdraws a saved result when Agent trace ownership cannot be verified", async () => {
+    const workspace = await root();
+    const input = result(workspace);
+    input.verdict = "failed";
+    delete input.agentTraceAudit;
+    const missing = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(missing.result).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("ownership is missing or inconsistent") });
+    input.agentTraceAudit = { status: "incomplete", checkedSteps: 1, checkedCalls: 1,
+      checkedObservations: 1, issues: ["Observation run-1 is unowned."], omittedIssues: 0 };
+    const mismatched = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(mismatched.result.testVerdict).toBe("inconclusive");
+    expect(await readFile(mismatched.path, "utf8")).toContain("Agent trace gap: Observation run-1 is unowned.");
+  });
+
   it("does not accept a saved project pass without a current frozen-review audit", async () => {
     const workspace = await root();
     const input = result(workspace);

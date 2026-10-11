@@ -28,6 +28,7 @@ import { ResourceRecoveryService } from "./resource-recovery.js";
 import { captureRunEvidence } from "./run-evidence.js";
 import { auditMissionProofClassification } from "./mission-proof-classification.js";
 import { auditMissionExecution, auditMissionRunFacts } from "./mission-execution-audit.js";
+import { auditMissionAgentTrace } from "./mission-agent-trace-audit.js";
 import { negativeOutcomeProofGap } from "./negative-outcome.js";
 import { acquireCdpTarget, acquireElectronPortFileScope, acquireExecutionScope, sharedTargetIdentity } from "./execution-scope.js";
 import { sourceBindingTarget } from "./source-binding-target.js";
@@ -774,6 +775,7 @@ export class LocalRunnerService {
     const proofClassification = await auditMissionProofClassification(mission, loadAuditRun);
     const executionAudit = await auditMissionRunFacts(mission,
       auditMissionExecution(mission, this.evidenceDir), loadAuditRun);
+    const agentTraceAudit = auditMissionAgentTrace(mission);
     const referencedRunIds = new Set(mission.observations.flatMap((item) => {
       const id = item.kind === "surface.run" ? item.data.runId
         : item.kind === "surface.inspected" ? item.data.inspectionId : undefined;
@@ -803,7 +805,7 @@ export class LocalRunnerService {
         comparisonUnavailable = "The replay source Mission could not be loaded or compared in this workspace.";
       }
     }
-    let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, workflowReviewAudit, comparison, comparisonUnavailable, proofClassification, executionAudit, sourceFreshness, currentSourceState }), acceptanceEvidenceIntegrity };
+    let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, agentTraceAudit, workflowReviewAudit, comparison, comparisonUnavailable, proofClassification, executionAudit, sourceFreshness, currentSourceState }), acceptanceEvidenceIntegrity };
     let report: string | undefined;
     let reportUnavailable: string | undefined;
     let evidenceIntegrity: MissionEvidenceIntegrity;

@@ -71,6 +71,18 @@ describe("LocalRunnerService", () => {
     expect(intact.diagnosticSupport).toMatchObject({
       diagnosis: { status: "supported" }, repairSuggestions: [{ status: "supported" }],
     });
+    const missionPath = join(root, ".proofkit", "missions", `${created.missionId}.json`);
+    const savedMission = await readFile(missionPath, "utf8");
+    const detachedFailure = JSON.parse(savedMission) as TestMission;
+    detachedFailure.agentSteps.find((step) => step.tool === "surface.run-charter")!.observationIds = [];
+    await writeFile(missionPath, JSON.stringify(detachedFailure));
+    const unownedFailure = await service.missionEvidence(completed.missionId);
+    expect(unownedFailure).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
+      summary: { agentTraceAudit: { status: "unverified" } } });
+    expect(unownedFailure.summary.agentTraceAudit?.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining("must belong to exactly one AgentStep"),
+    ]));
+    await writeFile(missionPath, savedMission);
     await writeFile(join(service.evidenceDir, source), "altered business evidence");
     const changed = await service.missionEvidence(completed.missionId);
     expect(changed).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
@@ -479,6 +491,8 @@ describe("LocalRunnerService", () => {
     expect(completed.evidence.length).toBeGreaterThanOrEqual(3);
     const accepted = await service.missionEvidence(created.missionId);
     expect(accepted.summary.executionAudit).toMatchObject({ status: "complete", expectedSlots: 4, matchedSlots: 4 });
+    expect(accepted.summary.agentTraceAudit).toMatchObject({ status: "complete", checkedSteps: completed.agentSteps.length,
+      checkedCalls: completed.toolCalls.length, checkedObservations: completed.observations.length });
     const structural = auditMissionExecution(completed, service.evidenceDir);
     const electronRunId = completed.observations.find((item) => item.kind === "surface.run"
       && item.data.surface === "electron" && item.data.runKind === "primary")!.data.runId as string;
@@ -505,6 +519,43 @@ describe("LocalRunnerService", () => {
 
     const missionPath = join(root, ".proofkit", "missions", `${created.missionId}.json`);
     const saved = await readFile(missionPath, "utf8");
+    const swappedTrace = JSON.parse(saved) as TestMission;
+    const webStep = swappedTrace.agentSteps.find((step) => step.tool === "surface.run-charter" && step.input.adapter === "web")!;
+    const electronStep = swappedTrace.agentSteps.find((step) => step.tool === "surface.run-charter" && step.input.adapter === "electron")!;
+    [webStep.observationIds, electronStep.observationIds] = [electronStep.observationIds, webStep.observationIds];
+    await writeFile(missionPath, JSON.stringify(swappedTrace));
+    const wrongTrace = await service.missionEvidence(created.missionId);
+    expect(wrongTrace).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      summary: { executionAudit: { status: "complete" }, agentTraceAudit: { status: "incomplete" } } });
+    expect(wrongTrace.summary.agentTraceAudit?.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining("does not belong to its AgentStep execution"),
+    ]));
+    expect(await readFile(wrongTrace.report!, "utf8")).toContain("Agent trace gap");
+
+    const forgedCall = JSON.parse(saved) as TestMission;
+    const call = forgedCall.toolCalls.find((item) => item.taskId === webStep.taskId)!;
+    call.attempt = 99;
+    call.evidence = [];
+    await writeFile(missionPath, JSON.stringify(forgedCall));
+    const wrongReceipt = await service.missionEvidence(created.missionId);
+    expect(wrongReceipt).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      summary: { executionAudit: { status: "complete" }, agentTraceAudit: { status: "incomplete" } } });
+    expect(wrongReceipt.summary.agentTraceAudit?.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining("exceeds its task attempt count"),
+      expect.stringContaining("does not own matching ToolCall"),
+    ]));
+
+    const legacyTrace = JSON.parse(saved) as TestMission;
+    legacyTrace.agentSteps = [];
+    legacyTrace.toolCalls = [];
+    await writeFile(missionPath, JSON.stringify(legacyTrace));
+    const unverifiedTrace = await service.missionEvidence(created.missionId);
+    expect(unverifiedTrace).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      summary: { agentTraceAudit: { status: "unverified" } } });
+    expect(unverifiedTrace.summary.agentTraceAudit?.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining("legacy trace is unverified"),
+    ]));
+
     const wrongSource = JSON.parse(saved) as TestMission;
     const webReplay = wrongSource.observations.find((item) => item.kind === "surface.run" && item.data.surface === "web" && item.data.runKind === "replay")!;
     webReplay.data.sourceRunId = "another-run";
