@@ -27,6 +27,7 @@ export function createProgram(): Command {
     .description("Generate an external onboarding bundle; optionally install the Skill and register the host MCP server")
     .requiredOption("--harness <harness>", "codex, claude-code or generic")
     .option("--root <path>", "tested project root", ".")
+    .option("--template <name>", "install a reviewed reference in the external workspace; currently: aihr")
     .option("--install-skill", "install the portable Skill in the host's personal discovery directory")
     .option("--skills-dir <path>", "explicit personal Skill directory; required for generic installation")
     .option("--allow-capability-writes", "emit operator opt-in for trusted test-environment write capabilities")
@@ -34,14 +35,18 @@ export function createProgram(): Command {
     .option("--register-host", "after a successful local check, install the Skill and register the MCP server with Codex or Claude Code")
     .option("--host-cli <path>", "native host executable or JavaScript entrypoint for --register-host")
     .option("--check-timeout-ms <milliseconds>", "total local connection deadline (1000-60000)", "30000")
-    .action(async (options: RootOptions & { harness: AgentHarness; installSkill?: boolean; skillsDir?: string; allowCapabilityWrites?: boolean; checkConnection?: boolean; registerHost?: boolean; hostCli?: string; checkTimeoutMs: string }) => {
+    .action(async (options: RootOptions & { harness: AgentHarness; template?: string; installSkill?: boolean; skillsDir?: string; allowCapabilityWrites?: boolean; checkConnection?: boolean; registerHost?: boolean; hostCli?: string; checkTimeoutMs: string }) => {
       const timeoutMs = Number(options.checkTimeoutMs);
       if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000) throw new Error("Agent connection timeout must be 1000–60000 milliseconds");
       if (options.hostCli && !options.registerHost) throw new Error("--host-cli requires --register-host");
       if (options.registerHost && options.harness === "generic") throw new Error("--register-host requires --harness codex or claude-code");
+      if (options.template && options.template !== "aihr") throw new Error(`Unknown reference template: ${options.template}`);
+      if (options.template && (options.checkConnection || options.registerHost)) {
+        throw new Error("Review the selected template connector before --check-connection or --register-host; run setup again without --template after review");
+      }
       const setup = await setupAgent({ root: options.root, workspaceRoot: options.workspace,
         harness: options.harness, installSkill: options.installSkill || options.registerHost, skillsDir: options.skillsDir,
-        allowCapabilityWrites: options.allowCapabilityWrites });
+        allowCapabilityWrites: options.allowCapabilityWrites, template: options.template === "aihr" ? "aihr" : undefined });
       const localConnection = options.checkConnection || options.registerHost ? await checkAgentConnection(setup, timeoutMs) : undefined;
       const hostRegistration = options.registerHost
         ? localConnection?.status === "connected"

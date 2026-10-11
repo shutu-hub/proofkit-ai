@@ -71,13 +71,13 @@ proofkit --version
 
 The distribution test packs the project, installs only that tarball in a fresh temporary directory, runs CLI onboarding, and calls the installed MCP server over stdio. A registry release can later use `npm install -g proofkit-ai` with the same two commands.
 
-The tarball also carries the AIHR reference connector and five example Charters. Install them in a separate test workspace without editing the AIHR source:
+The tarball also carries the AIHR reference connector and five example Charters. Select it explicitly during first host setup in a separate test workspace:
 
 ```bash
-proofkit template install aihr --root /path/to/AIHR-Microservices --workspace /path/to/aihr-test-workspace
+proofkit agent setup --harness codex --template aihr --root /path/to/AIHR-Microservices --workspace /path/to/aihr-test-workspace --install-skill
 ```
 
-This copies reviewable files but does not register Charters, start an app, run a test, or assert a product result. Repeating the command reuses identical files; changed files stop installation instead of being overwritten. Review the connector as trusted local JavaScript, configure isolated endpoints and credentials, then adapt each UI action, positive assertion and business Oracle before registering or running a Charter. The ordinary upload example currently has no positive UI assertion and cannot support a `core` acceptance claim unchanged.
+This copies reviewable files but does not load the connector, register Charters, start an app, run a test, or assert a product result. Repeating the command reuses identical files; changed files stop installation instead of being overwritten. Review the connector as trusted local JavaScript, configure isolated endpoints and credentials, then adapt each UI action, positive assertion and business Oracle before registering or running a Charter. The ordinary upload example currently has no positive UI assertion and cannot support a `core` acceptance claim unchanged. After review, rerun `agent setup` **without** `--template` and with `--check-connection` or `--register-host` as needed; template selection and connector loading cannot occur in the same command. Standalone installation remains available with `proofkit template install aihr --root <source> --workspace <external-workspace>` before generic setup. An existing generic or custom `integration.mjs` causes a conflict and is preserved; use a fresh external workspace or review and merge it deliberately.
 
 For host-agent use, generate the onboarding bundle and install its testing Skill:
 

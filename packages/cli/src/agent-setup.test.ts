@@ -55,6 +55,34 @@ describe("Agent onboarding", () => {
     expect((await readdir(join(f.workspaceRoot, ".proofkit"))).sort()).toEqual(["agents", "config.yaml", "integration.mjs"]);
   });
 
+  it("selects the AIHR reference during first setup without loading it or registering examples", async () => {
+    const f = await fixture();
+    const first = await setupAgent({ ...f, harness: "codex", template: "aihr" }, f);
+    expect(first).toMatchObject({ template: "aihr", testVerdict: "not-asserted",
+      templateInstallation: { status: "installed", testVerdict: "not-asserted" } });
+    expect(first.templateInstallation?.files).toHaveLength(8);
+    expect(await readFile(join(f.workspaceRoot, ".proofkit", "integration.mjs"), "utf8"))
+      .toContain("createIntegration");
+    expect((await readdir(join(f.workspaceRoot, ".proofkit"))).sort()).toEqual([
+      "agents", "aihr-desktop-acquisition.mjs", "aihr-manual-intake.mjs", "charters", "config.yaml", "integration.mjs",
+    ]);
+    expect(await readdir(f.root)).toEqual(["package.json"]);
+    const repeated = await setupAgent({ ...f, harness: "codex", template: "aihr" }, f);
+    expect(repeated.templateInstallation?.status).toBe("reused");
+    expect(repeated.bundle).toEqual({ path: first.bundle.path, status: "reused" });
+  });
+
+  it("keeps an existing generic connector when AIHR setup is selected too late", async () => {
+    const f = await fixture();
+    await setupAgent({ ...f, harness: "generic" }, f);
+    const connector = join(f.workspaceRoot, ".proofkit", "integration.mjs");
+    const original = await readFile(connector, "utf8");
+    await expect(setupAgent({ ...f, harness: "generic", template: "aihr" }, f))
+      .rejects.toThrow("conflicts with an existing workspace file: integration.mjs");
+    expect(await readFile(connector, "utf8")).toBe(original);
+    expect((await readdir(join(f.workspaceRoot, ".proofkit"))).sort()).toEqual(["agents", "config.yaml", "integration.mjs"]);
+  });
+
   it.each(["codex", "claude-code"] as const)("installs %s Skill into personal discovery, reuses identical output and preserves host config", async (harness) => {
     const f = await fixture();
     const hostRoot = join(f.userHome, harness === "codex" ? ".agents" : ".claude");
@@ -90,6 +118,12 @@ describe("Agent onboarding", () => {
       "--root", f.root, "--workspace", f.workspaceRoot, "--register-host"])).rejects.toThrow("requires --harness codex or claude-code");
     await expect(createProgram().parseAsync(["node", "proofkit", "agent", "setup", "--harness", "codex",
       "--root", f.root, "--workspace", f.workspaceRoot, "--host-cli", f.serverPath])).rejects.toThrow("requires --register-host");
+    await expect(createProgram().parseAsync(["node", "proofkit", "agent", "setup", "--harness", "codex",
+      "--root", f.root, "--workspace", f.workspaceRoot, "--template", "aihr", "--check-connection"]))
+      .rejects.toThrow("Review the selected template connector");
+    await expect(createProgram().parseAsync(["node", "proofkit", "agent", "setup", "--harness", "codex",
+      "--root", f.root, "--workspace", f.workspaceRoot, "--template", "other"]))
+      .rejects.toThrow("Unknown reference template");
     expect(await readdir(f.scratch)).not.toContain("external workspace");
   });
 

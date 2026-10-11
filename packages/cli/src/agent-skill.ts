@@ -16,6 +16,13 @@ If no bound ProofKit server is available, use proofkit agent setup with the
 actual harness, source root and external workspace. Register the emitted native
 MCP configuration through that host's supported workflow, then confirm tools
 are available. The setup export is not a connection check or a product test.
+When the source is verified as AIHR, explicitly select --template aihr on the
+first setup to install its reviewable connector and example Charters before the
+generic starter is created. Review this trusted connector before a separate
+connection check or host registration. These examples are not registered tests;
+inspect and adapt their UI actions, assertions and business readers. If a
+workspace already contains a generic or custom connector, preserve it and use
+a fresh external workspace or deliberately merge the reference after review.
 
 ## Resolve the request
 

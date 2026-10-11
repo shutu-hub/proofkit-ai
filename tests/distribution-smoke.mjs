@@ -80,6 +80,29 @@ try {
     "--workspace", sourceWorkspace], scratch, [1]);
   assert.match(templateSourceRefusal.stderr, /outside the tested source tree/);
   assert.equal((await readdir(source)).includes(".proofkit"), false);
+  const agentTemplateWorkspace = join(scratch, "AIHR first setup workspace");
+  const agentTemplateArgs = [cli, "agent", "setup", "--harness", "generic", "--template", "aihr",
+    "--root", source, "--workspace", agentTemplateWorkspace];
+  const agentTemplate = JSON.parse((await command(process.execPath, agentTemplateArgs, scratch)).stdout);
+  assert.equal(agentTemplate.template, "aihr");
+  assert.equal(agentTemplate.templateInstallation.status, "installed");
+  assert.equal(agentTemplate.testVerdict, "not-asserted");
+  assert.equal(agentTemplate.connection.status, "not-checked");
+  for (const file of templateManifest.files) {
+    assert.deepEqual(await readFile(join(agentTemplateWorkspace, ".proofkit", file)),
+      await readFile(join(installed, "bundle", "templates", "aihr", file)));
+  }
+  assert.equal((await readdir(join(agentTemplateWorkspace, ".proofkit"))).includes("missions"), false);
+  const agentTemplateReused = JSON.parse((await command(process.execPath, agentTemplateArgs, scratch)).stdout);
+  assert.equal(agentTemplateReused.templateInstallation.status, "reused");
+  assert.equal(agentTemplateReused.bundle.status, "reused");
+  const connectorBefore = await readFile(join(workspace, ".proofkit", "integration.mjs"));
+  const lateTemplate = await command(process.execPath, [cli, "agent", "setup", "--harness", "generic",
+    "--template", "aihr", "--root", source, "--workspace", workspace], scratch, [1]);
+  assert.match(lateTemplate.stderr, /conflicts with an existing workspace file: integration.mjs/);
+  assert.deepEqual(await readFile(join(workspace, ".proofkit", "integration.mjs")), connectorBefore);
+  const prematureCheck = await command(process.execPath, [...agentTemplateArgs, "--check-connection"], scratch, [1]);
+  assert.match(prematureCheck.stderr, /Review the selected template connector/);
   const personalSkills = join(scratch, "host skills");
   const setupArgs = [cli, "agent", "setup", "--harness", "claude-code", "--root", source, "--workspace", workspace,
     "--install-skill", "--skills-dir", personalSkills];
@@ -278,7 +301,7 @@ process.exit(3);
   assert.equal(workspaceFiles.includes("missions"), false);
   assert.equal(workspaceFiles.includes("runs"), false);
   assert.equal((await readdir(join(workspace, ".proofkit", "inspections"))).length, 2);
-  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-aihr-reference-template", "template-idempotence-and-conflict-guard", "template-source-immutability", "installed-agent-skill-and-idempotent-setup", "codex-and-claude-native-config-export", "emitted-native-config-stdio-connection", "installed-cli-local-connection-check", "isolated-host-registration", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
+  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-aihr-reference-template", "agent-selected-aihr-first-setup", "template-idempotence-and-conflict-guard", "template-source-immutability", "installed-agent-skill-and-idempotent-setup", "codex-and-claude-native-config-export", "emitted-native-config-stdio-connection", "installed-cli-local-connection-check", "isolated-host-registration", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
 } finally {
   if (environmentServer) {
     environmentServer.closeAllConnections();

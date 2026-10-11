@@ -342,6 +342,8 @@ The adapter now bounds each WebDriver response before parsing, leaves unavailabl
 
 The tarball now includes the AIHR reference connector and five example Charters. Its installed CLI exports them to a new external workspace with `template install aihr`, reuses identical files and rejects conflicting files without overwriting them or writing to the tested source. The distribution smoke checks these boundaries and confirms that no Mission or Run starts. Examples still need isolated AIHR configuration, reviewed UI assertions and business readers; packaging does not establish live acceptance.
 
+**AIHR first setup (2026-10-11):** `agent setup --template aihr` now installs the reference in the external workspace before the generic starter connector is created. The emitted Skill explains explicit selection, connector review and example Charter limits. Setup rejects a simultaneous connection check or host registration, because those would load the trusted connector before review. Existing generic or custom connectors still conflict without overwrite. CLI and installed-tarball tests cover fresh setup, repeat use, conflict protection and the absence of a Mission; this does not exercise an AIHR business workflow.
+
 The installed-package smoke also generates Codex/Claude native onboarding
 artifacts, installs and reuses the portable Skill in an isolated personal
 directory, and connects via the emitted JSON MCP launcher configuration.

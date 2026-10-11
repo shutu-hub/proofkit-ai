@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultWorkspaceRoot, initProject, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace } from "@proofkit/project";
 import { PROOFKIT_CHARTER_AUTHORING, PROOFKIT_TEST_SKILL } from "./agent-skill.js";
+import { installAihrTemplate } from "./template-install.js";
 
 export type AgentHarness = "codex" | "claude-code" | "generic";
 export type AgentSetupInput = {
@@ -14,6 +15,7 @@ export type AgentSetupInput = {
   installSkill?: boolean;
   skillsDir?: string;
   allowCapabilityWrites?: boolean;
+  template?: "aihr";
 };
 
 type SetupRuntime = { serverPath?: string; nodePath?: string; userHome?: string };
@@ -22,6 +24,7 @@ type FileSet = Record<string, string>;
 /** Export onboarding artifacts without loading connectors or changing the tested source. */
 export async function setupAgent(input: AgentSetupInput, runtime: SetupRuntime = {}) {
   if (!["codex", "claude-code", "generic"].includes(input.harness)) throw new Error("Harness must be codex, claude-code or generic");
+  if (input.template !== undefined && input.template !== "aihr") throw new Error(`Unknown reference template: ${input.template}`);
   if (input.skillsDir !== undefined && !input.installSkill) throw new Error("--skills-dir requires --install-skill");
   if (input.installSkill && input.harness === "generic" && !input.skillsDir) throw new Error("Generic Skill installation requires --skills-dir for the host's documented discovery location");
   const context = resolveProjectContext(input.root, {
@@ -45,7 +48,7 @@ export async function setupAgent(input: AgentSetupInput, runtime: SetupRuntime =
     ? `[mcp_servers.${serverName}]\ncommand = ${JSON.stringify(nodePath)}\nargs = ${JSON.stringify([serverPath])}\n\n[mcp_servers.${serverName}.env]\n${Object.entries(env).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join("\n")}\n`
     : json({ mcpServers: { [serverName]: { type: "stdio", ...launcher } } });
   const skillFiles: FileSet = { "SKILL.md": PROOFKIT_TEST_SKILL, "references/charter-authoring.md": PROOFKIT_CHARTER_AUTHORING };
-  const bundleKey = digest({ harness: input.harness, config, skillFiles }).slice(0, 20);
+  const bundleKey = digest({ harness: input.harness, config, skillFiles, template: input.template }).slice(0, 20);
   const bundlePath = resolveWithinWorkspace(context.workspaceRoot, join(context.metadataDir, "agents", input.harness, bundleKey));
   assertExternal(context.projectRoot, bundlePath);
   const configPath = join(bundlePath, configFile);
@@ -56,12 +59,14 @@ export async function setupAgent(input: AgentSetupInput, runtime: SetupRuntime =
     projectRoot: context.projectRoot,
     workspaceRoot: context.workspaceRoot,
     defaultLevel: "core",
+    ...(input.template ? { template: input.template } : {}),
     testVerdict: "not-asserted",
     connection: { status: "not-checked", serverName, ...launcher, configPath, ...(registration ? { registration } : {}) },
     skill: { name: "proofkit-test", path: join(bundlePath, "proofkit-test") },
-    next: ["Register the emitted MCP server with the host, or merge its native configuration fragment.",
+    next: [...(input.template ? ["Review the installed AIHR connector as trusted local JavaScript before starting or checking the MCP server; examples are not registered tests."] : []),
+      "Register the emitted MCP server with the host, or merge its native configuration fragment.",
       "Install the emitted proofkit-test Skill in the host's discovery directory, or rerun setup with --install-skill.",
-      "Set Web/Electron endpoints and business checks in the external workspace config.",
+      input.template ? "Configure isolated AIHR Web/Electron endpoints, test identity and independent business readers in the external workspace." : "Set Web/Electron endpoints and business checks in the external workspace config.",
       "Verify the host can call inspect_test_scope and confirm the returned projectRoot.",
       "Use proofkit-test for a natural-language test; environment and setup success are not product acceptance."],
   };
@@ -78,11 +83,15 @@ export async function setupAgent(input: AgentSetupInput, runtime: SetupRuntime =
     await verifyIfPresent(skillPath, skillFiles);
   }
 
-  // Validation above precedes publication; initProject never imports integration.mjs.
-  await initProject(context.projectRoot, { workspaceRoot: context.workspaceRoot });
+  // Validation above precedes publication; neither path imports integration.mjs.
+  const templateInstallation = input.template === "aihr"
+    ? await installAihrTemplate(context.projectRoot, context.workspaceRoot)
+    : undefined;
+  if (!templateInstallation) await initProject(context.projectRoot, { workspaceRoot: context.workspaceRoot });
   const bundleStatus = await publish(bundlePath, bundleFiles);
   const skillStatus = skillPath ? await publish(skillPath, skillFiles) : "not-requested";
   return { ...manifest, bundle: { path: bundlePath, status: bundleStatus },
+    ...(templateInstallation ? { templateInstallation } : {}),
     skill: { ...manifest.skill, installation: { status: skillStatus, ...(skillPath ? { path: skillPath } : {}) } } };
 }
 

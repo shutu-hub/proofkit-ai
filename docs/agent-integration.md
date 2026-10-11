@@ -76,10 +76,18 @@ an unknown application's login, isolation, APIs or business invariants merely
 by being installed. Configure those in the external workspace, then verify a
 real workflow. Syntax and MCP connection tests do not establish model behavior.
 
-For the AIHR reference, `proofkit template install aihr --root <AIHR-source>
---workspace <external-test-workspace>` exports the packaged connector and
-example Charters before host setup. Review them and provide isolated test
-configuration; the command neither registers a scenario nor starts a test.
+For the AIHR reference, explicitly choose `proofkit agent setup --harness
+codex --template aihr --root <AIHR-source> --workspace
+<external-test-workspace> --install-skill` on first setup. This installs the
+packaged connector and example Charters before the generic starter can occupy
+`integration.mjs`. It neither loads the connector nor registers a scenario or
+starts a test. Review the trusted JavaScript and provide isolated test
+configuration before rerunning `agent setup` without `--template` for an
+optional `--check-connection` or `--register-host`. Both options load the
+connector, so combining either with initial template selection is rejected.
+`proofkit template install aihr` remains available as a standalone first step.
+An existing generic or custom connector is preserved; choose a fresh external
+workspace or review and merge the reference deliberately.
 
 Setup validates the existing project/workspace binding, canonicalizes output
 paths, rejects source destinations and workspace path escapes, and does not
