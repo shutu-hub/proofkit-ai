@@ -87,6 +87,31 @@ describe("MCP response capture policy and Mission evidence", () => {
     expect(summaries.size).toBe(2);
   });
 
+  it.each([
+    ["failed", { targetContinuity: "changed" }],
+    ["failed", { applicationContinuity: "unverified" }],
+    ["failed", { integrationPostRunCheck: { passed: false, message: "gateway changed", evidence: {} } }],
+    ["blocked", {}],
+    ["inconclusive", {}],
+  ] as const)("rejects an uncertifiable negative outcome for expected %s case %#", async (expected, facts) => {
+    const { service, root } = await fixture();
+    stubRuns(service, root, expected, true, facts);
+    const mission = await service.createMission({ intent: plan.intent, charter: negativePlan(expected) });
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    expect(completed.verdict).not.toBe("passed");
+    expect(completed.observations.find((item) => item.data.runKind === "negative")?.data).toMatchObject({
+      verdict: expected, expectedVerdict: expected, outcomeMatched: false,
+    });
+    expect(completed.findings.some((item) => item.category === "product" && item.status === "confirmed")).toBe(false);
+    if (Object.keys(facts).length > 0) {
+      expect(completed.findings.some((item) => item.category === "environment" && item.status === "confirmed")).toBe(true);
+    }
+    const audited = await service.missionEvidence(mission.missionId);
+    expect(audited.summary.executionAudit?.status).toBe("incomplete");
+    expect(audited.summary.executionAudit?.issues.some((issue) => issue.includes("negative outcome"))).toBe(true);
+  });
+
   it("accepts an evidenced expected rejection and captures fresh IDs on replay", async () => {
     const { service, root } = await fixture(); const summaries = stubRuns(service, root, "failed", true);
     const mission = await service.createMission({ intent: plan.intent, charter: negativePlan("failed") });
@@ -97,13 +122,32 @@ describe("MCP response capture policy and Mission evidence", () => {
     const facts = [...summaries.values()].map((run) => run.steps[0]?.response?.fields.fileId);
     expect(facts).toEqual(["1", "2", "3", "4"]);
   });
+
+  it("withdraws a saved negative pass when its Run summary later shows a listener change", async () => {
+    const { service, root } = await fixture(); stubRuns(service, root, "failed", true);
+    const mission = await service.createMission({ intent: plan.intent, charter: negativePlan("failed") });
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    expect(completed.verdict).toBe("passed");
+    const runId = completed.observations.find((item) => item.data.runKind === "negative")?.data.runId;
+    expect(typeof runId).toBe("string");
+    const path = join(root, ".proofkit/runs", String(runId), "run.json");
+    const saved = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    saved.targetContinuity = "changed";
+    await writeFile(path, JSON.stringify(saved));
+    const audited = await service.missionEvidence(mission.missionId);
+    expect(audited.verdict).toBe("passed");
+    expect(audited.testVerdict).toBe("inconclusive");
+    expect(audited.summary.executionAudit?.issues.some((issue) => issue.includes("target listener changed"))).toBe(true);
+  });
 });
 
 function negativePlan(expected: Verdict) {
   return { ...plan, negativeCases: [{ caseId: "rejected", title: "reject invalid intake", actions: [capture], assertions: [], oracles: [],
     expectedVerdict: expected, sideEffectPolicy: "allow" as const, metadata: {} }] };
 }
-function stubRuns(service: LocalRunnerService, root: string, expected: Verdict, captureNegative: boolean) {
+function stubRuns(service: LocalRunnerService, root: string, expected: Verdict, captureNegative: boolean,
+  negativeFacts: Partial<Pick<RunSummary, "targetContinuity" | "applicationContinuity" | "integrationPostRunCheck">> = {}) {
   installMockRunEvidence(service);
   const summaries = new Map<string, RunSummary>();
   service.start = async (input = {}) => {
@@ -114,6 +158,7 @@ function stubRuns(service: LocalRunnerService, root: string, expected: Verdict, 
     await writeFile(join(root, ".proofkit/runs", source), JSON.stringify({ fileId: String(index), state: "completed" }));
     await writeFile(join(root, ".proofkit/runs", report), JSON.stringify({ passed: true }));
     const summary = RunSummarySchema.parse({ runId, charter, status: "completed", verdict: negative ? expected : "passed", startedAt: now, endedAt: now,
+      execution: { adapter: "web" }, ...(negative ? negativeFacts : {}),
       steps: negative && !captureNegative ? [] : [{ stepId: "step-001", action: charter.actions[0], status: "passed", artifacts: [], response: {
         name: "intake", association: "action-window", url: capture.response.url, method: "POST", status: 201, requestCount: 1,
         windowStartedAt: now, windowEndedAt: now, capturedAt: now, bodyBytes: 30, bodySha256: "a".repeat(64), fields: { fileId: String(index) },

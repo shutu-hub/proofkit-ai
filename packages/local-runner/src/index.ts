@@ -27,6 +27,7 @@ import { ResourceRecoveryService } from "./resource-recovery.js";
 import { captureRunEvidence } from "./run-evidence.js";
 import { auditMissionProofClassification } from "./mission-proof-classification.js";
 import { auditMissionExecution, auditMissionRunFacts } from "./mission-execution-audit.js";
+import { negativeOutcomeProofGap } from "./negative-outcome.js";
 import { acquireCdpTarget, acquireElectronPortFileScope, acquireExecutionScope, sharedTargetIdentity } from "./execution-scope.js";
 import { sourceBindingTarget } from "./source-binding-target.js";
 import { assertMissionSurfaceCoverage, selectMissionSurface } from "./mission-surface.js";
@@ -936,7 +937,12 @@ export class LocalRunnerService {
         && !summary.steps.find((step) => step.stepId === `step-${String(index + 1).padStart(3, "0")}`)?.response);
       const evidence = this.runEvidence(summary);
       const cleanupIncomplete = !hasCompleteCleanupEvidence(summary.integrationCleanup, summary.runId, evidence, this.evidenceDir);
-      const outcomeMatched = expectedVerdict === undefined ? undefined : !cleanupIncomplete && !replayInputMismatch && !responseFactsMissing && actualVerdict === expectedVerdict;
+      const provenanceGap = summary.targetContinuity === "changed" || summary.targetContinuity === "unverified"
+        || summary.applicationContinuity === "changed" || summary.applicationContinuity === "unverified"
+        || summary.integrationPostRunCheck?.passed === false;
+      const negativeProofGap = expectedVerdict === undefined ? undefined : negativeOutcomeProofGap(expectedVerdict, summary);
+      const outcomeMatched = expectedVerdict === undefined ? undefined : !cleanupIncomplete && !replayInputMismatch
+        && !responseFactsMissing && !negativeProofGap && actualVerdict === expectedVerdict;
       const effectiveVerdict: Verdict = cleanupIncomplete && actualVerdict === "passed" ? "blocked" : expectedVerdict === undefined
         ? actualVerdict
         : outcomeMatched ? "passed" : actualVerdict === "passed" ? "failed" : actualVerdict;
@@ -991,14 +997,11 @@ export class LocalRunnerService {
         evidence,
         observedAt: new Date().toISOString(),
       });
-      // A negative case may intentionally expect a failed or blocked surface
-      // run. Do not turn that expected outcome into a product finding; retain
+      // A negative case may intentionally expect a failed surface run.
+      // Do not turn that expected outcome into a product finding; retain
       // the raw run verdict in the observation and report the normalized
       // scenario verdict to the Mission Agent.
       const expectedFailureOutcome = runKind === "negative" && expectedVerdict !== undefined && expectedVerdict !== "passed";
-      const provenanceGap = summary.targetContinuity === "changed" || summary.targetContinuity === "unverified"
-        || summary.applicationContinuity === "changed" || summary.applicationContinuity === "unverified"
-        || summary.integrationPostRunCheck?.passed === false;
       const failedOracle = provenanceGap ? undefined : selectEvidencedBusinessFailure(summary, evidence);
       const verifiedSourceLocations = expectedFailureOutcome || outcomeMatched === true || !failedOracle
         ? [] : await verifySourceLocationHints(this.root, failedOracle.sourceLocations ?? []);
@@ -1011,13 +1014,13 @@ export class LocalRunnerService {
               charterId,
               surface: adapter,
               severity: "high",
-              category: "test",
+              category: provenanceGap ? "environment" : "test",
               status: "confirmed",
-              title: "Negative case outcome did not match expectation",
+              title: provenanceGap ? "Negative case environment continuity was not established" : "Negative case outcome did not match expectation",
               message: cleanupIncomplete ? "Test resource cleanup was not established; the expected negative outcome cannot certify this failure."
                 : responseFactsMissing ? "A declared action response was not observed; the expected negative outcome cannot certify missing response evidence."
                 : replayInputMismatch ? "Replay input files were missing, changed or unverified; the expected negative outcome cannot validate different test inputs."
-                : `Expected ${expectedVerdict}, but the surface run ended with ${actualVerdict}.`,
+                : negativeProofGap ?? `Expected ${expectedVerdict}, but the surface run ended with ${actualVerdict}.`,
               evidence,
               createdAt: summary.endedAt ?? summary.startedAt,
             })]

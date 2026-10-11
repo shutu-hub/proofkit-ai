@@ -279,7 +279,10 @@ JavaScript is trusted code, not sandboxed. Test environment labels and an opaque
 scope string do not by themselves prove tenant isolation.
 
 Keep release negative cases explicit, with expected outcomes supported by
-evidence. A declared suite certifies its saved workflows only. Static route
+evidence. Use passed or failed as the expected verdict; blocked,
+cancelled and inconclusive cannot certify a negative outcome. A listener
+or integration continuity gap also prevents a matching verdict from passing.
+A declared suite certifies its saved workflows only. Static route
 mapping or all-green declared cases cannot prove whole-project workflow coverage;
 that coverage gate is still unimplemented and must remain visible.
 `;

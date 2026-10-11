@@ -2,6 +2,7 @@ import { relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { MissionExecutionAuditSchema, TargetBindingSchema, TestCharterSchema, suiteChecks, type MissionExecutionAudit, type Observation, type RunSummary, type TargetBinding, type TestCharter, type TestMission } from "@proofkit/contracts";
 import { sameProjectPath } from "@proofkit/project";
+import { negativeOutcomeProofGap } from "./negative-outcome.js";
 
 type Surface = "web" | "electron" | "mobile" | "api";
 type Slot = { charterId?: string; surface: Surface; kind: "primary" | "replay" | "negative"; negativeCaseId?: string; expectedVerdict?: string };
@@ -109,6 +110,15 @@ export function auditMissionExecution(mission: TestMission, evidenceDir: string,
     if (slot.kind === "negative") {
       if (observation.data.expectedVerdict !== slot.expectedVerdict || observation.data.outcomeMatched !== true
         || observation.data.verdict !== slot.expectedVerdict) issue(`${label}: negative outcome does not match its declared expectation.`);
+      if (slot.expectedVerdict !== "passed" && slot.expectedVerdict !== "failed") {
+        issue(`${label}: an environment or evidence state cannot certify a negative outcome.`);
+      }
+      if (observation.data.targetContinuity === "changed" || observation.data.targetContinuity === "unverified"
+        || observation.data.applicationContinuity === "changed" || observation.data.applicationContinuity === "unverified"
+        || observation.data.integrationPostRunCheck && typeof observation.data.integrationPostRunCheck === "object"
+          && "passed" in observation.data.integrationPostRunCheck && observation.data.integrationPostRunCheck.passed === false) {
+        issue(`${label}: negative Run observation has an environment continuity gap.`);
+      }
     } else if (requirePass && observation.data.verdict !== "passed") {
       issue(`${label}: saved Run verdict is not passed.`);
     }
@@ -172,6 +182,18 @@ export async function auditMissionRunFacts(
     }
     if (!isDeepStrictEqual(run.integrationPostRunCheck, observation.data.integrationPostRunCheck)) {
       issue(`${label}: saved Run post-run integration check differs from the Mission observation.`);
+    }
+    if (!isDeepStrictEqual(run.targetContinuity, observation.data.targetContinuity)
+      || !isDeepStrictEqual(run.applicationContinuity, observation.data.applicationContinuity)) {
+      issue(`${label}: saved Run listener continuity differs from the Mission observation.`);
+    }
+    if (kind === "negative") {
+      const expectedVerdict = observation.data.expectedVerdict;
+      if (expectedVerdict === "passed" || expectedVerdict === "failed"
+        || expectedVerdict === "blocked" || expectedVerdict === "cancelled" || expectedVerdict === "inconclusive") {
+        const gap = negativeOutcomeProofGap(expectedVerdict, run);
+        if (gap) issue(`${label}: ${gap}`);
+      }
     }
     if (mission.workflowReviewAdmission && mission.level !== "quick") {
       if (surface !== "web" && surface !== "electron") {

@@ -21,8 +21,8 @@ describe("Mission file replay association", () => {
     expect(summaries.get("run-4")?.charter.metadata.negativeCaseId).toBe("invalid");
   });
 
-  it.each(["changed", "not-reached", "unverified"])("does not accept %s replay input as an expected blocked negative case", async (kind) => {
-    const { service, summaries, missionId } = await baseline({ blockedNegative: true });
+  it.each(["changed", "not-reached", "unverified"])("does not accept %s replay input for an expected failed negative case", async (kind) => {
+    const { service, summaries, missionId } = await baseline({ failedNegative: true });
     const originalStart = service.start.bind(service);
     service.start = async (input = {}) => {
       const started = await originalStart(input);
@@ -38,14 +38,14 @@ describe("Mission file replay association", () => {
     };
     const replay = await service.replayMission(missionId);
     const result = await service.waitMission(replay.mission.missionId);
-    expect(result.verdict).toBe("blocked");
+    expect(result.verdict).toBe("failed");
     const negative = result.observations.find((item) => item.data.runKind === "negative");
-    expect(negative?.data).toMatchObject({ verdict: "blocked", expectedVerdict: "blocked", outcomeMatched: false });
+    expect(negative?.data).toMatchObject({ verdict: "failed", expectedVerdict: "failed", outcomeMatched: false });
     expect(result.findings.some((item) => item.message.includes("different test inputs"))).toBe(true);
   });
 });
 
-async function baseline(options: { blockedNegative?: boolean } = {}) {
+async function baseline(options: { failedNegative?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), "proofkit-file-mission-")); roots.push(root);
   await mkdir(join(root, ".proofkit"), { recursive: true });
   const oracleName = "upload-terminal";
@@ -59,7 +59,7 @@ async function baseline(options: { blockedNegative?: boolean } = {}) {
     assertions: [{ kind: "text-visible", text: "ready" }], oracles: [oracleName], sideEffectPolicy: "allow",
     negativeCases: [{ caseId: "invalid", title: "invalid input", actions: [{ ...fileAction, files: [".proofkit/fixtures/invalid.txt"] }],
       assertions: [{ kind: "text-visible", text: "rejected" }], oracles: [oracleName], sideEffectPolicy: "allow",
-      ...(options.blockedNegative ? { expectedVerdict: "blocked" } : {}) }],
+      ...(options.failedNegative ? { expectedVerdict: "failed" } : {}) }],
   });
   const calls: LocalRunInput[] = [];
   const summaries = new Map<string, RunSummary>();
@@ -67,18 +67,18 @@ async function baseline(options: { blockedNegative?: boolean } = {}) {
     calls.push(input);
     const runId = `run-${calls.length}`;
     const plan = input.charter!;
-    const blocked = Boolean(options.blockedNegative && plan.metadata.negativeCaseId);
+    const rejected = Boolean(options.failedNegative && plan.metadata.negativeCaseId);
     const sourceArtifact = `${runId}/artifacts/oracle-source.json`;
     const reportArtifact = `${runId}/artifacts/oracle.json`;
     const artifacts = [sourceArtifact, reportArtifact];
     await mkdir(join(root, ".proofkit/runs", runId, "artifacts"), { recursive: true });
-    await writeFile(join(root, ".proofkit/runs", sourceArtifact), JSON.stringify({ state: blocked ? "rejected" : "accepted", runId }));
+    await writeFile(join(root, ".proofkit/runs", sourceArtifact), JSON.stringify({ state: rejected ? "rejected" : "accepted", runId }));
     await writeFile(join(root, ".proofkit/runs", reportArtifact), JSON.stringify({ passed: true }));
-    const summary = RunSummarySchema.parse({ runId, status: "completed", verdict: blocked ? "blocked" : "passed", charter: plan,
+    const summary = RunSummarySchema.parse({ runId, status: "completed", verdict: rejected ? "failed" : "passed", charter: plan,
       startedAt: new Date().toISOString(), endedAt: new Date().toISOString(),
-      steps: [{ stepId: "step-001", action: plan.actions[0], status: blocked ? "blocked" : "passed", artifacts: [],
-        inputFiles: [{ fixture: (plan.actions[0] as typeof fileAction).files[0], name: blocked ? "invalid.txt" : "resume.pdf",
-          sizeBytes: 4, sha256: "a".repeat(64), mimeType: blocked ? "text/plain" : "application/pdf" }],
+      steps: [{ stepId: "step-001", action: plan.actions[0], status: rejected ? "failed" : "passed", artifacts: [],
+        inputFiles: [{ fixture: (plan.actions[0] as typeof fileAction).files[0], name: rejected ? "invalid.txt" : "resume.pdf",
+          sizeBytes: 4, sha256: "a".repeat(64), mimeType: rejected ? "text/plain" : "application/pdf" }],
         ...(input.replayOfRunId ? { replayInputMatched: true } : {}) }],
       assertions: plan.assertions.map((assertion) => ({ assertion, passed: true, message: "fixture", evidence: [] })),
       oracles: [{ name: oracleName, passed: true, message: "fixture facts", observedAt: new Date().toISOString(),
