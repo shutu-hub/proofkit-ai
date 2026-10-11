@@ -322,6 +322,8 @@ Mission evidence now includes a bounded result projection and a static HTML/JSON
 
 **Current evidence:** `@proofkit/adapters` has a tested W3C WebDriver mobile adapter, and the contracts, Local Runner, CLI and MCP accept `mobile` as a surface. `inspect_surface` now reuses the ordinary Run lifecycle for mobile reconnaissance; its bounded label snapshot and screenshot are explicitly `not-asserted`, with no validated selector hints. `pnpm test:smoke:mobile` exercises native MCP inspection, a core Mission, real HTTP requests to a fake WebDriver, displayed-text assertions, independent business acceptance, defect evidence and session cleanup. The smoke also rejects session deletion after a passing business check and verifies a non-passing Run, Mission and JSON report. A failed or timed-out deletion preserves the adapter's session ID for retry; a successful driver response does not independently prove device-level cleanup. This does not exercise an emulator or device. An emulator-backed business run remains required.
 
+The adapter now bounds each WebDriver response before parsing, leaves unavailable title/URL assertion facts inconclusive, and preserves an externally attached session by default. Direct adapter regressions cover oversized streamed and declared responses, unavailable assertion facts and explicit session deletion. The real driver/device boundary remains unverified.
+
 **Gate:** one business Charter runs on Web, Electron and a real mobile adapter with surface-specific actions but the same business Oracle contract.
 
 ## Phase 6: team and CI operations

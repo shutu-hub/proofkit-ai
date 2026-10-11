@@ -81,6 +81,23 @@ describe("MobileAdapter", () => {
     expect(requests.some((request) => request.method === "DELETE")).toBe(false);
   });
 
+  it("preserves an attached session by default and deletes it only with an explicit opt-in", async () => {
+    const requests: string[] = [];
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      requests.push(init?.method ?? "GET");
+      return response({ value: null });
+    }) as typeof fetch;
+    const attached = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "shared" });
+    await attached.connect();
+    await attached.close();
+    expect(requests).toEqual([]);
+
+    const owned = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "shared", keepSession: false });
+    await owned.connect();
+    await owned.close();
+    expect(requests).toEqual(["DELETE"]);
+  });
+
   it("keeps the session available for cleanup retry after a driver HTTP failure", async () => {
     const requests: string[] = [];
     globalThis.fetch = vi.fn(async (input, init) => {
@@ -88,7 +105,7 @@ describe("MobileAdapter", () => {
       if (requests.length === 1) return new Response(JSON.stringify({ value: { error: "unknown error", message: "private driver detail" } }), { status: 500 });
       return response({ value: null });
     }) as typeof fetch;
-    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing", keepSession: false });
     await adapter.connect();
     await expect(adapter.close()).rejects.toMatchObject({
       name: "InconclusiveError", code: "mobile-session-cleanup-unverified",
@@ -110,7 +127,7 @@ describe("MobileAdapter", () => {
         else init?.signal?.addEventListener("abort", onAbort, { once: true });
       });
     }) as typeof fetch;
-    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing", requestTimeoutMs: 10 });
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing", keepSession: false, requestTimeoutMs: 10 });
     await adapter.connect();
     await expect(adapter.close()).rejects.toMatchObject({ name: "InconclusiveError", code: "mobile-session-cleanup-unverified" });
     await adapter.close();
@@ -170,6 +187,48 @@ describe("MobileAdapter", () => {
     await adapter.connect();
     await expect(adapter.assert({ kind: "text-not-visible", text: "Error" }))
       .rejects.toMatchObject({ name: "InconclusiveError", code: "mobile-visibility-unavailable" });
+  });
+
+  it("does not report a product assertion failure when the driver cannot return title or URL facts", async () => {
+    globalThis.fetch = vi.fn(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/title")) return new Response(JSON.stringify({ value: { error: "unknown error", message: "private title" } }), { status: 500 });
+      if (path.endsWith("/url")) return response({ value: null });
+      throw new Error(`unexpected request ${path}`);
+    }) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    await adapter.connect();
+    await expect(adapter.assert({ kind: "title-contains", text: "Expected" }))
+      .rejects.toMatchObject({ name: "InconclusiveError", code: "mobile-title-unavailable", message: expect.not.stringContaining("private title") });
+    await expect(adapter.assert({ kind: "url-matches", pattern: "expected" }))
+      .rejects.toMatchObject({ name: "InconclusiveError", code: "mobile-url-unavailable" });
+  });
+
+  it("bounds WebDriver responses even when the server omits Content-Length", async () => {
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      if (init?.method === "DELETE") return response({ value: null });
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(9 * 1024 * 1024));
+          controller.enqueue(new Uint8Array(8 * 1024 * 1024));
+          controller.close();
+        },
+      }));
+    }) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    await adapter.connect();
+    await expect(adapter.capture("screen.png"))
+      .rejects.toMatchObject({ name: "InconclusiveError", code: "mobile-driver-response-too-large" });
+  });
+
+  it("rejects an oversized declared driver response before reading its body", async () => {
+    globalThis.fetch = vi.fn(async () => new Response("small", {
+      headers: { "content-length": String(17 * 1024 * 1024) },
+    })) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    await adapter.connect();
+    await expect(adapter.capture("screen.png"))
+      .rejects.toMatchObject({ name: "InconclusiveError", code: "mobile-driver-response-too-large" });
   });
 
   it("quotes text containing both quote characters in the WebDriver XPath", async () => {

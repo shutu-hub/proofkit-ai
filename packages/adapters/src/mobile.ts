@@ -19,6 +19,7 @@ type WebDriverResponse = {
 };
 
 type MobileElement = { "element-6066-11e4-a52e-4f735466cecf"?: string; ELEMENT?: string };
+const MAX_DRIVER_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 /**
  * Thin W3C WebDriver adapter for Appium and compatible mobile drivers.
@@ -30,7 +31,7 @@ export class MobileAdapter implements SurfaceAdapter {
   private sessionId?: string;
 
   constructor(options: MobileAdapterOptions) {
-    this.options = { requestTimeoutMs: 30_000, ...options };
+    this.options = { requestTimeoutMs: 30_000, keepSession: Boolean(options.sessionId), ...options };
   }
 
   async connect(): Promise<void> {
@@ -123,13 +124,15 @@ export class MobileAdapter implements SurfaceAdapter {
         evidence: [] };
     }
     if (assertion.kind === "title-contains") {
-      const title = await this.command("GET", "/title").catch(() => "");
-      const passed = typeof title === "string" && title.includes(assertion.text);
+      const title = await this.assertionText("/title", "mobile-title-unavailable");
+      const passed = title.includes(assertion.text);
       return { assertion, passed, message: passed ? `Title contains: ${assertion.text}` : `Title does not contain: ${assertion.text}`, evidence: [] };
     }
-    const url = await this.readUrl();
-    let passed = false;
-    try { passed = url !== undefined && new RegExp(assertion.pattern).test(url); } catch { /* invalid patterns remain assertion failures */ }
+    const url = await this.assertionText("/url", "mobile-url-unavailable");
+    let pattern: RegExp;
+    try { pattern = new RegExp(assertion.pattern); }
+    catch { throw new InconclusiveError("mobile-url-pattern-invalid", "Mobile URL assertion has an invalid pattern"); }
+    const passed = pattern.test(url);
     return { assertion, passed, message: passed ? `URL matches: ${assertion.pattern}` : `URL does not match: ${assertion.pattern}`, evidence: [] };
   }
 
@@ -228,6 +231,16 @@ export class MobileAdapter implements SurfaceAdapter {
     return typeof value === "string" ? value : undefined;
   }
 
+  private async assertionText(path: "/title" | "/url", code: string): Promise<string> {
+    let value: unknown;
+    try { value = await this.command("GET", path); }
+    catch { throw new InconclusiveError(code, `Mobile driver could not verify ${path === "/title" ? "the title" : "the URL"}`); }
+    if (typeof value !== "string" || value.length > 4_096) {
+      throw new InconclusiveError(code, `Mobile driver did not return a bounded ${path === "/title" ? "title" : "URL"}`);
+    }
+    return value;
+  }
+
   private async command(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
     if (!this.sessionId) throw new Error("Mobile adapter is not connected");
     return (await this.request(method, `/session/${encodeURIComponent(this.sessionId)}${path}`, body, true, signal)).value;
@@ -248,7 +261,7 @@ export class MobileAdapter implements SurfaceAdapter {
         headers: body === undefined ? undefined : { "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
-      const raw = await response.text();
+      const raw = await boundedDriverResponse(response, controller);
       let parsed: WebDriverResponse = {};
       try { parsed = raw ? JSON.parse(raw) as WebDriverResponse : {}; } catch { parsed = { message: raw.slice(0, 256) }; }
       if (!response.ok) throw new Error(`Mobile driver HTTP ${response.status}: ${parsed.message ?? raw.slice(0, 256)}`);
@@ -263,6 +276,33 @@ export class MobileAdapter implements SurfaceAdapter {
       signal?.removeEventListener("abort", onAbort);
     }
   }
+}
+
+async function boundedDriverResponse(response: Response, controller: AbortController): Promise<string> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_DRIVER_RESPONSE_BYTES) {
+    const error = new InconclusiveError("mobile-driver-response-too-large", "Mobile driver response exceeds the allowed size");
+    controller.abort(error);
+    throw error;
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_DRIVER_RESPONSE_BYTES) {
+        const error = new InconclusiveError("mobile-driver-response-too-large", "Mobile driver response exceeds the allowed size");
+        controller.abort(error);
+        throw error;
+      }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  return Buffer.concat(chunks, size).toString("utf8");
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
