@@ -268,6 +268,8 @@ describe("ProofKit MCP tools", () => {
       verdict: "passed", testVerdict: "inconclusive", testVerdictReason: "Legacy Oracle proof is unverified", level: "core", summary: { missionId: "mission-test", verdict: "passed", runs: [{ runId: "run-1", large: "repeated detail" }] },
       evidenceIntegrity: { status: "intact" }, proofClassification: { status: "unverified", legacyOracles: 1 },
       acceptanceEvidenceIntegrity: { status: "intact", scope: "mission-evidence", references: { total: 1, intact: 1, unavailable: 0, legacy: 0, omitted: 0 } },
+      evidence: [{ evidenceId: "business-1", kind: "business", path: "C:/workspace/oracle.json", sha256: "abc123", capturedAt: "2026-10-12T00:00:00.000Z" }],
+      findings: [{ findingId: "finding-1", charterId: "resume", surface: "web", severity: "medium", category: "test", status: "unverified", title: "Legacy proof", message: "Business fact not classified", createdAt: "2026-10-12T00:00:00.000Z", evidence: [] }],
       report: "C:/workspace/report.html" }));
     const runner = { missionStatus, missionEvidence, startMission: vi.fn() } as unknown as LocalRunnerService;
     const { client, server } = await connectedClient(runner);
@@ -278,11 +280,28 @@ describe("ProofKit MCP tools", () => {
         acceptanceEvidenceIntegrity: { status: "intact", references: { total: 1, intact: 1 } },
         proofClassification: { status: "unverified", legacyOracles: 1 },
         testVerdictReason: "Legacy Oracle proof is unverified",
-        report: "C:/workspace/report.html", next: ["get_mission_evidence"] });
+        report: "C:/workspace/report.html", next: [],
+        evidence: [{ path: "C:/workspace/oracle.json", kind: "business", sha256: "abc123" }],
+        findings: [{ findingId: "finding-1", title: "Legacy proof" }],
+        fullDetail: { tool: "get_mission_evidence", arguments: { missionId: "mission-test", detail: "full" } } });
       expect(missionStatus).toHaveBeenCalledTimes(2);
       expect(JSON.parse(textContent(response)).summary.runs).toBeUndefined();
       expect(missionEvidence).toHaveBeenCalledWith("mission-test");
       expect(runner.startMission).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("does not promote a terminal historical pass without an audited verdict", async () => {
+    const mission = fixtureMission("completed");
+    const runner = { missionStatus: vi.fn(async () => ({ mission, running: false })),
+      missionEvidence: vi.fn(async () => ({ missionId: mission.missionId, status: "completed", running: false,
+        verdict: "passed", level: "core", summary: { missionId: mission.missionId, verdict: "passed" },
+        evidence: [], findings: [] })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "await_test_result", arguments: { missionId: mission.missionId } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ state: "terminal", verdict: "passed",
+        testVerdict: "not-asserted", evidence: [], next: [] });
     } finally { await client.close(); await server.close(); }
   });
 

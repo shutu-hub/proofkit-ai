@@ -4,7 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestMission } from "@proofkit/contracts";
 import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
-import { briefMissionEvidence, briefMissionResult } from "./mission-evidence-brief.js";
+import { briefMissionEvidence } from "./mission-evidence-brief.js";
 
 // MCP annotations are host scheduling hints, not authorization. Only operations
 // that read existing source/config/Mission state receive a read-only hint.
@@ -143,7 +143,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "await_test_result",
-    "Wait briefly for an existing Mission without starting or replaying it. A Mission that has not run returns testVerdict not-asserted, readiness gaps and safe next actions; it is not a blocked product test. Cancelling this wait does not cancel the Mission.",
+    "Wait briefly for an existing Mission without starting or replaying it. A terminal result includes an audited brief verdict and cited evidence, so another evidence read is optional unless more detail is needed. An unstarted Mission returns not-asserted and readiness gaps; cancelling this wait does not cancel the Mission.",
     { missionId: z.string().min(1), timeoutMs: z.number().int().min(500).max(30_000).default(20_000) },
     async ({ missionId, timeoutMs }, extra) => result(await awaitTestResult(runner, missionId, timeoutMs, extra.signal)),
   );
@@ -329,14 +329,7 @@ async function awaitTestResult(runner: LocalRunnerService, missionId: string, ti
       const evidence = await runner.missionEvidence(missionId);
       signal?.throwIfAborted();
       if (!evidence.running && ["completed", "failed", "blocked", "cancelled"].includes(evidence.status)) {
-        return { state: "terminal" as const, missionId, status: evidence.status, verdict: evidence.verdict,
-          testVerdict: evidence.testVerdict ?? "not-asserted",
-          testVerdictReason: evidence.testVerdictReason,
-          level: evidence.level, summary: briefMissionResult(evidence.summary), evidenceIntegrity: evidence.evidenceIntegrity,
-          acceptanceEvidenceIntegrity: evidence.acceptanceEvidenceIntegrity,
-          proofClassification: evidence.proofClassification,
-          firstFailure: evidence.firstFailure, report: evidence.report, reportUnavailable: evidence.reportUnavailable,
-          next: ["get_mission_evidence"] };
+        return { state: "terminal" as const, ...briefMissionEvidence(evidence), next: [] };
       }
       status = evidence.status;
       running = evidence.running;

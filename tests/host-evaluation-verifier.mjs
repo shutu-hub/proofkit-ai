@@ -79,7 +79,10 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
     || call.tool === "await_test_result" && call.result?.state === "terminal"
       && call.result.missionId === answer.missionId && call.result.verdict === expected.verdict);
   check(statusReads.some((call) => call.arguments.missionId === answer.missionId), "same-mission-status-not-read");
-  const evidenceReads = successful.filter((call) => call.tool === "get_mission_evidence" && call.arguments.missionId === answer.missionId);
+  const evidenceReads = successful.filter((call) => call.arguments.missionId === answer.missionId && (
+    call.tool === "get_mission_evidence" || call.tool === "await_test_result"
+      && call.result?.state === "terminal" && call.result.missionId === answer.missionId
+      && call.result.testVerdict === expected.verdict));
   const observed = evidenceReads.at(-1)?.result;
   check(observed?.summary?.verdict === expected.verdict, "terminal-evidence-not-read");
   check(typeof answer.report === "string" && observed?.report === answer.report, "answer-report-not-observed");

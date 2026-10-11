@@ -158,4 +158,6 @@ CI 可用 `proofkit mission check <id>` 对已保存 Mission 重新审计，输�
 
 当前 `evidenceIntegrity.diagnosticSupport` 对展示中的诊断和修复建议逐条核对证据文件、SHA-256、所属 Run，以及其与已保存失败边界或确认的产品问题是否关联。MCP 顶层也返回同一状态，JSON 与 HTML 明确区分历史 `proposed` 等状态和当前证据支持。跨 Run 拼接、缺失或篡改的文件、无证据及未关联失败的建议标为 `unsupported`；这不改写历史 Mission，也不将源码线索或建议升级为已验证修复。超过紧凑结果上限的建议仍只由完整 Mission 证据审计覆盖，需重新运行和比较才能证明修复有效。
 
+`await_test_result` 到达终态时直接返回与 `get_mission_evidence` 默认视图一致的精简审计结果，包含关键 Finding、证据链接、省略计数和报告路径。Agent 可据此直接给出结论；只有所需链接或逐 Run 事实被省略时才读取 `get_mission_evidence({ missionId, detail: "full" })`。
+
 下一阶段重点是用真实业务完善项目知识与场景目录、测试数据隔离、业务终态观测、覆盖度量及 AI 规划评测。各阶段用可复现的验收结果推进，不把静态路由数量当业务覆盖率。

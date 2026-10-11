@@ -120,10 +120,11 @@ workflowReviewAudit.scope. A pass is limited to reviewed source workflows;
 quick checks and previously saved Missions cannot gain this pass later.
 
 Keep the returned missionId. Call await_test_result for that same Mission. Its
-bounded wait returns a terminal summary with current evidence integrity, a
+bounded wait returns an audited terminal brief with cited evidence, a
 still-running receipt, or a concrete next action if no owner is running. Repeat
-the wait for a still-running Mission; read get_mission_evidence after termination
-for detailed findings and links. Never restart merely because a wait timed out.
+the wait for a still-running Mission. A terminal brief can support the final
+answer directly; call get_mission_evidence with detail=full only when the needed
+link, per-Run fact or diagnosis is omitted. Never restart merely because a wait timed out.
 The running receipt reports settled tasks and the saved execution deadline.
 If remainingExecutionMs reaches zero while an owner is still active, it may be
 finishing cancellation and cleanup; keep waiting on that Mission ID until the
@@ -147,7 +148,7 @@ Resource recovery does not change the original product verdict.
 
 ## Present and verify the result
 
-Use get_mission_evidence.testVerdict and the report path for the user-facing
+Use the terminal wait's testVerdict and report path for the user-facing
 outcome. The separate verdict field is the saved historical result. Give the tested scope
 and level, a compact outcome, the first actionable failure and its evidence,
 plus any missing acceptance obligations. Distinguish failed business facts from
@@ -159,7 +160,7 @@ For a concrete repair hypothesis, connect the independent failed business fact
 to a specific code branch or contract and cite both the evidence artifact and
 the current source location. If that connection cannot be established, say what
 remains unknown instead of presenting the generic saved suggestion as a fix.
-The default get_mission_evidence view is brief. It retains the audited verdict,
+The terminal wait and default get_mission_evidence view are brief. They retain the audited verdict,
 key cited artifacts and omission counts; use detail=full when a cited link or
 per-Run fact is missing from that view. Do not treat omitted links as inspected.
 For a multi-scenario Mission, read diagnoses and diagnosticSupport.diagnoses per
@@ -171,7 +172,7 @@ and replay verdict is an observed difference to investigate, not proof of
 flakiness. An unverified pair may lack a Run, a replay source link or hashed
 evidence. Check the Run links and current evidence integrity before reporting
 the saved comparison.
-Check get_mission_evidence.evidenceIntegrity.status before presenting a saved
+Check the terminal result's evidenceIntegrity.status before presenting a saved
 confirmed finding or repair as currently supported. "degraded" means one or
 more presented references or confirmed findings lack verifiable bytes;
 "partial" means the bounded result omitted some rows, findings or references;
@@ -184,7 +185,7 @@ pass or defect as current. A changed Git source during or after execution, or
 an unavailable recheck after a complete final fingerprint, makes testVerdict
 inconclusive. An unverified fingerprint does not attest the current checkout;
 the result still describes the tested point in time.
-Check get_mission_evidence.proofClassification as well. If it is "unverified",
+Check the terminal result's proofClassification as well. If it is "unverified",
 saved Oracle results lack explicit business/HTTP-contract classification or a
 referenced Run could not be read; describe the verdict as historical and rerun
 the affected scenarios before claiming current business proof. "explicit" only
