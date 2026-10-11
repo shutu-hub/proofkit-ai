@@ -137,7 +137,7 @@ High-level Mission creation infers an omitted surface only from explicit Web, El
 
 When a same-level external Charter is visible with no reported structural issue, `planningReadiness: candidate-review-needed` points to reviewing its file and source flow, then supplying the exact relative `charterPath` and `charterSha256` to `run_test`. Discovery does not approve writes or prove a product result.
 
-`workspaceCandidates` lists bounded, unregistered Charter hints from the external test workspace, including missing assertions, business readers and write-policy prerequisites. A focused search with no literal candidate match returns `fallback-unmatched` hints. Candidate files are never automatically registered or marked ready; review the file and the tested workflow before using it.
+`workspaceCandidates` lists bounded, unregistered Charter hints from the external test workspace, including missing assertions, business readers and write-policy prerequisites. Literal focus matches the file path, intent and declared UI words; a missing endpoint binding still leaves its candidate discoverable and marked invalid. A search with no literal candidate match returns `fallback-unmatched` hints. Candidate files are never automatically registered or marked ready; review the file and the tested workflow before using it.
 
 Direct workspace candidates must declare their supported `surfaces` in the Charter (for example, `[web]` or `[electron]`; a Web/Electron `release` candidate needs both). Scope also flags inline HTTP reader name conflicts, missing current-response ID bindings, and URLs that the MCP origin policy would reject. `candidate-review-needed` is withheld for those files; a candidate with no reported issue still needs source review and runtime evidence.
 

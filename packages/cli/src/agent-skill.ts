@@ -35,8 +35,9 @@ must retain coverage: project, even when only some scenarios are available.
 
 Call inspect_test_scope for the intended surface and level. Check its
 projectRoot against the checkout the user asked to test; select the matching
-ProofKit server when multiple bindings exist. A focus is a literal module or
-source-path substring, not the full natural-language sentence. The returned
+ProofKit server when multiple bindings exist. A focus is a short literal
+module, source path or declared UI phrase, not the full natural-language
+sentence. The returned
 routes are static candidates; counts, omissions and truncation are scope limits.
 Read planningReadiness before selecting a scenario. catalog-ready means only a
 saved plan passed structural checks; it is not runtime readiness. If a quick
@@ -53,6 +54,8 @@ Review workspaceCandidates when the external workspace has unregistered
 Charter files. These are read-only, bounded hints, including structural issue
 codes; they are never catalog-ready or executable by discovery alone. A
 fallback-unmatched selection means no candidate literally matched the focus.
+Candidate matching also examines declared visible UI text, even when a missing
+endpoint binding prevents the Charter from parsing as an executable plan.
 Resolve inline Oracle name, current-response binding and URL-origin issue codes
 before selecting a candidate; the same constraints are enforced at Mission
 creation. An empty issue list is still not an environment or business pass.

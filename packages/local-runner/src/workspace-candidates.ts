@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { hasPositiveSurfaceAssertion, type ProofkitConfig, type TestScope } from "@proofkit/contracts";
 import { resolveWithinWorkspace } from "@proofkit/project";
 import { firstInlineOracleIssue, isAllowedMcpWebUrl, isLoopbackHost } from "./inline-oracle-validation.js";
-import { readWorkspaceCharterFile, WorkspaceCharterFileError } from "./workspace-charter-file.js";
+import { candidateFocusText, readWorkspaceCharterFile, WorkspaceCharterFileError } from "./workspace-charter-file.js";
 
 type Candidates = NonNullable<TestScope["workspaceCandidates"]>;
 type Candidate = Candidates["items"][number];
@@ -109,8 +109,9 @@ export async function inspectWorkspaceCandidates(context: CandidateContext, focu
           || (action.kind === "captureResponse" && !isAllowedMcpWebUrl(action.response.url, context.config.surfaces.web?.baseUrl)))) {
           item.issues.push("web-origin-disallowed");
         }
-        searchable = [relativePath, charter.intent, ...actions.filter((action) => action.kind === "capability").map((action) => action.name), ...oracleNames].join(" ");
+        searchable = [relativePath, candidateFocusText(charter), ...actions.filter((action) => action.kind === "capability").map((action) => action.name), ...oracleNames].join(" ");
       } catch (error) {
+        if (error instanceof WorkspaceCharterFileError && error.focusText) searchable = `${relativePath} ${error.focusText}`;
         if (error instanceof WorkspaceCharterFileError && error.issue === "invalid-charter") {
           item.parseStatus = "invalid";
           item.issues = ["invalid-charter"];

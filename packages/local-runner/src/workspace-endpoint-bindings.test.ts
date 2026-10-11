@@ -76,6 +76,9 @@ describe("external Charter endpoint bindings", () => {
     const missing = (await service.inspectTestScope({ level: "quick", surface: "web" })).workspaceCandidates?.items[0];
     expect(missing).toMatchObject({ parseStatus: "invalid", issues: ["endpoint-binding-unavailable"] });
     await expect(readWorkspaceCharterFile(workspaceRoot, path)).rejects.toThrow("endpoint binding is unavailable");
+    await readWorkspaceCharterFile(workspaceRoot, path).catch((error: unknown) => {
+      expect(JSON.stringify(error)).not.toContain("Submitted");
+    });
     for (const value of ["https://user:secret@example.test/api", "http://127.0.0.1/api?token=secret", "file:///tmp/data"]) {
       process.env[environmentKey] = value;
       const result = (await service.inspectTestScope({ level: "quick", surface: "web" })).workspaceCandidates?.items[0];
@@ -118,5 +121,25 @@ describe("external Charter endpoint bindings", () => {
     expect(candidate).toMatchObject({ parseStatus: "valid", issues: ["web-origin-disallowed"] });
     await expect(service.createMission({ intent: "快速验证录入", level: "quick", surface: "web",
       charterPath: path, charterSha256: candidate!.sha256! })).rejects.toThrow("outside the configured origin");
+  });
+
+  it("retains a focused desktop candidate when its gateway binding is missing", async () => {
+    const { file, path, service } = await fixture();
+    await writeFile(file, JSON.stringify({ intent: "verify desktop run", level: "quick", surfaces: ["electron"],
+      sideEffectPolicy: "allow", actions: [
+        { kind: "waitForText", text: "BOSS直聘 简历获取" },
+        { kind: "captureResponse", name: "desktop-run", trigger: { kind: "click", selector: "#start" },
+          response: { url: `$env:${environmentKey}/resume-collection/runs`, method: "POST",
+            fields: { runId: { pointer: "/data/run_id", type: "id" } } } },
+      ], assertions: [{ kind: "text-visible", text: "任务进度" }] }));
+    delete process.env[environmentKey];
+    const missing = (await service.inspectTestScope({ level: "quick", surface: "electron", focus: "简历获取" }));
+    expect(missing.workspaceCandidates).toMatchObject({ selection: "focused", matched: 1,
+      items: [{ path, focusMatched: true, parseStatus: "invalid", issues: ["endpoint-binding-unavailable"] }] });
+    expect(missing.planningReadiness?.status).not.toBe("candidate-review-needed");
+    process.env[environmentKey] = "http://127.0.0.1:8123/api/v1";
+    const configured = (await service.inspectTestScope({ level: "quick", surface: "electron", focus: "简历获取" }));
+    expect(configured.workspaceCandidates).toMatchObject({ selection: "focused", matched: 1,
+      items: [{ path, focusMatched: true, parseStatus: "valid", issues: [] }] });
   });
 });

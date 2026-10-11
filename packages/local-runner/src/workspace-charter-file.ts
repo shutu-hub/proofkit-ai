@@ -11,7 +11,8 @@ const CANDIDATE_PATH = /^(?:\.proofkit\/)?charters\/[^/\\:\x00-\x1f]+\.ya?ml$/i;
 export type WorkspaceCharterFileIssue = "invalid-path" | "unavailable" | "oversized" | "invalid-charter" | "endpoint-binding-unavailable" | "changed";
 
 export class WorkspaceCharterFileError extends Error {
-  constructor(readonly issue: WorkspaceCharterFileIssue) {
+  readonly focusText?: string;
+  constructor(readonly issue: WorkspaceCharterFileIssue, focusText?: string) {
     super({
       "invalid-path": "Candidate Charter path must name a direct YAML file in the external workspace Charter directory",
       unavailable: "Candidate Charter file is unavailable or redirected",
@@ -20,6 +21,8 @@ export class WorkspaceCharterFileError extends Error {
       "endpoint-binding-unavailable": "Candidate Charter endpoint binding is unavailable or invalid; configure its ProofKit environment URL and inspect again",
       changed: "Candidate Charter digest changed since scope inspection; content or endpoint binding changed, inspect it again",
     }[issue]);
+    // Search hints are internal only; serializing an error must not reveal UI text.
+    Object.defineProperty(this, "focusText", { value: focusText, enumerable: false });
   }
 }
 
@@ -60,15 +63,18 @@ export async function readWorkspaceCharterFile(workspaceRoot: string, path: stri
   }
 
   const sourceSha256 = sha256(content);
+  let parsed: unknown;
+  try { parsed = parseYaml(content.toString("utf8")); }
+  catch { throw new WorkspaceCharterFileError("invalid-charter"); }
+  const focusText = candidateFocusText(parsed);
   let charter: TestCharter;
   let bindings: Array<{ location: string; url: string }>;
   try {
-    const parsed: unknown = parseYaml(content.toString("utf8"));
     bindings = bindEndpointUrls(parsed);
     charter = TestCharterSchema.parse(parsed);
   } catch (error) {
-    if (error instanceof WorkspaceCharterFileError) throw error;
-    throw new WorkspaceCharterFileError("invalid-charter");
+    if (error instanceof WorkspaceCharterFileError) throw new WorkspaceCharterFileError(error.issue, focusText);
+    throw new WorkspaceCharterFileError("invalid-charter", focusText);
   }
   // A candidate digest pins both reviewed source bytes and the concrete URLs.
   // A changed environment URL must not silently redirect an approved Mission.
@@ -122,4 +128,27 @@ function bindEndpointUrls(value: unknown): Array<{ location: string; url: string
 
 function isRecord(value: unknown): value is RecordValue {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Search only declared UI words and intent; never values, URLs or metadata. */
+export function candidateFocusText(value: unknown): string {
+  if (!isRecord(value)) return "";
+  const terms: string[] = [];
+  const add = (value: unknown) => { if (typeof value === "string" && value.length) terms.push(value.slice(0, 256)); };
+  add(value.intent);
+  const actions = (items: unknown) => {
+    if (!Array.isArray(items)) return;
+    for (const action of items.slice(0, 100)) {
+      if (isRecord(action) && action.kind === "waitForText") add(action.text);
+      if (isRecord(action) && action.kind === "captureResponse") add(action.name);
+    }
+  };
+  actions(value.actions);
+  if (Array.isArray(value.negativeCases)) for (const item of value.negativeCases.slice(0, 20)) {
+    if (isRecord(item)) { add(item.title); actions(item.actions); }
+  }
+  if (Array.isArray(value.assertions)) for (const assertion of value.assertions.slice(0, 100)) {
+    if (isRecord(assertion)) add(assertion.text);
+  }
+  return terms.join(" ").slice(0, 4096);
 }
