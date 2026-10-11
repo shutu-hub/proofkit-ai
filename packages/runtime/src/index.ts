@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { ProofkitConfig } from "@proofkit/contracts";
 import { probeHttpEndpoint } from "./http-probe.js";
 export { probeHttpEndpoint } from "./http-probe.js";
+export { probeWebDriverStatus } from "./webdriver-status.js";
 
 export type RuntimeEvent = {
   type: "process.started" | "process.stdout" | "process.stderr" | "process.exited" | "health.ready" | "health.timeout";

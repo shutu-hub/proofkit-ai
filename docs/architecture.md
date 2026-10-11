@@ -299,6 +299,8 @@ Scope inspection returns `testVerdict: not-asserted` and `executionChecks: not-r
 
 ### Environment inspection
 
+Mobile uses this same CLI/MCP entry point. A read-only runtime probe requests the configured WebDriver server's `/status`, reads at most 8192 bytes, and retains only a sanitized HTTP observation and the W3C `value.ready` boolean. It never creates a device session. MCP restricts the driver to loopback. The driver process is test infrastructure, so its source path is not treated as ownership evidence for the mobile app; declared backend health endpoints still receive their own source checks. The result lists `device-session` as unchecked and remains `not-asserted` even when the driver reports ready.
+
 `inspect_test_environment` and `proofkit environment` delegate to the same Local Runner method before live surface attachment. It composes configuration checks, header-only HTTP probes from `runtime`, the shared Electron endpoint resolver from `adapters`, and listener/source association from `project`. It creates no Mission or Run and calls no app startup, surface attachment or connector execution hook. Creating the service still loads trusted connector registration code.
 
 An optional Web `url`/CLI `--url` replaces the configured page URL for this single observation and the corresponding listener/source lookup. It is never persisted as the workspace's Run target. The override must be an HTTP(S) URL without embedded credentials; MCP permits loopback or the configured Web origin. Electron continues to use its configured CDP endpoint. The ordinary sanitized HTTP and source-binding checks determine the result, so a reachable candidate owned by another checkout is blocked rather than treated as ready.

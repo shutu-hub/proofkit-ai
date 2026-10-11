@@ -45,8 +45,10 @@ Prefer an eligible, plan-ready catalog Charter or explicit release suite that
 matches the requested behavior. Use charterId or suiteId when aliases are
 ambiguous. Plan readiness does not prove login, fixtures or running services.
 
-For Web/Electron, use inspect_test_environment to observe configured endpoints
-and source association. Resolve its concrete gaps before dependent actions.
+Use inspect_test_environment to observe configured endpoints before attachment.
+For Web/Electron it checks HTTP/CDP and applicable source association; for mobile
+it checks the bounded WebDriver /status ready value without opening a device
+session. Resolve its concrete gaps before dependent actions.
 MCP does not start the configured application command; use the project's
 documented development startup workflow when authorized. Use inspect_surface
 when controls or readiness are unknown, then inspect the owning source and

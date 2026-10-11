@@ -66,6 +66,19 @@ try {
   client = new Client({ name: "proofkit-mobile-smoke", version: "1" });
   await Promise.all([mcp.connect(serverTransport), client.connect(clientTransport)]);
 
+  const environment = payload(await client.callTool({ name: "inspect_test_environment", arguments: { surface: "mobile" } }));
+  assert.equal(environment.surface, "mobile");
+  assert.equal(environment.status, "incomplete", "the fixture declares no backend health endpoint");
+  assert.equal(environment.testVerdict, "not-asserted");
+  assert.ok(environment.checks.some((check) => check.id === "webdriver-status" && check.status === "passed"));
+  assert.ok(environment.notChecked.includes("device-session"));
+  assert.equal(sessions.size, 0, "environment inspection must not create a session");
+  const cliEnvironment = await environmentThroughCli();
+  assert.equal(cliEnvironment.surface, "mobile");
+  assert.ok(cliEnvironment.checks.some((check) => check.id === "webdriver-status" && check.status === "passed"));
+  assert.equal(sessions.size, 0);
+  assert.deepEqual(requests.filter((item) => item.includes("/status")), ["GET /status", "GET /status"]);
+
   const inspection = payload(await client.callTool({ name: "inspect_surface",
     arguments: { surface: "mobile" } }));
   assert.equal(inspection.surface, "mobile");
@@ -118,7 +131,7 @@ try {
   assert.equal(requests.filter((item) => item.startsWith("DELETE /session/")).length, 7);
   assert.equal(await readFile(join(source, "package.json"), "utf8"), sourceBytes);
   console.log(JSON.stringify({ successMission: success.missionId, defectMission: defect.missionId,
-    verified: ["native-mcp-mobile-inspection", "cli-mobile-inspection", "native-mcp-mobile-core", "w3c-http-session", "unique-visible-action-target", "displayed-text", "independent-business-oracle",
+    verified: ["native-mcp-mobile-environment", "cli-mobile-environment", "native-mcp-mobile-inspection", "cli-mobile-inspection", "native-mcp-mobile-core", "w3c-http-session", "unique-visible-action-target", "displayed-text", "independent-business-oracle",
       "evidence-linked-defect", "session-cleanup", "cleanup-failure-non-green", "external-workspace", "source-unchanged"] }, null, 2));
 } finally {
   await client?.close();
@@ -180,6 +193,22 @@ async function inspectThroughCli(serverUrl) {
   });
 }
 
+async function environmentThroughCli() {
+  return await new Promise((resolveInspection, rejectInspection) => {
+    const child = spawn(process.execPath, [join(process.cwd(), "bundle", "main.js"), "environment",
+      "--root", source, "--workspace", workspaceRoot, "--surface", "mobile"], { windowsHide: true });
+    let output = "";
+    let errors = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { errors += chunk; });
+    child.on("error", rejectInspection);
+    child.on("close", (code) => {
+      if (code !== 2) rejectInspection(new Error(`Mobile CLI environment inspection returned ${code}: ${errors}`));
+      else try { resolveInspection(JSON.parse(output)); } catch (error) { rejectInspection(error); }
+    });
+  });
+}
+
 async function handle(request, response) {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   const path = url.pathname;
@@ -188,6 +217,7 @@ async function handle(request, response) {
     response.writeHead(status, { "content-type": "application/json" });
     response.end(JSON.stringify({ value }));
   };
+  if (path === "/status" && request.method === "GET") return send({ ready: true, message: "fixture driver ready" });
   if (path === "/session" && request.method === "POST") {
     const sessionId = `mobile-${++sequence}`;
     sessions.set(sessionId, { boundRunId: null, clicked: false, accepted: false });

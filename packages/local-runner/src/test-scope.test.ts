@@ -103,8 +103,7 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     expect(release.suites.items[0]?.check.planReady).toBe(true);
     const mobile = await runner.inspectTestScope({ level: "release", surface: "mobile" });
     expect(mobile.selection.requiredSurfaces).toEqual(["mobile"]);
-    expect(mobile.next[0]).toBe("inspect_surface");
-    expect(mobile.next).not.toContain("inspect_test_environment");
+    expect(mobile.next[0]).toBe("inspect_test_environment");
     expect(mobile.catalog.eligible).toBe(0);
     const created = await runner.createMission({ intent: "test", charterId: "resume-release", surface: "web" });
     expect(created.plan.executionProfile.surfaceMatrix).toEqual(release.selection.requiredSurfaces);

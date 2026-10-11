@@ -51,11 +51,13 @@ Runner 对适配器动作、预检、租约、截图及清理抛出的普通异�
 
 Runner 在执行页面步骤前原子保存资源登记日志。若进程退出导致已登记资源未清理，`inspect_run_resources` 会校验 Run、项目/工作区、连接器版本、事件来源和摘要后，才报告 `recoverable`；`recover_run_resources` 会先取得同一个 Run 租约，并要求操作者写权限、工作区 `policies.sideEffects: allow`、原连接器的显式版本以及 `recover` 钩子。恢复结果写入独立的 `.proofkit/recoveries/` 目录，不修改原 Run 的证据和产品 Verdict。活动或无法确认的占用者、路径重定向、篡改或缺失证据都会拒绝自动清理；事件来源校验最多读取日志前 16 MiB，每条最多 256 KiB，超出限制会拒绝恢复。可信 JavaScript 仍然是协作式的；钩子超时后租约会保留到钩子真正结束或进程退出。声明的版本用于匹配，不能代替代码签名；文件 flush 和原子替换也尚无断电可靠性证明。句柄返回前发生的部分创建仍由连接器自行回滚。
 
+移动端也使用同一环境预检入口：`proofkit environment --surface mobile` 或 `inspect_test_environment({surface: "mobile"})`。只读取配置的 WebDriver `/status`，最多解析 8192 字节以核对 W3C `value.ready`，不创建设备会话。MCP 仅允许回环驱动地址；驱动进程不等于被测 App 的源码归属。结果将 `device-session` 列为未检查，驱动就绪也不代表业务通过。
+
 同一外部测试工作区的 Run 另有本机进程级独占租约。预检通过后、项目 setup 和页面连接前获取；已被另一个 Run 占用时，本次 Run 留下 `blocked` 证据而不连接页面。显式 CDP 地址及 WebDriver 服务器还有跨工作区的本机目标租约。Electron 的 `DevToolsActivePort` 先按文件路径协调；已有端口文件在 setup 前加锁其 CDP 端口，启动阶段新建或改写的端口文件在 setup 后再次解析并加锁，适配器固定连接最终已加锁的端点。不同端口文件指向同一端口也会阻断并发连接。租约覆盖正常清理以及仍在进行的迟到 setup/连接清理；进程退出由操作系统释放。不同工作区共享业务账号或后端、以及跨主机共享资源，仍需外部隔离或协调。
 
 页面检查可在 Web/Electron/Mobile 配置一次 `readyWhen: { text: "登录", timeoutMs: 5000 }`，也可通过 MCP/CLI 覆盖。它复用 Runner 的 `waitForText → observe` 步骤，在已有总截止时间内等待可见文字，再保存快照、截图和事件；Web/Electron 会等待任一可见文字匹配，隐藏的较早匹配不会阻塞后续可见内容。Web/Electron 另提供控件线索。移动端快照只提取有界、脱敏的非编辑 XML 标签，不承诺已验证的选择器。返回 `readiness` 区分未要求、已观察和未验证；缺少条件不会返回成功快照，也不证明产品有缺陷。已观察到的条件不会因稍后的环境阻断被抹去，整体 `status` 仍可为 `blocked`。结果同时返回最多十条已有运行异常及省略数量，完整异常保留在 Run 证据中。观察到文字只证明这一时刻的条件，页面仍可能有运行异常；产品结论始终是 `not-asserted`。配置了可信连接器时，检查仍使用其 preflight/setup/cleanup 生命周期，隔离责任由连接器承担。
 
-环境检查与页面检查都不产生产品通过结论。CLI `proofkit environment` 与 MCP 共用 Local Runner，在一个总截止时间内检查配置、HTTP/CDP 状态、最多八个后端健康端点及本地进程源码关联，保存带 SHA-256 的 JSON 快照；不启动应用、浏览器或调用连接器操作。环境检查可用 CLI `--url` 或 MCP `inspect_test_environment({surface: "web", url: "http://127.0.0.1:5173/"})` 临时指定一个 Web 候选地址；该地址同时用于 HTTP 和监听进程归属检查，不会改写工作区配置，也不会成为随后 Run 的默认目标。MCP 限制为回环地址或已配置的 Web origin；Electron 仍使用配置的 CDP 地址。HTTP 检查收到响应头即可结束，不跟随重定向，不保存响应正文、响应头、查询参数或原始网络错误；端点路径仍可见。结果明确列出未检查的登录、样本、连接器隔离门禁、业务终态与项目覆盖，不能把“端点可达”当作“功能已验收”。服务创建仍会加载可信连接器的注册代码。
+环境检查与页面检查都不产生产品通过结论。CLI `proofkit environment` 与 MCP 共用 Local Runner，在一个总截止时间内检查配置、HTTP/CDP 状态、最多八个后端健康端点及本地进程源码关联，保存带 SHA-256 的 JSON 快照；不启动应用、浏览器或调用连接器操作。环境检查可用 CLI `--url` 或 MCP `inspect_test_environment({surface: "web", url: "http://127.0.0.1:5173/"})` 临时指定一个 Web 候选地址；该地址同时用于 HTTP 和监听进程归属检查，不会改写工作区配置，也不会成为随后 Run 的默认目标。MCP 限制为回环地址或已配置的 Web origin；Electron 仍使用配置的 CDP 地址。普通 HTTP 检查收到响应头即可结束；移动端 WebDriver 状态检查最多读取 8192 字节，只保留就绪布尔值。检查不跟随重定向，不保存正文、响应头、查询参数或原始网络错误；端点路径仍可见。结果明确列出未检查的登录、样本、连接器隔离门禁、业务终态与项目覆盖，不能把“端点可达”当作“功能已验收”。服务创建仍会加载可信连接器的注册代码。
 
 Electron 使用 `file:` 页面或没有 HTTP 页面地址时，环境检查和 Run 的源码关联改查其 CDP 监听端口；`DevToolsActivePort` 会在检查时解析，带路径或查询的 WebSocket 地址只取监听 origin。配置了 HTTP 页面地址时仍检查页面服务。项目 setup 后会重新检查可能由连接器启动的 Electron 进程。关联只依据本机进程代码路径，无法核对实际渲染文件字节；进程无法归属到单一 Git checkout 时保持 `unverified`。
 

@@ -43,6 +43,13 @@ describe("CLI workspace onboarding", () => {
       expect(process.exitCode).toBe(1);
       expect(JSON.parse(await readFile(result.artifact.path, "utf8")).inspectionId).toBe(result.inspectionId);
       expect(await readdir(root)).toEqual(["package.json"]);
+      await writeFile(join(workspace, ".proofkit", "config.yaml"), JSON.stringify({ project: { root }, surfaces: { mobile: { serverUrl: "http://127.0.0.1:1" } } }));
+      log.mockClear();
+      await createProgram().parseAsync(["node", "proofkit", "environment", "--root", root, "--workspace", workspace, "--surface", "mobile", "--timeout-ms", "500"]);
+      const mobile = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(mobile).toMatchObject({ testVerdict: "not-asserted", status: "blocked", surface: "mobile",
+        checks: expect.arrayContaining([expect.objectContaining({ id: "webdriver-status", status: "blocked" })]) });
+      expect(await readdir(root)).toEqual(["package.json"]);
       await expect(createProgram().parseAsync(["node", "proofkit", "environment", "--root", root, "--workspace", workspace, "--timeout-ms", "NaN"])).rejects.toThrow();
     } finally { process.exitCode = exitCode; }
   });

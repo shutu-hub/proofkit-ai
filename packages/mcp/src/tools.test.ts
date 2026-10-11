@@ -85,8 +85,9 @@ describe("ProofKit MCP tools", () => {
       expect(JSON.parse(textContent(response))).toMatchObject({ status: "incomplete", testVerdict: "not-asserted" });
       expect(runner.inspectEnvironment).toHaveBeenCalledWith({ surface: "web", timeoutMs: 10000 }, expect.any(AbortSignal));
       expect((await client.callTool({ name: "inspect_test_environment", arguments: { timeoutMs: 15001 } })).isError).toBe(true);
-      expect((await client.callTool({ name: "inspect_test_environment", arguments: { surface: "mobile" } })).isError).toBe(true);
-      expect(runner.inspectEnvironment).toHaveBeenCalledTimes(1);
+      expect((await client.callTool({ name: "inspect_test_environment", arguments: { surface: "mobile" } })).isError).not.toBe(true);
+      expect(runner.inspectEnvironment).toHaveBeenCalledWith({ surface: "mobile", timeoutMs: 10000 }, expect.any(AbortSignal));
+      expect(runner.inspectEnvironment).toHaveBeenCalledTimes(2);
     } finally { await client.close(); await server.close(); }
   });
   it("routes a one-time Web environment URL through the MCP origin policy", async () => {
@@ -96,6 +97,7 @@ describe("ProofKit MCP tools", () => {
     try {
       expect((await client.callTool({ name: "inspect_test_environment", arguments: { url: "https://other.example.com/" } })).isError).toBe(true);
       expect((await client.callTool({ name: "inspect_test_environment", arguments: { surface: "electron", url: "http://127.0.0.1:9000/" } })).isError).toBe(true);
+      expect((await client.callTool({ name: "inspect_test_environment", arguments: { surface: "mobile", url: "http://127.0.0.1:9000/" } })).isError).toBe(true);
       expect(runner.inspectEnvironment).not.toHaveBeenCalled();
       const response = await client.callTool({ name: "inspect_test_environment", arguments: { url: "http://127.0.0.1:9000/preview" } });
       expect(response.isError).not.toBe(true);

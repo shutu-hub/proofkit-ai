@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProofkitConfigSchema } from "@proofkit/contracts";
-import { ElectronAdapter, WebAdapter } from "@proofkit/adapters";
+import { ElectronAdapter, MobileAdapter, WebAdapter } from "@proofkit/adapters";
 import * as project from "@proofkit/project";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { LocalRunnerService } from "./index.js";
@@ -39,6 +39,42 @@ async function serve(handler: RequestListener) {
 }
 
 describe("environment inspection", () => {
+  it("checks mobile WebDriver readiness without creating a session or modifying the source", async () => {
+    const { root, workspaceRoot, binding } = await fixture();
+    const requests: string[] = [];
+    const serverUrl = await serve((req, res) => { requests.push(`${req.method} ${req.url}`); res.end(JSON.stringify({ value: { ready: true, message: "private driver detail" } })); });
+    const connect = vi.spyOn(MobileAdapter.prototype, "connect");
+    const service = new LocalRunnerService({ root, workspaceRoot, config: ProofkitConfigSchema.parse({
+      project: { root }, surfaces: { mobile: { serverUrl: `${serverUrl}/wd/hub?token=private` } },
+    }) });
+    const result = await service.inspectEnvironment({ surface: "mobile" });
+    expect(result).toMatchObject({ surface: "mobile", status: "incomplete", testVerdict: "not-asserted",
+      checks: expect.arrayContaining([expect.objectContaining({ id: "webdriver-status", status: "passed", http: expect.objectContaining({ endpoint: `${serverUrl}/wd/hub/status`, status: "reachable" }) })]) });
+    expect(result.notChecked).toContain("device-session");
+    expect(result.next).toContainEqual(expect.objectContaining({ action: "inspect-surface" }));
+    expect(requests).toEqual(["GET /wd/hub/status"]);
+    expect(JSON.stringify(result)).not.toContain("private");
+    expect(await readFile(result.artifact.path, "utf8")).not.toContain("private");
+    expect(await readdir(root)).toEqual(["package.json"]);
+    expect(binding).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+  });
+  it("blocks a not-ready driver and refuses remote MCP driver endpoints before probing", async () => {
+    const { root, workspaceRoot } = await fixture();
+    const requests: string[] = [];
+    const serverUrl = await serve((req, res) => { requests.push(`${req.method} ${req.url}`); res.end(JSON.stringify({ value: { ready: false } })); });
+    const config = ProofkitConfigSchema.parse({ project: { root }, surfaces: { mobile: { serverUrl } } });
+    const result = await new LocalRunnerService({ root, workspaceRoot, config }).inspectEnvironment({ surface: "mobile" });
+    expect(result).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "webdriver-status", status: "blocked" })]) });
+    expect(result.next).toContainEqual(expect.objectContaining({ action: "check-webdriver", basedOn: ["webdriver-status"] }));
+    expect(result.next.some((item) => item.action === "inspect-surface")).toBe(false);
+    expect(requests).toEqual(["GET /status"]);
+    config.surfaces.mobile!.serverUrl = "https://example.com:4723";
+    const remote = await new LocalRunnerService({ root, workspaceRoot, config, restrictWebOrigins: true }).inspectEnvironment({ surface: "mobile" });
+    expect(remote).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "webdriver-status", status: "blocked", message: expect.stringContaining("loopback") })]) });
+    expect(requests).toEqual(["GET /status"]);
+    await expect(new LocalRunnerService({ root, workspaceRoot, config }).inspectEnvironment({ surface: "mobile", url: serverUrl })).rejects.toThrow("Only Web");
+  });
   it("stores a bounded snapshot without executing startup, browser or connector hooks", async () => {
     const { root, workspaceRoot, binding } = await fixture();
     const url = await serve((_req, res) => { res.writeHead(200, { "Set-Cookie": "private" }); res.end("private body"); });

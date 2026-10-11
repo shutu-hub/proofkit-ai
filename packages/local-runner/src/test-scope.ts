@@ -82,7 +82,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
     : "A workflow inventory is a reviewable claim only; reviewer identity, completeness and actual execution remain unverified");
   const readyCatalog = catalogItems.some((entry) => entry.check.planReady);
   const next = [
-    ...(surface === "mobile" ? [] : ["inspect_test_environment"]),
+    "inspect_test_environment",
     "inspect_surface",
     readyCatalog ? "run_test" : "plan_test",
   ];

@@ -364,7 +364,7 @@ export const HttpEndpointObservationSchema = z.object({
 export type HttpEndpointObservation = z.infer<typeof HttpEndpointObservationSchema>;
 
 export const EnvironmentInspectionInputSchema = z.object({
-  surface: z.enum(["web", "electron"]).default("web"),
+  surface: z.enum(["web", "electron", "mobile"]).default("web"),
   url: z.string().url().optional(),
   timeoutMs: z.number().int().min(100).max(15_000).default(10_000),
 });
@@ -374,7 +374,7 @@ export const EnvironmentInspectionSchema = z.object({
   inspectionId: z.string().regex(/^environment-[a-zA-Z0-9_-]+$/),
   projectRoot: z.string(),
   workspaceRoot: z.string(),
-  surface: z.enum(["web", "electron"]),
+  surface: z.enum(["web", "electron", "mobile"]),
   observedAt: z.string().datetime(),
   durationMs: z.number().nonnegative(),
   status: z.enum(["checks-passed", "blocked", "incomplete"]),
@@ -388,9 +388,9 @@ export const EnvironmentInspectionSchema = z.object({
     targetBinding: TargetBindingSchema.optional(),
   })).max(16),
   omittedHealthChecks: z.number().int().nonnegative(),
-  notChecked: z.array(z.enum(["browser-session", "authentication", "fixtures", "integration-preflight", "business-terminal", "project-coverage"])),
+  notChecked: z.array(z.enum(["browser-session", "device-session", "authentication", "fixtures", "integration-preflight", "business-terminal", "project-coverage"])),
   next: z.array(z.object({
-    action: z.enum(["configure-surface", "check-surface-endpoint", "configure-browser", "check-cdp", "check-health", "declare-health", "confirm-source", "retry-inspection", "inspect-surface"]),
+    action: z.enum(["configure-surface", "check-surface-endpoint", "configure-browser", "check-cdp", "check-webdriver", "check-health", "declare-health", "confirm-source", "retry-inspection", "inspect-surface"]),
     basedOn: z.array(z.string()).min(1).max(16),
     guidance: z.string().min(1).max(240),
   })).max(9),

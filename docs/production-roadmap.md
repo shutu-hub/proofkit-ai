@@ -31,6 +31,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
   recovery and final verification, with a persisted timeout Finding.
 - Expose cancellation through the CLI and MCP.
 - Expose shared CLI/MCP Web/Electron environment observations before surface attachment: one total deadline, at most eight health endpoints, local source association and a hashed external-workspace artifact. Keep login, fixtures, integration preflight, business terminal state and coverage explicitly unchecked; do not start applications or invoke connector operations.
+- Extend the same read-only environment entry point to mobile WebDriver `/status`: check a bounded W3C ready value without creating a session, keep driver ownership separate from tested-app source ownership, and retain device attachment and business acceptance as unchecked.
 - Reuse the existing Runner for configurable visible-text prerequisites before surface inspection, return observed/unverified readiness and bounded runtime diagnostics, and propagate MCP cancellation. Readiness is an observation, never business acceptance; trusted integration lifecycle hooks still apply.
 
 - Propagate Mission cancellation and deadlines to primary, replay and negative

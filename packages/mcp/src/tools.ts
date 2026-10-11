@@ -28,7 +28,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "inspect_test_environment",
-    "Observe configured Web/Electron endpoints, or a one-time Web URL, and source association with a total deadline. Saves a workspace artifact; starts no app, browser, test or connector operation. This does not prove login, business readiness or product correctness.",
+    "Observe configured Web/Electron endpoints or mobile WebDriver /status, plus applicable source association, with a total deadline. A one-time URL applies only to Web. Saves a workspace artifact; starts no app, device session, browser, test or connector operation. This does not prove login, business readiness or product correctness.",
     EnvironmentInspectionInputSchema.shape,
     async (input, extra) => {
       if (input.url && input.surface !== "web") throw new Error("Only Web environment inspection accepts a URL override");
