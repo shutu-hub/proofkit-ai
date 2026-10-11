@@ -3,11 +3,12 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile }
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stringify } from "yaml";
 import { defaultWorkspaceRoot, initProject, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace } from "@proofkit/project";
 import { PROOFKIT_CHARTER_AUTHORING, PROOFKIT_TEST_SKILL } from "./agent-skill.js";
 import { installAihrTemplate } from "./template-install.js";
 
-export type AgentHarness = "codex" | "claude-code" | "generic";
+export type AgentHarness = "codex" | "claude-code" | "deepseek-harness" | "generic";
 export type AgentSetupInput = {
   root: string;
   workspaceRoot?: string;
@@ -18,12 +19,14 @@ export type AgentSetupInput = {
   template?: "aihr";
 };
 
-type SetupRuntime = { serverPath?: string; nodePath?: string; userHome?: string };
+type SetupRuntime = { serverPath?: string; nodePath?: string; userHome?: string; dshHome?: string };
 type FileSet = Record<string, string>;
 
 /** Export onboarding artifacts without loading connectors or changing the tested source. */
 export async function setupAgent(input: AgentSetupInput, runtime: SetupRuntime = {}) {
-  if (!["codex", "claude-code", "generic"].includes(input.harness)) throw new Error("Harness must be codex, claude-code or generic");
+  if (!["codex", "claude-code", "deepseek-harness", "generic"].includes(input.harness)) {
+    throw new Error("Harness must be codex, claude-code, deepseek-harness or generic");
+  }
   if (input.template !== undefined && input.template !== "aihr") throw new Error(`Unknown reference template: ${input.template}`);
   if (input.skillsDir !== undefined && !input.installSkill) throw new Error("--skills-dir requires --install-skill");
   if (input.installSkill && input.harness === "generic" && !input.skillsDir) throw new Error("Generic Skill installation requires --skills-dir for the host's documented discovery location");
@@ -43,9 +46,14 @@ export async function setupAgent(input: AgentSetupInput, runtime: SetupRuntime =
   if (input.allowCapabilityWrites) env.PROOFKIT_ALLOW_CAPABILITY_WRITES = "1";
   const serverName = `proofkit-${digest([identity(context.projectRoot), identity(context.workspaceRoot)]).slice(0, 12)}`;
   const launcher = { command: nodePath, args: [serverPath], env };
-  const configFile = input.harness === "codex" ? "mcp.toml" : "mcp.json";
+  const configFile = input.harness === "codex" ? "mcp.toml"
+    : input.harness === "deepseek-harness" ? "cordis.patch.yml" : "mcp.json";
   const config = input.harness === "codex"
     ? `[mcp_servers.${serverName}]\ncommand = ${JSON.stringify(nodePath)}\nargs = ${JSON.stringify([serverPath])}\n\n[mcp_servers.${serverName}.env]\n${Object.entries(env).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join("\n")}\n`
+    : input.harness === "deepseek-harness"
+      ? stringify([{ insert: [{ id: serverName, name: "@deepseek-ai/dsh-mcp-client", config: {
+        serverName, transport: "stdio", ...launcher,
+      } }] }])
     : json({ mcpServers: { [serverName]: { type: "stdio", ...launcher } } });
   const skillFiles: FileSet = { "SKILL.md": PROOFKIT_TEST_SKILL, "references/charter-authoring.md": PROOFKIT_CHARTER_AUTHORING };
   const bundleKey = digest({ harness: input.harness, config, skillFiles, template: input.template }).slice(0, 20);
@@ -61,10 +69,13 @@ export async function setupAgent(input: AgentSetupInput, runtime: SetupRuntime =
     defaultLevel: "core",
     ...(input.template ? { template: input.template } : {}),
     testVerdict: "not-asserted",
-    connection: { status: "not-checked", serverName, ...launcher, configPath, ...(registration ? { registration } : {}) },
+    connection: { status: "not-checked", serverName, ...launcher, configPath, ...(registration ? { registration } : {}),
+      ...(input.harness === "deepseek-harness" ? { activation: { command: "dsh", args: ["headless", "--patch", configPath] } } : {}) },
     skill: { name: "proofkit-test", path: join(bundlePath, "proofkit-test") },
     next: [...(input.template ? ["Review the installed AIHR connector as trusted local JavaScript before starting or checking the MCP server; examples are not registered tests."] : []),
-      "Register the emitted MCP server with the host, or merge its native configuration fragment.",
+      input.harness === "deepseek-harness"
+        ? "Start DeepSeek Harness with the emitted --patch overlay, or merge its insert row into an existing profile patch without overwriting other entries."
+        : "Register the emitted MCP server with the host, or merge its native configuration fragment.",
       "Install the emitted proofkit-test Skill in the host's discovery directory, or rerun setup with --install-skill.",
       input.template ? "Configure isolated AIHR Web/Electron endpoints, test identity and independent business readers in the external workspace." : "Set Web/Electron endpoints and business checks in the external workspace config.",
       "Verify the host can call inspect_test_scope and confirm the returned projectRoot.",
@@ -76,7 +87,7 @@ export async function setupAgent(input: AgentSetupInput, runtime: SetupRuntime =
 
   let skillPath: string | undefined;
   if (input.installSkill) {
-    const skillsDir = canonical(input.skillsDir ?? join(runtime.userHome ?? homedir(), input.harness === "codex" ? ".agents" : ".claude", "skills"));
+    const skillsDir = canonical(input.skillsDir ?? defaultSkillsDir(input.harness, runtime));
     assertExternal(context.projectRoot, skillsDir);
     skillPath = join(skillsDir, "proofkit-test");
     assertExternal(context.projectRoot, canonical(skillPath));
@@ -93,6 +104,20 @@ export async function setupAgent(input: AgentSetupInput, runtime: SetupRuntime =
   return { ...manifest, bundle: { path: bundlePath, status: bundleStatus },
     ...(templateInstallation ? { templateInstallation } : {}),
     skill: { ...manifest.skill, installation: { status: skillStatus, ...(skillPath ? { path: skillPath } : {}) } } };
+}
+
+function defaultSkillsDir(harness: AgentHarness, runtime: SetupRuntime): string {
+  const userHome = runtime.userHome ?? homedir();
+  if (harness === "deepseek-harness") {
+    const configured = runtime.dshHome ?? process.env.DSH_HOME;
+    const dshHome = configured?.trim()
+      ? configured === "~" ? userHome
+        : configured.startsWith("~/") || configured.startsWith("~\\") ? join(userHome, configured.slice(2))
+          : configured
+      : join(userHome, ".dsh");
+    return join(dshHome, "skills");
+  }
+  return join(userHome, harness === "codex" ? ".agents" : ".claude", "skills");
 }
 
 function registrationCommand(harness: AgentHarness, serverName: string, launcher: { command: string; args: string[]; env: Record<string, string> }) {

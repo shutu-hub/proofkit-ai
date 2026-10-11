@@ -127,6 +127,19 @@ try {
   assert.equal(codexSetup.connection.serverName, onboarding.connection.serverName);
   assert.equal(codexSetup.skill.installation.status, "not-requested");
   assert.equal(codexSetup.connection.registration.command, "codex");
+  const dshHome = join(scratch, "dsh home");
+  const dshSetup = JSON.parse((await command(process.execPath, [cli, "agent", "setup", "--harness", "deepseek-harness",
+    "--root", source, "--workspace", workspace, "--install-skill", "--skills-dir", join(dshHome, "skills")], scratch)).stdout);
+  assert.equal(dshSetup.connection.serverName, onboarding.connection.serverName);
+  assert.equal(dshSetup.connection.registration, undefined);
+  assert.deepEqual(dshSetup.connection.activation,
+    { command: "dsh", args: ["headless", "--patch", dshSetup.connection.configPath] });
+  assert.deepEqual(parseYaml(await readFile(dshSetup.connection.configPath, "utf8")), [{ insert: [{
+    id: dshSetup.connection.serverName, name: "@deepseek-ai/dsh-mcp-client",
+    config: { serverName: dshSetup.connection.serverName, transport: "stdio",
+      command: dshSetup.connection.command, args: dshSetup.connection.args, env: dshSetup.connection.env },
+  }] }]);
+  assert.equal(await readFile(join(dshHome, "skills", "proofkit-test", "SKILL.md"), "utf8"), installedSkill);
   const hostCli = join(scratch, "mock-host-cli.js");
   const hostState = join(scratch, "host-registration.json");
   const hostEntry = { name: codexSetup.connection.serverName, transport: { type: "stdio",
@@ -311,7 +324,7 @@ process.exit(3);
   assert.equal(workspaceFiles.includes("missions"), false);
   assert.equal(workspaceFiles.includes("runs"), false);
   assert.equal((await readdir(join(workspace, ".proofkit", "inspections"))).length, 2);
-  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-aihr-reference-template", "agent-selected-aihr-first-setup", "template-idempotence-and-conflict-guard", "template-source-immutability", "installed-agent-skill-and-idempotent-setup", "codex-and-claude-native-config-export", "emitted-native-config-stdio-connection", "installed-cli-local-connection-check", "isolated-host-registration", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
+  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-aihr-reference-template", "agent-selected-aihr-first-setup", "template-idempotence-and-conflict-guard", "template-source-immutability", "installed-agent-skill-and-idempotent-setup", "codex-claude-deepseek-native-config-export", "emitted-native-config-stdio-connection", "installed-cli-local-connection-check", "isolated-host-registration", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
 } finally {
   if (environmentServer) {
     environmentServer.closeAllConnections();

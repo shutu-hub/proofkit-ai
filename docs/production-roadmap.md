@@ -437,9 +437,18 @@ The tarball now includes the AIHR reference connector and five example Charters.
 
 **AIHR first setup (2026-10-11):** `agent setup --template aihr` now installs the reference in the external workspace before the generic starter connector is created. The emitted Skill explains explicit selection, connector review and example Charter limits. Setup rejects a simultaneous connection check or host registration, because those would load the trusted connector before review. Existing generic or custom connectors still conflict without overwrite. CLI and installed-tarball tests cover fresh setup, repeat use, conflict protection and the absence of a Mission; this does not exercise an AIHR business workflow.
 
-The installed-package smoke also generates Codex/Claude native onboarding
+The installed-package smoke also generates Codex/Claude/DeepSeek native onboarding
 artifacts, installs and reuses the portable Skill in an isolated personal
 directory, and connects via the emitted JSON MCP launcher configuration.
+For DeepSeek Harness, the installed tarball emits a Cordis `insert` overlay
+with the `@deepseek-ai/dsh-mcp-client` stdio schema and an explicit `dsh
+headless --patch` activation array. The official `@deepseek-ai/dsh@0.2.1-alpha.2`
+CLI composed the emitted patch with `--dump-config` on Windows and retained
+the expected source/workspace binding. This checks native configuration
+composition at upstream revision `d743267`; a real DeepSeek model turn,
+Skill discovery and MCP tool call are not yet verified. Harness is a developer
+preview, so a future compatibility gate should run a pinned headless host
+fixture before claiming model-level interoperability.
 The CLI optionally checks that emitted launcher with `agent setup
 --check-connection`: it lists required tools and verifies the project/workspace
 binding through `inspect_test_scope`, without creating a Mission or Run.

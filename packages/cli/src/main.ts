@@ -24,7 +24,7 @@ export function createProgram(): Command {
   const agent = program.command("agent").description("Export host Agent Skills and native MCP onboarding configuration");
   agent.command("setup")
     .description("Generate an external onboarding bundle; optionally install the Skill and register the host MCP server")
-    .requiredOption("--harness <harness>", "codex, claude-code or generic")
+    .requiredOption("--harness <harness>", "codex, claude-code, deepseek-harness or generic")
     .option("--root <path>", "tested project root", ".")
     .option("--template <name>", "install a reviewed reference in the external workspace; currently: aihr")
     .option("--install-skill", "install the portable Skill in the host's personal discovery directory")
@@ -38,7 +38,9 @@ export function createProgram(): Command {
       const timeoutMs = Number(options.checkTimeoutMs);
       if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000) throw new Error("Agent connection timeout must be 1000–60000 milliseconds");
       if (options.hostCli && !options.registerHost) throw new Error("--host-cli requires --register-host");
-      if (options.registerHost && options.harness === "generic") throw new Error("--register-host requires --harness codex or claude-code");
+      if (options.registerHost && !["codex", "claude-code"].includes(options.harness)) {
+        throw new Error("--register-host requires --harness codex or claude-code");
+      }
       if (options.template && options.template !== "aihr") throw new Error(`Unknown reference template: ${options.template}`);
       if (options.template && (options.checkConnection || options.registerHost)) {
         throw new Error("Review the selected template connector before --check-connection or --register-host; run setup again without --template after review");

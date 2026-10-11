@@ -30,7 +30,7 @@ async function fixture() {
 }
 
 describe("Agent onboarding", () => {
-  it.each(["codex", "claude-code", "generic"] as const)("exports %s artifacts with an explicit unconnected state and no source writes", async (harness) => {
+  it.each(["codex", "claude-code", "deepseek-harness", "generic"] as const)("exports %s artifacts with an explicit unconnected state and no source writes", async (harness) => {
     const f = await fixture();
     const result = await setupAgent({ ...f, harness }, f);
     const context = resolveProjectContext(f.root, { workspaceRoot: f.workspaceRoot });
@@ -38,7 +38,15 @@ describe("Agent onboarding", () => {
       defaultLevel: "core", testVerdict: "not-asserted", connection: { status: "not-checked", args: [f.serverPath] },
       bundle: { status: "created" }, skill: { installation: { status: "not-requested" } } });
     expect(result.connection.env).toEqual({ PROOFKIT_ROOT: context.projectRoot, PROOFKIT_WORKSPACE_ROOT: context.workspaceRoot });
-    if (harness !== "codex") {
+    if (harness === "deepseek-harness") {
+      const patch = parse(await readFile(result.connection.configPath, "utf8"));
+      expect(patch).toEqual([{ insert: [{ id: result.connection.serverName,
+        name: "@deepseek-ai/dsh-mcp-client", config: { serverName: result.connection.serverName,
+          transport: "stdio", command: process.execPath, args: [f.serverPath], env: result.connection.env } }] }]);
+      expect(result.connection).toMatchObject({ activation: { command: "dsh",
+        args: ["headless", "--patch", result.connection.configPath] } });
+      expect(result.connection.registration).toBeUndefined();
+    } else if (harness !== "codex") {
       const config = JSON.parse(await readFile(result.connection.configPath, "utf8"));
       expect(config.mcpServers[result.connection.serverName]).toEqual({ type: "stdio", command: process.execPath,
         args: [f.serverPath], env: result.connection.env });
@@ -53,6 +61,22 @@ describe("Agent onboarding", () => {
     expect(await readdir(f.root)).toEqual(["package.json"]);
     expect(await readFile(join(f.root, "package.json"), "utf8")).toBe('{"name":"untouched-source"}');
     expect((await readdir(join(f.workspaceRoot, ".proofkit"))).sort()).toEqual(["agents", "config.yaml", "integration.mjs"]);
+  });
+
+  it("installs the DeepSeek Skill into DSH_HOME and preserves an existing profile patch", async () => {
+    const f = await fixture();
+    const dshHome = join(f.scratch, "DeepSeek home with spaces");
+    const profilePatch = join(dshHome, "cordis.patch.yml");
+    await mkdir(dshHome, { recursive: true });
+    await writeFile(profilePatch, "- insert:\n    - id: existing\n      name: example\n");
+    vi.stubEnv("DSH_HOME", dshHome);
+    const result = await setupAgent({ ...f, harness: "deepseek-harness", installSkill: true }, f);
+    expect(result.skill.installation).toEqual({ status: "created", path: join(dshHome, "skills", "proofkit-test") });
+    expect(await readFile(profilePatch, "utf8")).toContain("id: existing");
+    const again = await setupAgent({ ...f, harness: "deepseek-harness", installSkill: true }, f);
+    expect(again.bundle.status).toBe("reused");
+    expect(again.skill.installation.status).toBe("reused");
+    expect(await readdir(f.root)).toEqual(["package.json"]);
   });
 
   it("selects the AIHR reference during first setup without loading it or registering examples", async () => {
@@ -115,6 +139,8 @@ describe("Agent onboarding", () => {
     await expect(setupAgent({ ...f, harness: "invented" as AgentHarness }, f)).rejects.toThrow("Harness must be");
     await expect(setupAgent({ ...f, harness: "codex" }, { serverPath: join(f.scratch, "missing.js") })).rejects.toThrow("entrypoint is missing");
     await expect(createProgram().parseAsync(["node", "proofkit", "agent", "setup", "--harness", "generic",
+      "--root", f.root, "--workspace", f.workspaceRoot, "--register-host"])).rejects.toThrow("requires --harness codex or claude-code");
+    await expect(createProgram().parseAsync(["node", "proofkit", "agent", "setup", "--harness", "deepseek-harness",
       "--root", f.root, "--workspace", f.workspaceRoot, "--register-host"])).rejects.toThrow("requires --harness codex or claude-code");
     await expect(createProgram().parseAsync(["node", "proofkit", "agent", "setup", "--harness", "codex",
       "--root", f.root, "--workspace", f.workspaceRoot, "--host-cli", f.serverPath])).rejects.toThrow("requires --register-host");

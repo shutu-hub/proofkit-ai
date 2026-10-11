@@ -9,6 +9,7 @@ After installing the built package, generate a native connection bundle:
 ```bash
 proofkit agent setup --harness codex --root /path/to/source --workspace /path/to/test-workspace --install-skill
 proofkit agent setup --harness claude-code --root /path/to/source --workspace /path/to/test-workspace --install-skill
+proofkit agent setup --harness deepseek-harness --root /path/to/source --workspace /path/to/test-workspace --install-skill
 ```
 
 For a one-command Codex or Claude Code setup, add `--register-host` instead of
@@ -17,8 +18,8 @@ connection, then asks the host CLI to register that server in the user's host
 configuration. Registration is an explicit opt-in; plain `agent setup` still
 only exports reviewable files. On Windows ProofKit invokes a native host
 executable or JavaScript entrypoint without a shell. Use `--host-cli <path>`
-when automatic discovery cannot find one. `generic` hosts continue to use
-their own documented registration method.
+when automatic discovery cannot find one. DeepSeek Harness and `generic` hosts
+use their own documented configuration workflow.
 
 The returned `hostRegistration` is `registered`, `review-required`, `blocked`,
 or `unverified`. An existing server name is `review-required` and is never
@@ -33,19 +34,40 @@ project binding before running a scenario.
 Choose the command for the host you use. The external bundle lives under
 `.proofkit/agents/<harness>/<content-hash>/` and contains a portable
 `proofkit-test/SKILL.md`, `references/charter-authoring.md`, native `mcp.toml`
-(Codex) or `mcp.json` (`mcpServers` for Claude/generic), and `setup.json`.
+(Codex), `mcp.json` (`mcpServers` for Claude/generic), or `cordis.patch.yml`
+(DeepSeek Harness), and `setup.json`.
 It uses the installed absolute Node/MCP entrypoint paths and binds both
 `PROOFKIT_ROOT` and `PROOFKIT_WORKSPACE_ROOT`. Moving or uninstalling the
 package requires a new export and host registration. The server name hashes
 the source/workspace pair so different bindings have different names.
 
 `--install-skill` installs to `~/.agents/skills/proofkit-test` for Codex or
-`~/.claude/skills/proofkit-test` for Claude Code. `--skills-dir` overrides the
-personal discovery directory and requires `--install-skill`. A generic harness
-can consume the JSON fragment; its Skill discovery is host-specific, so an
-explicit `--skills-dir` is required to install. DeepSeek Harness compatibility
-depends on the actual harness's MCP and Skill support. These exports do not
-verify its discovery implementation.
+`~/.claude/skills/proofkit-test` for Claude Code, or
+`${DSH_HOME:-~/.dsh}/skills/proofkit-test` for DeepSeek Harness. `--skills-dir`
+overrides the personal discovery directory and requires `--install-skill`. A
+generic harness can consume the JSON fragment; its Skill discovery is
+host-specific, so an explicit `--skills-dir` is required to install.
+
+DeepSeek Harness uses a Cordis patch list, not the Claude `mcpServers` JSON.
+The emitted `connection.activation` is an argument array for a one-shot run:
+
+```bash
+dsh headless --patch /path/to/test-workspace/.proofkit/agents/deepseek-harness/<content-hash>/cordis.patch.yml "测试登录核心链路"
+```
+
+Use the actual `connection.configPath` from `agent setup`. The patch inserts
+one `@deepseek-ai/dsh-mcp-client` stdio entry whose `serverName` is bound to
+the source/workspace pair. To enable it persistently, merge that **one insert
+row** into the existing `$DSH_HOME/profiles/<profile>/cordis.patch.yml` or
+`$DSH_HOME/cordis.patch.yml`; preserve all other rows. `--register-host` is not
+available for DeepSeek Harness because its documented activation is a patch
+overlay, not an imperative MCP registration command. `--check-connection`
+checks the emitted ProofKit server directly; `dsh --dump-config` can confirm
+that a particular Harness profile composes the patch. Neither check proves
+that the model chose the Skill or performed a product test. This adapter was
+designed against upstream revision
+[`d743267`](https://github.com/deepseek-ai/deepseek-harness/commit/d743267388641bc76f17c45ce8b4c231aed1d32c)
+(developer preview); host behavior should be rechecked when upgrading Harness.
 
 Use `connection.registration.command` and its **argument array** to register
 the server with the host, or merge the generated native fragment through the

@@ -42,7 +42,8 @@ The Runner saves a page snapshot immediately after each surface assertion and at
 The public installation boundary is a single `proofkit-ai` npm tarball with `proofkit` and `proofkit-mcp` commands. Its build bundles the internal workspace modules, keeps third-party runtime dependencies explicit, and includes only the two entrypoints, README and license. A distribution smoke installs that tarball outside the repository and exercises both CLI and MCP. The internal `@proofkit/*` package names are not the user installation contract; npm registry publication has not occurred.
 
 The CLI's `agent setup` composes the existing project initializer with embedded
-portable Skill templates and native Codex TOML/Claude-compatible JSON exports.
+portable Skill templates and native Codex TOML, Claude-compatible JSON, or
+DeepSeek Harness Cordis patch exports.
 Plain setup does not instantiate Local Runner, import connectors or execute host
 registration. Explicit `--register-host` first checks the generated local MCP
 connection, then invokes the Codex or Claude Code CLI without a shell. It

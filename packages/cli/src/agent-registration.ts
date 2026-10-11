@@ -17,7 +17,7 @@ export type HostRegistration = {
 /** Register only after an explicit CLI opt-in and a successful local connection check. */
 export async function registerAgentHost(setup: AgentSetup, options: { hostCliPath?: string; timeoutMs?: number } = {}): Promise<HostRegistration> {
   const { harness, connection } = setup;
-  if (harness === "generic" || !connection.registration) throw new Error("Generic harness registration requires the host's own MCP configuration workflow");
+  if (!connection.registration) throw new Error("This harness requires its own MCP configuration workflow");
   const timeoutMs = options.timeoutMs ?? 30_000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000) throw new Error("Host registration timeout must be 1000–60000 milliseconds");
   const host = await resolveHostCommand(connection.registration.command, options.hostCliPath);
