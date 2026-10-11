@@ -76,6 +76,11 @@ an unknown application's login, isolation, APIs or business invariants merely
 by being installed. Configure those in the external workspace, then verify a
 real workflow. Syntax and MCP connection tests do not establish model behavior.
 
+For the AIHR reference, `proofkit template install aihr --root <AIHR-source>
+--workspace <external-test-workspace>` exports the packaged connector and
+example Charters before host setup. Review them and provide isolated test
+configuration; the command neither registers a scenario nor starts a test.
+
 Setup validates the existing project/workspace binding, canonicalizes output
 paths, rejects source destinations and workspace path escapes, and does not
 import trusted connector code unless the optional connection check starts the

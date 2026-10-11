@@ -71,6 +71,14 @@ proofkit --version
 
 The distribution test packs the project, installs only that tarball in a fresh temporary directory, runs CLI onboarding, and calls the installed MCP server over stdio. A registry release can later use `npm install -g proofkit-ai` with the same two commands.
 
+The tarball also carries the AIHR reference connector and five example Charters. Install them in a separate test workspace without editing the AIHR source:
+
+```bash
+proofkit template install aihr --root /path/to/AIHR-Microservices --workspace /path/to/aihr-test-workspace
+```
+
+This copies reviewable files but does not register Charters, start an app, run a test, or assert a product result. Repeating the command reuses identical files; changed files stop installation instead of being overwritten. Review the connector as trusted local JavaScript, configure isolated endpoints and credentials, then adapt each UI action, positive assertion and business Oracle before registering or running a Charter. The ordinary upload example currently has no positive UI assertion and cannot support a `core` acceptance claim unchanged.
+
 For host-agent use, generate the onboarding bundle and install its testing Skill:
 
 ```bash
@@ -387,7 +395,7 @@ live application business acceptance remains a separate validation step.
 4. Distinguish action receipts from assertions: an action receipt proves dispatch, not business success.
 5. Keep the core deterministic and make AI planning an optional provider behind a validated schema.
 
-See [docs/architecture.md](docs/architecture.md) for package boundaries, extension points, and the first end-to-end vertical slice. See [docs/research.md](docs/research.md) for the open-source project comparison and reuse decisions. See [docs/aihr-resume-integration.md](docs/aihr-resume-integration.md) for the first business-flow integration contract. The concrete AIHR gateway integration is [.proofkit/integration.mjs](.proofkit/integration.mjs), which imports [.proofkit/aihr-manual-intake.mjs](.proofkit/aihr-manual-intake.mjs); copy both to the external test workspace. Starter Charters are [.proofkit/charters/aihr-resume-upload.yml](.proofkit/charters/aihr-resume-upload.yml) and [.proofkit/charters/aihr-online-resume.yml](.proofkit/charters/aihr-online-resume.yml). See [docs/aihr-resume-testing-map.md](docs/aihr-resume-testing-map.md) for the verified source flow. The ordinary PDF upload Charter is the default AIHR path; online intake remains a compatibility flow. Manual intake has an independent submission-bound Oracle; its live page actions and positive assertion still require inspection.
+See [docs/architecture.md](docs/architecture.md) for package boundaries, extension points, and the first end-to-end vertical slice. See [docs/research.md](docs/research.md) for the open-source project comparison and reuse decisions. See [docs/aihr-resume-integration.md](docs/aihr-resume-integration.md) for the first business-flow integration contract. The concrete AIHR gateway connector is [.proofkit/integration.mjs](.proofkit/integration.mjs), with the manual-intake and desktop-acquisition helpers beside it; `proofkit template install aihr` exports the complete reference set to an external test workspace. Starter Charters include [.proofkit/charters/aihr-resume-upload.yml](.proofkit/charters/aihr-resume-upload.yml) and [.proofkit/charters/aihr-online-resume.yml](.proofkit/charters/aihr-online-resume.yml). See [docs/aihr-resume-testing-map.md](docs/aihr-resume-testing-map.md) for the verified source flow. The ordinary PDF upload Charter is the default AIHR path; online intake remains a compatibility flow. Manual intake has an independent submission-bound Oracle; its live page actions and positive assertion still require inspection.
 See [docs/product-direction.md](docs/product-direction.md) for the current status, adoption path, and next implementation decisions.
 
 ## License

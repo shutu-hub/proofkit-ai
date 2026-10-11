@@ -340,6 +340,8 @@ The adapter now bounds each WebDriver response before parsing, leaves unavailabl
 
 **Current distribution evidence:** `pnpm test:distribution` builds one `proofkit-ai` tarball, installs it in a fresh directory without the repository's `node_modules`, runs CLI onboarding, and calls the installed MCP server over stdio. The internal `@proofkit/*` modules are bundled into the two entrypoints. npm publication and cross-platform release verification remain open.
 
+The tarball now includes the AIHR reference connector and five example Charters. Its installed CLI exports them to a new external workspace with `template install aihr`, reuses identical files and rejects conflicting files without overwriting them or writing to the tested source. The distribution smoke checks these boundaries and confirms that no Mission or Run starts. Examples still need isolated AIHR configuration, reviewed UI assertions and business readers; packaging does not establish live acceptance.
+
 The installed-package smoke also generates Codex/Claude native onboarding
 artifacts, installs and reuses the portable Skill in an isolated personal
 directory, and connects via the emitted JSON MCP launcher configuration.

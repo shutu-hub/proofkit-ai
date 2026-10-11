@@ -19,7 +19,7 @@ The important distinction is that an upload response is an acknowledgement, not 
 
 The project integration is loaded from `<workspaceRoot>/.proofkit/integration.mjs` (or the path configured by `integration.path`). The module is trusted local test-workspace code and is composed into the same Local Runner lifecycle used by CLI, MCP and CI. It can export capabilities, read-only oracles, and a setup hook that returns cleanup. The Runner supplies a cancellation signal and the configured total run deadline to every run.
 
-The ProofKit repository includes a reference AIHR integration at `.proofkit/integration.mjs`, with sibling `.proofkit/aihr-manual-intake.mjs` and `.proofkit/aihr-desktop-acquisition.mjs`. Copy all three files to the external workspace's `.proofkit/` directory; the entry module imports both siblings even when their Oracles are not selected. No ProofKit file is needed in the AIHR repository. The connector calls only gateway endpoints and keeps the domain-specific allowlist in the workspace-owned module. The current capabilities are:
+The ProofKit repository and installable tarball include a reference AIHR integration at `.proofkit/integration.mjs`, with sibling `.proofkit/aihr-manual-intake.mjs` and `.proofkit/aihr-desktop-acquisition.mjs`. Run `proofkit template install aihr --root <AIHR-source> --workspace <external-test-workspace>` to export all three modules and the example Charters. The entry module imports both siblings even when their Oracles are not selected. No ProofKit file is needed in the AIHR repository. The connector calls only gateway endpoints and keeps the domain-specific allowlist in the workspace-owned module. The current capabilities are:
 
 The reference connector reads gateway JSON through an 8 MiB byte limit, including chunked responses. It rejects an oversized or malformed response without storing its body or business error message in Run evidence. A gateway reader failure is therefore an execution/reader gap, not proof that the resume workflow produced a wrong business result. The connector version is `0.2.2`; copy the updated entry module and its sibling modules when using an existing external workspace.
 
@@ -186,7 +186,7 @@ This split lets the same integration be used from the CLI, MCP and CI. MCP must 
 
 ## Implementation order
 
-1. Run `proofkit init --root <AIHR-source> --workspace <external-test-workspace>`, then copy or adapt `.proofkit/integration.mjs`, `.proofkit/aihr-manual-intake.mjs` and `.proofkit/aihr-desktop-acquisition.mjs` in that external workspace.
+1. Run `proofkit template install aihr --root <AIHR-source> --workspace <external-test-workspace>`, then review and adapt the exported connector and Charters. Installation does not register a Charter or execute the connector. Existing different files are never overwritten.
 2. Use the ordinary upload Charter to validate `collection_run → file → extract → parse → candidate → job → assessment`.
 3. Add or refine read-only observers for billing and retry/idempotency facts against a dedicated test workspace.
 4. Add `seedTestCandidate` and `resetTestScope` only after the test workspace and cleanup contract are explicit.

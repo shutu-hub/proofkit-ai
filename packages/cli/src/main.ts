@@ -13,6 +13,7 @@ import { captureSourceState, collectWorkflowReviewMaterials, initProject, inspec
 import { setupAgent, type AgentHarness } from "./agent-setup.js";
 import { checkAgentConnection } from "./agent-connection.js";
 import { registerAgentHost } from "./agent-registration.js";
+import { installAihrTemplate } from "./template-install.js";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -59,6 +60,16 @@ export function createProgram(): Command {
     .action(async ({ root, workspace }: RootOptions) => {
       const path = await initProject(resolve(root), { workspaceRoot: workspace });
       console.log(`Created ${path}`);
+    });
+
+  const template = program.command("template").description("Install reviewable project reference files in an external test workspace");
+  template.command("install")
+    .description("Install a named reference without changing the tested source")
+    .argument("<name>", "currently: aihr")
+    .option("--root <path>", "tested project root", ".")
+    .action(async (name: string, options: RootOptions) => {
+      if (name !== "aihr") throw new Error(`Unknown reference template: ${name}`);
+      console.log(JSON.stringify(await installAihrTemplate(resolve(options.root), options.workspace), null, 2));
     });
 
   program.command("doctor")
@@ -502,8 +513,8 @@ export function createProgram(): Command {
     });
 
   // Every leaf command resolves the same source/workspace pair.
-  for (const command of [...program.commands, ...mission.commands, ...resources.commands, ...agent.commands]) {
-    if (command !== mission && command !== resources && command !== agent) command.option("--workspace <path>", "test workspace root; defaults to an external workspace or legacy .proofkit (agent setup always external)");
+  for (const command of [...program.commands, ...mission.commands, ...resources.commands, ...agent.commands, ...template.commands]) {
+    if (command !== mission && command !== resources && command !== agent && command !== template) command.option("--workspace <path>", "test workspace root; defaults to an external workspace or legacy .proofkit (agent setup always external)");
   }
   return program;
 }

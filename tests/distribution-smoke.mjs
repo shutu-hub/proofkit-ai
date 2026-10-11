@@ -28,7 +28,10 @@ try {
   const packed = parsePackOutput((await npm(["pack", "--pack-destination", packDir, "--json", "--silent"], projectRoot)).stdout);
   assert.equal(packed.name, "proofkit-ai");
   const files = packed.files.map((file) => file.path).sort();
-  assert.deepEqual(files, ["LICENSE", "README.md", "bundle/main.js", "bundle/server.js", "package.json"]);
+  const templateManifest = JSON.parse(await readFile(join(projectRoot, "templates", "aihr", "manifest.json"), "utf8"));
+  assert.deepEqual(files, ["LICENSE", "README.md", "bundle/main.js", "bundle/server.js",
+    "bundle/templates/aihr/manifest.json", ...templateManifest.files.map((file) => `bundle/templates/aihr/${file}`),
+    "package.json"].sort());
   await npm([
     "install", "--prefix", installDir, "--ignore-scripts", "--no-audit", "--no-fund", resolve(packDir, packed.filename),
   ], scratch);
@@ -48,6 +51,35 @@ try {
   assert.match(inspectionHelp, /--ready-text <text>/);
   assert.match(inspectionHelp, /--ready-timeout-ms <milliseconds>/);
   await command(process.execPath, [cli, "init", "--root", source, "--workspace", workspace], scratch);
+  const templateWorkspace = join(scratch, "AIHR external workspace");
+  const templateArgs = [cli, "template", "install", "aihr", "--root", source, "--workspace", templateWorkspace];
+  const templateInstall = JSON.parse((await command(process.execPath, templateArgs, scratch)).stdout);
+  assert.equal(templateInstall.status, "installed");
+  assert.equal(templateInstall.testVerdict, "not-asserted");
+  assert.deepEqual(templateInstall.files.map((file) => file.name), templateManifest.files);
+  for (const file of templateManifest.files) {
+    assert.deepEqual(await readFile(join(templateWorkspace, ".proofkit", file)),
+      await readFile(join(installed, "bundle", "templates", "aihr", file)));
+  }
+  assert.equal((await readdir(join(templateWorkspace, ".proofkit"))).includes("runs"), false);
+  const templateReused = JSON.parse((await command(process.execPath, templateArgs, scratch)).stdout);
+  assert.equal(templateReused.status, "reused");
+  await writeFile(join(templateWorkspace, ".proofkit", "aihr-manual-intake.mjs"), "custom connector\n");
+  const templateConflict = await command(process.execPath, templateArgs, scratch, [1]);
+  assert.match(templateConflict.stderr, /conflicts with an existing workspace file/);
+  assert.equal(await readFile(join(templateWorkspace, ".proofkit", "aihr-manual-intake.mjs"), "utf8"), "custom connector\n");
+  const conflictingWorkspace = join(scratch, "AIHR conflicting workspace");
+  await mkdir(join(conflictingWorkspace, ".proofkit"), { recursive: true });
+  await writeFile(join(conflictingWorkspace, ".proofkit", "aihr-manual-intake.mjs"), "existing custom connector\n");
+  const preflightConflict = await command(process.execPath, [cli, "template", "install", "aihr", "--root", source,
+    "--workspace", conflictingWorkspace], scratch, [1]);
+  assert.match(preflightConflict.stderr, /conflicts with an existing workspace file/);
+  assert.deepEqual((await readdir(join(conflictingWorkspace, ".proofkit"))).sort(), ["aihr-manual-intake.mjs"]);
+  const sourceWorkspace = join(source, ".proofkit", "unsafe workspace");
+  const templateSourceRefusal = await command(process.execPath, [cli, "template", "install", "aihr", "--root", source,
+    "--workspace", sourceWorkspace], scratch, [1]);
+  assert.match(templateSourceRefusal.stderr, /outside the tested source tree/);
+  assert.equal((await readdir(source)).includes(".proofkit"), false);
   const personalSkills = join(scratch, "host skills");
   const setupArgs = [cli, "agent", "setup", "--harness", "claude-code", "--root", source, "--workspace", workspace,
     "--install-skill", "--skills-dir", personalSkills];
@@ -246,7 +278,7 @@ process.exit(3);
   assert.equal(workspaceFiles.includes("missions"), false);
   assert.equal(workspaceFiles.includes("runs"), false);
   assert.equal((await readdir(join(workspace, ".proofkit", "inspections"))).length, 2);
-  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-agent-skill-and-idempotent-setup", "codex-and-claude-native-config-export", "emitted-native-config-stdio-connection", "installed-cli-local-connection-check", "isolated-host-registration", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
+  console.log(JSON.stringify({ package: packed.name, version: packed.version, files, verified: ["isolated-npm-install", "installed-cli-bin", "cli-mission-charter-option", "cli-init-doctor", "installed-aihr-reference-template", "template-idempotence-and-conflict-guard", "template-source-immutability", "installed-agent-skill-and-idempotent-setup", "codex-and-claude-native-config-export", "emitted-native-config-stdio-connection", "installed-cli-local-connection-check", "isolated-host-registration", "installed-cli-scope", "installed-cli-mcp-environment", "environment-artifact-digests-and-redaction", "installed-mcp-bin-stdio-discovery", "mcp-inline-charter-schema", "installed-mcp-file-input-policy", "installed-mcp-response-capture-policy", "installed-mcp-test-scope", "installed-cli-mcp-coverage-planning", "source-unchanged-and-no-tests-started"] }, null, 2));
 } finally {
   if (environmentServer) {
     environmentServer.closeAllConnections();

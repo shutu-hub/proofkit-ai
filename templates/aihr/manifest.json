@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "files": [
+    "integration.mjs",
+    "aihr-manual-intake.mjs",
+    "aihr-desktop-acquisition.mjs",
+    "charters/aihr-resume-upload.yml",
+    "charters/aihr-resume-upload-idempotency.yml",
+    "charters/aihr-online-resume.yml",
+    "charters/aihr-desktop-resume-acquisition.yml",
+    "charters/aihr-resume-ui-quick.yml"
+  ]
+}
