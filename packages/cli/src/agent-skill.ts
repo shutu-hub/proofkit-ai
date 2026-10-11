@@ -155,7 +155,9 @@ or passing page cannot certify the original defect or the entire project.
 Mobile inspect_surface returns a bounded driver-label snapshot and evidence with
 testVerdict not-asserted; it does not provide validated selector hints or a
 device-backed acceptance claim. File selection and response capture currently
-support Web/Electron only. Mobile business testing still needs a real-device
+support Web/Electron only. Mobile click/fill requires one visible element at
+action time; an ambiguous or unverifiable locator is inconclusive. Mobile
+business testing still needs a real-device
 acceptance run before claiming device coverage.
 `;
 

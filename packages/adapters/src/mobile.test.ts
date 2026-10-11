@@ -29,10 +29,11 @@ describe("MobileAdapter", () => {
       if (path.endsWith("/elements") && init?.method === "POST") {
         const query = JSON.parse(String(init.body)).value as string;
         if (query.includes("Configuration failed")) return response({ value: [] });
+        if (query === "Continue" || query === "email") return response({ value: [{ "element-6066-11e4-a52e-4f735466cecf": "element-1" }] });
         return response({ value: [{ "element-6066-11e4-a52e-4f735466cecf": "visible-element" }] });
       }
       if (path.endsWith("/element/visible-element/displayed")) return response({ value: true });
-      if (path.endsWith("/element") && init?.method === "POST") return response({ value: { "element-6066-11e4-a52e-4f735466cecf": "element-1" } });
+      if (path.endsWith("/element/element-1/displayed")) return response({ value: true });
       if (path.includes("/element/")) return response({ value: null });
       if (path.endsWith("/actions") || path.endsWith("/url")) return response({ value: null });
       if (path.includes("/session/session-1") && init?.method === "DELETE") return response({ value: null });
@@ -59,7 +60,7 @@ describe("MobileAdapter", () => {
     expect(Buffer.from(screenshot!).toString()).toBe("png");
     await adapter.close();
     expect(requests.some((request) => request.path.endsWith("/session/session-1") && request.method === "DELETE")).toBe(true);
-    expect(requests.some((request) => request.path.endsWith("/element") && request.body?.includes("accessibility id"))).toBe(true);
+    expect(requests.some((request) => request.path.endsWith("/elements") && request.body?.includes("accessibility id"))).toBe(true);
   });
 
   it("uses accessibility id by default and can attach to an existing session", async () => {
@@ -70,7 +71,8 @@ describe("MobileAdapter", () => {
       if (path.endsWith("/source")) return response({ value: "ready" });
       if (path.endsWith("/url")) return response({ value: "about:blank" });
       if (path.endsWith("/title")) return response({ value: "" });
-      if (path.endsWith("/element") && init?.method === "POST") return response({ value: { ELEMENT: "legacy-element" } });
+      if (path.endsWith("/elements") && init?.method === "POST") return response({ value: [{ ELEMENT: "legacy-element" }] });
+      if (path.endsWith("/element/legacy-element/displayed")) return response({ value: true });
       if (path.includes("/element/")) return response({ value: null });
       throw new Error(`unexpected request ${init?.method ?? "GET"} ${path}`);
     }) as typeof fetch;
@@ -142,7 +144,7 @@ describe("MobileAdapter", () => {
       const path = new URL(String(input)).pathname;
       requests.push(`${init?.method ?? "GET"} ${path}`);
       if (path.endsWith("/url")) return response({ value: "http://device.local/home" });
-      if (path.endsWith("/element") && init?.method === "POST") {
+      if (path.endsWith("/elements") && init?.method === "POST") {
         locatorStarted();
         return await new Promise<Response>((_resolve, reject) => {
           const onAbort = () => reject(init.signal?.reason);
@@ -161,7 +163,28 @@ describe("MobileAdapter", () => {
     controller.abort(reason);
     await expect(action).rejects.toBe(reason);
     expect(requests.some((request) => request.endsWith("/click"))).toBe(false);
-    expect(requests.filter((request) => request.endsWith("/element"))).toHaveLength(1);
+    expect(requests.filter((request) => request.endsWith("/elements"))).toHaveLength(1);
+  });
+
+  it.each([
+    [[], "mobile-selector-missing"],
+    [[{ ELEMENT: "one" }, { ELEMENT: "two" }], "mobile-selector-ambiguous"],
+    [[{ ELEMENT: "one" }], "mobile-selector-hidden"],
+  ] as const)("refuses an unverified mobile action target (%s)", async (matches, code) => {
+    const requests: string[] = [];
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      requests.push(`${init?.method ?? "GET"} ${path}`);
+      if (path.endsWith("/url")) return response({ value: "http://device.local/home" });
+      if (path.endsWith("/elements")) return response({ value: matches });
+      if (path.endsWith("/element/one/displayed")) return response({ value: false });
+      throw new Error(`unexpected request ${path}`);
+    }) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    await adapter.connect();
+    await expect(adapter.act({ kind: "click", selector: "accessibility=Submit" }))
+      .rejects.toMatchObject({ name: "InconclusiveError", code });
+    expect(requests.some((request) => /\/(click|clear|value)$/.test(request))).toBe(false);
   });
 
   it("does not treat hidden source text as visible", async () => {

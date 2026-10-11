@@ -185,10 +185,29 @@ export class MobileAdapter implements SurfaceAdapter {
 
   private async findElement(selector: string, signal?: AbortSignal): Promise<string> {
     const locator = parseSelector(selector);
-    const value = await this.command("POST", "/element", locator, signal);
-    if (!isRecord(value)) throw new Error(`Mobile driver returned an invalid element for selector: ${selector}`);
-    const element = value["element-6066-11e4-a52e-4f735466cecf"] ?? value.ELEMENT;
-    if (typeof element !== "string") throw new Error(`Mobile driver returned no element id for selector: ${selector}`);
+    const value = await this.command("POST", "/elements", locator, signal);
+    if (!Array.isArray(value) || value.length > 100) {
+      throw new InconclusiveError("mobile-selector-elements-invalid", "Mobile driver did not return a bounded element list for the action target");
+    }
+    if (value.length !== 1) {
+      throw new InconclusiveError(value.length === 0 ? "mobile-selector-missing" : "mobile-selector-ambiguous",
+        `Mobile action target matched ${value.length} elements; use a unique selector`);
+    }
+    const match = value[0];
+    const element = isRecord(match) ? match["element-6066-11e4-a52e-4f735466cecf"] ?? match.ELEMENT : undefined;
+    if (typeof element !== "string" || !element) {
+      throw new InconclusiveError("mobile-selector-element-invalid", "Mobile driver returned an invalid action target element");
+    }
+    let displayed: unknown;
+    try { displayed = await this.command("GET", `/element/${encodeURIComponent(element)}/displayed`, undefined, signal); }
+    catch {
+      signal?.throwIfAborted();
+      throw new InconclusiveError("mobile-selector-visibility-unavailable", "Mobile driver could not verify action target visibility");
+    }
+    if (displayed !== true) {
+      throw new InconclusiveError(displayed === false ? "mobile-selector-hidden" : "mobile-selector-visibility-unavailable",
+        "Mobile action target is not verified visible");
+    }
     return element;
   }
 

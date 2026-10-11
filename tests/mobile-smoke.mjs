@@ -83,6 +83,19 @@ try {
   assert.equal(requests.filter((item) => item.endsWith("/click")).length, 0);
 
   const success = await runMission("passed");
+  mode = "duplicate-target";
+  const clicksBeforeAmbiguous = requests.filter((item) => item.endsWith("/click")).length;
+  const ambiguousStart = payload(await client.callTool({ name: "run_test",
+    arguments: { intent: "测试移动端提交", surface: "mobile" } }));
+  const ambiguousWait = payload(await client.callTool({ name: "await_test_result",
+    arguments: { missionId: ambiguousStart.missionId, timeoutMs: 20000 } }));
+  assert.equal(ambiguousWait.state, "terminal");
+  const ambiguous = payload(await client.callTool({ name: "get_mission_evidence",
+    arguments: { missionId: ambiguousStart.missionId } }));
+  assert.equal(ambiguous.testVerdict, "inconclusive");
+  assert.ok(ambiguous.findings.some((finding) => finding.message.includes("matched 2 elements")));
+  assert.equal(ambiguous.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"), false);
+  assert.equal(requests.filter((item) => item.endsWith("/click")).length, clicksBeforeAmbiguous);
   mode = "business-defect";
   const defect = await runMission("failed");
   assert.ok(defect.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"
@@ -102,10 +115,10 @@ try {
   assert.ok(requests.some((item) => item.endsWith("/elements")));
   assert.ok(requests.some((item) => item.endsWith("/displayed")));
   assert.equal(requests.filter((item) => item.endsWith("/click")).length, 3);
-  assert.equal(requests.filter((item) => item.startsWith("DELETE /session/")).length, 6);
+  assert.equal(requests.filter((item) => item.startsWith("DELETE /session/")).length, 7);
   assert.equal(await readFile(join(source, "package.json"), "utf8"), sourceBytes);
   console.log(JSON.stringify({ successMission: success.missionId, defectMission: defect.missionId,
-    verified: ["native-mcp-mobile-inspection", "cli-mobile-inspection", "native-mcp-mobile-core", "w3c-http-session", "displayed-text", "independent-business-oracle",
+    verified: ["native-mcp-mobile-inspection", "cli-mobile-inspection", "native-mcp-mobile-core", "w3c-http-session", "unique-visible-action-target", "displayed-text", "independent-business-oracle",
       "evidence-linked-defect", "session-cleanup", "cleanup-failure-non-green", "external-workspace", "source-unchanged"] }, null, 2));
 } finally {
   await client?.close();
@@ -212,16 +225,14 @@ async function handle(request, response) {
   if (route === "url") return send("app://proofkit/submit");
   if (route === "title") return send("ProofKit Mobile Fixture");
   if (route === "screenshot") return send(png);
-  if (route === "element" && request.method === "POST") {
-    const body = JSON.parse(await bodyText(request));
-    if (body.using !== "accessibility id" || body.value !== "Submit") {
-      return send({ error: "no such element", message: "Unknown control" }, 404);
-    }
-    return send({ "element-6066-11e4-a52e-4f735466cecf": "submit-button" });
-  }
   if (route === "elements" && request.method === "POST") {
     const body = JSON.parse(await bodyText(request));
-    if (body.using === "xpath" && body.value.includes('"Submit"')) {
+    if (body.using === "accessibility id" && body.value === "Submit" && mode === "duplicate-target") {
+      return send([{ "element-6066-11e4-a52e-4f735466cecf": "submit-button" },
+        { "element-6066-11e4-a52e-4f735466cecf": "duplicate-button" }]);
+    }
+    if ((body.using === "accessibility id" && body.value === "Submit")
+      || (body.using === "xpath" && body.value.includes('"Submit"'))) {
       return send([{ "element-6066-11e4-a52e-4f735466cecf": "submit-button" }]);
     }
     const found = body.using === "xpath" && body.value.includes('"Submitted"') && session.clicked;
