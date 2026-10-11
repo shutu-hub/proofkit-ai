@@ -114,7 +114,7 @@ export function windowsCommandCodePaths(commandLine: string): string[] {
 
 async function windowsListeners(port: number, hostname: string, signal?: AbortSignal): Promise<ListenerProcess[]> {
   const addresses = targetListenerAddresses(hostname).map((address) => `'${address}'`).join(",");
-  const script = `$port=${port}; $addresses=@(${addresses}); $items=@(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop | Where-Object { $addresses -contains $_.LocalAddress } | Select-Object -ExpandProperty OwningProcess -Unique | Select-Object -First 8 | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$_" -ErrorAction Stop | Select-Object ProcessId,ExecutablePath,CommandLine }); ConvertTo-Json -InputObject $items -Compress -Depth 3`;
+  const script = `$port=${port}; $addresses=@(${addresses}); $connections=@(); try { $connections=@(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop) } catch { if ($_.FullyQualifiedErrorId -ne 'CmdletizationQuery_NotFound,Get-NetTCPConnection') { throw } }; $items=@($connections | Where-Object { $addresses -contains $_.LocalAddress } | Select-Object -ExpandProperty OwningProcess -Unique | Select-Object -First 8 | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$_" -ErrorAction Stop | Select-Object ProcessId,ExecutablePath,CommandLine }); ConvertTo-Json -InputObject $items -Compress -Depth 3`;
   const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     // The first NetTCP/CIM query on a fresh hosted Windows runner can exceed 10s.
     encoding: "utf8", timeout: WINDOWS_LISTENER_TIMEOUT_MS, maxBuffer: 256 * 1024, windowsHide: true, signal,

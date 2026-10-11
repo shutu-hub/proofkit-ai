@@ -267,6 +267,14 @@ ProofKit 的 Gin 扫描器补上同文件辅助函数调用展开后，对此检
 （SHA-256 `14129568ea4463a7bb3e51c47f2945c00a39429a086a5c24158c697ae14cb942`）。
 这提升了静态候选的完整度；244 条线索既不是业务流程总数，也不是已测覆盖率。
 
+同日再次运行只读 `environment`，配置的 5274 页面仍不可达，未声明后端健康端点；
+`environment-20261011035019-477f40ab` 返回 `blocked`、`not-asserted`。Windows 监听查询现把
+无人监听的端口明确记录为 `No local listener process was found`，不再写成进程检查失败。
+AIHR HEAD 仍为 `dc781c3`，运行前后未提交文件数均为 43；检查只在外部工作区留下
+`.proofkit/aihr-local-workspace/.proofkit/inspections/environment-20261011035019-477f40ab.json`
+（SHA-256 `ef093286b9998d3ae84def10ee6c9ca20a6b75e34789725019e06968ddfccdee`）。
+这仍不是简历业务测试；需要同源页面、隔离网关和 worker、测试身份与独立终态读取。
+
 ## 隔离业务验收的接入配置
 
 在隔离 test/local 环境设置：
