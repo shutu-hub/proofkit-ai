@@ -114,6 +114,9 @@ export async function inspectWorkspaceCandidates(context: CandidateContext, focu
         if (error instanceof WorkspaceCharterFileError && error.issue === "invalid-charter") {
           item.parseStatus = "invalid";
           item.issues = ["invalid-charter"];
+        } else if (error instanceof WorkspaceCharterFileError && error.issue === "endpoint-binding-unavailable") {
+          item.parseStatus = "invalid";
+          item.issues = ["endpoint-binding-unavailable"];
         } else if (error instanceof WorkspaceCharterFileError && error.issue === "oversized") {
           item.parseStatus = "oversized";
           item.issues = ["file-too-large"];

@@ -1,14 +1,14 @@
 import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
-import type { TestCharter } from "@proofkit/contracts";
+import { parse as parseYaml } from "yaml";
+import { ResponseEndpointSchema, TestCharterSchema, type TestCharter } from "@proofkit/contracts";
 import { sha256 } from "@proofkit/evidence";
-import { IntentPlanner } from "@proofkit/planner";
 import { resolveWithinWorkspace } from "@proofkit/project";
 
 export const MAX_CANDIDATE_BYTES = 128 * 1024;
 const CANDIDATE_PATH = /^(?:\.proofkit\/)?charters\/[^/\\:\x00-\x1f]+\.ya?ml$/i;
 
-export type WorkspaceCharterFileIssue = "invalid-path" | "unavailable" | "oversized" | "invalid-charter" | "changed";
+export type WorkspaceCharterFileIssue = "invalid-path" | "unavailable" | "oversized" | "invalid-charter" | "endpoint-binding-unavailable" | "changed";
 
 export class WorkspaceCharterFileError extends Error {
   constructor(readonly issue: WorkspaceCharterFileIssue) {
@@ -17,7 +17,8 @@ export class WorkspaceCharterFileError extends Error {
       unavailable: "Candidate Charter file is unavailable or redirected",
       oversized: "Candidate Charter file exceeds the read limit",
       "invalid-charter": "Candidate Charter YAML or schema is invalid",
-      changed: "Candidate Charter digest changed since scope inspection; inspect it again",
+      "endpoint-binding-unavailable": "Candidate Charter endpoint binding is unavailable or invalid; configure its ProofKit environment URL and inspect again",
+      changed: "Candidate Charter digest changed since scope inspection; content or endpoint binding changed, inspect it again",
     }[issue]);
   }
 }
@@ -58,8 +59,67 @@ export async function readWorkspaceCharterFile(workspaceRoot: string, path: stri
     throw new WorkspaceCharterFileError("unavailable");
   }
 
-  const actualSha256 = sha256(content);
+  const sourceSha256 = sha256(content);
+  let charter: TestCharter;
+  let bindings: Array<{ location: string; url: string }>;
+  try {
+    const parsed: unknown = parseYaml(content.toString("utf8"));
+    bindings = bindEndpointUrls(parsed);
+    charter = TestCharterSchema.parse(parsed);
+  } catch (error) {
+    if (error instanceof WorkspaceCharterFileError) throw error;
+    throw new WorkspaceCharterFileError("invalid-charter");
+  }
+  // A candidate digest pins both reviewed source bytes and the concrete URLs.
+  // A changed environment URL must not silently redirect an approved Mission.
+  const actualSha256 = bindings.length ? sha256(`${sourceSha256}\n${JSON.stringify(bindings)}`) : sourceSha256;
   if (expectedSha256 && actualSha256 !== expectedSha256) throw new WorkspaceCharterFileError("changed");
-  try { return { charter: new IntentPlanner().fromYaml(content.toString("utf8")), sha256: actualSha256 }; }
-  catch { throw new WorkspaceCharterFileError("invalid-charter"); }
+  return { charter, sha256: actualSha256 };
+}
+
+type RecordValue = Record<string, unknown>;
+const BINDING = /^\$env:((?:[A-Z][A-Z0-9]*_)?PROOFKIT_[A-Z0-9_]+)(\/[^?#]*)?$/;
+
+function bindEndpointUrls(value: unknown): Array<{ location: string; url: string }> {
+  if (!isRecord(value)) return [];
+  const bindings: Array<{ location: string; url: string }> = [];
+  const bind = (holder: RecordValue, location: string) => {
+    const raw = holder.url;
+    if (typeof raw !== "string" || !raw.startsWith("$env:")) return;
+    const match = BINDING.exec(raw);
+    if (!match) throw new WorkspaceCharterFileError("endpoint-binding-unavailable");
+    const base = process.env[match[1]!]?.trim();
+    if (!base || !ResponseEndpointSchema.safeParse(base).success) throw new WorkspaceCharterFileError("endpoint-binding-unavailable");
+    const suffix = match[2] ?? "";
+    if (suffix.split("/").some((part) => part === ".." || part === ".")) throw new WorkspaceCharterFileError("endpoint-binding-unavailable");
+    const url = `${base.replace(/\/+$/, "")}${suffix}`;
+    if (!ResponseEndpointSchema.safeParse(url).success) throw new WorkspaceCharterFileError("endpoint-binding-unavailable");
+    const basePath = new URL(base).pathname.replace(/\/+$/, "");
+    const endpoint = new URL(url);
+    if (basePath && endpoint.pathname !== basePath && !endpoint.pathname.startsWith(`${basePath}/`)) {
+      throw new WorkspaceCharterFileError("endpoint-binding-unavailable");
+    }
+    holder.url = url;
+    bindings.push({ location, url });
+  };
+  const actions = (items: unknown, prefix: string) => {
+    if (!Array.isArray(items)) return;
+    items.forEach((item, index) => {
+      if (isRecord(item) && item.kind === "captureResponse" && isRecord(item.response)) {
+        bind(item.response, `${prefix}[${index}].response.url`);
+      }
+    });
+  };
+  actions(value.actions, "actions");
+  if (Array.isArray(value.negativeCases)) value.negativeCases.forEach((item, index) => {
+    if (isRecord(item)) actions(item.actions, `negativeCases[${index}].actions`);
+  });
+  if (Array.isArray(value.httpOracles)) value.httpOracles.forEach((item, index) => {
+    if (isRecord(item)) bind(item, `httpOracles[${index}].url`);
+  });
+  return bindings;
+}
+
+function isRecord(value: unknown): value is RecordValue {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

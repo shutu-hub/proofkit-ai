@@ -56,6 +56,10 @@ fallback-unmatched selection means no candidate literally matched the focus.
 Resolve inline Oracle name, current-response binding and URL-origin issue codes
 before selecting a candidate; the same constraints are enforced at Mission
 creation. An empty issue list is still not an environment or business pass.
+For endpoint-binding-unavailable, inspect the Charter's named PROOFKIT_
+environment URL and configure the reviewed test gateway in the ProofKit
+CLI/MCP process. Reinspect scope after changing it; never substitute a
+production URL merely to clear the issue.
 Direct candidate files must declare surfaces such as [web] or [electron].
 For release on Web or Electron, declare both. A missing or mismatched platform
 is a planning gap; inspect the owning UI flow before changing this declaration.
@@ -63,8 +67,8 @@ Inspect the Charter and source flow, and repair missing assertions or Oracles.
 After review, use run_test with the relative charterPath exactly as returned
 by workspaceCandidates and the exact charterSha256 from the same scope
 inspection, or register a reusable catalog entry. Do not convert the candidate
-path to an absolute filesystem path. A digest
-mismatch means the file changed: inspect it again before planning. Do not
+path to an absolute filesystem path. A digest mismatch means the file or a
+resolved endpoint binding changed: inspect it again before planning. Do not
 infer core proof from an
 unregistered file or lower the requested level to reuse a quick example.
 The candidate file owns its actions, Oracles, mode and side-effect policy;
@@ -256,6 +260,12 @@ the workspace catalog for reuse. A model confidence score cannot prove readiness
 For a digest-pinned direct workspace candidate, declare supported surfaces in
 the Charter. A catalog entry supplies its own surface matrix; a structured
 inline submission may also declare surfaces to prevent wrong-platform use.
+An external candidate can reference a reviewed gateway with
+url: $env:AIHR_PROOFKIT_API_BASE_URL/resume-collection/runs in captureResponse
+or an inline HTTP Oracle. The ProofKit process must receive that environment
+URL before scope inspection. Scope pins the concrete URL with the file bytes;
+Mission creation freezes it and applies the ordinary origin policy. Inline
+submissions, catalog Charters and ad-hoc Runs need concrete URLs.
 
 ## Minimal read-only core example
 

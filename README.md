@@ -143,6 +143,8 @@ Direct workspace candidates must declare their supported `surfaces` in the Chart
 
 After reviewing a candidate, pass its `path` and `sha256` from the current scope result as `charterPath` and `charterSha256` to MCP `run_test` or `create_test_mission`. CLI `proofkit mission create` accepts `--candidate <path> --candidate-sha256 <digest>`. ProofKit checks that the file is a direct external-workspace Charter, reads at most 128 KiB, rejects changed bytes and applies the ordinary Mission validation and readiness gates. It freezes the parsed Charter in the Mission; catalog registration is optional for one-off tests.
 
+An external candidate may use `url: $env:AIHR_PROOFKIT_API_BASE_URL/resume-collection/runs` in a `captureResponse` action or inline HTTP Oracle. Set the named `PROOFKIT_` environment variable in the ProofKit CLI/MCP process to a reviewed HTTP(S) gateway base URL before scope inspection. The binding accepts no credentials, query or fragment. Scope marks a missing or invalid value `endpoint-binding-unavailable`; its candidate digest covers both file bytes and resolved URLs, so changing the environment value requires another scope inspection. Mission creation checks that digest and saves only concrete URLs, which then receive the usual origin and side-effect validation. This binding applies to direct external candidates, not catalog Charters or ad-hoc Runs.
+
 Observe configured endpoints or a one-time Web candidate before attaching to a page:
 
 ```bash

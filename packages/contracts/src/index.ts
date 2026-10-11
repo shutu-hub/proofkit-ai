@@ -1002,7 +1002,7 @@ export const TestScopeSchema = z.object({
       actionCount: ScopeCountSchema.optional(),
       assertionCount: ScopeCountSchema.optional(),
       oracleCount: ScopeCountSchema.optional(),
-      issues: z.array(z.enum(["invalid-charter", "file-too-large", "file-unavailable", "missing-positive-assertion", "missing-business-oracle", "unregistered-capability", "unregistered-oracle", "capability-environment-mismatch", "write-opt-in-required", "scenario-side-effect-policy-conflict", "mcp-workspace-policy-conflict", "inline-oracle-name-conflict", "inline-oracle-binding-invalid", "inline-oracle-current-id-missing", "oracle-origin-disallowed", "web-origin-disallowed", "surface-unspecified", "surface-mismatch"])).max(18),
+      issues: z.array(z.enum(["invalid-charter", "endpoint-binding-unavailable", "file-too-large", "file-unavailable", "missing-positive-assertion", "missing-business-oracle", "unregistered-capability", "unregistered-oracle", "capability-environment-mismatch", "write-opt-in-required", "scenario-side-effect-policy-conflict", "mcp-workspace-policy-conflict", "inline-oracle-name-conflict", "inline-oracle-binding-invalid", "inline-oracle-current-id-missing", "oracle-origin-disallowed", "web-origin-disallowed", "surface-unspecified", "surface-mismatch"])).max(18),
     })).max(50),
   }).optional(),
   limitations: z.array(z.string()),

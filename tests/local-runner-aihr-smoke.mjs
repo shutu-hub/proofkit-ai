@@ -224,13 +224,17 @@ try {
   assert.equal(idempotencySummary.oracles[0]?.passed, true);
 
   // The desktop reference clicks a real renderer control; no connector creates its Run.
-  const desktopReference = await loadCharter(join(repoRoot, ".proofkit", "charters", "aihr-desktop-resume-acquisition.yml"));
+  const desktopReferenceSource = await readFile(join(repoRoot, ".proofkit", "charters", "aihr-desktop-resume-acquisition.yml"), "utf8");
+  assert.ok(desktopReferenceSource.includes("$env:AIHR_PROOFKIT_API_BASE_URL/resume-collection/runs"));
+  const desktopReference = new IntentPlanner().fromYaml(desktopReferenceSource.replace(
+    "$env:AIHR_PROOFKIT_API_BASE_URL/resume-collection/runs", `${baseUrl}/api/v1/resume-collection/runs`));
   const desktopActions = [{ kind: "goto", url: `${baseUrl}/desktop` }, ...desktopReference.actions];
   desktopActions[2] = { ...desktopActions[2], response: { ...desktopActions[2].response,
     url: `${baseUrl}/api/v1/resume-collection/runs` }, followUp: { ...desktopActions[2].followUp, waitMs: 100 },
     requestStartTimeoutMs: 1000, requestWindowMs: 100, timeoutMs: 3000 };
   const desktopCharter = TestCharterSchema.parse({ ...desktopReference,
     intent: surface === "web" ? "验证 AIHR 浏览器端立即运行产生的本次 BOSS 简历处理和岗位评估" : desktopReference.intent,
+    surfaces: [surface],
     actions: desktopActions,
     metadata: { aihrDesktop: { ...desktopReference.metadata.aihrDesktop, captureStepId: "step-003", maxWaitMs: 1000, pollIntervalMs: 20 } } });
   mode = "success";

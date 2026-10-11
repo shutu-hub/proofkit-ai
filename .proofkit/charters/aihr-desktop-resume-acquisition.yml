@@ -7,7 +7,7 @@ preconditions:
   - 使用仅包含一份待获取脱敏简历的隔离 BOSS 测试账号和 AIHR 测试租户
   - Electron CDP 已连接到当前源码对应的简历获取页面，网关和异步 worker 可用
   - 核实本工作区的 AIHR 测试身份、岗位和预期文件数；停用同账号的自动调度
-  - 将下方响应 URL 改为本测试环境真实网关地址，并让 Run 总时限覆盖异步业务等待
+  - 设置 AIHR_PROOFKIT_API_BASE_URL 为本隔离环境网关地址；检查 scope 中的用例候选绑定，并让 Run 总时限覆盖异步业务等待
 actions:
   - kind: waitForText
     text: BOSS直聘 简历获取
@@ -25,7 +25,7 @@ actions:
     requestWindowMs: 3000
     timeoutMs: 180000
     response:
-      url: http://127.0.0.1:8080/api/v1/resume-collection/runs
+      url: $env:AIHR_PROOFKIT_API_BASE_URL/resume-collection/runs
       method: POST
       statuses: [201]
       fields:

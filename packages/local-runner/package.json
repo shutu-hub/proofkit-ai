@@ -19,6 +19,7 @@
     "@proofkit/planner": "workspace:*",
     "@proofkit/project": "workspace:*",
     "@proofkit/runner": "workspace:*",
-    "@proofkit/runtime": "workspace:*"
+    "@proofkit/runtime": "workspace:*",
+    "yaml": "2.9.1"
   }
 }

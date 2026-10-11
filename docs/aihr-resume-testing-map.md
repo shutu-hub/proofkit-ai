@@ -334,6 +334,14 @@ $env:AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT = "false"  # only set true for an 
 
 运行 Charter 时必须显式允许写操作；默认配置仍是 `confirm`。
 
+桌面“立即运行”参考 Charter 的 `captureResponse.response.url` 使用
+`$env:AIHR_PROOFKIT_API_BASE_URL/resume-collection/runs`。将该文件放在外部测试工作区的
+`.proofkit/charters/`，设置上述环境变量后先执行 `scope`，核对网关地址、源码归属和写入策略；
+再把本次 `path`、`sha256` 交给 `mission create` 或 MCP `run_test`。候选摘要同时绑定文件内容
+和解析后的网关 URL；变更网关必须重新检查 scope。Mission 中冻结具体 URL，后续仍须核实
+连接器读取的网关环境变量没有漂移。缺失或非法地址只得到
+`endpoint-binding-unavailable`，不会执行点击。
+
 先确认 AIHR gateway、resume-collection、candidate、job、integration 和 assessment worker 都连接到隔离的 local/test 环境。AIHR `devlocal` 默认请求 `http://127.0.0.1:8080/api/v1`；如果使用共享测试环境，显式设置 ProofKit API 地址，不能把测试数据发到生产环境。
 
 源码根目录与测试工作区必须分开。当前本地只读接入使用：
