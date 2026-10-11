@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ProjectMapSchema, ProofkitConfigSchema, WorkflowInventorySchema } from "@proofkit/contracts";
 import { captureSourceState } from "./source-state.js";
 import { inspectWorkflowInventory } from "./workflow-inventory.js";
+import { signWorkflowReview } from "./workflow-review.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -86,6 +88,42 @@ describe("external workflow inventory", () => {
     await writeFile(join(outside, "workflows.yaml"), "schemaVersion: 1\n");
     await symlink(outside, join(workspace, ".proofkit"), process.platform === "win32" ? "junction" : "dir");
     expect((await inspectWorkflowInventory(project, workspace, ProofkitConfigSchema.parse({}))).inspection.status).toBe("invalid");
+  });
+
+  it("reads a workspace attestation but trusts only an independently supplied reviewer key", async () => {
+    const { project, workspace, source } = await fixture();
+    const config = ProofkitConfigSchema.parse({ charters: [
+      { id: "resume-core", path: "charters/resume.yaml", aliases: ["resume flow"], level: "core", surfaces: ["web"] },
+    ] });
+    const inventory = WorkflowInventorySchema.parse({ schemaVersion: 1,
+      source: { headSha: source.headSha, worktreeSha256: source.worktreeSha256 },
+      review: { by: "operator", at: new Date().toISOString(), method: "Reviewed all candidate entries and workflows" },
+      workflows: [{ id: "resume", title: "Resume", sourcePaths: ["src/app.ts"], charterIds: ["resume-core"], surfaces: ["web"] }],
+      exclusions: [],
+    });
+    await writeFile(join(workspace, ".proofkit", "workflows.yaml"), stringify(inventory));
+    const map = ProjectMapSchema.parse({ root: project, detected: { web: true, electron: false, backend: false },
+      inventory: { entryPoints: [{ kind: "web", path: "src/app.ts", reason: "entry" }] }, generatedAt: new Date().toISOString() });
+    const unsigned = (await inspectWorkflowInventory(project, workspace, config, source, map)).inspection;
+    expect(unsigned.reviewAuthentication?.status).toBe("missing");
+    const keys = generateKeyPairSync("ed25519");
+    const privatePem = keys.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const publicPem = keys.publicKey.export({ type: "spki", format: "pem" }).toString();
+    const signed = signWorkflowReview(inventory, unsigned.candidateAudit!, "reviewer-1", privatePem);
+    await writeFile(join(workspace, ".proofkit", "workflow-review.json"), JSON.stringify(signed));
+    const untrusted = (await inspectWorkflowInventory(project, workspace, config, source, map, {})).inspection;
+    expect(untrusted.reviewAuthentication?.status).toBe("untrusted");
+    const verified = (await inspectWorkflowInventory(project, workspace, config, source, map,
+      { "reviewer-1": publicPem })).inspection;
+    expect(verified.reviewAuthentication).toMatchObject({ status: "verified", keyId: "reviewer-1" });
+    expect(verified.issues).toContain("workflow-inventory-completeness-unverified");
+
+    const additional = ProjectMapSchema.parse({ ...map, inventory: { ...map.inventory,
+      entryPoints: [...map.inventory.entryPoints, { kind: "web", path: "src/other.ts", reason: "entry" }] } });
+    const changed = (await inspectWorkflowInventory(project, workspace, config, source, additional,
+      { "reviewer-1": publicPem })).inspection;
+    expect(changed.reviewAuthentication?.status).toBe("invalid");
+    expect(changed.issues).toContain("workflow-inventory-candidates-unclaimed");
   });
 });
 

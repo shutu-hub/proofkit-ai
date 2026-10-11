@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { RunMode, SideEffectPolicy, TestCoverage, TestLevel } from "@proofkit/contracts";
 import { EvidenceStore } from "@proofkit/evidence";
 import { IntentPlanner, loadCharter } from "@proofkit/planner";
 import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
-import { initProject, loadConfig, resolveProjectContext, resolveWithinWorkspace, scanProject } from "@proofkit/project";
+import { captureSourceState, initProject, inspectWorkflowInventory, loadConfig, resolveProjectContext,
+  resolveWithinWorkspace, scanProject, signWorkflowReview } from "@proofkit/project";
 import { setupAgent, type AgentHarness } from "./agent-setup.js";
 import { checkAgentConnection } from "./agent-connection.js";
 import { registerAgentHost } from "./agent-registration.js";
@@ -145,6 +146,53 @@ export function createProgram(): Command {
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       const scope = await runner.inspectTestScope({ surface: options.surface as LocalAdapterName, level: options.level as TestLevel, focus: options.focus, limit: Number(options.limit), includeSourceState: Boolean(options.sourceState) });
       console.log(JSON.stringify(scope, null, 2));
+    });
+
+  program.command("review-workflows")
+    .description("Sign a complete workflow declaration with an operator-controlled Ed25519 key")
+    .option("--root <path>", "project root", ".")
+    .requiredOption("--key-id <id>", "trusted reviewer key ID")
+    .requiredOption("--private-key <path>", "private PEM key outside the project and test workspace")
+    .action(async (options: RootOptions & { keyId: string; privateKey: string }) => {
+      const root = resolve(options.root);
+      const context = resolveProjectContext(root, { workspaceRoot: options.workspace });
+      const config = await loadConfig(root, { workspaceRoot: context.workspaceRoot });
+      const map = await scanProject(root);
+      const source = await captureSourceState(root);
+      const reviewed = await inspectWorkflowInventory(root, context.workspaceRoot, config, source, map);
+      const inspection = reviewed.inspection;
+      const candidates = inspection.candidateAudit;
+      if (!reviewed.inventory || inspection.status !== "loaded" || inspection.sourceMatch !== "matching"
+        || !inspection.reviewDeclared || inspection.exclusionCount !== 0
+        || inspection.linkedWorkflowCount !== inspection.workflowCount
+        || inspection.missingSourcePaths.length || inspection.uncoveredSurfaces.length || inspection.missingCharterIds.length
+        || !candidates || candidates.status !== "scanned" || candidates.routeCandidates + candidates.entryCandidates === 0
+        || candidates.unclaimed || candidates.unlinkedRoutes || candidates.overlappingExclusions
+        || candidates.unresolvedRouteDeclarations || candidates.skippedCandidates || candidates.omittedGaps) {
+        throw new Error("Workflow review requires a matching source fingerprint, declared reviewer, complete candidate scan, no exclusions and fully linked Charter/platform checks");
+      }
+      if (!isAbsolute(options.privateKey)) throw new Error("Workflow review private key path must be absolute");
+      const keyPath = await realpath(options.privateKey);
+      const sourceRoot = await realpath(root);
+      const workspaceRoot = await realpath(context.workspaceRoot);
+      const within = (base: string) => {
+        const path = relative(base, keyPath);
+        return path === "" || path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+      };
+      if (within(sourceRoot) || within(workspaceRoot)) throw new Error("Workflow review private key must be outside the project and test workspace");
+      const keyInfo = await stat(keyPath);
+      if (!keyInfo.isFile() || keyInfo.size > 16_384) throw new Error("Workflow review private key is unavailable or too large");
+      const privatePem = await readFile(keyPath, "utf8");
+      const attestation = signWorkflowReview(reviewed.inventory, candidates, options.keyId, privatePem);
+      const final = await captureSourceState(root);
+      if (!final.complete || final.method !== "git" || final.headSha !== reviewed.inventory.source.headSha
+        || final.worktreeSha256 !== reviewed.inventory.source.worktreeSha256) {
+        throw new Error("Project source changed during workflow review signing");
+      }
+      await writeWorkspaceOutput(context.workspaceRoot, ".proofkit/workflow-review.json", `${JSON.stringify(attestation, null, 2)}\n`);
+      console.log(JSON.stringify({ status: "signed", path: ".proofkit/workflow-review.json", keyId: attestation.keyId,
+        inventorySha256: attestation.inventorySha256, candidateSha256: attestation.candidateSha256,
+        acceptance: "unverified-until-executed-and-audited" }, null, 2));
     });
 
   program.command("charters")

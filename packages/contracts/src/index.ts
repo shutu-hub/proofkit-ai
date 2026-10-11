@@ -665,7 +665,7 @@ export const WorkflowInventorySchema = z.object({
     headSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
     worktreeSha256: z.string().regex(/^[a-f0-9]{64}$/i),
   }).strict(),
-  /** Human review is a declaration; ProofKit cannot authenticate this identity. */
+  /** Human review is a declaration unless an external-key attestation authenticates it. */
   review: z.object({ by: z.string().trim().min(1).max(120), at: z.string().datetime({ offset: true }), method: z.string().trim().min(1).max(500) }).strict().optional(),
   workflows: z.array(z.object({
     id: CatalogIdSchema,
@@ -735,11 +735,31 @@ export const WorkflowCandidateAuditSchema = z.object({
 });
 export type WorkflowCandidateAudit = z.infer<typeof WorkflowCandidateAuditSchema>;
 
+/** A signature over the normalized inventory and the exact candidate audit presented to its reviewer. */
+export const WorkflowReviewAttestationSchema = z.object({
+  schemaVersion: z.literal(1),
+  algorithm: z.literal("Ed25519"),
+  keyId: CatalogIdSchema,
+  inventorySha256: z.string().regex(/^[a-f0-9]{64}$/),
+  candidateSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  signature: z.string().regex(/^[A-Za-z0-9+/]{86}==$/),
+}).strict();
+export type WorkflowReviewAttestation = z.infer<typeof WorkflowReviewAttestationSchema>;
+
+export const WorkflowReviewAuthenticationSchema = z.object({
+  status: z.enum(["missing", "untrusted", "invalid", "verified"]),
+  keyId: CatalogIdSchema.optional(),
+  /** This authenticates the declaration only; semantic completeness still requires review judgment. */
+  candidateSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+});
+export type WorkflowReviewAuthentication = z.infer<typeof WorkflowReviewAuthenticationSchema>;
+
 export const WorkflowInventoryInspectionSchema = z.object({
   status: z.enum(["missing", "invalid", "loaded"]),
   path: z.literal(".proofkit/workflows.yaml"),
   sourceMatch: z.enum(["not-checked", "matching", "changed", "unverified"]),
   reviewDeclared: z.boolean(),
+  reviewAuthentication: WorkflowReviewAuthenticationSchema.optional(),
   workflowCount: z.number().int().nonnegative(),
   linkedWorkflowCount: z.number().int().nonnegative(),
   exclusionCount: z.number().int().nonnegative(),

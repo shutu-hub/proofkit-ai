@@ -77,7 +77,9 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   if (focus) limitations.push("Focus is a literal substring filter; the focused view is not whole-project coverage");
   if (inventory.retentionFocus) limitations.push("Focus prioritizes matching source files, entry points and routes before inventory retention caps; totals describe the retained candidate slice, not all project routes");
   if (inventory.retentionFocus && inventory.truncated) limitations.push("File discovery and source reads remain bounded; route-text focus cannot recover declarations from unscanned files, and filesystem focus prioritizes only discovered paths");
-  limitations.push("A workflow inventory is a reviewable claim only; reviewer identity, completeness and actual execution remain unverified");
+  limitations.push(context.workflowInventory.reviewAuthentication?.status === "verified"
+    ? "A trusted key authenticated the saved workflow review; semantic completeness and actual execution remain unverified"
+    : "A workflow inventory is a reviewable claim only; reviewer identity, completeness and actual execution remain unverified");
   const readyCatalog = catalogItems.some((entry) => entry.check.planReady);
   const next = [
     ...(surface === "mobile" ? [] : ["inspect_test_environment"]),

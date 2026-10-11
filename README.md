@@ -93,6 +93,8 @@ Setup always uses an external workspace, including projects with a legacy source
 
 `proofkit init` also creates a starter integration module in that test workspace. Leave its arrays empty for UI-only checks, or add typed business capabilities and independent oracles when a workflow needs backend proof. Initialization does not add files to the source tree when an external workspace is selected.
 
+For a whole-project workflow declaration, an operator can run `proofkit review-workflows --root <project> --workspace <test-workspace> --key-id <reviewer-id> --private-key <external-private.pem>` after reviewing the inventory and candidate scan. ProofKit saves a signed `.proofkit/workflow-review.json` in the test workspace. Set `PROOFKIT_WORKFLOW_REVIEW_TRUST_PATH` to a JSON map of reviewer IDs to Ed25519 public PEM keys outside both the source project and test workspace; `scope` then reports whether the declaration authenticates. This establishes who signed the exact inventory and candidate audit, not that every business workflow was discovered or tested. Whole-project acceptance remains inconclusive until a separately verified completeness gate exists.
+
 Inspect what is available before authoring a test:
 
 ```bash

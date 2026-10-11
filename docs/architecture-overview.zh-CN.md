@@ -96,6 +96,8 @@ Mission 创建时会核对自然语言中明确且唯一的力度提示与宿主
 
 外部工作区可放 `.proofkit/workflows.yaml`：逐项声明业务流程、源码位置、Charter×目标平台，并绑定 `scope --source-state` 提供的 Git 指纹。`inspect_test_scope` 会报告文件缺失、源码变化、无效映射和明确排除项，并把有界源码地图中的入口与路由同清单交叉核对，列出未归属入口、没有关联 Charter 路由声明的候选路由、排除项重叠及静态扫描不完整的位置。清单新鲜且关联完整时，未指定单个 Charter 或套件的全项目请求会直接从清单生成 Mission：`quick` 运行已登记的页面主路径，不要求业务 Oracle；默认 `core` 运行主路径并要求独立业务事实；`release` 还运行对应回放。已声明的负向场景按 Charter 执行。结果按冻结清单逐项核对各级别要求的断言、业务事实、清理和运行证据，`workflowExecution.requiredProof` 明确标出本次要求的是 `surface` 还是 `business` 证明。`quick` 的 API 路由不记为已验证业务结果，且所有级别的静态候选都不等于业务流程全集；即使声明检查通过，清单完整性仍未独立证明，`project` 通过门禁保持有效。
 
+审阅者现在可用 `proofkit review-workflows --root <project> --workspace <external-workspace> --key-id <id> --private-key <external-private.pem>` 对规范化清单和本次完整候选审计签名，生成外部工作区的 `.proofkit/workflow-review.json`。命令要求源码指纹一致、候选扫描完整且非空、无遗漏候选或排除、Charter×平台映射完整；私钥必须位于源项目和测试工作区之外。运行 ProofKit 的操作者通过 `PROOFKIT_WORKFLOW_REVIEW_TRUST_PATH` 指向这两处目录之外的 JSON 公钥表（`{"<id>":"-----BEGIN PUBLIC KEY-----..."}`）。`inspect_test_scope` 会返回审阅签名的 `missing`、`untrusted`、`invalid` 或 `verified` 状态。签名绑定清单内容、审阅声明、源码指纹和候选审计摘要；任何一方变化都需重新审阅和签名。它只认证声明来源及被签名的候选切片，不能由密码学证明审阅者找全了业务语义；现阶段即使签名有效，全项目通过门禁仍保持关闭。
+
 Web 路由覆盖要求本次 Run 的页面 URL 与配置的 HTTP origin 一致。Electron `file:` hash 路由还要求页面是配置的同一 HTML 文件；适配器只保存文件 URL 的 SHA-256 和唯一匹配的声明路由模式（如 `/resumes/:id`），汇总层用配置文件重新核对摘要，不保存本地文件路径或 hash 中的具体 ID。Web/Electron/Mobile 页面快照与动作回执的 HTTP URL 只保存唯一匹配的已声明路径模式；其他非根路径保存为 `/__redacted__`。运行事件和诊断采用同样的模式投影，运行信号筛选仍使用内存中的原始 URL；API 覆盖还核对方法、origin、状态和未脱敏的路由匹配标记。缺少目标绑定、路由声明歧义或访问同前缀的其他文件都不能计入覆盖。文件摘要不能防止猜测常见本地路径；Charter 和配置中的显式 URL、页面可见文字里的相对路径、截图像素及连接器自定义证据不受这层 URL 投影保护，测试数据仍应隔离和脱敏。
 
 结果分为 `passed`、`failed`、`blocked`、`cancelled`、`inconclusive`。产品缺陷需有证据支持；登录、环境或覆盖缺口按实际原因报告。修复比较只确认原缺陷在相同测试范围内未再复现。
