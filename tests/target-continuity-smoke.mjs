@@ -19,6 +19,7 @@ const workspaceRoot = join(tempRoot, "workspace");
 const serverPath = join(sourceRoot, "server.mjs");
 const chromePath = process.env.PROOFKIT_BROWSER_PATH ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 let serverChild;
+let ipv6OnlyChild;
 try {
   await mkdir(sourceRoot, { recursive: true });
   await mkdir(join(workspaceRoot, ".proofkit"), { recursive: true });
@@ -27,7 +28,8 @@ const server = createServer((_request, response) => {
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   response.end("<!doctype html><title>ProofKit target</title><h1>Ready</h1>");
 });
-server.listen(Number(process.env.PROOFKIT_FIXTURE_PORT), "127.0.0.1", () => process.send?.({ ready: true }));
+server.listen({ port: Number(process.env.PROOFKIT_FIXTURE_PORT), host: "::",
+  ipv6Only: process.env.PROOFKIT_IPV6_ONLY === "1" }, () => process.send?.({ ready: true }));
 `);
   execFileSync("git", ["init", "-q", sourceRoot], { windowsHide: true });
   execFileSync("git", ["-C", sourceRoot, "-c", "core.autocrlf=false", "add", "server.mjs"], { windowsHide: true });
@@ -83,10 +85,15 @@ server.listen(Number(process.env.PROOFKIT_FIXTURE_PORT), "127.0.0.1", () => proc
   assert.equal(changed.result.summary?.scope?.sourceStability, "stable");
   const report = await readFile(changed.result.report, "utf8");
   assert.match(report, /Target continuity: changed/);
+  const ipv6OnlyPort = await freePort();
+  ipv6OnlyChild = await startServer(ipv6OnlyPort, true);
+  const ipv4Binding = await inspectTargetBinding(sourceRoot, `http://127.0.0.1:${ipv6OnlyPort}/`);
+  assert.equal(ipv4Binding.status, "unverified", JSON.stringify(ipv4Binding));
+  assert.match(ipv4Binding.reason, /No local listener process/);
   assert.equal(execFileSync("git", ["-C", sourceRoot, "status", "--porcelain"], { encoding: "utf8", windowsHide: true }).trim(), "");
   console.log(JSON.stringify({ stableMission: stable.result.missionId, changedMission: changed.result.missionId,
     stablePid: stable.run.targetBinding.processId, changedPid: changed.run.targetBindingAfterRun.processId,
-    verified: ["real-windows-listener", "real-browser", "oracle-time-replacement", "run-and-mission-verdict", "report"] }, null, 2));
+    verified: ["dual-stack-ipv4-listener", "ipv6-only-exclusion", "real-browser", "oracle-time-replacement", "run-and-mission-verdict", "report"] }, null, 2));
 
   async function runMission(selectedCharter) {
     const created = await service.createMission({ intent: selectedCharter.intent, surface: "web", charter: selectedCharter });
@@ -100,9 +107,10 @@ server.listen(Number(process.env.PROOFKIT_FIXTURE_PORT), "127.0.0.1", () => proc
     return { result, run };
   }
 
-  async function startServer(targetPort) {
+  async function startServer(targetPort, ipv6Only = false) {
     const child = spawn(process.execPath, [serverPath], { cwd: sourceRoot, windowsHide: true,
-      env: { ...process.env, PROOFKIT_FIXTURE_PORT: String(targetPort) }, stdio: ["ignore", "pipe", "pipe", "ipc"] });
+      env: { ...process.env, PROOFKIT_FIXTURE_PORT: String(targetPort), PROOFKIT_IPV6_ONLY: ipv6Only ? "1" : "0" },
+      stdio: ["ignore", "pipe", "pipe", "ipc"] });
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr = `${stderr}${chunk}`.slice(-2_000); });
     try {
@@ -119,6 +127,7 @@ server.listen(Number(process.env.PROOFKIT_FIXTURE_PORT), "127.0.0.1", () => proc
     }
   }
 } finally {
+  await stopServer(ipv6OnlyChild);
   await stopServer(serverChild);
   const resolved = await realpath(tempRoot);
   const temporaryParent = await realpath(tmpdir());

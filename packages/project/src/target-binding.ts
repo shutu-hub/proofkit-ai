@@ -114,7 +114,34 @@ export function windowsCommandCodePaths(commandLine: string): string[] {
 
 async function windowsListeners(port: number, hostname: string, signal?: AbortSignal): Promise<ListenerProcess[]> {
   const addresses = targetListenerAddresses(hostname).map((address) => `'${address}'`).join(",");
-  const script = `$port=${port}; $addresses=@(${addresses}); $connections=@(); try { $connections=@(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop) } catch { if ($_.FullyQualifiedErrorId -ne 'CmdletizationQuery_NotFound,Get-NetTCPConnection') { throw } }; $items=@($connections | Where-Object { $addresses -contains $_.LocalAddress } | Select-Object -ExpandProperty OwningProcess -Unique | Select-Object -First 8 | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$_" -ErrorAction Stop | Select-Object ProcessId,ExecutablePath,CommandLine }); ConvertTo-Json -InputObject $items -Compress -Depth 3`;
+  const ipv4Target = /^127(?:\.\d{1,3}){3}$/.test(hostname) ? "$true" : "$false";
+  const script = String.raw`
+$port = ${port}
+$addresses = @(${addresses})
+$connections = @()
+try { $connections = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop) }
+catch { if ($_.FullyQualifiedErrorId -ne 'CmdletizationQuery_NotFound,Get-NetTCPConnection') { throw } }
+$processIds = @($connections | Where-Object { $addresses -contains $_.LocalAddress } | Select-Object -ExpandProperty OwningProcess -Unique)
+if ($processIds.Count -eq 0 -and ${ipv4Target}) {
+  # Get-NetTCPConnection can expose a dual-stack socket only as ::. Netstat's
+  # IPv4 row is needed before associating it with an IPv4 target.
+  $netstatPath = Join-Path $env:SystemRoot 'System32\netstat.exe'
+  foreach ($line in @(& $netstatPath -ano -p TCP)) {
+    if ($line -match '^\s*TCP\s+(\S+)\s+\S+\s+LISTENING\s+(\d+)\s*$') {
+      $endpoint = $Matches[1]
+      $ownerId = [int]$Matches[2]
+      if (($endpoint -eq "0.0.0.0:$port" -or $endpoint -eq "${hostname}:$port") -and $ownerId -gt 0) {
+        $processIds += $ownerId
+      }
+    }
+  }
+}
+$processIds = @($processIds | Sort-Object -Unique)
+if ($processIds.Count -gt 8) { throw 'Too many listener processes' }
+$items = @($processIds | ForEach-Object {
+  Get-CimInstance Win32_Process -Filter "ProcessId=$_" -ErrorAction Stop | Select-Object ProcessId,ExecutablePath,CommandLine
+})
+ConvertTo-Json -InputObject $items -Compress -Depth 3`;
   const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     // The first NetTCP/CIM query on a fresh hosted Windows runner can exceed 10s.
     encoding: "utf8", timeout: WINDOWS_LISTENER_TIMEOUT_MS, maxBuffer: 256 * 1024, windowsHide: true, signal,
