@@ -191,7 +191,7 @@ export async function auditMissionRunFacts(
       const expectedVerdict = observation.data.expectedVerdict;
       if (expectedVerdict === "passed" || expectedVerdict === "failed"
         || expectedVerdict === "blocked" || expectedVerdict === "cancelled" || expectedVerdict === "inconclusive") {
-        const gap = negativeOutcomeProofGap(expectedVerdict, run);
+        const gap = negativeOutcomeProofGap(expectedVerdict, run, observation.evidence);
         if (gap) issue(`${label}: ${gap}`);
       }
     }

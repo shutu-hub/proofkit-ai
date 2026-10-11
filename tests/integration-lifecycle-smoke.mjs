@@ -43,11 +43,12 @@ const http = createServer(async (request, response) => {
   if (url.pathname === "/submit") {
     const record = resources.get(url.searchParams.get("scope"));
     if (!record) { response.writeHead(404).end(); return; }
+    if (record.negative) { response.writeHead(403).end(); return; }
     record.submitted = true; response.writeHead(200).end(); return;
   }
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   response.end(`<!doctype html><title>ProofKit resource lifecycle</title><h1>Ready</h1>
-    <button id="submit" onclick="fetch('/submit?scope=${currentScope}').then(r=>{if(r.ok)document.querySelector('#result').textContent='Completed'})">Submit</button><div id="result"></div>`);
+    <button id="submit" onclick="fetch('/submit?scope=${currentScope}').then(r=>{if(r.ok)document.querySelector('#result').textContent='Completed';else if(r.status===403)document.querySelector('#result').textContent='Denied'})">Submit</button><div id="result"></div>`);
 });
 async function call(name, args) {
   const result = await client.callTool({ name, arguments: args });
@@ -157,11 +158,12 @@ try {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: "resource-lifecycle-smoke", version: "1" });
   await Promise.all([mcp.connect(serverTransport), client.connect(clientTransport)]);
-  const charter = { intent: "测试隔离业务提交核心链路", level: "core", mode: "deterministic", preconditions: [],
+  const charter = { intent: "测试隔离业务提交链路", level: "core", mode: "deterministic", preconditions: [],
     actions: [{ kind: "goto", url: origin }, { kind: "click", selector: "#submit" }, { kind: "waitForText", text: "Completed", timeoutMs: 2000 }],
     assertions: [{ kind: "text-visible", text: "Completed" }], oracles: ["fixture-terminal"], sideEffectPolicy: "allow", metadata: {},
-    negativeCases: [{ caseId: "denied", title: "assert absent denial state", actions: [{ kind: "goto", url: origin }],
-      assertions: [{ kind: "text-visible", text: "Denied" }], oracles: [], sideEffectPolicy: "allow", expectedVerdict: "failed" }],
+    negativeCases: [{ caseId: "denied", title: "assert scoped submission denial", actions: [{ kind: "goto", url: origin },
+      { kind: "click", selector: "#submit" }, { kind: "waitForText", text: "Denied", timeoutMs: 2000 }],
+      assertions: [{ kind: "text-visible", text: "Denied" }], oracles: ["fixture-terminal"], sideEffectPolicy: "allow", expectedVerdict: "failed" }],
   };
   const surfaces = electronConfig ? ["web", "electron"] : ["web"];
   if (electronConfig) {

@@ -123,6 +123,38 @@ describe("MCP response capture policy and Mission evidence", () => {
     expect(facts).toEqual(["1", "2", "3", "4"]);
   });
 
+  it.each([
+    ["action error", (run: RunSummary) => { run.steps[0]!.status = "failed"; }],
+    ["unobserved business failure", (run: RunSummary) => { run.oracles[0]!.passed = true; }],
+    ["missing Oracle source", (run: RunSummary) => { run.oracles[0]!.sourceEvidenceArtifacts = []; run.oracles[0]!.sourceEvidenceCount = 0; }],
+  ] as const)("does not treat %s as an expected business rejection", async (_case, mutate) => {
+    const { service, root } = await fixture();
+    stubRuns(service, root, "failed", true, {}, mutate);
+    const mission = await service.createMission({ intent: plan.intent, charter: negativePlan("failed") });
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    expect(completed.verdict).not.toBe("passed");
+    expect(completed.observations.find((item) => item.data.runKind === "negative")?.data.outcomeMatched).toBe(false);
+    expect(completed.findings.some((item) => item.category === "product" && item.status === "confirmed")).toBe(false);
+    const audited = await service.missionEvidence(mission.missionId);
+    expect(audited.summary.executionAudit?.status).toBe("incomplete");
+  });
+
+  it.each(["failed", "missing-evidence"] as const)("does not accept a %s negative surface assertion as the expected rejection", async (mode) => {
+    const { service, root } = await fixture();
+    stubRuns(service, root, "failed", true, {}, (run) => {
+      if (mode === "failed") run.assertions[0]!.passed = false;
+      else run.assertions[0]!.evidence = [];
+    });
+    const declared = TestCharterSchema.parse(negativePlan("failed"));
+    declared.negativeCases![0]!.assertions = [{ kind: "text-visible", text: "Rejected" }];
+    const mission = await service.createMission({ intent: plan.intent, charter: declared });
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    expect(completed.verdict).not.toBe("passed");
+    expect(completed.findings.some((item) => item.message.includes("surface assertion failed"))).toBe(true);
+  });
+
   it("withdraws a saved negative pass when its Run summary later shows a listener change", async () => {
     const { service, root } = await fixture(); stubRuns(service, root, "failed", true);
     const mission = await service.createMission({ intent: plan.intent, charter: negativePlan("failed") });
@@ -140,14 +172,32 @@ describe("MCP response capture policy and Mission evidence", () => {
     expect(audited.testVerdict).toBe("inconclusive");
     expect(audited.summary.executionAudit?.issues.some((issue) => issue.includes("target listener changed"))).toBe(true);
   });
+
+  it("withdraws a saved negative pass when the failing Oracle loses its source binding", async () => {
+    const { service, root } = await fixture(); stubRuns(service, root, "failed", true);
+    const mission = await service.createMission({ intent: plan.intent, charter: negativePlan("failed") });
+    await service.startMission(mission.missionId, { approve: true });
+    const completed = await service.waitMission(mission.missionId);
+    expect(completed.verdict).toBe("passed");
+    const runId = completed.observations.find((item) => item.data.runKind === "negative")?.data.runId;
+    const path = join(root, ".proofkit/runs", String(runId), "run.json");
+    const saved = JSON.parse(await readFile(path, "utf8")) as RunSummary;
+    saved.oracles[0]!.sourceEvidenceArtifacts = [];
+    await writeFile(path, JSON.stringify(saved));
+    const audited = await service.missionEvidence(mission.missionId);
+    expect(audited.verdict).toBe("passed");
+    expect(audited.testVerdict).toBe("inconclusive");
+    expect(audited.summary.executionAudit?.issues.some((issue) => issue.includes("independent source evidence"))).toBe(true);
+  });
 });
 
 function negativePlan(expected: Verdict) {
-  return { ...plan, negativeCases: [{ caseId: "rejected", title: "reject invalid intake", actions: [capture], assertions: [], oracles: [],
+  return { ...plan, negativeCases: [{ caseId: "rejected", title: "reject invalid intake", actions: [capture], assertions: [], oracles: ["intake"],
     expectedVerdict: expected, sideEffectPolicy: "allow" as const, metadata: {} }] };
 }
 function stubRuns(service: LocalRunnerService, root: string, expected: Verdict, captureNegative: boolean,
-  negativeFacts: Partial<Pick<RunSummary, "targetContinuity" | "applicationContinuity" | "integrationPostRunCheck">> = {}) {
+  negativeFacts: Partial<Pick<RunSummary, "targetContinuity" | "applicationContinuity" | "integrationPostRunCheck">> = {},
+  mutateNegative?: (run: RunSummary) => void) {
   installMockRunEvidence(service);
   const summaries = new Map<string, RunSummary>();
   service.start = async (input = {}) => {
@@ -164,10 +214,11 @@ function stubRuns(service: LocalRunnerService, root: string, expected: Verdict, 
         windowStartedAt: now, windowEndedAt: now, capturedAt: now, bodyBytes: 30, bodySha256: "a".repeat(64), fields: { fileId: String(index) },
       } }],
       assertions: charter.assertions.map((assertion) => ({ assertion, passed: true, message: "Submitted", evidence: [source] })),
-      oracles: negative ? [] : [{ name: "intake", passed: true, message: "independent facts", observedAt: now,
+      oracles: [{ name: "intake", passed: !negative, verificationKind: "business", message: "independent facts", observedAt: now,
         evidence: [source, report], sourceEvidenceCount: 1, sourceEvidenceArtifacts: [source] }],
       artifacts: [source, report], findings: [],
     });
+    if (negative) mutateNegative?.(summary);
     summaries.set(runId, summary); return { runId, status: "completed", verdict: summary.verdict, summary };
   };
   service.wait = async (runId) => summaries.get(runId)!;

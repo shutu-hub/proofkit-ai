@@ -779,7 +779,7 @@ describe("LocalRunnerService", () => {
         title: "未授权上传应失败",
         actions: [{ kind: "click", selector: "#upload" }],
         assertions: [],
-        oracles: [],
+        oracles: ["resume-terminal"],
         expectedVerdict: "failed",
         sideEffectPolicy: "deny",
         metadata: {},
@@ -799,10 +799,10 @@ describe("LocalRunnerService", () => {
         status: "completed",
         verdict: negative ? "failed" : "passed",
         charter: input.charter,
-        steps: [],
+        steps: negative ? [{ stepId: "step-001", action: input.charter.actions[0]!, status: "passed", artifacts: [] }] : [],
         assertions: negative ? [] : input.charter.assertions.map((assertion) => ({ assertion, passed: true, message: "passed", evidence: [`${runId}/after.json`] })),
-        oracles: negative ? [] : [{ name: "resume-terminal", passed: true, message: "passed", evidence: [`${runId}/oracle-source.json`, `${runId}/oracle.json`], sourceEvidenceCount: 1, sourceEvidenceArtifacts: [`${runId}/oracle-source.json`], observedAt: now }],
-        artifacts: [`${runId}/after.json`, ...(negative ? [] : [`${runId}/oracle-source.json`]), `${runId}/oracle.json`],
+        oracles: [{ name: "resume-terminal", passed: !negative, verificationKind: "business", message: "independent scoped facts", evidence: [`${runId}/oracle-source.json`, `${runId}/oracle.json`], sourceEvidenceCount: 1, sourceEvidenceArtifacts: [`${runId}/oracle-source.json`], observedAt: now }],
+        artifacts: [`${runId}/after.json`, `${runId}/oracle-source.json`, `${runId}/oracle.json`],
         findings: negative ? ["expected authorization rejection"] : [],
         ...(negative && cleanupMode !== "legacy" ? { integrationCleanup: cleanupMode === "missing-proof"
           ? { status: "verified" as const, declaredResources: 1, verifiedResources: 1, artifact: `${runId}/artifacts/integration-cleanup.json`, sha256: "0".repeat(64) }

@@ -179,7 +179,7 @@ export const NegativeCaseSchema = z.object({
   actions: z.array(ActionSchema).default([]),
   assertions: z.array(AssertionSchema).default([]),
   oracles: z.array(z.string().min(1)).default([]),
-  /** Only passed/failed can certify an outcome; other saved values remain readable but never normalize to a pass. */
+  /** Prefer passed with positive rejection proof. Failed needs an evidenced business Oracle; other values never certify. */
   expectedVerdict: VerdictSchema.optional(),
   sideEffectPolicy: SideEffectPolicySchema.default("deny"),
   metadata: z.record(z.string(), z.unknown()).default({}),

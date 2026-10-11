@@ -70,19 +70,20 @@ async function baseline(options: { failedNegative?: boolean } = {}) {
     const rejected = Boolean(options.failedNegative && plan.metadata.negativeCaseId);
     const sourceArtifact = `${runId}/artifacts/oracle-source.json`;
     const reportArtifact = `${runId}/artifacts/oracle.json`;
-    const artifacts = [sourceArtifact, reportArtifact];
+    const afterArtifact = `${runId}/artifacts/assertion-snapshot.json`;
+    const artifacts = [sourceArtifact, reportArtifact, afterArtifact];
     await mkdir(join(root, ".proofkit/runs", runId, "artifacts"), { recursive: true });
     await writeFile(join(root, ".proofkit/runs", sourceArtifact), JSON.stringify({ state: rejected ? "rejected" : "accepted", runId }));
     await writeFile(join(root, ".proofkit/runs", reportArtifact), JSON.stringify({ passed: true }));
     const summary = RunSummarySchema.parse({ runId, status: "completed", verdict: rejected ? "failed" : "passed", charter: plan,
       startedAt: new Date().toISOString(), endedAt: new Date().toISOString(),
-      steps: [{ stepId: "step-001", action: plan.actions[0], status: rejected ? "failed" : "passed", artifacts: [],
+      steps: [{ stepId: "step-001", action: plan.actions[0], status: "passed", artifacts: [],
         inputFiles: [{ fixture: (plan.actions[0] as typeof fileAction).files[0], name: rejected ? "invalid.txt" : "resume.pdf",
           sizeBytes: 4, sha256: "a".repeat(64), mimeType: rejected ? "text/plain" : "application/pdf" }],
         ...(input.replayOfRunId ? { replayInputMatched: true } : {}) }],
-      assertions: plan.assertions.map((assertion) => ({ assertion, passed: true, message: "fixture", evidence: [] })),
-      oracles: [{ name: oracleName, passed: true, message: "fixture facts", observedAt: new Date().toISOString(),
-        evidence: artifacts, sourceEvidenceArtifacts: [sourceArtifact], sourceEvidenceCount: 1 }], artifacts, findings: [],
+      assertions: plan.assertions.map((assertion) => ({ assertion, passed: true, message: "fixture", evidence: [afterArtifact] })),
+      oracles: [{ name: oracleName, passed: !rejected, verificationKind: "business", message: "fixture facts", observedAt: new Date().toISOString(),
+        evidence: [sourceArtifact, reportArtifact], sourceEvidenceArtifacts: [sourceArtifact], sourceEvidenceCount: 1 }], artifacts, findings: [],
     });
     summaries.set(runId, summary);
     return { runId, status: "completed", verdict: summary.verdict, summary };

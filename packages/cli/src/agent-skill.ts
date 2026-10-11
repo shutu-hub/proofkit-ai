@@ -282,6 +282,10 @@ Keep release negative cases explicit, with expected outcomes supported by
 evidence. Use passed or failed as the expected verdict; blocked,
 cancelled and inconclusive cannot certify a negative outcome. A listener
 or integration continuity gap also prevents a matching verdict from passing.
+Prefer passed with an observed rejection assertion or Oracle. Use expected
+failed only when all actions and surface assertions complete and a declared
+business Oracle fails with preserved independent source facts. An action error,
+failed page assertion or runtime signal cannot certify the intended rejection.
 A declared suite certifies its saved workflows only. Static route
 mapping or all-green declared cases cannot prove whole-project workflow coverage;
 that coverage gate is still unimplemented and must remain visible.

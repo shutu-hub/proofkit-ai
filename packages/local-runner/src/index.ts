@@ -940,7 +940,7 @@ export class LocalRunnerService {
       const provenanceGap = summary.targetContinuity === "changed" || summary.targetContinuity === "unverified"
         || summary.applicationContinuity === "changed" || summary.applicationContinuity === "unverified"
         || summary.integrationPostRunCheck?.passed === false;
-      const negativeProofGap = expectedVerdict === undefined ? undefined : negativeOutcomeProofGap(expectedVerdict, summary);
+      const negativeProofGap = expectedVerdict === undefined ? undefined : negativeOutcomeProofGap(expectedVerdict, summary, evidence);
       const outcomeMatched = expectedVerdict === undefined ? undefined : !cleanupIncomplete && !replayInputMismatch
         && !responseFactsMissing && !negativeProofGap && actualVerdict === expectedVerdict;
       const effectiveVerdict: Verdict = cleanupIncomplete && actualVerdict === "passed" ? "blocked" : expectedVerdict === undefined
