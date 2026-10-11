@@ -184,6 +184,18 @@ export async function auditMissionRunFacts(
           || run.targetContinuity !== "stable" || observation.data.targetContinuity !== "stable") {
           issue(`${label}: listener process continuity was not verified through Run completion.`);
         }
+        if (surface === "electron") {
+          const application = TargetBindingSchema.safeParse(observation.data.applicationBinding);
+          const applicationAfter = TargetBindingSchema.safeParse(observation.data.applicationBindingAfterRun);
+          if (!application.success || !reviewedBindingMatches(application.data, run.applicationBinding, mission.projectRoot)) {
+            issue(`${label}: Electron CDP process was not verified under the reviewed source checkout.`);
+          }
+          if (!applicationAfter.success || !reviewedBindingMatches(applicationAfter.data, run.applicationBindingAfterRun, mission.projectRoot)
+            || !application.success || !sameTargetProcess(application.data, applicationAfter.data)
+            || run.applicationContinuity !== "stable" || observation.data.applicationContinuity !== "stable") {
+            issue(`${label}: Electron CDP process continuity was not verified through Run completion.`);
+          }
+        }
       }
     }
   }

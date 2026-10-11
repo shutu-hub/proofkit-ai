@@ -183,6 +183,8 @@ function projectRun(mission: TestMission, task: TaskNode | undefined, observatio
   const evidence = selectEvidence(observation?.evidence ?? []);
   const binding = TargetBindingSchema.safeParse(data.targetBinding);
   const finalBinding = TargetBindingSchema.safeParse(data.targetBindingAfterRun);
+  const applicationBinding = TargetBindingSchema.safeParse(data.applicationBinding);
+  const finalApplicationBinding = TargetBindingSchema.safeParse(data.applicationBindingAfterRun);
   const cleanup = IntegrationCleanupSchema.safeParse(data.integrationCleanup);
   const runId = stringValue(data.runId);
   const verdict = VerdictSchema.safeParse(data.verdict);
@@ -211,6 +213,9 @@ function projectRun(mission: TestMission, task: TaskNode | undefined, observatio
     targetBinding: binding.success ? binding.data : undefined,
     targetBindingAfterRun: finalBinding.success ? finalBinding.data : undefined,
     targetContinuity: data.targetContinuity === "stable" || data.targetContinuity === "changed" || data.targetContinuity === "unverified" ? data.targetContinuity : undefined,
+    applicationBinding: applicationBinding.success ? applicationBinding.data : undefined,
+    applicationBindingAfterRun: finalApplicationBinding.success ? finalApplicationBinding.data : undefined,
+    applicationContinuity: data.applicationContinuity === "stable" || data.applicationContinuity === "changed" || data.applicationContinuity === "unverified" ? data.applicationContinuity : undefined,
     integrationCleanup: cleanup.success ? cleanup.data : undefined,
     evidence: evidence.items,
     omittedEvidence: evidence.omitted,

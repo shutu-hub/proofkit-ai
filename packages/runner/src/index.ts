@@ -165,6 +165,8 @@ export type ExecutionOptions = {
   setup?: IntegrationSetup | Array<IntegrationSetup | IntegrationSetupEntry>;
   setupPolicy?: IntegrationSetupPolicy;
   targetBinding?: (signal: AbortSignal) => Promise<TargetBinding>;
+  /** Electron CDP process source association, independent of its HTTP page server. */
+  applicationBinding?: (signal: AbortSignal) => Promise<TargetBinding>;
   targetBindingPolicy?: "record" | "block-different";
   targetBindingRecheckAfterSetup?: boolean;
   /** Optional host-owned lease held across setup, surface actions and late cleanup. */
@@ -192,6 +194,7 @@ export class ExecutionRunner {
   private readonly replayOfRunId?: string;
   private readonly setups: IntegrationSetupEntry[];
   private readonly targetBinding?: ExecutionOptions["targetBinding"];
+  private readonly applicationBinding?: ExecutionOptions["applicationBinding"];
   private readonly targetBindingPolicy: NonNullable<ExecutionOptions["targetBindingPolicy"]>;
   private readonly targetBindingRecheckAfterSetup: boolean;
   private readonly executionLease?: ExecutionOptions["executionLease"];
@@ -228,6 +231,7 @@ export class ExecutionRunner {
       return { setup: value.setup, ...(value.policy ? { policy: validateSetupPolicy(value.policy) } : {}) };
     });
     this.targetBinding = options.targetBinding;
+    this.applicationBinding = options.applicationBinding;
     this.targetBindingPolicy = options.targetBindingPolicy ?? "block-different";
     this.targetBindingRecheckAfterSetup = options.targetBindingRecheckAfterSetup ?? false;
     this.executionLease = options.executionLease;
@@ -326,6 +330,22 @@ export class ExecutionRunner {
       }
       return binding;
     };
+    const inspectAndRecordApplication = async (phase: "before-setup" | "after-setup" | "after-run"): Promise<TargetBinding | undefined> => {
+      if (!this.applicationBinding) return undefined;
+      const binding = TargetBindingSchema.parse(await withAbort(this.applicationBinding(signal), signal, "Application binding inspection"));
+      if (phase === "after-run") summary.applicationBindingAfterRun = binding;
+      else summary.applicationBinding = binding;
+      const artifact = await this.store.writeJson(runId, phase === "before-setup" ? "application-binding" : `application-binding-${phase}`, binding);
+      summary.artifacts.push(artifact);
+      await this.emit({ runId, timestamp: binding.observedAt, type: "target.binding", payload: {
+        role: "application", phase, status: binding.status, method: binding.method, targetOrigin: binding.targetOrigin,
+        expectedProjectRoot: binding.expectedProjectRoot, observedProjectRoot: binding.observedProjectRoot, evidence: artifact,
+      } });
+      if (phase !== "after-run" && binding.status === "different-project" && this.targetBindingPolicy === "block-different") {
+        throw new BlockedError(`Application process belongs to another Git checkout: ${binding.observedProjectRoot}`);
+      }
+      return binding;
+    };
     try {
       throwIfAborted(signal);
       for (const { policy } of this.setups) {
@@ -344,6 +364,7 @@ export class ExecutionRunner {
         if (!this.adapter.supportsFileInputs) throw new BlockedError(`File selection is not supported by the ${this.adapter.name} adapter`);
       }
       await inspectAndRecordTarget("before-setup");
+      await inspectAndRecordApplication("before-setup");
       if (this.preflight) {
         let result: IntegrationPreflightResult;
         try {
@@ -394,7 +415,10 @@ export class ExecutionRunner {
         }
         throwIfAborted(signal);
       }
-      if (this.targetBindingRecheckAfterSetup) await inspectAndRecordTarget("after-setup");
+      if (this.targetBindingRecheckAfterSetup) {
+        await inspectAndRecordTarget("after-setup");
+        await inspectAndRecordApplication("after-setup");
+      }
       if (this.attachmentLease) {
         let acquired: LocalExecutionLease | undefined;
         try {
@@ -589,6 +613,26 @@ export class ExecutionRunner {
           }
         }
       }
+      if (surfaceAttached && charter.level !== "quick" && summary.applicationBinding?.processId) {
+        if (signal.aborted) summary.applicationContinuity = "unverified";
+        else {
+          try {
+            summary.applicationContinuity = compareTargetContinuity(summary.applicationBinding, await inspectAndRecordApplication("after-run"));
+            if (summary.applicationContinuity !== "stable") {
+              const gap = new InconclusiveError("application-continuity-unverified", "Application listener changed or could not be verified after this Run.");
+              summary.findings.push(gap.message);
+              if (mayReplaceWithContinuityGap(executionError)) executionError = gap;
+            }
+          } catch {
+            summary.applicationContinuity = "unverified";
+            if (!signal.aborted) {
+              const gap = new InconclusiveError("application-continuity-unavailable", "Application listener could not be checked after this Run.");
+              summary.findings.push(gap.message);
+              if (mayReplaceWithContinuityGap(executionError)) executionError = gap;
+            }
+          }
+        }
+      }
       try { await unsubscribe(); } catch (error) { executionError ??= safeRunError(error); summary.findings.push("Adapter event subscription cleanup failed; inspect trusted local diagnostics."); }
       try { await this.adapter.close(); } catch (error) { executionError ??= safeRunError(error); summary.findings.push("Adapter close failed; inspect trusted local diagnostics."); }
       await pendingEvents;
@@ -630,7 +674,8 @@ export class ExecutionRunner {
     const environmentBlocked = (summary.runtimeFindings ?? []).some((finding) => finding.category === "environment" && finding.status === "confirmed" && finding.affectsVerdict);
     const independentBusinessFailure = summary.oracles.some((oracle) => oracle.verificationKind !== "http-contract"
       && oracle.passed === false && (oracle.sourceEvidenceCount ?? 0) > 0);
-    const targetContinuityGap = summary.targetContinuity === "changed" || summary.targetContinuity === "unverified";
+    const targetContinuityGap = summary.targetContinuity === "changed" || summary.targetContinuity === "unverified"
+      || summary.applicationContinuity === "changed" || summary.applicationContinuity === "unverified";
     summary.verdict = environmentBlocked && !independentBusinessFailure
       ? "blocked"
       : targetContinuityGap && baseVerdict !== "blocked" && baseVerdict !== "cancelled"

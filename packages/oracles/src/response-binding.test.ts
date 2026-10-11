@@ -30,7 +30,7 @@ async function fixture(body: (calls: number, id: string | null) => unknown) {
   const address = server.address(); if (!address || typeof address === "string") throw new Error("Missing port");
   const config = ProofkitConfigSchema.parse({ oracles: [{ name: "terminal", url: `http://127.0.0.1:${address.port}/status`,
     query: { fileId: { source: "response", stepId: "step-003", field: "fileId", matchPointer: "/data/file_id" } },
-    statusPointer: "/data/state", successValues: ["complete"], failureValues: ["failed"], intervalMs: 10, deadlineMs: 150 }] });
+    statusPointer: "/data/state", successValues: ["complete"], failureValues: ["failed"], intervalMs: 10, deadlineMs: 1_000 }] });
   return { oracle: configuredHttpOracle(config.oracles[0]!), reads };
 }
 

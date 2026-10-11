@@ -951,6 +951,9 @@ export class LocalRunnerService {
           targetBinding: summary.targetBinding,
           targetBindingAfterRun: summary.targetBindingAfterRun,
           targetContinuity: summary.targetContinuity,
+          applicationBinding: summary.applicationBinding,
+          applicationBindingAfterRun: summary.applicationBindingAfterRun,
+          applicationContinuity: summary.applicationContinuity,
           integrationCleanup: summary.integrationCleanup,
           businessEvidence: summary.oracles.reduce((count, oracle) => count + (oracle.verificationKind !== "http-contract" && (oracle.sourceEvidenceArtifacts ?? []).some((path) =>
             evidence.some((item) => item.kind === "business" && item.evidenceId === `${summary.runId}:${path}`))
@@ -1478,6 +1481,8 @@ export class LocalRunnerService {
       ...(surface === "web" || surface === "electron" ? {
         targetBinding: async (bindingSignal: AbortSignal) => inspectTargetBinding(this.root,
           await sourceBindingTarget(surface, targetUrl, electronCdp, electronPortFile, bindingSignal), bindingSignal),
+        ...(surface === "electron" ? { applicationBinding: async (bindingSignal: AbortSignal) => inspectTargetBinding(this.root,
+          await sourceBindingTarget("electron", undefined, electronCdp, electronPortFile, bindingSignal), bindingSignal) } : {}),
         targetBindingPolicy: this.config.policies.targetBinding,
         targetBindingRecheckAfterSetup: Boolean(integrationSetup || (input.start !== false && this.config.project.start)),
       } : {}),

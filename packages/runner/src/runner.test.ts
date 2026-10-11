@@ -279,6 +279,45 @@ describe("ExecutionRunner", () => {
     expect(quick.targetBindingAfterRun).toBeUndefined();
   });
 
+  it("checks an Electron application listener separately from its HTTP page listener", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-application-binding-"));
+    let applicationChecks = 0;
+    const binding = (origin: string, processId: number) => ({ status: "matching-process-path" as const,
+      method: "windows-listener-process" as const, expectedProjectRoot: "D:/code/AIHR",
+      observedProjectRoot: "D:/code/AIHR", targetOrigin: origin, processId,
+      reason: "Listener process path matches the source checkout.", observedAt: new Date().toISOString() });
+    const summary = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root,
+      targetBinding: async () => binding("http://localhost:5174", 12),
+      applicationBinding: async () => binding("http://localhost:9222", ++applicationChecks === 1 ? 20 : 21),
+    }).run({ intent: "Check desktop application", level: "core", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "allow", metadata: {} }, "application-change-run");
+    expect(summary).toMatchObject({ verdict: "inconclusive", targetContinuity: "stable",
+      applicationContinuity: "changed", applicationBinding: { processId: 20 }, applicationBindingAfterRun: { processId: 21 } });
+    expect(summary.artifacts).toContain("application-change-run/artifacts/application-binding-after-run.json");
+  });
+
+  it("blocks a foreign Electron application before attaching to its page", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-foreign-application-"));
+    const adapter = new FakeAdapter();
+    let connected = false;
+    adapter.connect = async () => { connected = true; };
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root,
+      targetBinding: async () => ({ status: "matching-process-path", method: "windows-listener-process",
+        expectedProjectRoot: "D:/code/AIHR", observedProjectRoot: "D:/code/AIHR", targetOrigin: "http://localhost:5174",
+        processId: 12, reason: "Page server matches.", observedAt: new Date().toISOString() }),
+      applicationBinding: async () => ({ status: "different-project", method: "windows-listener-process",
+        expectedProjectRoot: "D:/code/AIHR", observedProjectRoot: "D:/tmp/other",
+        targetOrigin: "http://localhost:9222", processId: 20,
+        reason: "Application belongs to another checkout.", observedAt: new Date().toISOString() }),
+    }).run({ intent: "Check desktop application", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [], assertions: [{ kind: "text-visible", text: "Ready" }], sideEffectPolicy: "deny", metadata: {} },
+    "foreign-application-run");
+    expect(connected).toBe(false);
+    expect(summary).toMatchObject({ verdict: "blocked", targetBinding: { status: "matching-process-path" },
+      applicationBinding: { status: "different-project" } });
+  });
+
   it("keeps a core Run inconclusive if the known target cannot be reidentified", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-target-unverified-"));
     let checks = 0;

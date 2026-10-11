@@ -215,8 +215,9 @@ describe("environment inspection", () => {
       sideEffectPolicy: "deny", metadata: {},
     } });
     const result = await service.wait(started.runId);
-    expect(binding.mock.calls.map((call) => call[1])).toEqual([undefined, cdpUrl]);
-    expect(result).toMatchObject({ verdict: "blocked", targetBinding: { status: "different-project", targetOrigin: cdpUrl } });
+    expect(binding.mock.calls.map((call) => call[1])).toEqual([undefined, undefined, cdpUrl]);
+    expect(result).toMatchObject({ verdict: "blocked", targetBinding: { status: "different-project", targetOrigin: cdpUrl },
+      applicationBinding: { status: "unverified" } });
     expect(connect).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledOnce();
   });
