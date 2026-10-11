@@ -207,7 +207,7 @@ try {
 
   // A partial static inventory must not prevent acceptance of a declared core flow.
   const extraRouteFile = join(sourceRoot, "apps", "web", "src", "extra-router.ts");
-  const extraRouteSource = Array.from({ length: 230 }, (_, index) => `const route${index} = { path: '/extra-${index}' };`).join("\n");
+  const extraRouteSource = Array.from({ length: 2_050 }, (_, index) => `const route${index} = { path: '/extra-${index}' };`).join("\n");
   await writeFile(extraRouteFile, extraRouteSource);
   const savedResume = JSON.parse(await readFile(join(workspaceRoot, ".proofkit", "charters", "resume.yml"), "utf8"));
   const coreCharter = TestCharterSchema.parse({ ...savedResume, level: "core" });

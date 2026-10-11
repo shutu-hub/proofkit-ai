@@ -107,6 +107,17 @@ concurrent recovery attempt was rejected while a cleanup handle was active.
 This proves the registered-resource crash-recovery contract in an isolated
 fixture; it does not prove power-loss durability or live AIHR cleanup.
 
+**Durable Agent limits (2026-10-11):** Mission execution now saves its first
+start and absolute deadline. A resumed owner cannot reset the total timeout;
+expired interrupted read tasks close without retry, and previously saved
+AgentStep/ToolCall attempts count against the Mission-wide step limit. Agent
+regressions cover approval wait, exact-limit completion, expired current and
+legacy Missions, interrupted reads and cumulative steps. This verifies the
+saved-loop policy in local tests, not an OS crash across separate processes.
+The real Web/Electron release-suite smoke also passed after the schema change;
+its partial-inventory fixture now exceeds the scanner's current 2,000-route
+retention limit instead of relying on the older 230-route threshold.
+
 ## Phase 2: measurable AI planning
 
 **Goal:** make one-sentence planning useful without allowing unverified model output to become an unsafe command.

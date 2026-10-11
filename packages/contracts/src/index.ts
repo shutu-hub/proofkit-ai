@@ -1345,6 +1345,9 @@ export const TestMissionSchema = z.object({
   diagnosis: DiagnosisSchema.optional(),
   repairSuggestions: z.array(RepairSuggestionSchema).default([]),
   currentTaskId: z.string().optional(),
+  /** First execution window; approval wait does not count toward the Mission deadline. */
+  executionStartedAt: z.string().datetime().optional(),
+  executionDeadlineAt: z.string().datetime().optional(),
   revision: z.number().int().nonnegative().default(0),
   createdAt: z.string(),
   updatedAt: z.string(),

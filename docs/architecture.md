@@ -344,6 +344,13 @@ Mission is stored as `cancelled`, and an environment Finding titled `Mission
 timed out` keeps the reason reviewable. The lower-level `run.timeoutMs`
 remains the deadline for one surface Run; both deadlines are retained so a
 slow business workflow cannot keep an AI client waiting indefinitely.
+The first execution after approval persists `executionStartedAt` and
+`executionDeadlineAt`; a restarted owner uses only the remaining time and does
+not count time waiting for approval. For older running Missions without those
+fields, the earliest saved attempt (or last running update) bounds recovery.
+An expired interrupted read task is closed without retry. `maxSteps` counts
+persisted AgentStep/ToolCall attempts across owners, while a Mission that
+settles on its exact final allowed step can still complete.
 
 An individual MissionTool timeout is a separate environment block. Its Task,
 ToolCall and AgentStep all receive terminal `blocked` receipts, and the Mission

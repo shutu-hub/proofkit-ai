@@ -525,19 +525,26 @@ export class MissionAgent {
     if (mission.status !== "approved" && mission.status !== "paused" && mission.status !== "running") {
       throw new Error(`Mission cannot run from status ${mission.status}`);
     }
-    const recovery = await this.recoverInterruptedTasks(mission);
-    mission = recovery.mission;
-    const recoveryTaskIds = recovery.retryTaskIds;
-    if (mission.status === "blocked" || mission.status === "cancelled" || mission.status === "failed") return mission;
+    const executionStartedAt = mission.executionStartedAt ?? inferExecutionStart(mission);
+    const executionDeadlineAt = mission.executionDeadlineAt
+      ?? new Date(Date.parse(executionStartedAt) + mission.policy.timeoutMs).toISOString();
+    mission = await this.save({ ...mission, executionStartedAt, executionDeadlineAt });
     const controller = new AbortController();
     const detach = relayAbort(options.signal, controller);
     const detachRemote = relayAbort(remoteSignal, controller);
-    const timeout = setTimeout(() => {
-      controller.abort(new MissionTimeoutError(mission.policy.timeoutMs));
-    }, mission.policy.timeoutMs);
+    const remainingMs = Date.parse(executionDeadlineAt) - Date.now();
+    const timeout = remainingMs > 0
+      ? setTimeout(() => controller.abort(new MissionTimeoutError(mission.policy.timeoutMs)), remainingMs)
+      : undefined;
+    if (remainingMs <= 0) controller.abort(new MissionTimeoutError(mission.policy.timeoutMs));
     try {
+      const recovery = await this.recoverInterruptedTasks(mission, controller.signal);
+      mission = recovery.mission;
+      const recoveryTaskIds = recovery.retryTaskIds;
+      if (mission.status === "blocked" || mission.status === "cancelled" || mission.status === "failed") return mission;
+      throwIfAborted(controller.signal);
       mission = await this.save({ ...mission, status: "running" });
-      for (let step = 0; step < mission.policy.maxSteps; step++) {
+      for (let step = Math.max(mission.agentSteps.length, mission.toolCalls.length); ; step++) {
         throwIfAborted(controller.signal);
         const current = await this.load(mission.missionId);
         const next = nextReadyTask(current);
@@ -559,12 +566,14 @@ export class MissionAgent {
           const verdict = blocked ? "blocked" : failed ? "failed" : current.verdict ?? "passed";
           return this.save({ ...current, status: terminal, verdict });
         }
+        if (step >= mission.policy.maxSteps) {
+          return this.save({ ...current, status: "blocked", verdict: "blocked", findings: [...current.findings, finding("agent-step-limit", "medium", "test", "Agent step limit reached", "Mission exceeded its configured maxSteps across all execution attempts.")] });
+        }
         const phase = recoveryTaskIds.has(next.taskId) ? "recover" : undefined;
         mission = await this.executeTask(current, next, controller.signal, phase);
         recoveryTaskIds.delete(next.taskId);
         if (mission.status === "failed" || mission.status === "blocked" || mission.status === "cancelled") return mission;
       }
-      return this.save({ ...mission, status: "blocked", verdict: "blocked", findings: [...mission.findings, finding("agent-step-limit", "medium", "test", "Agent step limit reached", "Mission exceeded its configured maxSteps.")] });
     } catch (error) {
       if (controller.signal.aborted) {
         const timedOut = isMissionTimeout(controller.signal.reason);
@@ -591,7 +600,7 @@ export class MissionAgent {
         findings: [...current.findings, finding("mission-system-failure", "high", "test", "Mission execution failed", "Mission execution stopped before a complete tool receipt was saved. Inspect trusted local diagnostics.", "suspected")],
       });
     } finally {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       detach();
       detachRemote();
     }
@@ -605,7 +614,7 @@ export class MissionAgent {
    * operation blindly could duplicate user data or trigger an external side
    * effect twice, so only side-effect-free tasks are automatically retried.
    */
-  private async recoverInterruptedTasks(mission: TestMission): Promise<{ mission: TestMission; retryTaskIds: Set<string> }> {
+  private async recoverInterruptedTasks(mission: TestMission, signal: AbortSignal): Promise<{ mission: TestMission; retryTaskIds: Set<string> }> {
     const runningTasks = mission.plan.graph.tasks.filter((task) => task.status === "running");
     if (runningTasks.length === 0) return { mission, retryTaskIds: new Set() };
 
@@ -614,6 +623,25 @@ export class MissionAgent {
     for (const task of runningTasks) {
       const tool = this.tools.get(task.tool);
       const safe = tool !== undefined && isSafeToRecover(mission, task, tool);
+      if (safe && task.attempts < task.maxAttempts && signal.aborted) {
+        const timedOut = isMissionTimeout(signal.reason);
+        const reason = timedOut
+          ? "Mission deadline expired before the interrupted task could be retried."
+          : "Mission was cancelled before the interrupted task could be retried.";
+        recovered = updateTask(recovered, { ...task, status: "blocked", error: reason },
+          { currentTaskId: recovered.currentTaskId === task.taskId ? undefined : recovered.currentTaskId });
+        recovered = {
+          ...recovered,
+          toolCalls: closeStartedCalls(recovered.toolCalls, task.taskId, reason),
+          agentSteps: closeInterruptedAgentSteps(recovered.agentSteps, task, reason, "cancelled"),
+          status: "cancelled",
+          verdict: "cancelled",
+          ...(timedOut && !recovered.firstFailure ? { firstFailure: timeoutBoundary(reason) } : {}),
+          findings: [...recovered.findings, finding(timedOut ? "mission-timeout" : "mission-cancelled",
+            timedOut ? "medium" : "info", "environment", timedOut ? "Mission timed out" : "Mission cancelled", reason)],
+        };
+        continue;
+      }
       if (safe && task.attempts < task.maxAttempts) {
         const reason = `The previous process stopped while task ${task.taskId} was running; a safe retry is being scheduled.`;
         const nextTask = { ...task, status: "pending" as const, error: undefined };
@@ -963,6 +991,18 @@ function timeoutBoundary(message: string): FailureBoundary {
 
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Mission cancelled");
+}
+
+function inferExecutionStart(mission: TestMission): string {
+  if (mission.status === "approved" && mission.agentSteps.length === 0 && mission.toolCalls.length === 0) {
+    return new Date().toISOString();
+  }
+  // Legacy running Missions did not persist a deadline. Their earliest attempt
+  // bounds recovery; an approval wait must not be used as execution time.
+  const attempts = [...mission.agentSteps.map((step) => step.startedAt), ...mission.toolCalls.map((call) => call.startedAt)]
+    .map((value) => Date.parse(value)).filter(Number.isFinite);
+  const start = attempts.length > 0 ? Math.min(...attempts) : Date.parse(mission.updatedAt);
+  return new Date(Number.isFinite(start) ? start : 0).toISOString();
 }
 
 function relayAbort(source: AbortSignal | undefined, target: AbortController): () => void {

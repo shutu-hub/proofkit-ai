@@ -160,6 +160,96 @@ describe("MissionAgent", () => {
     expect(result.agentSteps[0]?.status).toBe("cancelled");
   });
 
+  it("keeps the first execution deadline across recovery and excludes approval wait", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-durable-deadline-"));
+    const store = new JsonMissionStore(root);
+    const calls: string[] = [];
+    const tools = new InMemoryMissionToolRegistry([
+      { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000,
+        inputSchema: z.object({}), execute: async () => { calls.push("discover"); return {}; } },
+      { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000,
+        inputSchema: z.object({}).passthrough(), execute: async () => { calls.push("run"); return { verdict: "passed" as const }; } },
+      { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000,
+        inputSchema: z.object({}), execute: async () => { calls.push("verify"); return { verdict: "passed" as const }; } },
+    ]);
+    const agent = new MissionAgent({ store, tools });
+    const created = await agent.create({ intent: "bounded mission", projectRoot: root, surface: "web",
+      policy: { timeoutMs: 10_000, maxSteps: 3 } });
+    await store.save({ ...created, createdAt: new Date(Date.now() - 60_000).toISOString() });
+    await agent.approve(created.missionId);
+    const completed = await agent.run(created.missionId);
+    expect(completed.status).toBe("completed");
+    expect(completed.executionStartedAt).toBeDefined();
+    expect(Date.parse(completed.executionStartedAt!)).toBeGreaterThan(Date.now() - 10_000);
+    expect(Date.parse(completed.executionDeadlineAt!) - Date.parse(completed.executionStartedAt!)).toBe(10_000);
+    expect(calls).toEqual(["discover", "run", "verify"]);
+
+    const expired = await agent.create({ intent: "expired mission", projectRoot: root, surface: "web",
+      policy: { requireApproval: false, timeoutMs: 1_000 } });
+    const previousStart = new Date(Date.now() - 5_000).toISOString();
+    const previousDeadline = new Date(Date.now() - 4_000).toISOString();
+    await store.save({ ...expired, status: "running", executionStartedAt: previousStart,
+      executionDeadlineAt: previousDeadline });
+    const result = await agent.run(expired.missionId);
+    expect(result).toMatchObject({ status: "cancelled", verdict: "cancelled",
+      executionStartedAt: previousStart, executionDeadlineAt: previousDeadline });
+    expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Mission timed out" })]));
+    expect(result.agentSteps).toHaveLength(0);
+    expect(calls).toEqual(["discover", "run", "verify"]);
+
+    const interrupted = await agent.create({ intent: "expired interrupted read", projectRoot: root, surface: "web",
+      policy: { requireApproval: false, timeoutMs: 1_000 } });
+    const runningTask = interrupted.plan.graph.tasks.map((task) => task.taskId === "reconnaissance"
+      ? { ...task, status: "running" as const, attempts: 1, maxAttempts: 2 } : task);
+    await store.save({ ...interrupted, status: "running", currentTaskId: "reconnaissance",
+      executionStartedAt: previousStart, executionDeadlineAt: previousDeadline,
+      plan: { ...interrupted.plan, graph: { ...interrupted.plan.graph, tasks: runningTask } },
+      toolCalls: [{ toolCallId: "stale-read", taskId: "reconnaissance", tool: "project.discover", attempt: 1,
+        input: {}, status: "started", startedAt: previousStart, evidence: [] }] });
+    const interruptedResult = await agent.run(interrupted.missionId);
+    expect(interruptedResult.verdict).toBe("cancelled");
+    expect(interruptedResult.toolCalls[0]?.status).toBe("cancelled");
+    expect(interruptedResult.agentSteps[0]?.status).toBe("cancelled");
+    expect(interruptedResult.findings.map((finding) => finding.message).join(" ")).not.toContain("will retry");
+    expect(calls).toEqual(["discover", "run", "verify"]);
+
+    const legacy = await agent.create({ intent: "legacy running mission", projectRoot: root, surface: "web",
+      policy: { requireApproval: false, timeoutMs: 1_000 } });
+    await store.save({ ...legacy, status: "running", updatedAt: new Date(Date.now() - 5_000).toISOString() });
+    const legacyResult = await agent.run(legacy.missionId);
+    expect(legacyResult.verdict).toBe("cancelled");
+    expect(Date.parse(legacyResult.executionDeadlineAt!)).toBeLessThan(Date.now());
+    expect(calls).toEqual(["discover", "run", "verify"]);
+  });
+
+  it("counts already saved Agent steps against the Mission step limit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-durable-step-limit-"));
+    const store = new JsonMissionStore(root);
+    const calls: string[] = [];
+    const tools = new InMemoryMissionToolRegistry([
+      { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000,
+        inputSchema: z.object({}), execute: async () => { calls.push("discover"); return {}; } },
+      { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000,
+        inputSchema: z.object({}).passthrough(), execute: async () => { calls.push("run"); return { verdict: "passed" as const }; } },
+      { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000,
+        inputSchema: z.object({}), execute: async () => { calls.push("verify"); return { verdict: "passed" as const }; } },
+    ]);
+    const agent = new MissionAgent({ store, tools });
+    const created = await agent.create({ intent: "limit across restart", projectRoot: root, surface: "web",
+      policy: { requireApproval: false, maxSteps: 2 } });
+    const now = new Date().toISOString();
+    const tasks = created.plan.graph.tasks.map((task) => task.taskId === "reconnaissance"
+      ? { ...task, status: "passed" as const, attempts: 1 } : task);
+    await store.save({ ...created, status: "running", plan: { ...created.plan, graph: { ...created.plan.graph, tasks } },
+      agentSteps: [{ agentStepId: "prior-step", sequence: 1, taskId: "reconnaissance", phase: "execute", tool: "project.discover",
+        decision: "prior completed task", input: {}, status: "succeeded", startedAt: now, endedAt: now, toolCallIds: [], observationIds: [], evidence: [] }] });
+    const result = await agent.run(created.missionId);
+    expect(result.verdict).toBe("blocked");
+    expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Agent step limit reached" })]));
+    expect(calls).toEqual(["run"]);
+    expect(result.agentSteps).toHaveLength(2);
+  });
+
   it("does not invoke a tool when cancellation arrives during input validation", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-pre-tool-cancel-"));
     const controller = new AbortController();
