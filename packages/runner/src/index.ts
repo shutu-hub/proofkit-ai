@@ -319,7 +319,7 @@ export class ExecutionRunner {
     let unsubscribe: () => void | Promise<void> = () => {};
     let pendingEvents = Promise.resolve();
     let eventEvidenceFailed = false;
-    const inspectAndRecordTarget = async (phase: "before-setup" | "after-setup" | "after-run"): Promise<TargetBinding | undefined> => {
+    const inspectAndRecordTarget = async (phase: "before-setup" | "after-setup" | "before-attachment" | "after-run"): Promise<TargetBinding | undefined> => {
       if (!this.targetBinding) return undefined;
       const binding = TargetBindingSchema.parse(await withAbort(this.targetBinding(signal), signal, "Target binding inspection"));
       if (phase === "after-run") summary.targetBindingAfterRun = binding;
@@ -336,7 +336,7 @@ export class ExecutionRunner {
       }
       return binding;
     };
-    const inspectAndRecordApplication = async (phase: "before-setup" | "after-setup" | "after-run"): Promise<TargetBinding | undefined> => {
+    const inspectAndRecordApplication = async (phase: "before-setup" | "after-setup" | "before-attachment" | "after-run"): Promise<TargetBinding | undefined> => {
       if (!this.applicationBinding) return undefined;
       const binding = TargetBindingSchema.parse(await withAbort(this.applicationBinding(signal), signal, "Application binding inspection"));
       if (phase === "after-run") summary.applicationBindingAfterRun = binding;
@@ -453,6 +453,10 @@ export class ExecutionRunner {
         }
         if (!acquired) throw new BlockedError("Another Run controls this configured attachment target; retry after it completes.");
         retainLease(acquired);
+        // A port file can change after setup checks. Bind evidence to the
+        // endpoint that the attachment lease has actually pinned.
+        await inspectAndRecordTarget("before-attachment");
+        await inspectAndRecordApplication("before-attachment");
       }
       await withResourceAbort(this.adapter.connect(), signal, "Adapter connect", () => this.adapter.close(), trackAcquisition);
       surfaceAttached = true;

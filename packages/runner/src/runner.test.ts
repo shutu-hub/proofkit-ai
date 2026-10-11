@@ -248,6 +248,34 @@ describe("ExecutionRunner", () => {
     expect(summary.artifacts).toContain("target-change-run/artifacts/target-binding-after-setup.json");
   });
 
+  it("blocks a foreign application selected by the final attachment lease before connecting", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-attachment-binding-"));
+    const adapter = new FakeAdapter();
+    let connected = false;
+    let released = false;
+    let finalTarget = false;
+    adapter.connect = async () => { connected = true; };
+    const matching = { status: "matching-process-path" as const, method: "windows-listener-process" as const,
+      expectedProjectRoot: "D:/code/AIHR", observedProjectRoot: "D:/code/AIHR",
+      targetOrigin: "http://localhost:5174", processId: 12,
+      reason: "Page server matches.", observedAt: new Date().toISOString() };
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root,
+      targetBinding: async () => matching,
+      applicationBinding: async () => finalTarget
+        ? { ...matching, status: "different-project", observedProjectRoot: "D:/tmp/other",
+          targetOrigin: "http://localhost:9333", processId: 30, reason: "Pinned application belongs to another checkout." }
+        : { ...matching, targetOrigin: "http://localhost:9222", processId: 20 },
+      attachmentLease: async () => { finalTarget = true; return { release: async () => { released = true; } }; },
+    }).run({ intent: "Check final Electron application", level: "quick", mode: "deterministic",
+      preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "deny", metadata: {} }, "foreign-pinned-application-run");
+    expect(connected).toBe(false);
+    expect(released).toBe(true);
+    expect(summary).toMatchObject({ verdict: "blocked", applicationBinding: {
+      status: "different-project", targetOrigin: "http://localhost:9333" } });
+    expect(summary.artifacts).toContain("foreign-pinned-application-run/artifacts/application-binding-before-attachment.json");
+  });
+
   it("requires one known listener throughout a core Run while keeping quick checks short", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-target-continuity-"));
     const charter = (level: "quick" | "core") => ({ intent: "Check a stable target", level, mode: "deterministic" as const,

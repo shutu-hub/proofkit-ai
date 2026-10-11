@@ -1592,6 +1592,7 @@ export class LocalRunnerService {
     const resolveElectronPortFile = surface === "electron" && !electronCdp && electronPortFile
       && !/^(https?|wss?):\/\//i.test(electronPortFile);
     let preSetupCdpUrl: string | undefined;
+    let pinnedCdpUrl: string | undefined;
     const targetUrl = charter.actions.find((action) => action.kind === "goto")?.url
       ?? input.url
       ?? (surface === "electron" ? this.config.surfaces.electron?.targetUrlPrefix : this.config.surfaces.web?.baseUrl);
@@ -1666,19 +1667,20 @@ export class LocalRunnerService {
         if (!cdpUrl) throw new Error("Electron CDP endpoint is missing from its port file");
         if (cdpUrl === preSetupCdpUrl) {
           (adapter as ElectronAdapter).pinCdpUrl(cdpUrl);
+          pinnedCdpUrl = cdpUrl;
           return { release: async () => {} };
         }
         const lease = await acquireCdpTarget(cdpUrl);
         if (!lease) return undefined;
-        try { (adapter as ElectronAdapter).pinCdpUrl(cdpUrl); }
+        try { (adapter as ElectronAdapter).pinCdpUrl(cdpUrl); pinnedCdpUrl = cdpUrl; }
         catch (error) { await lease.release(); throw error; }
         return lease;
       } } : {}),
       ...(surface === "web" || surface === "electron" ? {
         targetBinding: async (bindingSignal: AbortSignal) => inspectTargetBinding(this.root,
-          await sourceBindingTarget(surface, targetUrl, electronCdp, electronPortFile, bindingSignal), bindingSignal),
+          await sourceBindingTarget(surface, targetUrl, pinnedCdpUrl ?? electronCdp, electronPortFile, bindingSignal), bindingSignal),
         ...(surface === "electron" ? { applicationBinding: async (bindingSignal: AbortSignal) => inspectTargetBinding(this.root,
-          await sourceBindingTarget("electron", undefined, electronCdp, electronPortFile, bindingSignal), bindingSignal) } : {}),
+          await sourceBindingTarget("electron", undefined, pinnedCdpUrl ?? electronCdp, electronPortFile, bindingSignal), bindingSignal) } : {}),
         targetBindingPolicy: this.config.policies.targetBinding,
         targetBindingRecheckAfterSetup: Boolean(integrationSetup || (input.start !== false && this.config.project.start)),
       } : {}),

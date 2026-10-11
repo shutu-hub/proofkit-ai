@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,13 +9,13 @@ import type { SurfaceAdapter } from "@proofkit/runner";
 import { LocalRunnerService } from "./index.js";
 import { acquireCdpTarget, sharedTargetIdentity } from "./execution-scope.js";
 
-const state = vi.hoisted(() => ({ connected: 0, pinned: [] as string[], holdFirst: true, entered: () => {},
+const state = vi.hoisted(() => ({ connected: 0, pinned: [] as string[], onPin: (_cdpUrl: string) => {}, holdFirst: true, entered: () => {},
   release: Promise.resolve(), releaseFirst: () => {} }));
 vi.mock("@proofkit/adapters", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@proofkit/adapters")>();
   class Adapter implements SurfaceAdapter {
     readonly name = "fixture";
-    pinCdpUrl(cdpUrl: string) { state.pinned.push(cdpUrl); }
+    pinCdpUrl(cdpUrl: string) { state.pinned.push(cdpUrl); state.onPin(cdpUrl); }
     async connect() { state.connected++; }
     async discover() { return this.snapshot(); }
     async snapshot() { return { capturedAt: new Date().toISOString(), text: "ready", metadata: {} }; }
@@ -43,6 +44,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   state.connected = 0;
   state.pinned = [];
+  state.onPin = () => {};
   state.holdFirst = true;
   state.entered = () => {};
   state.release = Promise.resolve();
@@ -249,4 +251,30 @@ it("pins a port changed by setup and releases both endpoint leases", async () =>
     expect(oldLease).toBeDefined();
     expect(newLease).toBeDefined();
   } finally { await Promise.all([oldLease?.release(), newLease?.release()]); }
+});
+
+it("associates the pinned CDP endpoint even when its port file changes during attachment", async () => {
+  const base = await mkdtemp(join(tmpdir(), "proofkit-electron-pinned-binding-"));
+  roots.push(base);
+  const root = join(base, "source");
+  await mkdir(root);
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "pinned-binding-fixture" }));
+  const file = join(base, "active-port");
+  const oldPort = 30_000 + Math.floor(Math.random() * 10_000);
+  const newPort = oldPort + 10_000;
+  await writeFile(file, `${oldPort}\n`);
+  state.holdFirst = false;
+  state.onPin = () => { writeFileSync(file, `${newPort}\n`); };
+  const runner = new LocalRunnerService({ root, workspaceRoot: join(base, "workspace"),
+    config: ProofkitConfigSchema.parse({ surfaces: { electron: { devtoolsActivePort: file } } }) });
+  const charter = TestCharterSchema.parse({ intent: "Check pinned Electron ownership", level: "quick",
+    actions: [{ kind: "waitForText", text: "ready" }],
+    assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" });
+  const started = await runner.start({ charter, adapter: "electron" });
+  const summary = await runner.wait(started.runId);
+  expect(summary.verdict).toBe("passed");
+  expect(state.pinned).toEqual([`http://127.0.0.1:${oldPort}`]);
+  expect(summary.applicationBinding?.targetOrigin).toBe(`http://127.0.0.1:${oldPort}`);
+  expect(summary.targetBinding?.targetOrigin).toBe(`http://127.0.0.1:${oldPort}`);
+  expect(summary.artifacts).toContain(`${started.runId}/artifacts/application-binding-before-attachment.json`);
 });
