@@ -1,11 +1,17 @@
+import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { createHostFixture, hostCases } from "./host-evaluation-fixture.mjs";
+import { parseClaudeHostAnswer, parseClaudeToolEvents } from "./claude-host-events.mjs";
 import { verifyHostSession } from "./host-evaluation-verifier.mjs";
 
+const protocol = argument("--protocol") ?? "native-mcp";
+if (!["native-mcp", "claude-code"].includes(protocol)) {
+  throw new Error("--protocol must be native-mcp or claude-code");
+}
 const requested = argument("--cases");
 const selected = requested ? requested.split(",").map((id) => {
   const found = hostCases.find((item) => item.id === id);
@@ -15,7 +21,7 @@ const selected = requested ? requested.split(",").map((id) => {
 const root = await mkdtemp(join(tmpdir(), "proofkit-host-baseline-"));
 const cases = [];
 console.log(JSON.stringify({ baselineRoot: root, cases: selected.map((item) => item.id),
-  scope: "scripted native MCP and real Chrome/Electron where selected; no language model is evaluated" }));
+  protocol, scope: "scripted native MCP and real Chrome/Electron where selected; no language model is evaluated" }));
 for (const expected of selected) {
   const fixture = await createHostFixture(join(root, expected.id), expected);
   try {
@@ -27,7 +33,8 @@ for (const expected of selected) {
     console.log(JSON.stringify({ caseId: expected.id, passed: false, error: String(error) }));
   } finally { await fixture.close(); }
 }
-const report = { schemaVersion: 1, evaluation: "scripted-mcp-baseline", productAcceptance: "synthetic-fixture-only",
+const report = { schemaVersion: 1, evaluation: protocol === "claude-code" ? "scripted-claude-protocol-baseline" : "scripted-mcp-baseline",
+  protocol, productAcceptance: "synthetic-fixture-only",
   modelAdherence: "not-evaluated", root, total: cases.length,
   passed: cases.filter((item) => item.validation.passed).length, cases, generatedAt: new Date().toISOString() };
 await writeFile(join(root, "baseline.json"), JSON.stringify(report, null, 2));
@@ -35,18 +42,26 @@ console.log(JSON.stringify({ report: join(root, "baseline.json"), passed: report
 if (report.passed !== report.total) process.exitCode = 1;
 
 async function evaluate(fixture, expected) {
-  const { command, args, env } = fixture.setup.connection;
+  const { serverName, command, args, env } = fixture.setup.connection;
   const transport = new StdioClientTransport({ command, args, env: { ...process.env, ...env,
     PROOFKIT_ALLOW_CAPABILITY_WRITES: "0" } });
   const client = new Client({ name: "proofkit-host-scripted-baseline", version: "1" });
   const calls = [];
+  const events = [];
   const call = async (tool, arguments_) => {
+    const id = `scripted-call-${calls.length + 1}`;
+    if (protocol === "claude-code") events.push({ type: "assistant", message: { content: [
+      { type: "tool_use", id, name: `mcp__${serverName}__${tool}`, input: arguments_ },
+    ] } });
     const response = await withDeadline(client.callTool({ name: tool, arguments: arguments_ }), 30_000, tool);
     const body = response.content?.find((item) => item.type === "text")?.text;
     let result;
     try { result = body ? JSON.parse(body) : undefined; } catch { /* retain MCP error */ }
     calls.push({ tool, arguments: arguments_, status: response.isError ? "failed" : "completed",
       isError: Boolean(response.isError), result, resultBytes: Buffer.byteLength(body ?? "", "utf8") });
+    if (protocol === "claude-code") events.push({ type: "user", message: { content: [
+      { type: "tool_result", tool_use_id: id, is_error: Boolean(response.isError), content: response.content },
+    ] } });
     if (response.isError) throw new Error(`${tool}: ${body?.slice(0, 500) ?? "MCP error"}`);
     return result;
   };
@@ -115,18 +130,36 @@ async function evaluate(fixture, expected) {
         gaps: [...new Set(issues)], summary: `Audited Mission result: ${evidence.testVerdict}` };
     }
   } finally { await client.close(); }
+  let observedCalls = calls;
+  let observedAnswer = answer;
+  let transcriptPath;
+  if (protocol === "claude-code") {
+    events.push({ type: "result", subtype: "success", is_error: false,
+      structured_output: answer, result: JSON.stringify(answer) });
+    transcriptPath = join(fixture.root, "claude-scripted-events.jsonl");
+    const transcript = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
+    await writeFile(transcriptPath, transcript);
+    observedCalls = parseClaudeToolEvents(transcript, serverName);
+    observedAnswer = parseClaudeHostAnswer(transcript);
+    assert.deepEqual(observedCalls.map(({ tool, arguments: args, status, isError, result }) =>
+      ({ tool, arguments: args, status, isError, result })),
+    calls.map(({ tool, arguments: args, status, isError, result }) =>
+      ({ tool, arguments: args, status, isError, result })), "Claude event parsing changed the actual MCP tool observations");
+    assert.deepEqual(observedAnswer, answer, "Claude final result parsing changed the audited answer");
+  }
   const missions = await records(join(fixture.workspace, ".proofkit", "missions"));
   const runRoot = join(fixture.workspace, ".proofkit", "runs");
   let runs = [];
   try { runs = await Promise.all((await readdir(runRoot, { withFileTypes: true }))
     .filter((item) => item.isDirectory()).map(async (item) => JSON.parse(await readFile(join(runRoot, item.name, "run.json"), "utf8")))); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
-  const validation = await verifyHostSession({ expected, answer, calls, missions, runs,
+  const validation = await verifyHostSession({ expected, answer: observedAnswer, calls: observedCalls, missions, runs,
     workspace: fixture.workspace, sourceUnchanged: await fixture.sourceUnchanged(),
     workspaceContractsUnchanged: await fixture.workspaceContractsUnchanged() });
   return { caseId: expected.id, expected: { verdict: expected.verdict, level: expected.level, coverage: expected.coverage, surface: expected.surface },
-    answer, tools: calls.map(({ tool, status, resultBytes }) => ({ tool, status, resultBytes })),
-    missionIds: missions.map((item) => item.missionId), evidenceRoot: fixture.workspace, validation };
+    answer: observedAnswer, tools: calls.map(({ tool, status, resultBytes }) => ({ tool, status, resultBytes })),
+    missionIds: missions.map((item) => item.missionId), evidenceRoot: fixture.workspace,
+    ...(transcriptPath ? { transcript: transcriptPath } : {}), validation };
 }
 
 async function waitForMission(call, missionId) {

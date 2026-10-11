@@ -38,6 +38,7 @@
     "benchmark:host": "pnpm build && node tests/host-evaluation.mjs",
     "benchmark:host:claude": "pnpm build && node tests/host-evaluation.mjs --host claude-code --implicit-skill",
     "benchmark:host:baseline": "pnpm build && node tests/host-evaluation-baseline.mjs",
+    "benchmark:host:claude:protocol": "pnpm build && node tests/host-evaluation-baseline.mjs --protocol claude-code",
     "benchmark:host:electron": "pnpm build && node tests/host-evaluation-baseline.mjs --cases electron-core-pass,electron-core-defect",
     "test:host-verifier": "node --test tests/host-evaluation-verifier.test.mjs tests/host-evaluation-runtime.test.mjs tests/host-evaluation-cli.test.mjs tests/claude-host-events.test.mjs",
     "test:host-evaluator": "pnpm build && node --test tests/host-evaluation-cli.test.mjs",

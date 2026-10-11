@@ -130,6 +130,7 @@ node tests/host-evaluation-baseline.mjs --cases candidate-core-defect,candidate-
 node tests/host-evaluation.mjs --run --implicit-skill --cases candidate-core-defect,candidate-electron-defect
 node tests/host-evaluation.mjs --run --implicit-skill --cases inline-electron-pass,inline-electron-defect
 # Claude Code uses its own Skill and MCP config with the same fixture and verifier:
+node tests/host-evaluation-baseline.mjs --protocol claude-code --cases quick-pass,core-pass,core-defect
 node tests/host-evaluation.mjs --run --host claude-code --implicit-skill --cases quick-pass
 ```
 
@@ -143,6 +144,12 @@ ProofKit MCP tools in Claude's initialization event, then stopped on a provider
 is verified, but Claude model behavior and product acceptance are not. Set
 `PROOFKIT_CLAUDE_CLI` to a native executable or JavaScript entrypoint when the
 CLI is not on the evaluator's default path.
+The scripted protocol command executes the actual ProofKit stdio MCP calls in
+the synthetic browser fixture, serializes their responses as Claude-shaped
+`tool_use`/`tool_result` events, parses the final `result`, and applies that
+same Mission/Run evidence verifier. It writes the transcript beside
+`baseline.json` and reports `modelAdherence: not-evaluated`; it checks protocol
+handling and evidence consistency, not a Claude model run.
 
 Set `PROOFKIT_ELECTRON_PATH` to a local Electron executable and run
 `node tests/host-evaluation-baseline.mjs --cases electron-core-pass,electron-core-defect`

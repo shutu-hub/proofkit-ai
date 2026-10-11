@@ -279,6 +279,10 @@ cases as infrastructure-blocked. See [host effectiveness check](docs/agent-integ
 For Claude Code, run `pnpm benchmark:host:claude --run --cases quick-pass`.
 It uses the same fixture and evidence verifier with an isolated Claude Skill
 directory and one explicit MCP config; provider authentication is required.
+`pnpm benchmark:host:claude:protocol --cases quick-pass,core-pass,core-defect`
+first checks the Claude event parser against real ProofKit MCP calls and saved
+evidence without using a model. Its synthetic Claude transcript and passing
+result do not establish Claude Code model behavior.
 
 Set `PROOFKIT_ELECTRON_PATH` and run `pnpm benchmark:host:electron` for the
 two optional native-MCP Electron/CDP cases.
