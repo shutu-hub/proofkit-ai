@@ -99,6 +99,20 @@ describe("LocalRunnerService", () => {
     });
     const missionPath = join(root, ".proofkit", "missions", `${created.missionId}.json`);
     const savedMission = await readFile(missionPath, "utf8");
+    const advisoryOnly = JSON.parse(savedMission) as TestMission;
+    const missingProposalEvidence = { ...advisoryOnly.repairSuggestions[0]!.evidence[0]!,
+      evidenceId: "proposal-only-missing", path: `${runId}/artifacts/proposal-only-missing.json` };
+    advisoryOnly.diagnosis!.evidence.push(missingProposalEvidence);
+    advisoryOnly.repairSuggestions[0]!.evidence.push(missingProposalEvidence);
+    await writeFile(missionPath, JSON.stringify(advisoryOnly));
+    const unsupportedAdvice = await service.missionEvidence(completed.missionId);
+    expect(unsupportedAdvice).toMatchObject({ verdict: "failed", testVerdict: "failed",
+      diagnosticSupport: { diagnosis: { status: "unsupported", reason: "unavailable-evidence" },
+        repairSuggestions: [{ status: "unsupported", reason: "unavailable-evidence" }] } });
+    expect(unsupportedAdvice.acceptanceEvidenceIntegrity).toMatchObject({ status: "intact",
+      references: { total: intact.acceptanceEvidenceIntegrity.references.total } });
+    await writeFile(missionPath, savedMission);
+
     const mismatchedRun = JSON.parse(savedMission) as TestMission;
     const observedRun = mismatchedRun.observations.find((item) => item.kind === "surface.run")!;
     observedRun.data.steps = Number(observedRun.data.steps) + 1;

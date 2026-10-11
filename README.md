@@ -223,7 +223,7 @@ WebDriver responses are limited to 16 MiB before JSON parsing. Missing title or 
 
 Relative Charter and output paths resolve against the selected test workspace. Runs are stored under `<workspaceRoot>/.proofkit/runs/<run-id>/` by default. Each run contains `run.json`, `events.jsonl`, artifacts, and `report.html`.
 
-For a Mission, `get_mission_evidence` returns `summary`, `evidenceIntegrity` for the compact presentation, `acceptanceEvidenceIntegrity` for all saved Mission references (up to 2048), and a `report` path. Use audited `testVerdict` for the current acceptance claim; `verdict` is the saved historical result. A partial compact presentation can still support a pass when the full reference audit is intact. A saved failure cannot support a current product-defect claim after its Agent trace, observed Run facts, cited evidence or Oracle classification becomes unverified. CLI users can generate the same result:
+For a Mission, `get_mission_evidence` returns `summary`, `evidenceIntegrity` for the compact presentation, `acceptanceEvidenceIntegrity` for all saved execution and Finding references (up to 2048), and a `report` path. Diagnosis and repair proposals have separate support checks in the compact report. Use audited `testVerdict` for the current acceptance claim; `verdict` is the saved historical result. A partial compact presentation can still support a pass when the full acceptance reference audit is intact. A saved failure cannot support a current product-defect claim after its Agent trace, observed Run facts, cited evidence or Oracle classification becomes unverified. CLI users can generate the same result:
 
 ```bash
 proofkit mission report <mission-id> --root /path/to/source --workspace /path/to/test-workspace

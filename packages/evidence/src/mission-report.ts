@@ -55,7 +55,7 @@ export class MissionReportStore {
     return summarizeIntegrity(result, links);
   }
 
-  /** Audit the Mission's full saved reference set; presentation caps do not make an ordinary Run fail. */
+  /** Audit every supplied acceptance reference; presentation caps do not make an ordinary Run fail. */
   async inspectMissionEvidence(refs: EvidenceRef[], runIds: Set<string>): Promise<MissionAcceptanceIntegrity> {
     const unique = [...new Map(refs.map((ref) => [evidenceKey(ref), ref])).values()];
     const inspected = unique.slice(0, MAX_MISSION_AUDIT_REFERENCES);
@@ -175,7 +175,7 @@ export function auditMissionVerdict(result: MissionResult, integrity: MissionEvi
   if (saved === "failed" && integrity.visibleConfirmedFindings.supported < integrity.visibleConfirmedFindings.saved) {
     return { testVerdict: "inconclusive", testVerdictReason: "Saved confirmed product finding has missing or changed cited evidence; rerun before claiming a product defect." };
   }
-  if ((!full && integrity.status !== "intact") || (saved === "passed" && (integrity.status === "degraded" || integrity.status === "no-evidence"))) {
+  if (!full && integrity.status !== "intact") {
     return { testVerdict: "inconclusive", testVerdictReason: "Saved result has unavailable or incompletely audited presented evidence; rerun before claiming current acceptance." };
   }
   return saved === "passed" && result.planning?.coverage?.requested === "project"
@@ -230,7 +230,7 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
       : evidenceUnverified ? `Saved ${result.verdict === "passed" ? "pass" : "failure"} · current evidence unverified` : outcomeLabel(outcome);
   const limits = [
     result.evidenceIntegrity ? `Current presented evidence integrity: ${result.evidenceIntegrity.status}; ${result.evidenceIntegrity.references.intact}/${result.evidenceIntegrity.references.total} reference(s) verified at ${result.evidenceIntegrity.checkedAt}. This does not change the saved acceptance verdict.` : undefined,
-    result.acceptanceEvidenceIntegrity ? `Current Mission evidence integrity: ${result.acceptanceEvidenceIntegrity.status}; ${result.acceptanceEvidenceIntegrity.references.intact}/${result.acceptanceEvidenceIntegrity.references.total} saved reference(s) verified, ${result.acceptanceEvidenceIntegrity.references.omitted} beyond the audit limit. This does not prove whole-project coverage or application state after the Run.` : undefined,
+    result.acceptanceEvidenceIntegrity ? `Current Mission acceptance evidence integrity: ${result.acceptanceEvidenceIntegrity.status}; ${result.acceptanceEvidenceIntegrity.references.intact}/${result.acceptanceEvidenceIntegrity.references.total} saved execution and Finding reference(s) verified, ${result.acceptanceEvidenceIntegrity.references.omitted} beyond the audit limit. Advisory diagnosis and repair evidence is assessed separately. This does not prove whole-project coverage or application state after the Run.` : undefined,
     result.testVerdictReason,
     executionAudit ? `Execution slots (${executionAudit.scope}): ${executionAudit.matchedSlots}/${executionAudit.expectedSlots} uniquely matched; ${executionAudit.unexecutedSlots} unexecuted, ${executionAudit.unexpectedObservations} unexpected Run observation(s).` : undefined,
     agentTraceAudit ? `Agent trace: ${agentTraceAudit.status}; ${agentTraceAudit.checkedSteps} step(s), ${agentTraceAudit.checkedCalls} call(s), ${agentTraceAudit.checkedObservations} observation(s) checked.` : undefined,

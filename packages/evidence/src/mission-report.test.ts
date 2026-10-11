@@ -252,6 +252,16 @@ describe("Mission report", () => {
     expect(intact.result).toMatchObject({ verdict: "passed", testVerdict: "passed", evidenceIntegrity: { status: "intact" } });
     expect(await readFile(intact.path, "utf8")).toContain('data-verdict="passed"');
 
+    input.repairSuggestions = [{ suggestionId: "advisory-only", title: "Investigate an unrelated observation",
+      rationale: "This proposal has no acceptance role", changes: ["Inspect the source"], confidence: 0.2,
+      evidence: [{ ...evidence, evidenceId: "missing-advisory", path: join(dirname(factPath), "missing-advisory.json") }],
+      status: "proposed" }];
+    const unsupportedAdvice = await store.writeReportSnapshot(input);
+    expect(unsupportedAdvice.result).toMatchObject({ verdict: "passed", testVerdict: "passed",
+      evidenceIntegrity: { status: "degraded", diagnosticSupport: { repairSuggestions: [{ status: "unsupported" }] } },
+      acceptanceEvidenceIntegrity: { status: "intact" } });
+    input.repairSuggestions = [];
+
     input.runs[0]!.omittedEvidence = 1;
     const partial = await store.writeReportSnapshot(input);
     expect(partial.result).toMatchObject({ verdict: "passed", testVerdict: "passed",

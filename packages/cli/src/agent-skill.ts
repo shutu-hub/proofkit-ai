@@ -164,8 +164,8 @@ Check get_mission_evidence.evidenceIntegrity.status before presenting a saved
 confirmed finding or repair as currently supported. "degraded" means one or
 more presented references or confirmed findings lack verifiable bytes;
 "partial" means the bounded result omitted some rows, findings or references;
-read acceptanceEvidenceIntegrity for the full Mission reference audit and
-claim current support only when every cited finding and repair fact verifies.
+read acceptanceEvidenceIntegrity for the full execution and Finding audit;
+check diagnosticSupport separately before claiming a repair proposal is supported.
 "no-evidence" cannot support a product claim. The saved verdict is historical,
 and "intact" covers only the presented references, not all project workflows.
 Check summary.scope.sourceStability and sourceFreshness before treating a saved

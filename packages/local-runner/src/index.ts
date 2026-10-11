@@ -783,17 +783,18 @@ export class LocalRunnerService {
         : item.kind === "surface.inspected" ? item.data.inspectionId : undefined;
       return typeof id === "string" && /^[a-zA-Z0-9_-]+$/.test(id) ? [id] : [];
     }));
-    const missionReferences = [
+    // Diagnostic proposals are advisory claims. Audit their evidence in the
+    // report, but do not let a proposal-only artifact withdraw an otherwise
+    // evidenced product verdict.
+    const acceptanceReferences = [
       ...mission.evidence,
       ...mission.agentSteps.flatMap((step) => step.evidence),
       ...mission.toolCalls.flatMap((call) => call.evidence),
       ...mission.observations.flatMap((observation) => observation.evidence),
       ...mission.findings.flatMap((finding) => finding.evidence),
       ...(mission.firstFailure?.evidence ?? []),
-      ...(mission.diagnosis?.evidence ?? []),
-      ...mission.repairSuggestions.flatMap((suggestion) => suggestion.evidence),
     ];
-    const acceptanceEvidenceIntegrity = await this.missionReports.inspectMissionEvidence(missionReferences, referencedRunIds);
+    const acceptanceEvidenceIntegrity = await this.missionReports.inspectMissionEvidence(acceptanceReferences, referencedRunIds);
     const currentSourceState = (mission.verdict === "passed" || mission.verdict === "failed")
       && finalSourceState.success && finalSourceState.data.complete && finalSourceState.data.method === "git"
       ? await captureSourceState(this.root) : undefined;
