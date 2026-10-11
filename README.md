@@ -363,6 +363,16 @@ The repository is a pnpm workspace with explicit package boundaries:
 
 Screenshots are supporting evidence. They do not override failed API, worker, file, or business-state assertions.
 
+## Evidence retention audit
+
+ProofKit keeps saved Run and Mission evidence until an operator manages the external test workspace. To inspect Run storage without loading the project connector or changing evidence:
+
+```bash
+proofkit workspace retention --root /path/to/project --workspace /path/to/test-workspace --older-than-days 30
+```
+
+The JSON result reports byte counts and marks each Run `retain`, `review`, or `unverified`. Mission records, report snapshots, replay references, active Run owners and integration resource history cause retention. Missing or malformed records make the audit incomplete. `review` means only that no known reference was found; it does not authorize deletion. ProofKit currently has no automatic or CLI evidence deletion, so a Run needed for replay or recovery remains available by default.
+
 ## Safety and data
 
 - Use a dedicated test profile and test data. CDP attachment controls the selected browser session.

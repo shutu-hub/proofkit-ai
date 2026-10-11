@@ -37,6 +37,7 @@ import { sourceBindingTarget } from "./source-binding-target.js";
 import { assertMissionSurfaceCoverage, selectMissionSurface } from "./mission-surface.js";
 
 export { loadProjectIntegration } from "./integration.js";
+export { inspectEvidenceRetention, type EvidenceRetentionAudit, type EvidenceRetentionRow } from "./evidence-retention.js";
 
 export type LocalAdapterName = "web" | "electron" | "mobile";
 

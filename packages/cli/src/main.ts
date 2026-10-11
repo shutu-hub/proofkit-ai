@@ -7,7 +7,7 @@ import { Command } from "commander";
 import type { MissionComparison, RunMode, SideEffectPolicy, TestCoverage, TestLevel } from "@proofkit/contracts";
 import { EvidenceStore } from "@proofkit/evidence";
 import { IntentPlanner, loadCharter } from "@proofkit/planner";
-import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
+import { inspectEvidenceRetention, LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
 import { captureSourceState, collectWorkflowReviewMaterials, initProject, inspectWorkflowInventory, loadConfig, resolveProjectContext,
   resolveWithinWorkspace, scanProject, signWorkflowReview } from "@proofkit/project";
 import { setupAgent, type AgentHarness } from "./agent-setup.js";
@@ -571,9 +571,21 @@ export function createProgram(): Command {
       if (recovered.status !== "verified") process.exitCode = 2;
     });
 
+  const workspaceCommand = program.command("workspace").description("Inspect the external test workspace");
+  workspaceCommand.command("retention")
+    .description("Audit Run storage and references without deleting evidence")
+    .option("--root <path>", "project root", ".")
+    .option("--older-than-days <days>", "review age in whole days", "30")
+    .action(async (options: RootOptions & { olderThanDays: string }) => {
+      const context = resolveProjectContext(resolve(options.root), { workspaceRoot: options.workspace });
+      const result = await inspectEvidenceRetention(context.projectRoot, context.workspaceRoot, Number(options.olderThanDays));
+      console.log(JSON.stringify(result, null, 2));
+      if (result.status === "incomplete") process.exitCode = 2;
+    });
+
   // Every leaf command resolves the same source/workspace pair.
-  for (const command of [...program.commands, ...mission.commands, ...repeat.commands, ...resources.commands, ...agent.commands, ...template.commands]) {
-    if (command !== mission && command !== repeat && command !== resources && command !== agent && command !== template) command.option("--workspace <path>", "test workspace root; defaults to an external workspace or legacy .proofkit (agent setup always external)");
+  for (const command of [...program.commands, ...mission.commands, ...repeat.commands, ...resources.commands, ...workspaceCommand.commands, ...agent.commands, ...template.commands]) {
+    if (command !== mission && command !== repeat && command !== resources && command !== workspaceCommand && command !== agent && command !== template) command.option("--workspace <path>", "test workspace root; defaults to an external workspace or legacy .proofkit (agent setup always external)");
   }
   return program;
 }
