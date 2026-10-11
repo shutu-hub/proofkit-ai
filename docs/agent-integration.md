@@ -95,6 +95,8 @@ The source checkout includes two distinct evaluations after `pnpm build`:
 ```bash
 node tests/host-evaluation-baseline.mjs
 node tests/host-evaluation.mjs --run --cases core-pass,core-defect,core-pending,project-gap,quick-pass,author-core
+# No catalog or registered business Oracle; the host must author an inline reader:
+node tests/host-evaluation.mjs --run --implicit-skill --cases inline-core-pass,inline-core-defect
 ```
 
 Set `PROOFKIT_ELECTRON_PATH` to a local Electron executable and run
@@ -106,6 +108,14 @@ coverage gap, a quick page check and a submitted Charter without a catalog
 entry. Its `scripted-mcp-baseline` result **does not measure an AI host**.
 The desktop cases use a separate Electron profile and CDP port, and the
 verifier rejects an answer or saved Run silently switched to Web.
+The optional inline cases expose a local read-only status endpoint but no
+catalog Charter or registered Oracle. The host must capture the current POST
+file ID, author `httpOracles` in its Charter, and cite the independent source
+artifact. The defect case returns an older successful file ID from the reader;
+the verifier requires a failed business result rather than accepting its
+`complete` state. Run the same two IDs through
+`host-evaluation-baseline.mjs --cases inline-core-pass,inline-core-defect`
+when checking the scripted transport without a model.
 In the scripted baseline, `core-pass` omits `surface` to check the ordinary Web fallback. The optional `electron-core-pass` also omits it, checking desktop intent selection through the full MCP and Electron path when an Electron executable is provided.
 The `run_test` start receipt returns the selected `surface` and full `executionProfile.surfaceMatrix`, so the host can inspect the saved execution target even when it omitted the input platform.
 
@@ -134,6 +144,13 @@ unexecuted whole-project request correctly labeled `not-asserted`, and two
 Electron core cases. The earlier eight real-host passes used a fixed historical
 object and do not prove current-action identity.
 Broader adherence and false-pass rates remain unmeasured.
+With Windows `unelevated` sandbox in the isolated fixture, both optional
+inline cases also passed the real Codex implicit-Skill evaluation: the normal
+current-ID read passed, and the historical-ID read produced an evidenced
+business failure. The default Windows sandbox stalled before a ProofKit call
+while reading the Skill; that incomplete attempt is a host execution limit,
+not a product verdict. These two fixtures do not establish live AIHR or
+general cross-project effectiveness.
 
 ProofKit marks source/scope/catalog/status reads with MCP read-only hints.
 Actions that generate workspace evidence or execute a Mission do not receive

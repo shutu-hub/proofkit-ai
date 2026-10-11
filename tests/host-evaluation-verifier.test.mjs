@@ -99,6 +99,33 @@ test("requires unchanged workspace contracts and an inline authored Charter", as
   input.calls[1].arguments.charter = { actions: [{ kind: "captureResponse" }] };
   assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
 });
+test("requires a submitted response-bound reader and current identity in its independent HTTP facts", async (t) => {
+  for (const wrongIdentity of [false, true]) {
+    const input = await fixture(t, wrongIdentity ? "failed" : "passed");
+    input.expected.noCatalog = true;
+    input.expected.noReader = true;
+    input.expected.wrongIdentity = wrongIdentity;
+    input.calls[1].arguments.charter = { oracles: ["current-resume-status"], httpOracles: [{
+      name: "current-resume-status", query: { fileId: { source: "response", stepId: "step-002",
+        field: "fileId", matchPointer: "/data/fileId" } },
+    }] };
+    delete input.runs[0].steps[1].response.fields.jobId;
+    input.runs[0].oracles[0].name = "current-resume-status";
+    const facts = JSON.stringify({ oracle: "current-resume-status", facts: [{ observations: [{
+      state: wrongIdentity ? "failed" : "passed", facts: { expected_fileId: "102",
+        observed_fileId: wrongIdentity ? "101" : "102", scopeMatches: !wrongIdentity },
+    }] }] });
+    await writeFile(input.answer.evidencePaths[0], facts);
+    input.calls[3].result.evidence[0].sha256 = hash(facts);
+    assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
+    delete input.calls[1].arguments.charter.httpOracles;
+    await rejects(input, "response-bound-inline-oracle-not-submitted");
+    input.calls[1].arguments.charter.httpOracles = [{ name: "current-resume-status",
+      query: { fileId: { source: "response", stepId: "step-002", field: "fileId", matchPointer: "/data/fileId" } } }];
+    input.runs[0].steps[1].response.fields.fileId = "103";
+    await rejects(input, "oracle-not-bound-to-current-action");
+  }
+});
 test("detects changed evidence bytes and links invented by the host", async (t) => {
   const input = await fixture(t); await writeFile(input.answer.evidencePaths[0], "changed after observation");
   await rejects(input, "answer-evidence-digest-mismatch");

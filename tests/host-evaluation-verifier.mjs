@@ -23,6 +23,11 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
     check(starts.some((call) => call.tool === "run_test" && call.arguments.charter
       && typeof call.arguments.charter === "object" && !call.arguments.charterId && !call.arguments.suiteId), "authored-charter-not-submitted-inline");
   }
+  if (expected.noReader) {
+    check(starts.some((call) => call.arguments.charter?.httpOracles?.some((oracle) =>
+      call.arguments.charter.oracles?.includes(oracle.name) && Object.values(oracle.query ?? {}).some((binding) =>
+        binding.source === "response" && binding.matchPointer))), "response-bound-inline-oracle-not-submitted");
+  }
   for (const call of starts) {
     const planning = call.result?.planning ?? call.result?.plan?.planning;
     check((call.arguments.level ?? call.result?.level) === expected.level, "tool-intensity-changed");
@@ -74,7 +79,7 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
       const captured = run.steps?.filter((step) => step.action?.kind === "captureResponse" && step.status === "passed"
         && step.response?.association === "action-window" && step.response?.requestCount === 1) ?? [];
       const response = captured.find((step) => typeof step.response.fields?.fileId === "string"
-        && step.response.fields.fileId !== "101" && typeof step.response.fields?.jobId === "string")?.response;
+        && step.response.fields.fileId !== "101" && (expected.noReader || typeof step.response.fields?.jobId === "string"))?.response;
       check(Boolean(response), "current-action-identity-not-captured");
       if (!response) continue;
       let matchedSource = false;
@@ -94,6 +99,11 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
             && fact.captured?.jobId === response.fields.jobId && fact.observed?.fileId === response.fields.fileId)) {
             matchedSource = true;
           }
+          if (expected.noReader && source.facts.some((fact) => fact.observations?.some((observation) =>
+            observation.facts?.expected_fileId === response.fields.fileId
+            && observation.facts?.observed_fileId === (expected.wrongIdentity ? "101" : response.fields.fileId)
+            && observation.facts?.scopeMatches === !expected.wrongIdentity
+            && observation.state === (expected.wrongIdentity ? "failed" : "passed")))) matchedSource = true;
         }
       }
       check(matchedSource, "oracle-not-bound-to-current-action");

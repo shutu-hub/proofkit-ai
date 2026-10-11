@@ -48,11 +48,15 @@ These observations return not-asserted and cannot establish a product pass.
 
 If the catalog has no suitable scenario, submit a structured Charter to
 run_test. Read [Charter authoring](references/charter-authoring.md) for this path.
-Include a positive surface assertion and, for core/release, a registered
-independent business Oracle for the expected terminal result. When no business
-reader exists, report the missing contract or implement a workspace connector
-within the authorized task; do not invent an Oracle name or infer backend
-success from a toast. Observe test identities and isolation before write actions.
+Include a positive surface assertion and, for core/release, an independent
+business Oracle for the expected terminal result. If this action returns an ID
+and the project exposes a suitable read-only status API, declare a bounded
+httpOracles reader in the Charter. Bind the current captured ID to its query,
+verify the independent response's ID and terminal state, and use the Oracle's
+name in oracles. For authenticated or multi-entity checks, use a trusted
+workspace connector. When no valid reader exists, report the missing contract;
+do not invent an Oracle name or infer backend success from a toast. Observe
+test identities and isolation before write actions.
 Use authorization already given by the user. Missing access or write permission
 is a concrete prerequisite, not a reason to weaken the test.
 
@@ -188,6 +192,12 @@ Use captureResponse around the actual submit click or keypress when an API
 returns the new object's identity. Declare its exact endpoint, method, accepted
 statuses and selected JSON Pointer scalar fields. An independent Oracle must
 query those IDs and check reader identity before waiting for terminal state.
+For a simple local read-only status API, define httpOracles in the Charter;
+the current response binding, identity matchPointer and terminal statusPointer
+are required. Read the example below. MCP only accepts loopback Oracle URLs.
+The inline reader performs bounded GET polling and cannot supply credentials,
+custom headers or arbitrary code. Use a workspace connector for those needs
+or for multiple independent business entities.
 If the request starts later, set requestStartTimeoutMs while keeping timeoutMs
 large enough for the full action. If an optional confirmation dialog may appear,
 declare one followUp: { kind: clickIfVisible, selector, waitMs } using a reviewed
@@ -195,6 +205,38 @@ unique visible control. The same listener covers both clicks and saves whether
 the follow-up was clicked or skipped. A late or ambiguous dialog is not a pass.
 Multiple matching requests, missing capture or missing reader facts are
 inconclusive. Do not reuse an older successful object as proof of this action.
+
+\`\`\`json
+{
+  "intent": "Test this resume submission and its terminal state",
+  "surface": "web",
+  "level": "core",
+  "charter": {
+    "intent": "Test this resume submission and its terminal state",
+    "level": "core",
+    "sideEffectPolicy": "allow",
+    "actions": [
+      { "kind": "goto", "url": "http://127.0.0.1:5173/resumes" },
+      { "kind": "captureResponse", "name": "resume-created",
+        "trigger": { "kind": "click", "selector": "#submit-resume" },
+        "response": { "url": "http://127.0.0.1:5173/api/v1/resumes", "method": "POST",
+          "statuses": [201], "fields": { "fileId": { "pointer": "/data/fileId", "type": "id" } } } }
+    ],
+    "assertions": [{ "kind": "text-visible", "text": "Submission accepted" }],
+    "oracles": ["current-resume-status"],
+    "httpOracles": [{ "name": "current-resume-status",
+      "url": "http://127.0.0.1:5173/api/v1/resume-status",
+      "query": { "fileId": { "source": "response", "stepId": "step-002",
+        "field": "fileId", "matchPointer": "/data/fileId" } },
+      "statusPointer": "/data/state", "successValues": ["complete"],
+      "failureValues": ["failed"], "deadlineMs": 30000 }]
+  }
+}
+\`\`\`
+
+Replace endpoints, selectors, pointers and terminal values with observed
+project contracts. The page's positive assertion and workspace side-effect
+policy still apply. A status-only 200 or a historic successful ID is not proof.
 
 ## Business connectors and acceptance scope
 

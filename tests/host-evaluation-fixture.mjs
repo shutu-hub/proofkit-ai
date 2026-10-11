@@ -13,6 +13,8 @@ export const hostCases = [
   { id: "project-gap", prompt: "测试整个项目的所有功能", surface: "web", level: "core", coverage: "project", verdict: "not-asserted", state: "complete" },
   { id: "quick-pass", prompt: "快速测试简历获取页面", surface: "web", level: "quick", coverage: "declared", verdict: "passed", state: "complete" },
   { id: "author-core", prompt: "测试简历获取功能", surface: "web", level: "core", coverage: "declared", verdict: "passed", state: "complete", noCatalog: true },
+  { id: "inline-core-pass", prompt: "测试简历获取功能，并用项目的只读状态接口核对本次文件 ID 和处理终态", surface: "web", level: "core", coverage: "declared", verdict: "passed", state: "complete", noCatalog: true, noReader: true, optional: true },
+  { id: "inline-core-defect", prompt: "测试简历获取功能，并用项目的只读状态接口核对本次文件 ID 和处理终态", surface: "web", level: "core", coverage: "declared", verdict: "failed", state: "complete", noCatalog: true, noReader: true, wrongIdentity: true, optional: true },
   { id: "electron-core-pass", prompt: "测试 Electron 桌面端的简历获取功能", surface: "electron", level: "core", coverage: "declared", verdict: "passed", state: "complete", optional: true, omitSurfaceInScriptedBaseline: true },
   { id: "electron-core-defect", prompt: "测试 Electron 桌面端的简历获取功能", surface: "electron", level: "core", coverage: "declared", verdict: "failed", state: "complete", wrongRelation: true, optional: true },
 ];
@@ -33,6 +35,12 @@ export async function acquireResume() {
   return (await response.json()).data;
 }
 `,
+    "resume-api.js": `// Independent reader contract for the resume workflow.
+// GET /api/v1/resume-status?fileId=<the fileId returned by POST /api/v1/resumes>
+// Response: { code: 'SUCCESS', data: { fileId: string, state: 'pending'|'complete'|'failed' } }
+// The response's data.fileId must equal the current POST response fileId.
+export const resumeStatusRoute = '/api/v1/resume-status';
+`,
   };
   await Promise.all(Object.entries(sourceFiles).map(([path, content]) => writeFile(join(source, path), content)));
   const records = new Map([["101", { fileId: "101", jobId: "7", state: "complete" }]]);
@@ -47,6 +55,12 @@ export async function acquireResume() {
       records.set(fileId, { fileId, jobId: expected.wrongRelation ? "9" : "7", state: expected.state });
       response.writeHead(201, { "content-type": "application/json" });
       response.end(JSON.stringify({ code: "SUCCESS", data: { fileId, jobId: "7" } }));
+    } else if (request.method === "GET" && url.pathname === "/api/v1/resume-status") {
+      const fileId = url.searchParams.get("fileId");
+      const record = records.get(expected.wrongIdentity ? "101" : fileId);
+      if (!record) { response.writeHead(404).end(); return; }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ code: "SUCCESS", data: { fileId: record.fileId, state: record.state } }));
     } else if (request.method === "GET" && /^\/api\/v1\/resumes\/[1-9]\d*$/.test(url.pathname)) {
       const record = records.get(url.pathname.split("/").at(-1));
       if (!record) { response.writeHead(404).end(); return; }
@@ -98,7 +112,11 @@ export async function acquireResume() {
               fileId: { pointer: "/data/fileId", type: "id" }, jobId: { pointer: "/data/jobId", type: "id" },
             } }, requestWindowMs: 200, timeoutMs: 5000 },
           { kind: "waitForText", text: "Submission accepted", timeoutMs: 5000 }],
-        assertions: [{ kind: "text-visible", text: "Submission accepted" }], oracles: ["resume.terminal"] });
+        assertions: [{ kind: "text-visible", text: "Submission accepted" }],
+        oracles: [expected.noReader ? "current-resume-status" : "resume.terminal"],
+        ...(expected.noReader ? { httpOracles: [{ name: "current-resume-status", url: `${origin}/api/v1/resume-status`,
+          query: { fileId: { source: "response", stepId: "step-002", field: "fileId", matchPointer: "/data/fileId" } },
+          statusPointer: "/data/state", successValues: ["complete"], failureValues: ["failed"], intervalMs: 100, deadlineMs: 1000 }] } : {}) });
     const charters = expected.noCatalog ? [] : ["core", "quick"].map((level) => ({ id: `resume-${level}`, path: `.proofkit/charters/resume-${level}.yml`,
       aliases: ["简历获取", "简历"], level, surfaces: [surface], routeTargets: [{ kind: "web", path: "/resumes", source: "resume-page.js" }] }));
     const config = ProofkitConfigSchema.parse({ project: { root: source }, surfaces: { web: { baseUrl: origin,
@@ -110,7 +128,9 @@ export async function acquireResume() {
     if (!expected.noCatalog) {
       for (const level of ["core", "quick"]) await writeFile(join(workspace, ".proofkit", "charters", `resume-${level}.yml`), JSON.stringify(plan(level)));
     }
-    await writeFile(join(workspace, ".proofkit", "integration.mjs"), `export default { name: 'host-evaluation-fixture', version: '1.0.0', oracles: [{
+    await writeFile(join(workspace, ".proofkit", "integration.mjs"), expected.noReader
+      ? "export default { name: 'host-evaluation-fixture', version: '1.0.0', oracles: [] };\n"
+      : `export default { name: 'host-evaluation-fixture', version: '1.0.0', oracles: [{
       name: 'resume.terminal', async check(context) {
         const capture = context.steps.find(step => step.action.kind === 'captureResponse')?.response;
         const fileId = capture?.fields.fileId;

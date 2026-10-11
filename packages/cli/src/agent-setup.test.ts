@@ -185,8 +185,14 @@ describe("Agent onboarding", () => {
     const frontmatter = parse(skill.split("---")[1]!);
     expect(frontmatter.name).toBe("proofkit-test");
     const reference = await readFile(join(result.skill.path, "references", "charter-authoring.md"), "utf8");
-    const example = JSON.parse(reference.match(/```json\s*([\s\S]*?)```/)![1]!);
-    expect(TestCharterSchema.parse(example.charter).level).toBe("core");
+    const examples = [...reference.matchAll(/```json\s*([\s\S]*?)```/g)].map((match) => JSON.parse(match[1]!));
+    expect(examples.some((example) => TestCharterSchema.parse(example.charter).level === "core")).toBe(true);
+    const inline = examples.map((example) => TestCharterSchema.parse(example.charter))
+      .find((charter) => charter.httpOracles?.length);
+    const binding = inline?.httpOracles?.[0]?.query.fileId;
+    expect(binding).toMatchObject({ source: "response", field: "fileId", matchPointer: "/data/fileId" });
+    expect(inline?.actions[Number(binding?.stepId.slice(5)) - 1]).toMatchObject({ kind: "captureResponse",
+      response: { fields: { fileId: { type: "id" } } } });
     expect(result.connection.status).toBe("not-checked");
     expect(result.skill.installation.status).toBe("created");
   });

@@ -17,7 +17,7 @@ const selected = requested ? requested.split(",").map((id) => {
 }) : hostCases.filter((item) => !item.optional);
 if (!process.argv.includes("--run")) {
   console.log(JSON.stringify({ execution: "not-started", cases: selected.map(({ id, prompt, surface, level, coverage, verdict }) => ({ id, prompt, surface, level, coverage, expectedVerdict: verdict })),
-    optionalElectronCases: hostCases.filter((item) => item.optional).map((item) => item.id),
+    optionalCases: hostCases.filter((item) => item.optional).map((item) => item.id),
     next: "Add --run to use the installed Codex CLI and its configured model/auth. Model usage is separate from deterministic tests." }, null, 2));
 } else {
   const root = await mkdtemp(join(tmpdir(), "proofkit-host-evaluation-"));
