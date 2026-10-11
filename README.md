@@ -6,7 +6,7 @@ ProofKit turns a short product instruction into a reviewable test charter, runs 
 
 It is designed for workflows where a green button is not enough: a resume must be acquired, parsed, attached to the right candidate and position, and reach the expected terminal state. ProofKit is local-first and uses independent business facts where available.
 
-> Early development: the first vertical slice supports Chromium-based Web and Electron applications. CLI and data formats are still evolving.
+> Early development: Web and Electron have real-browser fixture coverage. Mobile uses a W3C WebDriver adapter verified against an isolated protocol fixture; emulator and device-backed acceptance remain open. CLI and data formats are still evolving.
 
 See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for the host-agent integration, execution layers and current capability boundaries.
 

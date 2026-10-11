@@ -85,8 +85,11 @@ export class MobileAdapter implements SurfaceAdapter {
         break;
       case "fill":
         if (typeof action.value !== "string") throw new Error("Fill environment reference must be resolved by the runner");
-        await this.elementCommand(action.selector, "POST", "/clear", undefined, signal);
-        await this.elementCommand(action.selector, "POST", "/value", { text: action.value, value: [...action.value] }, signal);
+        const inputElement = await this.findElement(action.selector, signal);
+        await this.command("POST", `/element/${encodeURIComponent(inputElement)}/clear`, undefined, signal);
+        signal?.throwIfAborted();
+        await this.command("POST", `/element/${encodeURIComponent(inputElement)}/value`,
+          { text: action.value, value: [...action.value] }, signal);
         break;
       case "press":
         const key = mobileKeyValue(action.key);

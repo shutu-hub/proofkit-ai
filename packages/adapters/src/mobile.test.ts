@@ -83,6 +83,28 @@ describe("MobileAdapter", () => {
     expect(requests.some((request) => request.method === "DELETE")).toBe(false);
   });
 
+  it("keeps a fill bound to the original element when clearing changes the locator result", async () => {
+    const requests: string[] = [];
+    let cleared = false;
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      requests.push(`${init?.method ?? "GET"} ${path}`);
+      if (path.endsWith("/url")) return response({ value: "app://proofkit/form" });
+      if (path.endsWith("/elements")) return response({ value: [{ ELEMENT: cleared ? "other-field" : "original-field" }] });
+      if (path.endsWith("/element/original-field/displayed")) return response({ value: true });
+      if (path.endsWith("/element/original-field/clear")) { cleared = true; return response({ value: null }); }
+      if (path.endsWith("/element/original-field/value")) return response({ value: null });
+      throw new Error(`unexpected request ${init?.method ?? "GET"} ${path}`);
+    }) as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    await adapter.connect();
+    await adapter.act({ kind: "fill", selector: "accessibility=Email", value: "synthetic@example.test" });
+    expect(requests.filter((request) => request.endsWith("/elements"))).toHaveLength(1);
+    expect(requests).toContain("POST /session/existing/element/original-field/clear");
+    expect(requests).toContain("POST /session/existing/element/original-field/value");
+    expect(requests.some((request) => request.includes("other-field"))).toBe(false);
+  });
+
   it("preserves an attached session by default and deletes it only with an explicit opt-in", async () => {
     const requests: string[] = [];
     globalThis.fetch = vi.fn(async (_input, init) => {
