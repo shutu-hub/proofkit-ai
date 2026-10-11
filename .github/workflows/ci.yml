@@ -27,10 +27,32 @@ jobs:
         env:
           PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome
         run: node tests/host-evaluation-baseline.mjs --protocol claude-code --cases quick-pass,core-defect,project-gap,mobile-quick-pass,mobile-core-pass,mobile-core-defect
-      - run: pnpm test:distribution
-      - run: pnpm test:git-install
       - name: Verify Linux listener binding
         run: sudo env PROOFKIT_REQUIRE_LINUX_PROC=1 "$(command -v node)" tests/linux-target-binding-smoke.mjs
+
+  install-distribution:
+    name: Installed package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Verify packed package and installed CLI/MCP
+        run: pnpm test:distribution
+      - name: Verify installation from Git and source isolation
+        run: pnpm test:git-install
 
   target-continuity-windows:
     runs-on: windows-latest
