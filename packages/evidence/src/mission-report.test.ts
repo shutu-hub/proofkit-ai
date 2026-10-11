@@ -412,6 +412,48 @@ describe("Mission report", () => {
     expect(input.repairSuggestions[0]!.status).toBe("proposed");
   });
 
+  it("shows each scenario diagnosis with its own Finding and Run evidence", async () => {
+    const workspace = await root();
+    const uiPath = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "ui.json"), "ui mismatch");
+    const businessPath = await file(join(workspace, ".proofkit", "runs", "run-2", "artifacts", "business.json"), "wrong relation");
+    const ui = ref(uiPath, createHash("sha256").update("ui mismatch").digest("hex"));
+    const business = ref(businessPath, createHash("sha256").update("wrong relation").digest("hex"));
+    const input = result(workspace, [ui]);
+    input.verdict = "failed";
+    input.proofClassification = explicitProof(false);
+    input.runs.push({ title: "Business", surface: "electron", runKind: "primary", runId: "run-2",
+      verdict: "failed", evidence: [business], omittedEvidence: 0 });
+    input.findings = [
+      { findingId: "ui", category: "unknown", status: "confirmed", severity: "medium", title: "UI mismatch",
+        message: "Wrong page state", evidence: [ui], createdAt: now },
+      { findingId: "business", category: "product", status: "confirmed", severity: "high", title: "Wrong relation",
+        message: "Candidate relation is wrong", evidence: [business], createdAt: now },
+    ];
+    input.confirmedProductFindings = 1;
+    input.diagnosis = { diagnosisId: "business-diagnosis", findingId: "business", summary: "Trace relation writer",
+      confidence: 0.6, sourceLocations: [], evidence: [business], createdAt: now };
+    input.diagnoses = [input.diagnosis, { diagnosisId: "ui-diagnosis", findingId: "ui",
+      summary: "Check page expectation", confidence: 0.4, sourceLocations: [], evidence: [ui], createdAt: now }];
+    const store = new MissionReportStore(workspace);
+    input.acceptanceEvidenceIntegrity = await store.inspectMissionEvidence([ui, business], new Set(["run-1", "run-2"]));
+    const intact = await store.writeReportSnapshot(input);
+    expect(intact.integrity.diagnosticSupport?.diagnoses).toMatchObject([
+      { diagnosisId: "business-diagnosis", status: "supported" },
+      { diagnosisId: "ui-diagnosis", status: "supported" },
+    ]);
+    const markup = await readFile(intact.path, "utf8");
+    expect(markup).toContain("Diagnosis 1 · Mission headline");
+    expect(markup).toContain("For finding: Wrong relation");
+    expect(markup).toContain("For finding: UI mismatch");
+    expect(markup).toContain("Check page expectation");
+
+    input.diagnoses[1]!.findingId = "business";
+    const wrongLink = await store.writeReportSnapshot(input);
+    expect(wrongLink.integrity.diagnosticSupport?.diagnoses[1])
+      .toMatchObject({ status: "unsupported", reason: "unlinked-failure" });
+    expect(wrongLink.result.testVerdict).toBe("failed");
+  });
+
   it("requires classified business proof for a saved product finding but preserves an evidenced test failure", async () => {
     const workspace = await root();
     const path = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "failure.json"), "observed mismatch");

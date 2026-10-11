@@ -744,6 +744,7 @@ export class LocalRunnerService {
     findings: TestMission["findings"];
     firstFailure?: TestMission["firstFailure"];
     diagnosis?: TestMission["diagnosis"];
+    diagnoses: TestMission["diagnoses"];
     repairSuggestions: TestMission["repairSuggestions"];
     targetBindings: Array<{ runId: string; surface: string; binding: TargetBinding }>;
     sourceStability: "stable" | "changed" | "unverified";
@@ -859,6 +860,7 @@ export class LocalRunnerService {
       findings: mission.findings,
       firstFailure: mission.firstFailure,
       diagnosis: mission.diagnosis,
+      diagnoses: mission.diagnoses.length ? mission.diagnoses : mission.diagnosis ? [mission.diagnosis] : [],
       repairSuggestions: mission.repairSuggestions,
       targetBindings: mission.observations.flatMap((observation) => {
         if (observation.kind !== "surface.run" || typeof observation.data.runId !== "string" || typeof observation.data.surface !== "string") return [];

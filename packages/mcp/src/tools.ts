@@ -149,7 +149,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "get_mission_evidence",
-    "Read traceable Mission evidence, current full-reference and presented-evidence integrity, per-proposal diagnostic support, Oracle proof classification, a bounded summary and local HTML report. testVerdict is downgraded to inconclusive when a saved pass lacks required current proof; verdict retains the historical value.",
+    "Read traceable Mission evidence, full acceptance and presented-evidence integrity, per-diagnosis and per-proposal support, Oracle proof classification, a bounded summary and local HTML report. testVerdict is downgraded to inconclusive when a saved pass lacks required current proof; verdict retains the historical value.",
     { missionId: z.string().min(1) },
     async ({ missionId }) => {
       const evidence = await runner.missionEvidence(missionId);

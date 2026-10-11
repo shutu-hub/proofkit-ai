@@ -796,8 +796,13 @@ export class MissionAgent {
         ...(failedVerdict ? { error: `Tool returned verdict ${result.verdict}` } : {}),
       });
       const taskUpdate = updateTask(startedMission, { ...runningTask, status: taskStatus, output, ...(failedVerdict ? { error: `Tool returned verdict ${result.verdict}` } : {}) }, { currentTaskId: undefined });
+      const incomingDiagnosis = result.diagnosis ? DiagnosisSchema.parse(result.diagnosis) : undefined;
       const diagnosis = preferredDiagnosis(startedMission.diagnosis, startedMission.findings,
-        result.diagnosis ? DiagnosisSchema.parse(result.diagnosis) : undefined, result.findings ?? []);
+        incomingDiagnosis, result.findings ?? []);
+      const previousDiagnoses = startedMission.diagnoses.length ? startedMission.diagnoses
+        : startedMission.diagnosis ? [startedMission.diagnosis] : [];
+      const diagnoses = incomingDiagnosis && !previousDiagnoses.some((item) => item.diagnosisId === incomingDiagnosis.diagnosisId)
+        ? [...previousDiagnoses, incomingDiagnosis] : previousDiagnoses;
       return this.save({
         ...taskUpdate,
         agentSteps: replaceAgentStep(startedMission.agentSteps, agentStep),
@@ -807,6 +812,7 @@ export class MissionAgent {
         findings: [...startedMission.findings, ...(result.findings ?? []).map((item) => FindingSchema.parse(item))],
         ...(!startedMission.firstFailure && result.firstFailure ? { firstFailure: FailureBoundarySchema.parse(result.firstFailure) } : {}),
         ...(diagnosis ? { diagnosis } : {}),
+        diagnoses,
         repairSuggestions: [...startedMission.repairSuggestions, ...(result.repairSuggestions ?? []).map((item) => RepairSuggestionSchema.parse(item))],
         verdict: startedMission.verdict === "failed" && result.verdict === "passed" ? "failed" : result.verdict,
         ...(failedVerdict ? { status: taskStatus === "blocked" ? result.verdict === "cancelled" ? "cancelled" : "blocked" : startedMission.plan.executionProfile.collectAllResults ? "running" : "failed" } : {}),

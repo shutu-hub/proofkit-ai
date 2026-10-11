@@ -183,6 +183,11 @@ try {
   assert.ok(bad.evidence.suiteScope.results.filter((item) => item.charterId === "login").every((item) => item.verdict === "passed"));
   assert.equal(bad.evidence.suiteScope.routeCoverage.observedCandidates, 2);
   assert.ok(bad.status.mission.findings.some((item) => item.category === "product" && item.status === "confirmed" && item.charterId === "resume" && item.evidence.length > 0));
+  assert.equal(bad.evidence.diagnoses.length, 4);
+  assert.equal(bad.evidence.summary.diagnoses.length, 4);
+  assert.ok(bad.evidence.diagnoses.every((diagnosis) => bad.evidence.findings.some((finding) => finding.findingId === diagnosis.findingId)));
+  assert.ok(bad.evidence.diagnosticSupport.diagnoses.every((diagnosis) => diagnosis.status === "supported"));
+  assert.ok((await readFile(bad.evidence.report, "utf8")).includes("Diagnosis 4"));
   defect = false;
   const replayStarted = payload(await client.callTool({ name: "replay_mission", arguments: { missionId: bad.started.missionId, approve: true } }));
   assert.equal(replayStarted.mission.replayOfMissionId, bad.started.missionId);
@@ -439,7 +444,7 @@ try {
     "--root", sourceRoot, "--workspace", workspaceRoot);
   assert.equal(restoredCompare.code, 0, restoredCompare.stderr || restoredCompare.stdout);
   assert.equal(JSON.parse(restoredCompare.stdout).status, "verified-in-scope");
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, singleReleaseMission: singleStarted.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "single-charter-release-continues-after-product-failure", "saved-run-slot-audit-rejects-wrong-replay-and-duplicate", "saved-run-slot-audit-rejects-borrowed-evidence", "saved-run-facts-reject-wrong-adapter", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "cli-repair-exit-gate", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, singleReleaseMission: singleStarted.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "per-scenario-diagnosis-evidence", "single-charter-release-continues-after-product-failure", "saved-run-slot-audit-rejects-wrong-replay-and-duplicate", "saved-run-slot-audit-rejects-borrowed-evidence", "saved-run-facts-reject-wrong-adapter", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "cli-repair-exit-gate", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
   await quickClient?.close();
   await quickMcpServer?.close();

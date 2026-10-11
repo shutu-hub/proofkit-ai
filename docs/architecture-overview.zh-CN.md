@@ -150,6 +150,8 @@ Web/Electron 已有真实隔离样例验证，包含跨端回放、注入缺陷�
 
 Mission 紧凑结果页汇总结论、验收范围、场景与各端执行、首个失败、证据和修复回放比较。MCP `get_mission_evidence` 返回 `summary`、报告路径及当前 `evidenceIntegrity`：`intact`、`degraded`、`partial` 或 `no-evidence`，并列出已检查引用和可继续支持的可见产品问题数。它只覆盖有界展示结果；独立的 `acceptanceEvidenceIntegrity` 审计整个 Mission 保存的执行与 Finding 证据引用，最多检查 2048 条。Diagnosis 和 RepairSuggestion 的证据支持在紧凑结果页单独审计，不会因建议独有的附件损坏而撤销证据完好的产品缺陷结论。结果页因展示上限为 `partial` 时，只要完整验收证据审计为 `intact`，仍可保留通过结论；验收审计损坏、缺失或超限则把历史通过降为 `inconclusive`。已保存的失败若声称确认产品缺陷，却缺少明确分类的业务证明或其引用证据已经失效，当前结论也降为 `inconclusive`；证据完好的普通测试失败仍为 `failed`。CLI `mission report` 生成同一静态快照；`summary.json`、MCP 和报告页面共用当前审计后的 `testVerdict`，同时保留历史 `verdict`。报告保留缺失运行、覆盖缺口及负向测试的预期结果，证据缺失、越界或摘要不符时显示不可用。完整验收证据审计不等于全项目覆盖证明；修复比较需要重新运行才能给出当前证明。
 
+多场景失败会保存逐场景 `diagnoses`，原有单条 `diagnosis` 只作为 Mission 主诊断。紧凑报告最多显示 10 条诊断，逐条核对对应 Finding 与同一次 Run 的证据，并报告省略数量；Agent 需要查看完整 Mission 才能声称已审阅所有诊断。旧 Mission 只有单条诊断时仍可读取。
+
 结果重读时另按冻结的场景和平台审计每个主运行、回放及负向场景的任务与 Run 归属。重复或多余记录、回放来源错配、负向预期不符、缺少槽位证据，以及观察记录引用其他 Run 的证据，都会显示具体缺口。审计还会重新读取保存的 Run 摘要，核对实际适配器、回放源、Charter 执行内容、原始 verdict、步骤/断言/Oracle 数量与资源清理；旧 Run 若没有适配器身份，不能支持当前通过结论。已保存的 `passed` 在审计不完整时降为当前 `inconclusive`。这项检查覆盖完整 Mission 记录，不依赖紧凑结果页的展示上限；超过 256 条 Run 观察会明确报告未审计部分。证据文件摘要完整只证明文件未变，不能替代执行身份和归属校验。
 
 CI 可用 `proofkit mission check <id>` 对已保存 Mission 重新审计，输出机器可读 JSON，其中 `summary` 遵循带版本号的 `MissionResult` 协议；检查不加载工作区连接器，也不重新执行产品。`mission run` 和 `mission replay` 同样按当前 `testVerdict` 退出。退出码 0 为通过，1 为已观察失败，2 为阻断、取消、证据不足或尚未断言。`mission report` 只负责生成报告快照，不能充当验收门禁。

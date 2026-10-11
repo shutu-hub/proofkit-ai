@@ -1399,6 +1399,8 @@ export const TestMissionSchema = z.object({
   evidence: z.array(EvidenceRefSchema).default([]),
   findings: z.array(FindingSchema).default([]),
   firstFailure: FailureBoundarySchema.optional(),
+  /** All saved scenario diagnoses; singular diagnosis remains the Mission headline. */
+  diagnoses: z.array(DiagnosisSchema).default([]),
   diagnosis: DiagnosisSchema.optional(),
   repairSuggestions: z.array(RepairSuggestionSchema).default([]),
   currentTaskId: z.string().optional(),
@@ -1587,6 +1589,11 @@ export const MissionEvidenceIntegritySchema = z.object({
       status: z.enum(["not-present", "supported", "unsupported"]),
       reason: z.enum(["missing-evidence", "unavailable-evidence", "cross-run-evidence", "run-not-present", "unlinked-failure"]).optional(),
     }),
+    diagnoses: z.array(z.object({
+      diagnosisId: z.string().min(1),
+      status: z.enum(["supported", "unsupported"]),
+      reason: z.enum(["missing-evidence", "unavailable-evidence", "cross-run-evidence", "run-not-present", "unlinked-failure"]).optional(),
+    })).max(10).default([]),
     repairSuggestions: z.array(z.object({
       suggestionId: z.string().min(1),
       status: z.enum(["supported", "unsupported"]),
@@ -1597,13 +1604,14 @@ export const MissionEvidenceIntegritySchema = z.object({
   omittedEvidenceReferences: z.number().int().nonnegative(),
   omittedRunResults: z.number().int().nonnegative(),
   omittedFindings: z.number().int().nonnegative(),
+  omittedDiagnoses: z.number().int().nonnegative().default(0),
   omittedRepairSuggestions: z.number().int().nonnegative(),
   omittedComparisonRuns: z.number().int().nonnegative(),
   omittedComparisonDefects: z.number().int().nonnegative(),
 });
 export type MissionEvidenceIntegrity = z.infer<typeof MissionEvidenceIntegritySchema>;
 
-/** Current readability of all Mission-owned references, bounded independently of the compact report. */
+/** Current readability of all Mission acceptance references, bounded independently of the compact report. */
 export const MissionAcceptanceIntegritySchema = z.object({
   status: z.enum(["intact", "degraded", "partial", "no-evidence"]),
   scope: z.literal("mission-evidence"),
@@ -1729,6 +1737,8 @@ export const MissionResultSchema = z.object({
   proofClassification: MissionProofClassificationSchema.optional(),
   firstFailure: FailureBoundarySchema.optional(),
   diagnosis: DiagnosisSchema.optional(),
+  diagnoses: z.array(DiagnosisSchema).max(10).default([]),
+  omittedDiagnoses: z.number().int().nonnegative().default(0),
   repairSuggestions: z.array(RepairSuggestionSchema).max(10),
   omittedRepairSuggestions: z.number().int().nonnegative(),
   comparison: MissionComparisonSchema.optional(),

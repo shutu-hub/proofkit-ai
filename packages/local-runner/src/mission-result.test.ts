@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DeterministicMissionPlanner } from "@proofkit/agent";
-import { FindingSchema, MissionPolicySchema, ObservationSchema, TestCharterSchema, TestMissionSchema, type Observation, type TestMission } from "@proofkit/contracts";
+import { DiagnosisSchema, FindingSchema, MissionPolicySchema, ObservationSchema, TestCharterSchema, TestMissionSchema, type Observation, type TestMission } from "@proofkit/contracts";
 import { compareCurrentSource, projectMissionResult } from "./mission-result.js";
 
 const now = "2026-10-10T00:00:00.000Z";
@@ -173,5 +173,42 @@ describe("Mission result projection", () => {
     expect(result.findings[0]?.category).toBe("product");
     expect(result.omittedFindings).toBe(2);
     expect(result.confirmedProductFindings).toBe(1);
+  });
+
+  it("retains each visible diagnosis's Finding while bounding the report", async () => {
+    const mission = await fixture();
+    mission.findings = Array.from({ length: 22 }, (_, index) => FindingSchema.parse({
+      findingId: `f-${index}`, title: `Finding ${index}`, message: "Observed", severity: "high",
+      category: index === 21 ? "product" : "unknown", status: "confirmed", evidence: [], createdAt: now,
+    }));
+    mission.diagnosis = DiagnosisSchema.parse({ diagnosisId: "headline", findingId: "f-21", summary: "Product defect",
+      confidence: 0.8, sourceLocations: [], evidence: [], createdAt: now });
+    mission.diagnoses = Array.from({ length: 12 }, (_, index) => DiagnosisSchema.parse({
+      diagnosisId: `diagnosis-${index}`, findingId: `f-${index}`, summary: `Scenario ${index}`,
+      confidence: 0.5, sourceLocations: [], evidence: [], createdAt: now,
+    }));
+    mission.repairSuggestions = Array.from({ length: 10 }, (_, index) => ({
+      suggestionId: `repair-${index}`, findingId: `f-${index + 10}`, title: `Repair ${index}`,
+      rationale: "Trace the observed mismatch", changes: ["Inspect flow"], confidence: 0.4,
+      evidence: [], status: "proposed" as const,
+    }));
+    const result = projectMissionResult(mission, options);
+    expect(result.diagnoses).toHaveLength(10);
+    expect(result.omittedDiagnoses).toBe(3);
+    expect(result.diagnoses[0]?.diagnosisId).toBe("headline");
+    const visibleIds = [...result.diagnoses, ...result.repairSuggestions].map((item) => item.findingId);
+    expect(visibleIds.every((id) => result.findings.some((finding) => finding.findingId === id))).toBe(true);
+    expect(result.omittedFindings).toBe(2);
+  });
+
+  it("projects a historical Mission with only the singular diagnosis", async () => {
+    const mission = await fixture();
+    mission.diagnosis = DiagnosisSchema.parse({ diagnosisId: "historical", summary: "Inspect saved failure",
+      confidence: 0.4, sourceLocations: [], evidence: [], createdAt: now });
+    const restored = TestMissionSchema.parse({ ...mission, diagnoses: undefined });
+    expect(restored.diagnoses).toEqual([]);
+    expect(projectMissionResult(restored, options)).toMatchObject({
+      diagnosis: { diagnosisId: "historical" }, diagnoses: [{ diagnosisId: "historical" }], omittedDiagnoses: 0,
+    });
   });
 });

@@ -60,7 +60,16 @@ export function projectMissionResult(mission: TestMission, options: {
   }
   const tasks = mission.plan.graph.tasks;
   const routeCoverage = options.suiteScope?.routeCoverage;
-  const findings = [...mission.findings].sort((left, right) => findingPriority(left) - findingPriority(right));
+  const diagnoses = mission.diagnosis
+    ? [mission.diagnosis, ...mission.diagnoses.filter((item) => item.diagnosisId !== mission.diagnosis?.diagnosisId)]
+    : mission.diagnoses;
+  const visibleDiagnoses = diagnoses.slice(0, 10);
+  const visibleSuggestions = mission.repairSuggestions.slice(0, 10);
+  const claimFindingIds = new Set([...visibleDiagnoses, ...visibleSuggestions]
+    .flatMap((item) => item.findingId ? [item.findingId] : []));
+  const findings = [...mission.findings].sort((left, right) =>
+    Number(claimFindingIds.has(right.findingId)) - Number(claimFindingIds.has(left.findingId))
+    || findingPriority(left) - findingPriority(right));
   return MissionResultSchema.parse({
     schemaVersion: "1",
     missionId: mission.missionId,
@@ -117,8 +126,10 @@ export function projectMissionResult(mission: TestMission, options: {
     proofClassification: options.proofClassification,
     firstFailure: mission.firstFailure,
     diagnosis: mission.diagnosis,
-    repairSuggestions: mission.repairSuggestions.slice(0, 10),
-    omittedRepairSuggestions: Math.max(0, mission.repairSuggestions.length - 10),
+    diagnoses: visibleDiagnoses,
+    omittedDiagnoses: Math.max(0, diagnoses.length - visibleDiagnoses.length),
+    repairSuggestions: visibleSuggestions,
+    omittedRepairSuggestions: Math.max(0, mission.repairSuggestions.length - visibleSuggestions.length),
     comparison: options.comparison,
     comparisonUnavailable: options.comparisonUnavailable,
   });

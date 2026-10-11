@@ -623,6 +623,7 @@ function fixtureMission(status: TestMission["status"]): TestMission {
     observations: [],
     evidence: [],
     findings: [],
+    diagnoses: [],
     repairSuggestions: [],
     revision: 1,
     createdAt: new Date().toISOString(),

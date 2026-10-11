@@ -859,6 +859,10 @@ describe("MissionAgent", () => {
     expect(result.status).toBe("failed");
     expect(runIndex).toBe(4);
     expect(result.diagnosis).toMatchObject({ diagnosisId: "diagnosis-2", findingId: "finding-2" });
+    expect(result.diagnoses.map((diagnosis) => [diagnosis.diagnosisId, diagnosis.findingId])).toEqual([
+      ["diagnosis-1", "finding-1"], ["diagnosis-2", "finding-2"], ["diagnosis-3", "finding-3"],
+    ]);
+    expect((await agent.load(created.missionId)).diagnoses).toEqual(result.diagnoses);
     expect(result.repairSuggestions.map((suggestion) => [suggestion.suggestionId, suggestion.findingId])).toEqual([
       ["repair-1", "finding-1"], ["repair-2", "finding-2"], ["repair-3", "finding-3"],
     ]);
