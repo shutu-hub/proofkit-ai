@@ -45,8 +45,12 @@ Charter matches a core request, keep core and author or register core proof.
 candidate-review-needed means a same-level workspace file has no reported
 structural issue, but it still needs source-flow review and the normal runtime
 checks before run_test; it is not an acceptance claim. Scope limit is at most 50.
-For inspection-incomplete, refine the literal focus or raise the bounded limit
-before concluding no plan exists. A source-focus-unresolved gap means the
+For inspection-incomplete, read its gap codes before acting. Refine the literal
+focus or raise the bounded limit when matching details were omitted. A
+candidate-endpoint-binding-unavailable gap means an existing focused Charter
+was discovered but its environment URL is unresolved; inspect that file,
+configure only the reviewed test endpoint, and repeat scope inspection before
+authoring a replacement. A source-focus-unresolved gap means the
 literal term missed retained source hints, not that the feature is absent.
 An oracle-name-unmatched gap likewise requires inspecting the registered
 readers; it does not prove that no business reader applies.

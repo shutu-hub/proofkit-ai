@@ -970,10 +970,10 @@ export const TestScopeSchema = z.object({
     compatibleReady: ScopeCountSchema,
     compatibleOmitted: ScopeCountSchema,
     gaps: z.array(z.object({
-      code: z.enum(["no-compatible-plan", "intensity-mismatch", "surface-mismatch", "plan-invalid", "catalog-omitted", "source-focus-unresolved", "oracle-name-unmatched", "no-registered-oracle", "unregistered-workspace-charters"]),
+      code: z.enum(["no-compatible-plan", "intensity-mismatch", "surface-mismatch", "plan-invalid", "catalog-omitted", "source-focus-unresolved", "oracle-name-unmatched", "no-registered-oracle", "unregistered-workspace-charters", "candidate-endpoint-binding-unavailable"]),
       relatedIds: z.array(CatalogIdSchema).max(5),
       guidance: z.string().min(1).max(240),
-    })).max(8),
+    })).max(9),
   }).optional(),
   /** Configuration hints only; endpoint reachability and app identity need environment inspection. */
   targetConfiguration: z.object({

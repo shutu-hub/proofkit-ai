@@ -122,7 +122,9 @@ export async function inspectWorkspaceCandidates(context: CandidateContext, focu
           item.parseStatus = "oversized";
           item.issues = ["file-too-large"];
         } else item.issues = ["file-unavailable"];
-        partial = true;
+        // The file and its focus hints were discovered. An unresolved URL
+        // binding limits execution readiness, not candidate enumeration.
+        if (!(error instanceof WorkspaceCharterFileError && error.issue === "endpoint-binding-unavailable")) partial = true;
       }
       found.push({ item, searchable });
     }

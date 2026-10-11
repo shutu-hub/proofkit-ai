@@ -87,7 +87,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   if (focus) limitations.push("Focus is a literal substring filter; the focused view is not whole-project coverage");
   if (inventory.retentionFocus) limitations.push("Focus prioritizes matching source files, entry points and routes before inventory retention caps; totals describe the retained candidate slice, not all project routes");
   if (inventory.retentionFocus && inventory.truncated) limitations.push("File discovery and source reads remain bounded; route-text focus cannot recover declarations from unscanned files, and filesystem focus prioritizes only discovered paths");
-  if (workspaceCandidates.scanStatus === "partial") limitations.push("Workspace Charter candidate discovery is incomplete; directory, file-count, size or read bounds may hide candidates");
+  if (workspaceCandidates.scanStatus === "partial") limitations.push("Workspace Charter discovery or focus matching is incomplete; directory, file-count, size, read or parsing failures may hide candidates");
   if (workspaceCandidates.selection === "fallback-unmatched") limitations.push("No unregistered Charter literally matched the focus; bounded fallback candidates are hints, not semantic matches");
   limitations.push(context.workflowInventory.reviewAuthentication?.status === "verified"
     ? "A trusted key authenticated the saved workflow review; semantic completeness and actual execution remain unverified"
@@ -101,9 +101,12 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const focusUnresolved = Boolean(focus && !selectedCharters.length && !suites.length && !routes.length && !entries.length && !capabilityMatches.length && !oracleMatches.length && !workspaceCandidates.matched);
   const reviewableCandidate = workspaceCandidates.selection !== "fallback-unmatched"
     && workspaceCandidates.items.some((item) => item.parseStatus === "valid" && item.level === level && item.sha256 && item.issues.length === 0);
+  const unresolvedCandidateBinding = workspaceCandidates.selection === "focused"
+    && workspaceCandidates.items.some((item) => item.issues.includes("endpoint-binding-unavailable"));
   const planningStatus: NonNullable<TestScope["planningReadiness"]>["status"] = compatibleReady ? "catalog-ready"
     : compatibleOmitted || focusUnresolved ? "inspection-incomplete"
-      : reviewableCandidate ? "candidate-review-needed" : "authoring-needed";
+      : reviewableCandidate ? "candidate-review-needed"
+        : unresolvedCandidateBinding ? "inspection-incomplete" : "authoring-needed";
   const gaps: PlanningGap[] = [];
   const gap = (code: PlanningGap["code"], relatedIds: string[], guidance: string) => gaps.push({ code, relatedIds: relatedIds.slice(0, 5), guidance });
   const wrongLevel = selectedCharters.filter((entry) => entry.level !== level);
@@ -120,9 +123,13 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   if (!compatibleMatched) gap("no-compatible-plan", [],
     reviewableCandidate
       ? `No registered matching ${level} plan covers the required surface; review the matching workspace candidate and use its pinned path or register it.`
-      : getTestLevelProfile(level).evidencePolicy.requireBusinessOracle
-        ? `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive assertion and independent business Oracle.`
-        : `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive surface assertion.`);
+      : unresolvedCandidateBinding
+        ? "A focused workspace Charter has an unresolved endpoint URL; inspect its level and surface, configure the reviewed test endpoint, then rescan before authoring a new plan."
+        : getTestLevelProfile(level).evidencePolicy.requireBusinessOracle
+          ? `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive assertion and independent business Oracle.`
+          : `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive surface assertion.`);
+  if (!compatibleReady && unresolvedCandidateBinding) gap("candidate-endpoint-binding-unavailable", [],
+    "Inspect the focused Charter's named PROOFKIT_ environment URL, set it to a reviewed test endpoint in the ProofKit process, then repeat scope inspection. Do not use a production URL.");
   if (workspaceCandidates.total && !compatibleReady) gap("unregistered-workspace-charters", [],
     reviewableCandidate
       ? "Review the matching Charter and source flow; then pass its exact relative path and SHA-256 to run_test, or register it. Discovery is not execution approval."
@@ -135,12 +142,11 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
     else if (focus && !oracleMatches.length) gap("oracle-name-unmatched", [],
       "No registered Oracle name literally matches this focus; inspect the existing readers and business contract before choosing one.");
   }
-  const next = [
-    "inspect_test_environment",
-    "inspect_surface",
-    compatibleReady || planningStatus === "candidate-review-needed" ? "run_test"
-      : planningStatus === "inspection-incomplete" ? "inspect_test_scope" : "plan_test",
-  ];
+  const missingTarget = targetConfiguration.required.some((item) => item.status === "missing");
+  const planningNext = compatibleReady || planningStatus === "candidate-review-needed" ? "run_test"
+    : planningStatus === "inspection-incomplete" ? "inspect_test_scope" : "plan_test";
+  const next = ["inspect_test_environment", ...(!missingTarget ? ["inspect_surface"] : []),
+    ...(missingTarget && planningNext === "run_test" ? [] : [planningNext])];
   return TestScopeSchema.parse({
     schemaVersion: 1, testVerdict: "not-asserted", executionChecks: "not-run",
     projectRoot: project.root, workspaceRoot: context.workspaceRoot, sourceState: context.sourceState, workflowInventory: context.workflowInventory,

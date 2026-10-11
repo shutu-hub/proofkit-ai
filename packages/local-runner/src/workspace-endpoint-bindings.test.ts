@@ -134,9 +134,14 @@ describe("external Charter endpoint bindings", () => {
       ], assertions: [{ kind: "text-visible", text: "任务进度" }] }));
     delete process.env[environmentKey];
     const missing = (await service.inspectTestScope({ level: "quick", surface: "electron", focus: "简历获取" }));
-    expect(missing.workspaceCandidates).toMatchObject({ selection: "focused", matched: 1,
+    expect(missing.workspaceCandidates).toMatchObject({ scanStatus: "complete", scanTruncated: false, selection: "focused", matched: 1,
       items: [{ path, focusMatched: true, parseStatus: "invalid", issues: ["endpoint-binding-unavailable"] }] });
-    expect(missing.planningReadiness?.status).not.toBe("candidate-review-needed");
+    expect(missing.planningReadiness).toMatchObject({ status: "inspection-incomplete", gaps: expect.arrayContaining([
+      expect.objectContaining({ code: "candidate-endpoint-binding-unavailable" }),
+    ]) });
+    expect(missing.next.at(-1)).toBe("inspect_test_scope");
+    expect(missing.next).not.toContain("inspect_surface");
+    expect(missing.limitations).not.toContainEqual(expect.stringContaining("candidate discovery is incomplete"));
     process.env[environmentKey] = "http://127.0.0.1:8123/api/v1";
     const configured = (await service.inspectTestScope({ level: "quick", surface: "electron", focus: "简历获取" }));
     expect(configured.workspaceCandidates).toMatchObject({ selection: "focused", matched: 1,

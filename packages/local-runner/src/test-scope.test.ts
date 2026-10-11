@@ -52,6 +52,7 @@ describe("read-only test scope", () => {
     expect(scope.workspaceCandidates).toMatchObject({ total: 2, matched: 0, selection: "fallback-unmatched", omitted: 1 });
     expect(scope.limitations).toContainEqual(expect.stringContaining("fallback candidates"));
     const full = await runner.inspectTestScope({ focus: "简历获取", limit: 50 });
+    expect(full.workspaceCandidates?.scanStatus).toBe("partial");
     expect(full.workspaceCandidates?.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "charters/intake.yml", parseStatus: "valid", actionCount: 1, assertionCount: 0, oracleCount: 1,
         issues: ["missing-positive-assertion", "unregistered-capability", "mcp-workspace-policy-conflict", "unregistered-oracle"] }),
