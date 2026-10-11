@@ -1520,13 +1520,8 @@ export class LocalRunnerService {
   async evidenceFor(runId: string, section: "summary" | "events" | "report" = "summary", maxChars = 20_000): Promise<{ runId: string; section: string; content: string; truncated: boolean }> {
     const safeRunId = validateRunId(runId);
     await this.loadRunSummary(safeRunId);
-    const path = section === "summary"
-      ? resolve(this.evidenceDir, safeRunId, "run.json")
-      : section === "events"
-        ? resolve(this.evidenceDir, safeRunId, "events.jsonl")
-        : resolve(this.evidenceDir, safeRunId, "report.html");
-    const content = await readFile(path, "utf8");
-    return { runId: safeRunId, section, content: content.slice(0, maxChars), truncated: content.length > maxChars };
+    const preview = await this.evidence.readPreview(safeRunId, section, maxChars);
+    return { runId: safeRunId, section, ...preview };
   }
 
   async replay(runId: string, input: Omit<LocalRunInput, "intent" | "charter" | "charterPath"> = {}): Promise<LocalRunStatus> {

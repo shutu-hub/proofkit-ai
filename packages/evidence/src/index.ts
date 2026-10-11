@@ -1,5 +1,5 @@
-import { appendFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { appendFile, lstat, mkdir, open, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
+import { constants, createReadStream } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -23,6 +23,8 @@ export async function atomicWriteJson(path: string, value: unknown): Promise<voi
 }
 
 const REDACT_KEYS = /authorization|cookie|password|secret|token|access[_-]?key|phone|mobile/i;
+const MAX_RUN_SUMMARY_BYTES = 16 * 1024 * 1024;
+const MAX_EVIDENCE_PREVIEW_CHARS = 100_000;
 
 export function sanitizeEvidence(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sanitizeEvidence);
@@ -123,8 +125,28 @@ export class EvidenceStore {
   }
 
   async loadSummary(runId: string): Promise<RunSummary> {
-    const raw = await readFile(join(this.runDir(runId), "run.json"), "utf8");
-    return RunSummarySchema.parse(JSON.parse(raw));
+    const { bytes, truncated } = await this.readRunFilePrefix(runId, "run.json", MAX_RUN_SUMMARY_BYTES);
+    if (truncated) throw new Error("Run summary exceeds its read limit");
+    const summary = RunSummarySchema.parse(JSON.parse(bytes.toString("utf8")));
+    if (summary.runId !== runId) throw new Error("Run summary identity mismatch");
+    return summary;
+  }
+
+  /** Read only a bounded prefix of an allowlisted Run file for CLI/MCP display. */
+  async readPreview(runId: string, section: "summary" | "events" | "report", maxChars = 20_000): Promise<{ content: string; truncated: boolean }> {
+    if (!Number.isInteger(maxChars) || maxChars < 1 || maxChars > MAX_EVIDENCE_PREVIEW_CHARS) {
+      throw new Error(`Evidence preview must be 1–${MAX_EVIDENCE_PREVIEW_CHARS} characters`);
+    }
+    if (section !== "summary" && section !== "events" && section !== "report") throw new Error("Invalid evidence section");
+    const name = section === "summary" ? "run.json" : section === "events" ? "events.jsonl" : "report.html";
+    // Four UTF-8 bytes per UTF-16 code unit is a conservative prefix bound.
+    const { bytes, truncated } = await this.readRunFilePrefix(runId, name, maxChars * 4);
+    const content = bytes.toString("utf8");
+    let preview = content.slice(0, maxChars);
+    if (preview.length === maxChars && /[\uD800-\uDBFF]$/.test(preview) && /[\uDC00-\uDFFF]/.test(content.charAt(maxChars))) {
+      preview = preview.slice(0, -1);
+    }
+    return { content: preview, truncated: truncated || content.length > preview.length };
   }
 
   async writeReport(summary: RunSummary): Promise<string> {
@@ -156,6 +178,37 @@ export class EvidenceStore {
     return join(this.rootDir, runId);
   }
 
+  private async readRunFilePrefix(runId: string, name: "run.json" | "events.jsonl" | "report.html", limit: number): Promise<{ bytes: Buffer; truncated: boolean }> {
+    if (!/^[a-zA-Z0-9_-]+$/.test(runId)) throw new Error("Invalid run id");
+    const root = await realpath(this.rootDir);
+    const runPath = this.runDir(runId);
+    if (!(await lstat(runPath)).isDirectory() || !samePath(await realpath(runPath), join(root, runId))) {
+      throw new Error("Run evidence directory is redirected");
+    }
+    const path = join(runPath, name);
+    const direct = await lstat(path);
+    if (!direct.isFile() || !samePath(await realpath(path), join(root, runId, name))) {
+      throw new Error("Run evidence file is redirected");
+    }
+    const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const info = await file.stat();
+      if (!info.isFile() || info.dev !== direct.dev || info.ino !== direct.ino) {
+        throw new Error("Run evidence file changed during opening");
+      }
+      const capacity = Math.min(limit + 1, Math.max(4_096, info.size + 1));
+      const output = Buffer.allocUnsafe(capacity);
+      let length = 0;
+      while (length < output.length) {
+        const result = await file.read(output, length, output.length - length, length);
+        if (!result.bytesRead) break;
+        length += result.bytesRead;
+      }
+      return { bytes: output.subarray(0, Math.min(length, limit)),
+        truncated: length > limit || info.size > limit || length === capacity };
+    } finally { await file.close(); }
+  }
+
   private relativePath(path: string): string {
     return relative(this.rootDir, path).replaceAll("\\", "/");
   }
@@ -180,4 +233,8 @@ export function createRunId(): string {
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
+}
+
+function samePath(left: string, right: string): boolean {
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }

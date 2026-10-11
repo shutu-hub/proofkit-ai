@@ -1,13 +1,54 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { TestCharterSchema } from "@proofkit/contracts";
 import { atomicWriteJson, EvidenceStore, sha256 } from "./index.js";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 describe("EvidenceStore event streaming", () => {
+  it("bounds previews of large logs without splitting a UTF-8 character", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-preview-")); roots.push(root);
+    const store = new EvidenceStore(root);
+    const charter = TestCharterSchema.parse({ intent: "Inspect preview", level: "quick", actions: [], assertions: [] });
+    await store.startRun({ runId: "run-1", startedAt: "2026-10-12T00:00:00Z", status: "completed", verdict: "passed",
+      charter, steps: [], assertions: [], oracles: [], artifacts: [], findings: [] });
+    await writeFile(join(root, "run-1", "events.jsonl"), `简历测试${"x".repeat(2_000_000)}`);
+    expect(await store.readPreview("run-1", "events", 4)).toEqual({ content: "简历测试", truncated: true });
+    await writeFile(join(root, "run-1", "report.html"), "A🙂B");
+    expect(await store.readPreview("run-1", "report", 2)).toEqual({ content: "A", truncated: true });
+    expect(await store.readPreview("run-1", "summary", 100_000)).toMatchObject({ truncated: false });
+    await expect(store.readPreview("run-1", "events", 100_001)).rejects.toThrow("1–100000");
+    await expect(store.readPreview("run-1", "events", -1)).rejects.toThrow("1–100000");
+  });
+
+  it("rejects redirected Run evidence and mismatched summary identities", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-preview-")); roots.push(root);
+    const store = new EvidenceStore(root);
+    const charter = TestCharterSchema.parse({ intent: "Inspect preview", level: "quick", actions: [], assertions: [] });
+    await store.startRun({ runId: "run-1", startedAt: "2026-10-12T00:00:00Z", status: "completed", verdict: "passed",
+      charter, steps: [], assertions: [], oracles: [], artifacts: [], findings: [] });
+    const outside = join(root, "private.txt");
+    await writeFile(outside, "private evidence outside this Run");
+    try {
+      await symlink(outside, join(root, "run-1", "report.html"), "file");
+      await expect(store.readPreview("run-1", "report", 100)).rejects.toThrow("redirected");
+    } catch (error) {
+      if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+    }
+    const summaryPath = join(root, "run-1", "run.json");
+    const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+    await writeFile(summaryPath, JSON.stringify({ ...summary, runId: "run-2" }));
+    await expect(store.loadSummary("run-1")).rejects.toThrow("identity mismatch");
+    await truncate(summaryPath, 16 * 1024 * 1024 + 1);
+    await expect(store.loadSummary("run-1")).rejects.toThrow("read limit");
+    await mkdir(join(root, "other"));
+    await symlink(join(root, "other"), join(root, "run-2"), process.platform === "win32" ? "junction" : "dir");
+    await expect(store.readPreview("run-2", "summary", 100)).rejects.toThrow("redirected");
+  });
+
   it("keeps the previous atomic snapshot on serialization failure and removes its temporary file", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-atomic-evidence-")); roots.push(root);
     const path = join(root, "journal.json");

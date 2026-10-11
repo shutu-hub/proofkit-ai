@@ -124,6 +124,8 @@ Runner 会在每条页面断言执行后立即保存页面快照，并尽力保�
 
 Mission 采集 Run 证据时，业务事实、断言快照等 artifact 必须同时存在于本次 Run、列在 Run 摘要中，并与 `artifact.created` 事件当时记录的字节数和 SHA-256 相符；引用保存该摘要。事件日志解析限制为 16 MiB、单条 256 KiB，单个证据文件校验限制为 64 MiB；缺失、越界、无效或内容改变的 artifact 不进入可确认的证据集合。修复比较再次核对摘要；旧 Mission 没有摘要的引用在结果页标为“完整性未验证”，不会用于确认修复。`run.json`、`report.html` 和 `events.jsonl` 的摘要在 Mission 采集时形成，不能证明采集前未被本地可信代码修改，也不能抵御能同时改写 Run 与 Mission 状态的恶意工作区操作者。
 
+MCP `get_evidence` 只读取所选 Run 文件的有界前缀，最多返回 10 万个 UTF-16 字符，并拒绝重定向的 Run 目录或文件；读取前仍核对 Run 摘要的身份和项目/工作区归属。Run 摘要读取上限为 16 MiB，超限时拒绝读取。该入口是证据预览，不会因为预览被截断就改变已保存的产品结论；完整性与归属仍由 Mission 审计决定。
+
 ## 接入与技术栈
 
 用户侧安装单个 `proofkit-ai` 包，提供 `proofkit` 和 `proofkit-mcp` 命令。源码开发采用 Node.js 22+、TypeScript、pnpm、Zod、Playwright Core 和 MCP SDK；计划使用 YAML，任务与证据使用本地 JSON/JSONL。npm tarball 已可独立安装，注册表发布尚未完成。
