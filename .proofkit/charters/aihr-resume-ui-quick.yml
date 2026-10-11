@@ -1,5 +1,6 @@
 intent: 快速检查 AIHR BOSS 简历获取页面可用
 level: quick
+surfaces: [web, electron]
 mode: deterministic
 sideEffectPolicy: deny
 preconditions:

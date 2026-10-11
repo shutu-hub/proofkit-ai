@@ -209,7 +209,7 @@ export const resumeStatusRoute = '/api/v1/resume-status';
     if (!expected.noCatalog) {
       for (const level of catalogLevels) await writeFile(join(workspace, ".proofkit", "charters", `resume-${level}.yml`), JSON.stringify(plan(level)));
     } else if (expected.candidatePath) {
-      await writeFile(join(workspace, expected.candidatePath), JSON.stringify(plan("core")));
+      await writeFile(join(workspace, expected.candidatePath), JSON.stringify({ ...plan("core"), surfaces: [expected.surface] }));
     }
     await writeFile(join(workspace, ".proofkit", "integration.mjs"), surface === "mobile" && expected.level === "core"
       ? `export default { name: 'host-evaluation-mobile-fixture', version: '1.0.0', oracles: [{

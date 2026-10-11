@@ -220,6 +220,8 @@ export function normalizePlanningQuality(value?: PlanningQuality): PlanningQuali
 export const TestCharterSchema = z.object({
   intent: z.string().min(1),
   level: TestLevelSchema.default("core"),
+  /** Explicit platform claim for direct workspace candidates; catalog entries retain their own surface matrix. */
+  surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1).max(3).refine((items) => new Set(items).size === items.length).optional(),
   levelSelection: TestLevelSelectionSchema.optional(),
   planning: PlanningQualitySchema.optional(),
   mode: RunModeSchema.default("guided"),
@@ -995,11 +997,12 @@ export const TestScopeSchema = z.object({
       focusMatched: z.boolean(),
       parseStatus: z.enum(["valid", "invalid", "oversized", "unreadable"]),
       level: TestLevelSchema.optional(),
+      surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1).max(3).optional(),
       sideEffectPolicy: SideEffectPolicySchema.optional(),
       actionCount: ScopeCountSchema.optional(),
       assertionCount: ScopeCountSchema.optional(),
       oracleCount: ScopeCountSchema.optional(),
-      issues: z.array(z.enum(["invalid-charter", "file-too-large", "file-unavailable", "missing-positive-assertion", "missing-business-oracle", "unregistered-capability", "unregistered-oracle", "capability-environment-mismatch", "write-opt-in-required", "scenario-side-effect-policy-conflict", "mcp-workspace-policy-conflict"])).max(11),
+      issues: z.array(z.enum(["invalid-charter", "file-too-large", "file-unavailable", "missing-positive-assertion", "missing-business-oracle", "unregistered-capability", "unregistered-oracle", "capability-environment-mismatch", "write-opt-in-required", "scenario-side-effect-policy-conflict", "mcp-workspace-policy-conflict", "inline-oracle-name-conflict", "inline-oracle-binding-invalid", "inline-oracle-current-id-missing", "oracle-origin-disallowed", "web-origin-disallowed", "surface-unspecified", "surface-mismatch"])).max(18),
     })).max(50),
   }).optional(),
   limitations: z.array(z.string()),

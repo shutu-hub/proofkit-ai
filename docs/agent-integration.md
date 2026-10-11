@@ -397,6 +397,7 @@ contract, not a ready-made AIHR workflow; inspect real routes and controls:
 ```yaml
 intent: Verify one resume submission and its terminal processing state
 level: core
+surfaces: [web]
 sideEffectPolicy: allow
 actions:
   - kind: goto

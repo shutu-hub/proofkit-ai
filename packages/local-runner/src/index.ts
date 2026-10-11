@@ -23,6 +23,7 @@ import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from 
 import { summarizeWorkflowExecution } from "./workflow-coverage.js";
 import { admitReviewedWorkflowScope, auditWorkflowReview } from "./workflow-review-audit.js";
 import { inspectTestScope } from "./test-scope.js";
+import { firstInlineOracleIssue, isAllowedMcpWebUrl, isLoopbackHost } from "./inline-oracle-validation.js";
 import { readWorkspaceCharterFile } from "./workspace-charter-file.js";
 import { compareCurrentSource, projectMissionResult } from "./mission-result.js";
 import type { MissionResult, MissionRepeatSeriesStatus, MissionStabilityAnalysis } from "@proofkit/contracts";
@@ -337,6 +338,7 @@ export class LocalRunnerService {
 
   async createMission(input: MissionCreateOptions): Promise<TestMission> {
     if (input.charterPath !== undefined) {
+      if (input.surface === "api") throw new Error("Mission surface is not enabled by the local runner: api");
       if (!input.charterSha256) throw new Error("Candidate Charter path requires the SHA-256 returned by scope inspection");
       if (input.charter || input.charterId || input.suiteId) throw new Error("Candidate Charter path cannot be combined with a submitted Charter or catalog selection");
       if (input.url || input.expect?.length || input.oracleNames?.length || input.mode || input.sideEffectPolicy) {
@@ -355,6 +357,12 @@ export class LocalRunnerService {
       const requestedLevel = resolveTestLevel(input.intent, input.level).resolved;
       if (loaded.charter.level !== requestedLevel) {
         throw new Error(`Candidate Charter level ${loaded.charter.level} does not match requested level ${requestedLevel}`);
+      }
+      const requestedSurface = selectMissionSurface(input.intent, input.surface ?? input.adapter);
+      const requiredSurfaces = requiredCatalogSurfaces(requestedLevel, requestedSurface);
+      if (!loaded.charter.surfaces) throw new Error("Candidate Charter must declare its supported surfaces before Mission creation");
+      if (!requiredSurfaces.every((surface) => loaded.charter.surfaces?.includes(surface))) {
+        throw new Error(`Candidate Charter does not support the requested ${requiredSurfaces.join(" + ")} surface matrix`);
       }
       return this.createMission({ ...input, level: requestedLevel, charterPath: undefined, charterSha256: undefined,
         charter: TestCharterSchema.parse({ ...loaded.charter, metadata: { ...loaded.charter.metadata,
@@ -489,6 +497,9 @@ export class LocalRunnerService {
     if (charter.level !== levelSelection.resolved) {
       throw new Error(`Charter level ${charter.level} does not match requested level ${levelSelection.resolved}`);
     }
+    if (charter.surfaces && !requiredCatalogSurfaces(levelSelection.resolved, surface).every((required) => charter.surfaces?.includes(required))) {
+      throw new Error(`Charter does not support the requested ${requiredCatalogSurfaces(levelSelection.resolved, surface).join(" + ")} surface matrix`);
+    }
     const normalizedCharter = TestCharterSchema.parse({ ...charter,
       levelSelection: charter.levelSelection ?? levelSelection,
       ...(projectMap ? { planning: withPlanningCoverage(charter.planning, coverage) } : {}),
@@ -614,30 +625,14 @@ export class LocalRunnerService {
   }
 
   private validateInlineHttpOracles(label: string, charter: TestCharter): void {
-    const definitions = charter.httpOracles ?? [];
-    const names = definitions.map((definition) => definition.name);
-    if (new Set(names).size !== names.length) throw new Error(`${label} has duplicate inline Oracle names`);
     const registered = new Set([...this.oracles.map((oracle) => oracle.name), ...this.config.oracles.map((oracle) => oracle.name)]);
-    for (const definition of definitions) {
-      if (registered.has(definition.name)) throw new Error(`${label} inline Oracle shadows a registered Oracle: ${definition.name}`);
-      if (this.restrictWebOrigins && !isLoopback(new URL(definition.url).hostname)) {
-        throw new Error(`${label} inline Oracle must use loopback in MCP mode: ${definition.name}`);
-      }
-      const scenarios = [{ name: "main", actions: charter.actions, oracles: charter.oracles ?? [] },
-        ...(charter.negativeCases ?? []).map((item) => ({ name: item.caseId, actions: item.actions, oracles: item.oracles }))];
-      for (const scenario of scenarios.filter((item) => item.oracles.includes(definition.name))) {
-        let hasCurrentId = false;
-        for (const binding of Object.values(definition.query)) {
-          const stepIndex = Number(binding.stepId.slice(5)) - 1;
-          const action = scenario.actions[stepIndex];
-          if (action?.kind !== "captureResponse" || !Object.hasOwn(action.response.fields, binding.field)) {
-            throw new Error(`${label} inline Oracle ${definition.name} must bind a captured field in ${scenario.name}`);
-          }
-          hasCurrentId ||= action.response.fields[binding.field]?.type === "id";
-        }
-        if (!hasCurrentId) throw new Error(`${label} inline Oracle ${definition.name} needs a captured current ID in ${scenario.name}`);
-      }
-    }
+    const issue = firstInlineOracleIssue(charter, registered, this.restrictWebOrigins);
+    if (!issue) return;
+    if (issue.code === "duplicate-name") throw new Error(`${label} has duplicate inline Oracle names`);
+    if (issue.code === "registered-name-conflict") throw new Error(`${label} inline Oracle shadows a registered Oracle: ${issue.name}`);
+    if (issue.code === "origin-disallowed") throw new Error(`${label} inline Oracle must use loopback in MCP mode: ${issue.name}`);
+    if (issue.code === "binding-invalid") throw new Error(`${label} inline Oracle ${issue.name} must bind a captured field in ${issue.scenario}`);
+    throw new Error(`${label} inline Oracle ${issue.name} needs a captured current ID in ${issue.scenario}`);
   }
 
   async approveMission(missionId: string): Promise<TestMission> {
@@ -1771,15 +1766,12 @@ export class LocalRunnerService {
 
   private validateWebOrigins(charter: TestCharter, input: LocalRunInput): void {
     if (!this.restrictWebOrigins) return;
-    const configuredOrigin = this.config.surfaces.web?.baseUrl
-      ? new URL(this.config.surfaces.web.baseUrl).origin
-      : undefined;
     const urls = [input.url, ...charter.actions.flatMap((action) => action.kind === "goto" ? [action.url]
       : action.kind === "captureResponse" ? [action.response.url] : [])];
     for (const value of urls) {
       if (!value) continue;
       const parsed = new URL(value);
-      if (isLoopback(parsed.hostname) || parsed.origin === configuredOrigin) continue;
+      if (isAllowedMcpWebUrl(value, this.config.surfaces.web?.baseUrl)) continue;
       throw new Error(`Web URL is outside the configured origin: ${parsed.origin}`);
     }
   }
@@ -1914,5 +1906,5 @@ function toError(error: unknown): Error {
 }
 
 function isLoopback(hostname: string): boolean {
-  return ["localhost", "[::1]"].includes(hostname) || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+  return isLoopbackHost(hostname);
 }

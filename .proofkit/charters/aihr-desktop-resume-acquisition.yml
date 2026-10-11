@@ -1,5 +1,6 @@
 intent: 验证 AIHR 桌面端立即运行产生的本次 BOSS 简历完成处理和岗位评估
 level: core
+surfaces: [electron]
 mode: deterministic
 sideEffectPolicy: allow
 preconditions:

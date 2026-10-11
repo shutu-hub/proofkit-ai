@@ -32,7 +32,7 @@ describe("CLI workspace onboarding", () => {
     await writeFile(join(workspace, ".proofkit", "config.yaml"), JSON.stringify({ project: { root } }));
     const path = ".proofkit/charters/quick.yml";
     await writeFile(join(workspace, ".proofkit", "charters", "quick.yml"), JSON.stringify({
-      intent: "quick candidate", level: "quick", actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny",
+      intent: "quick candidate", level: "quick", surfaces: ["web"], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny",
     }));
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const run = (...args: string[]) => createProgram().parseAsync(["node", "proofkit", ...args, "--root", root, "--workspace", workspace]);

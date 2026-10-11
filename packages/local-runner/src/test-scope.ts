@@ -68,7 +68,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const capabilityMatches = context.capabilities.filter((item) => matches(item.name, item.description));
   const allOracles = [...context.oracles.map((item) => ({ name: item.name, kind: "registered" as const })), ...config.oracles.map((item) => ({ name: item.name, kind: "configured-http" as const }))];
   const oracleMatches = allOracles.filter((item) => matches(item.name));
-  const workspaceCandidates = await inspectWorkspaceCandidates(context, request.focus, limit);
+  const workspaceCandidates = await inspectWorkspaceCandidates(context, request.focus, limit, requiredSurfaces);
   const { entryPoints: _entries, routeHints: _routes, ...inventory } = project.inventory;
   const limitations = [
     "Target configuration is a read-only declaration check; endpoint reachability, process ownership, login and business readiness require separate inspection or execution",

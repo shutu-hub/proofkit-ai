@@ -46,7 +46,7 @@ describe("MCP external workspace", () => {
       await writeFile(join(workspaceRoot, ".proofkit", "config.yaml"), JSON.stringify({ project: { root } }));
       const candidatePath = ".proofkit/charters/quick.yml";
       const file = join(workspaceRoot, ".proofkit", "charters", "quick.yml");
-      const charter = { intent: "quick candidate", level: "quick", actions: [],
+      const charter = { intent: "quick candidate", level: "quick", surfaces: ["web"], actions: [],
         assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" };
       await writeFile(file, JSON.stringify(charter));
       server = await createProofkitMcp({ root, workspaceRoot });
@@ -71,7 +71,7 @@ describe("MCP external workspace", () => {
       expect(missingDigest.isError).toBe(true);
       const corePath = ".proofkit/charters/core.yml";
       await writeFile(join(workspaceRoot, ".proofkit", "charters", "core.yml"), JSON.stringify({
-        intent: "core candidate", level: "core", actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny",
+        intent: "core candidate", level: "core", surfaces: ["web"], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny",
       }));
       const coreScope = payload(await client.callTool({ name: "inspect_test_scope", arguments: { level: "core", focus: "core.yml" } }));
       const coreCandidate = coreScope.workspaceCandidates.items[0];

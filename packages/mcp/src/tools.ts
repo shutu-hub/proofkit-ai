@@ -21,7 +21,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "inspect_test_scope",
-    "Read candidate source entry points, route declarations, required surface connection declarations, registered and unregistered workspace Charter hints, plan gaps, and business capabilities/Oracles. Optional focus is a literal substring. candidate-review-needed means inspect the external Charter and source flow, then use its returned path and SHA-256 with run_test. Target configuration is not a runtime check; this does not register or run tests or prove coverage.",
+    "Read candidate source entry points, route declarations, required surface connection declarations, registered and unregistered workspace Charter hints, plan gaps, and business capabilities/Oracles. Optional focus is a literal substring. A direct workspace candidate needs declared surfaces matching the requested matrix. candidate-review-needed means inspect the external Charter and source flow, then use its returned path and SHA-256 with run_test. Target configuration is not a runtime check; this does not register or run tests or prove coverage.",
     TestScopeInputSchema.shape,
     READ_ONLY_TOOL,
     async (input) => result(await runner.inspectTestScope(input)),
@@ -143,7 +143,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "await_test_result",
-    "Wait briefly for an existing Mission without starting or replaying it. A terminal result includes an audited brief verdict and cited evidence, so another evidence read is optional unless more detail is needed. An unstarted Mission returns not-asserted and readiness gaps; cancelling this wait does not cancel the Mission.",
+    "Wait briefly for an existing Mission without starting or replaying it. A terminal result includes an audited brief verdict and cited evidence, so another evidence read is optional unless more detail is needed. A saved running Mission whose owner is temporarily unseen is rechecked until this wait ends; an unstarted Mission returns not-asserted and readiness gaps. Cancelling this wait does not cancel the Mission.",
     { missionId: z.string().min(1), timeoutMs: z.number().int().min(500).max(30_000).default(20_000) },
     async ({ missionId, timeoutMs }, extra) => result(await awaitTestResult(runner, missionId, timeoutMs, extra.signal)),
   );
@@ -334,6 +334,13 @@ async function awaitTestResult(runner: LocalRunnerService, missionId: string, ti
       status = evidence.status;
       running = evidence.running;
     }
+    const remaining = deadline - Date.now();
+    if (!running && status === "running" && remaining > 0) {
+      // The durable status can lead the execution lease during startup or finalization.
+      // Do not tell a host to restart a Mission while that transition can still settle.
+      await delay(Math.min(500, remaining), undefined, signal ? { signal } : undefined);
+      continue;
+    }
     if (!running) {
       const readiness = missionReadiness(current.mission);
       let next: string[];
@@ -349,7 +356,6 @@ async function awaitTestResult(runner: LocalRunnerService, missionId: string, ti
       return { state: "needs-action" as const, missionId, status, running: false,
         testVerdict: "not-asserted" as const, progress: missionProgress(current.mission), readiness, next };
     }
-    const remaining = deadline - Date.now();
     if (remaining <= 0) return { state: "still-running" as const, missionId, status,
       running: true, testVerdict: "not-asserted" as const,
       progress: missionProgress(current.mission), next: ["await_test_result"] };

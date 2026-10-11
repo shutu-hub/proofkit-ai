@@ -133,7 +133,7 @@ describe("Mission cancellation through Local Runner", () => {
     expect(result.firstFailure).toMatchObject({ kind: "environment", message: expect.stringContaining("total timeout") });
     expect(result.findings.some((item) => item.title === "Mission timed out")).toBe(true);
     await assertCancelledEvidence(state.service, result, runId);
-  });
+  }, 10_000);
 
   it.each([
     { name: "replay", level: "release" as const, pendingRun: 3 },

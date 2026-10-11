@@ -2,6 +2,7 @@ import { lstat, opendir } from "node:fs/promises";
 import { join } from "node:path";
 import { hasPositiveSurfaceAssertion, type ProofkitConfig, type TestScope } from "@proofkit/contracts";
 import { resolveWithinWorkspace } from "@proofkit/project";
+import { firstInlineOracleIssue, isAllowedMcpWebUrl, isLoopbackHost } from "./inline-oracle-validation.js";
 import { readWorkspaceCharterFile, WorkspaceCharterFileError } from "./workspace-charter-file.js";
 
 type Candidates = NonNullable<TestScope["workspaceCandidates"]>;
@@ -20,7 +21,8 @@ const MAX_DIRECTORY_ENTRIES = 256;
 const MAX_CANDIDATES = 100;
 
 /** Read-only, bounded hints. Discovery never registers or executes a Charter. */
-export async function inspectWorkspaceCandidates(context: CandidateContext, focus: string | undefined, limit: number): Promise<Candidates> {
+export async function inspectWorkspaceCandidates(context: CandidateContext, focus: string | undefined, limit: number,
+  requiredSurfaces: readonly ("web" | "electron" | "mobile")[]): Promise<Candidates> {
   const registered = new Set(context.config.charters.flatMap((entry) => {
     try { return [resolveWithinWorkspace(context.workspaceRoot, entry.path)]; }
     catch { return []; }
@@ -70,12 +72,15 @@ export async function inspectWorkspaceCandidates(context: CandidateContext, focu
         item.parseStatus = "valid";
         item.sha256 = sha256;
         item.level = charter.level;
+        item.surfaces = charter.surfaces;
         item.sideEffectPolicy = charter.sideEffectPolicy;
         item.actionCount = charter.actions.length;
         item.assertionCount = charter.assertions.length;
         item.oracleCount = charter.oracles?.length ?? 0;
         if (!hasPositiveSurfaceAssertion(charter.assertions)) item.issues.push("missing-positive-assertion");
         if (charter.level !== "quick" && !item.oracleCount) item.issues.push("missing-business-oracle");
+        if (!charter.surfaces) item.issues.push("surface-unspecified");
+        else if (!requiredSurfaces.every((surface) => charter.surfaces?.includes(surface))) item.issues.push("surface-mismatch");
         const actions = [...charter.actions, ...(charter.negativeCases ?? []).flatMap((negative) => negative.actions)];
         if (actions.some((action) => action.kind === "capability" && !knownCapabilities.has(action.name))) item.issues.push("unregistered-capability");
         const usedCapabilities = actions.flatMap((action) => action.kind === "capability" ? [knownCapabilities.get(action.name)] : []).filter((item) => item !== undefined);
@@ -93,6 +98,17 @@ export async function inspectWorkspaceCandidates(context: CandidateContext, focu
         const oracleNames = [...(charter.oracles ?? []), ...(charter.negativeCases ?? []).flatMap((negative) => negative.oracles)];
         const availableOracles = new Set([...knownOracles, ...(charter.httpOracles ?? []).map((oracle) => oracle.name)]);
         if (oracleNames.some((oracle) => !availableOracles.has(oracle))) item.issues.push("unregistered-oracle");
+        const inlineIssue = firstInlineOracleIssue(charter, knownOracles, context.restrictWebOrigins);
+        if (inlineIssue?.code === "duplicate-name" || inlineIssue?.code === "registered-name-conflict") item.issues.push("inline-oracle-name-conflict");
+        if (inlineIssue?.code === "binding-invalid") item.issues.push("inline-oracle-binding-invalid");
+        if (inlineIssue?.code === "current-id-missing") item.issues.push("inline-oracle-current-id-missing");
+        if (inlineIssue?.code === "origin-disallowed" || context.restrictWebOrigins && context.config.oracles.some((oracle) =>
+          oracleNames.includes(oracle.name) && !isLoopbackHost(new URL(oracle.url).hostname))) item.issues.push("oracle-origin-disallowed");
+        if (context.restrictWebOrigins && actions.some((action) =>
+          (action.kind === "goto" && !isAllowedMcpWebUrl(action.url, context.config.surfaces.web?.baseUrl))
+          || (action.kind === "captureResponse" && !isAllowedMcpWebUrl(action.response.url, context.config.surfaces.web?.baseUrl)))) {
+          item.issues.push("web-origin-disallowed");
+        }
         searchable = [relativePath, charter.intent, ...actions.filter((action) => action.kind === "capability").map((action) => action.name), ...oracleNames].join(" ");
       } catch (error) {
         if (error instanceof WorkspaceCharterFileError && error.issue === "invalid-charter") {

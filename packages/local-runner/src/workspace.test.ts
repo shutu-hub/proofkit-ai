@@ -32,7 +32,7 @@ async function fixture() {
   return { base, root, workspaceRoot };
 }
 
-const charter = () => TestCharterSchema.parse({ intent: "verify fixture", level: "quick", actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" });
+const charter = () => TestCharterSchema.parse({ intent: "verify fixture", level: "quick", surfaces: ["web"], actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" });
 
 describe("external test workspace", () => {
   it("creates a Mission only from a digest-pinned, direct external Charter file", async () => {

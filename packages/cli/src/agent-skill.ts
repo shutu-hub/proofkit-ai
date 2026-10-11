@@ -53,6 +53,12 @@ Review workspaceCandidates when the external workspace has unregistered
 Charter files. These are read-only, bounded hints, including structural issue
 codes; they are never catalog-ready or executable by discovery alone. A
 fallback-unmatched selection means no candidate literally matched the focus.
+Resolve inline Oracle name, current-response binding and URL-origin issue codes
+before selecting a candidate; the same constraints are enforced at Mission
+creation. An empty issue list is still not an environment or business pass.
+Direct candidate files must declare surfaces such as [web] or [electron].
+For release on Web or Electron, declare both. A missing or mismatched platform
+is a planning gap; inspect the owning UI flow before changing this declaration.
 Inspect the Charter and source flow, and repair missing assertions or Oracles.
 After review, use run_test with the relative charterPath exactly as returned
 by workspaceCandidates and the exact charterSha256 from the same scope
@@ -247,6 +253,9 @@ Read the live run_test input schema and inspect_test_scope capability hints.
 The server's Zod validation is authoritative. Keep the Charter in the external
 workspace; use an inline Charter for one Mission, or save a proven scenario in
 the workspace catalog for reuse. A model confidence score cannot prove readiness.
+For a digest-pinned direct workspace candidate, declare supported surfaces in
+the Charter. A catalog entry supplies its own surface matrix; a structured
+inline submission may also declare surfaces to prevent wrong-platform use.
 
 ## Minimal read-only core example
 

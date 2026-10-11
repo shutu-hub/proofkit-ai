@@ -20,11 +20,11 @@ describe("read-only test scope", () => {
     const candidateDir = join(runner.workspaceRoot, ".proofkit", "charters");
     await mkdir(candidateDir, { recursive: true });
     await writeFile(join(candidateDir, "online-resume.yml"), JSON.stringify({
-      intent: "验证简历获取链路", level: "core", actions: [{ kind: "observe" }],
+      intent: "验证简历获取链路", level: "core", surfaces: ["web"], actions: [{ kind: "observe" }],
       assertions: [{ kind: "text-visible", text: "done" }], oracles: ["resume.terminal"],
     }));
     await writeFile(join(runner.workspaceRoot, "charters", "unregistered.yml"), JSON.stringify({
-      intent: "another workflow", level: "quick", actions: [], assertions: [{ kind: "title-contains", text: "ready" }],
+      intent: "another workflow", level: "quick", surfaces: ["web"], actions: [], assertions: [{ kind: "title-contains", text: "ready" }],
     }));
     const scope = await runner.inspectTestScope({ focus: "简历获取", level: "core" });
     expect(scope.workspaceCandidates).toMatchObject({ scanStatus: "complete", total: 2, matched: 1, selection: "focused", omitted: 0,
@@ -44,7 +44,7 @@ describe("read-only test scope", () => {
   it("uses an explicit unmatched fallback and reports structural gaps without exposing Charter content", async () => {
     const { runner } = await fixture();
     await writeFile(join(runner.workspaceRoot, "charters", "intake.yml"), JSON.stringify({
-      intent: "private-intent-token", level: "core", actions: [{ kind: "capability", name: "missing.reader" }],
+      intent: "private-intent-token", level: "core", surfaces: ["web"], actions: [{ kind: "capability", name: "missing.reader" }],
       assertions: [], oracles: ["missing.oracle"], sideEffectPolicy: "allow",
     }));
     await writeFile(join(runner.workspaceRoot, "charters", "broken.yml"), "intent: [private-yaml-token\n");
@@ -64,7 +64,7 @@ describe("read-only test scope", () => {
   it("counts selected inline Oracles and reports execution-policy gaps for candidate Charters", async () => {
     const { runner } = await fixture();
     await writeFile(join(runner.workspaceRoot, "charters", "inline-reader.yml"), JSON.stringify({
-      intent: "inline reader", level: "core", sideEffectPolicy: "allow",
+      intent: "inline reader", level: "core", surfaces: ["web"], sideEffectPolicy: "allow",
       actions: [{ kind: "captureResponse", name: "submit", trigger: { kind: "click", selector: "#submit" },
         response: { url: "http://127.0.0.1:5173/api/v1/intakes", method: "POST", fields: { fileId: { pointer: "/data/file_id", type: "id" } } } }],
       assertions: [{ kind: "text-visible", text: "submitted" }], oracles: ["current-file"],
@@ -83,7 +83,7 @@ describe("read-only test scope", () => {
       issues: ["missing-business-oracle"] })]);
 
     await writeFile(join(runner.workspaceRoot, "charters", "write-candidate.yml"), JSON.stringify({
-      intent: "write candidate", level: "core", sideEffectPolicy: "allow",
+      intent: "write candidate", level: "core", surfaces: ["web"], sideEffectPolicy: "allow",
       actions: [{ kind: "capability", name: "resume.write" }],
       assertions: [{ kind: "text-visible", text: "done" }], oracles: ["resume.terminal"],
     }));
@@ -98,12 +98,92 @@ describe("read-only test scope", () => {
       "capability-environment-mismatch", "write-opt-in-required", "mcp-workspace-policy-conflict",
     ] })]);
     await writeFile(join(runner.workspaceRoot, "charters", "write-policy.yml"), JSON.stringify({
-      intent: "write policy", level: "quick", sideEffectPolicy: "deny",
+      intent: "write policy", level: "quick", surfaces: ["web"], sideEffectPolicy: "deny",
       actions: [{ kind: "capability", name: "resume.write" }], assertions: [{ kind: "text-visible", text: "done" }],
     }));
     const policy = await restricted.inspectTestScope({ focus: "write-policy" });
     expect(policy.workspaceCandidates?.items[0]?.issues).toEqual(expect.arrayContaining(["scenario-side-effect-policy-conflict", "write-opt-in-required"]));
     expect(write.testVerdict).toBe("not-asserted");
+  });
+
+  it("does not direct an Agent to run a candidate rejected by Mission Oracle and origin rules", async () => {
+    const { runner } = await fixture();
+    const config = ProofkitConfigSchema.parse({ ...runner.config,
+      policies: { ...runner.config.policies, sideEffects: "allow" },
+      oracles: [...runner.config.oracles, { name: "remote-status", url: "https://remote.example.test/state",
+        statusPointer: "/state", successValues: ["done"] }],
+    });
+    const service = new LocalRunnerService({ root: runner.root, workspaceRoot: runner.workspaceRoot, config, restrictWebOrigins: true });
+    const capture = { kind: "captureResponse", name: "submit", trigger: { kind: "click", selector: "#submit" },
+      response: { url: "http://127.0.0.1:5173/api/v1/intakes", method: "POST",
+        fields: { fileId: { pointer: "/data/file_id", type: "id" } } } };
+    const reader = { name: "current-file", url: "http://127.0.0.1:8080/api/v1/files/status",
+      query: { fileId: { source: "response", stepId: "step-001", field: "fileId", matchPointer: "/data/file_id" } },
+      statusPointer: "/data/status", successValues: ["complete"] };
+    const base = { intent: "intake candidate", level: "core", surfaces: ["web"], sideEffectPolicy: "allow", actions: [capture],
+      assertions: [{ kind: "text-visible", text: "submitted" }], oracles: ["current-file"], httpOracles: [reader] };
+    const cases = [
+      { name: "bad-binding", charter: { ...base, httpOracles: [{ ...reader,
+        query: { fileId: { ...reader.query.fileId, stepId: "step-002" } } }] }, issue: "inline-oracle-binding-invalid", error: "must bind a captured field" },
+      { name: "no-current-id", charter: { ...base, actions: [{ ...capture,
+        response: { ...capture.response, fields: { fileId: { pointer: "/data/file_id", type: "string" } } } }] },
+      issue: "inline-oracle-current-id-missing", error: "needs a captured current ID" },
+      { name: "duplicate-reader", charter: { ...base, httpOracles: [reader, reader] },
+        issue: "inline-oracle-name-conflict", error: "duplicate inline Oracle names" },
+      { name: "remote-inline", charter: { ...base, httpOracles: [{ ...reader, url: "https://remote.example.test/state" }] }, issue: "oracle-origin-disallowed", error: "loopback" },
+      { name: "remote-configured", charter: { ...base, oracles: ["remote-status"], httpOracles: [] }, issue: "oracle-origin-disallowed", error: "loopback" },
+      { name: "remote-action", charter: { ...base, actions: [{ ...capture,
+        response: { ...capture.response, url: "https://remote.example.test/intakes" } }] }, issue: "web-origin-disallowed", error: "outside the configured origin" },
+    ];
+    for (const item of cases) {
+      const path = `charters/${item.name}.yml`;
+      await writeFile(join(service.workspaceRoot, path), JSON.stringify(item.charter));
+      const scope = await service.inspectTestScope({ focus: item.name });
+      const candidate = scope.workspaceCandidates?.items[0];
+      expect(candidate).toMatchObject({ path, parseStatus: "valid", issues: expect.arrayContaining([item.issue]) });
+      expect(scope.planningReadiness?.status).toBe("authoring-needed");
+      expect(scope.next.at(-1)).toBe("plan_test");
+      await expect(service.createMission({ intent: "intake candidate", level: "core", surface: "web",
+        charterPath: path, charterSha256: candidate!.sha256 })).rejects.toThrow(item.error);
+    }
+    await writeFile(join(service.workspaceRoot, "charters", "valid-inline.yml"), JSON.stringify(base));
+    const valid = await service.inspectTestScope({ focus: "valid-inline" });
+    expect(valid.workspaceCandidates?.items[0]).toMatchObject({ parseStatus: "valid", issues: [] });
+    expect(valid.planningReadiness?.status).toBe("candidate-review-needed");
+  });
+
+  it("requires a declared candidate platform and matches the requested surface matrix", async () => {
+    const { runner } = await fixture();
+    const desktopPath = "charters/desktop-candidate.yml";
+    const desktop = { intent: "desktop candidate", level: "core", surfaces: ["electron"],
+      actions: [{ kind: "observe" }], assertions: [{ kind: "text-visible", text: "ready" }], oracles: ["resume.terminal"] };
+    await writeFile(join(runner.workspaceRoot, desktopPath), JSON.stringify(desktop));
+    const web = await runner.inspectTestScope({ level: "core", surface: "web", focus: "desktop-candidate" });
+    expect(web.workspaceCandidates?.items[0]).toMatchObject({ surfaces: ["electron"], issues: ["surface-mismatch"] });
+    expect(web.planningReadiness?.status).toBe("authoring-needed");
+    await expect(runner.createMission({ intent: "desktop candidate", level: "core", surface: "web",
+      charterPath: desktopPath, charterSha256: web.workspaceCandidates!.items[0]!.sha256 })).rejects.toThrow("does not support the requested web");
+    const electron = await runner.inspectTestScope({ level: "core", surface: "electron", focus: "desktop-candidate" });
+    expect(electron.workspaceCandidates?.items[0]).toMatchObject({ surfaces: ["electron"], issues: [] });
+    expect(electron.planningReadiness?.status).toBe("candidate-review-needed");
+    const mission = await runner.createMission({ intent: "desktop candidate", level: "core", surface: "electron",
+      charterPath: desktopPath, charterSha256: electron.workspaceCandidates!.items[0]!.sha256 });
+    expect(mission.surface).toBe("electron");
+
+    const unspecifiedPath = "charters/unspecified-candidate.yml";
+    await writeFile(join(runner.workspaceRoot, unspecifiedPath), JSON.stringify({ ...desktop, surfaces: undefined }));
+    const unspecified = await runner.inspectTestScope({ level: "core", surface: "electron", focus: "unspecified-candidate" });
+    expect(unspecified.workspaceCandidates?.items[0]?.issues).toEqual(["surface-unspecified"]);
+    await expect(runner.createMission({ intent: "desktop candidate", level: "core", surface: "electron",
+      charterPath: unspecifiedPath, charterSha256: unspecified.workspaceCandidates!.items[0]!.sha256 })).rejects.toThrow("must declare its supported surfaces");
+
+    const releasePath = "charters/release-web-candidate.yml";
+    await writeFile(join(runner.workspaceRoot, releasePath), JSON.stringify({ ...desktop, intent: "release candidate", level: "release", surfaces: ["web"] }));
+    const release = await runner.inspectTestScope({ level: "release", surface: "web", focus: "release-web-candidate" });
+    expect(release.selection.requiredSurfaces).toEqual(["web", "electron"]);
+    expect(release.workspaceCandidates?.items[0]?.issues).toEqual(["surface-mismatch"]);
+    await expect(runner.createMission({ intent: "release candidate", level: "release", surface: "web",
+      charterPath: releasePath, charterSha256: release.workspaceCandidates!.items[0]!.sha256 })).rejects.toThrow("web + electron");
   });
 
   it("caps candidate reads and enumeration and excludes links and registered files", async () => {

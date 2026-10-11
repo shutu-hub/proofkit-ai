@@ -291,6 +291,38 @@ describe("ProofKit MCP tools", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  it("rechecks a saved running Mission when its owner is briefly unseen", async () => {
+    const running = fixtureMission("running");
+    const completed = fixtureMission("completed");
+    const runner = { missionStatus: vi.fn()
+      .mockResolvedValueOnce({ mission: running, running: false })
+      .mockResolvedValue({ mission: completed, running: false }),
+    missionEvidence: vi.fn(async () => ({ missionId: running.missionId, status: "completed", running: false,
+      verdict: "passed", testVerdict: "passed", level: "core", summary: { missionId: running.missionId, verdict: "passed" },
+      evidence: [], findings: [] })), startMission: vi.fn() } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "await_test_result", arguments: { missionId: running.missionId, timeoutMs: 1_000 } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ state: "terminal", status: "completed", testVerdict: "passed" });
+      expect(runner.missionStatus).toHaveBeenCalledTimes(2);
+      expect(runner.startMission).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("reports a persistent ownerless running Mission only after the wait deadline", async () => {
+    const mission = fixtureMission("running");
+    const runner = { missionStatus: vi.fn(async () => ({ mission, running: false })),
+      missionEvidence: vi.fn(), startMission: vi.fn() } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "await_test_result", arguments: { missionId: mission.missionId, timeoutMs: 500 } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ state: "needs-action", status: "running", running: false,
+        testVerdict: "not-asserted" });
+      expect(runner.missionStatus).toHaveBeenCalledTimes(2);
+      expect(runner.startMission).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
   it("does not promote a terminal historical pass without an audited verdict", async () => {
     const mission = fixtureMission("completed");
     const runner = { missionStatus: vi.fn(async () => ({ mission, running: false })),
