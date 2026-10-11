@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { EnvironmentInspectionInputSchema, EnvironmentInspectionSchema, type EnvironmentInspection, type EnvironmentInspectionInput, type ProofkitConfig } from "@proofkit/contracts";
+import { EnvironmentInspectionInputSchema, EnvironmentInspectionSchema, type EnvironmentInspection, type EnvironmentInspectionInput, type ProofkitConfig, type TargetBinding } from "@proofkit/contracts";
 import { resolveElectronCdpUrl } from "@proofkit/adapters";
 import { inspectTargetBinding } from "@proofkit/project";
 import { probeHttpEndpoint } from "@proofkit/runtime";
@@ -34,6 +34,17 @@ export async function inspectEnvironment(context: Context, input: EnvironmentIns
   const config = context.config;
   const checks: Check[] = [];
   const tasks: Array<Promise<Check>> = [];
+  const bindings = new Map<string, Promise<TargetBinding>>();
+  const bindingFor = (target?: string): Promise<TargetBinding> => {
+    if (!target || !/^https?:\/\//i.test(target)) return inspectTargetBinding(context.root, target, controller.signal);
+    const origin = new URL(target).origin;
+    let pending = bindings.get(origin);
+    if (!pending) {
+      pending = inspectTargetBinding(context.root, target, controller.signal);
+      bindings.set(origin, pending);
+    }
+    return pending;
+  };
   const omittedHealthChecks = Math.max(0, config.project.health.length - 8);
   const bounded = (id: string, kind: Check["kind"], work: () => Promise<Check>) => {
     const unavailable = (): Check => ({ id, kind, status: "unverified", message: "The check could not complete; no raw error was retained." });
@@ -46,12 +57,20 @@ export async function inspectEnvironment(context: Context, input: EnvironmentIns
       void work().then(finish, () => finish(unavailable()));
     }));
   };
-  const probe = (id: string, url: string, expectedStatus: number, localOnly: boolean) => {
+  const probe = (id: string, url: string, expectedStatus: number, localOnly: boolean, bindLocalSource = false) => {
     bounded(id, "http", async () => {
       let parsed: URL;
       try { parsed = new URL(url); } catch { return { id, kind: "http", status: "blocked", message: "Configure a valid HTTP endpoint." }; }
       if (localOnly && !isLoopback(parsed.hostname)) return { id, kind: "http", status: "blocked", message: "This MCP check requires a loopback endpoint." };
       const http = await probeHttpEndpoint(url, expectedStatus, timeoutMs, controller.signal);
+      if (bindLocalSource && http.status === "reachable" && isLoopback(parsed.hostname)) {
+        const targetBinding = await bindingFor(url);
+        const status = targetBinding.status === "matching-process-path" ? "passed"
+          : targetBinding.status === "different-project" && config.policies.targetBinding === "block-different" ? "blocked" : "unverified";
+        return { id, kind: "http", status, message: status === "passed"
+          ? "Expected HTTP status observed and the local listener is associated with the selected checkout; served bytes are not attested."
+          : targetBinding.reason, http, targetBinding };
+      }
       return { id, kind: "http", status: http.status === "reachable" ? "passed" : "blocked", message: http.status === "reachable" ? "Expected HTTP status observed; no body or protocol session was checked." : "The configured endpoint did not return its expected HTTP status.", http };
     });
   };
@@ -74,7 +93,7 @@ export async function inspectEnvironment(context: Context, input: EnvironmentIns
         surface === "electron" ? electron?.cdpUrl : web?.cdpUrl,
         surface === "electron" ? electron?.devtoolsActivePort ?? process.env.PROOFKIT_ELECTRON_DEVTOOLS_PORT : undefined,
         controller.signal);
-      const targetBinding = await inspectTargetBinding(context.root, bindingUrl, controller.signal);
+      const targetBinding = await bindingFor(bindingUrl);
       return { id: "source-binding", kind: "source-binding", status: targetBinding.status === "matching-process-path" ? "passed" : targetBinding.status === "different-project" && config.policies.targetBinding === "block-different" ? "blocked" : "unverified", message: targetBinding.reason, targetBinding };
     });
     const cdpConfigured = surface === "electron" ? hasConnection : Boolean(web?.cdpUrl);
@@ -95,7 +114,7 @@ export async function inspectEnvironment(context: Context, input: EnvironmentIns
       });
     }
     for (const [index, check] of config.project.health.slice(0, 8).entries()) {
-      probe(`health-${index + 1}`, typeof check === "string" ? check : check.url, typeof check === "string" ? 200 : check.expectedStatus, context.restrictWebOrigins);
+      probe(`health-${index + 1}`, typeof check === "string" ? check : check.url, typeof check === "string" ? 200 : check.expectedStatus, context.restrictWebOrigins, true);
     }
     if (!config.project.health.length) checks.push({ id: "health-configuration", kind: "configuration", status: "unverified", message: "No backend health endpoints are declared; surface reachability cannot establish backend readiness." });
     if (omittedHealthChecks) checks.push({ id: "health-limit", kind: "configuration", status: "unverified", message: "Only the first eight declared health endpoints were checked." });
@@ -131,7 +150,7 @@ function recommendNext(checks: Check[]): EnvironmentInspection["next"] {
   if (check("cdp-http")?.status === "blocked") {
     add("check-cdp", ["cdp-http"], "Confirm the local CDP listener or Electron DevToolsActivePort file belongs to the intended app, then repeat inspection.");
   }
-  const blockedHealth = checks.filter((item) => /^health-\d+$/.test(item.id) && item.status === "blocked").map((item) => item.id);
+  const blockedHealth = checks.filter((item) => /^health-\d+$/.test(item.id) && item.status === "blocked" && item.http?.status !== "reachable").map((item) => item.id);
   if (blockedHealth.length) {
     add("check-health", blockedHealth, "Check the declared backend health endpoints in the isolated test environment, then repeat inspection.");
   }
@@ -139,8 +158,10 @@ function recommendNext(checks: Check[]): EnvironmentInspection["next"] {
     add("declare-health", ["health-configuration"], "Declare relevant backend health endpoints in the external test workspace before claiming backend readiness.");
   }
   const source = check("source-binding");
-  if (source?.status !== "passed" && source) {
-    add("confirm-source", ["source-binding"], source.targetBinding?.status === "different-project"
+  const healthSources = checks.filter((item) => /^health-\d+$/.test(item.id) && item.targetBinding && item.status !== "passed");
+  const sourceIssues = [...(source?.status !== "passed" && source ? [source] : []), ...healthSources];
+  if (sourceIssues.length) {
+    add("confirm-source", sourceIssues.map((item) => item.id), sourceIssues.some((item) => item.targetBinding?.status === "different-project")
       ? "The observed listener is associated with another checkout; select the intended local app before testing."
       : "Confirm that the observed listener belongs to the intended source checkout before attributing test results to this project.");
   }
@@ -148,7 +169,7 @@ function recommendNext(checks: Check[]): EnvironmentInspection["next"] {
     add("retry-inspection", ["inspection-deadline"], "The observation deadline expired; retry after the local services settle or increase the bounded timeout.");
   }
   if (!checks.some((item) => item.status === "blocked") && !check("inspection-deadline")
-    && source?.targetBinding?.status !== "different-project") {
+    && !sourceIssues.some((item) => item.targetBinding?.status === "different-project")) {
     add("inspect-surface", ["surface-configuration"], "Inspect the live Web/Electron surface next; this environment result is not a product test verdict.");
   }
   return next;

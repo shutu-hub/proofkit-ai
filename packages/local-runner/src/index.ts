@@ -11,7 +11,7 @@ import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, Nega
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, intentTestLevelHints, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowInventory, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject, verifySourceLocationHints } from "@proofkit/project";
-import { BlockedError, CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
+import { BlockedError, CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationPreflight, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
 import { auditComparisonCurrentSource, compareMissionRecords } from "./mission-comparison.js";
@@ -1465,6 +1465,34 @@ export class LocalRunnerService {
     const targetUrl = charter.actions.find((action) => action.kind === "goto")?.url
       ?? input.url
       ?? (surface === "electron" ? this.config.surfaces.electron?.targetUrlPrefix : this.config.surfaces.web?.baseUrl);
+    const healthOrigins = [...new Set(this.config.project.health.flatMap((check) => {
+      try {
+        const endpoint = new URL(typeof check === "string" ? check : check.url);
+        return ["http:", "https:"].includes(endpoint.protocol) && isLoopback(endpoint.hostname) ? [endpoint.origin] : [];
+      } catch { return []; }
+    }))];
+    const firstForeignHealth = async (bindingSignal: AbortSignal): Promise<TargetBinding | undefined> => {
+      for (const origin of healthOrigins) {
+        const binding = await inspectTargetBinding(this.root, origin, bindingSignal);
+        if (binding.status === "different-project") return binding;
+      }
+      return undefined;
+    };
+    const healthResult = (foreign: TargetBinding | undefined, phase: "preflight" | "after-setup") => foreign
+      ? { passed: this.config.policies.targetBinding !== "block-different",
+        message: `A declared local health listener belongs to another Git checkout ${phase === "after-setup" ? "after setup" : "before setup"}.`,
+        evidence: { healthOrigin: foreign.targetOrigin ?? "unknown", expectedProjectRoot: this.root,
+          observedProjectRoot: foreign.observedProjectRoot ?? "unknown", listenerProcessId: foreign.processId ?? 0 } }
+      : undefined;
+    const integrationPreflight = this.integration?.preflight;
+    const preflight: IntegrationPreflight | undefined = healthOrigins.length ? async (context) => {
+      const foreign = await firstForeignHealth(context.signal);
+      const observed = healthResult(foreign, "preflight");
+      if (observed && !observed.passed) return observed;
+      if (!integrationPreflight) return observed ?? { passed: true, message: "Declared local health listener source checks completed." };
+      const connector = await integrationPreflight(context);
+      return observed ? { ...connector, evidence: { ...connector.evidence, ...observed.evidence } } : connector;
+    } : integrationPreflight;
     return new ExecutionRunner(adapter, {
       projectRoot: this.root,
       workspaceRoot: this.workspaceRoot,
@@ -1477,7 +1505,12 @@ export class LocalRunnerService {
       allowFileUploads: this.config.policies.sideEffects === "allow",
       expectedInputFiles,
       replayOfRunId: input.replayOfRunId,
-      preflight: this.integration?.preflight,
+      preflight,
+      ...(healthOrigins.length && (setup || integrationSetup) ? { postSetupCheck: async (context: Parameters<IntegrationPreflight>[0]) => {
+        const foreign = await firstForeignHealth(context.signal);
+        return healthResult(foreign, "after-setup")
+          ?? { passed: true, message: "Declared local health listener source checks completed after setup." };
+      } } : {}),
       signal,
       timeoutMs: this.config.run.timeoutMs,
       runtimeQuality: this.config.policies.runtime,
@@ -1739,5 +1772,5 @@ function toError(error: unknown): Error {
 }
 
 function isLoopback(hostname: string): boolean {
-  return ["localhost", "127.0.0.1", "[::1]"].includes(hostname);
+  return ["localhost", "[::1]"].includes(hostname) || /^127(?:\.\d{1,3}){3}$/.test(hostname);
 }

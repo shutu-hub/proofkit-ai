@@ -162,6 +162,8 @@ export type ExecutionOptions = {
   timeoutMs?: number;
   integration?: { name: string; version?: string };
   preflight?: IntegrationPreflight;
+  /** Trusted host check after setup handles are registered, before browser attachment. */
+  postSetupCheck?: IntegrationPreflight;
   setup?: IntegrationSetup | Array<IntegrationSetup | IntegrationSetupEntry>;
   setupPolicy?: IntegrationSetupPolicy;
   targetBinding?: (signal: AbortSignal) => Promise<TargetBinding>;
@@ -203,6 +205,7 @@ export class ExecutionRunner {
   private readonly timeoutMs?: number;
   private readonly integration?: { name: string; version?: string };
   private readonly preflight?: IntegrationPreflight;
+  private readonly postSetupCheck?: IntegrationPreflight;
   private readonly projectRoot?: string;
   private readonly workspaceRoot?: string;
   private readonly runtimeQuality: RuntimeQualityPolicy;
@@ -242,6 +245,7 @@ export class ExecutionRunner {
     this.urlEvidenceTargets = options.urlEvidenceTargets ?? [];
     this.webEvidenceOrigin = options.webEvidenceOrigin;
     this.preflight = options.preflight;
+    this.postSetupCheck = options.postSetupCheck;
     this.projectRoot = options.projectRoot;
     this.workspaceRoot = options.workspaceRoot;
     this.runtimeQuality = RuntimeQualityPolicySchema.parse(options.runtimeQuality ?? {});
@@ -414,6 +418,23 @@ export class ExecutionRunner {
           await this.store.writeSummary(summary);
         }
         throwIfAborted(signal);
+      }
+      if (this.postSetupCheck) {
+        let result: IntegrationPreflightResult;
+        try {
+          result = preflightResult(await withAbort(this.postSetupCheck({
+            runId, charter, environment: this.environment, projectRoot: this.projectRoot,
+            workspaceRoot: this.workspaceRoot, signal,
+          }), signal, "Post-setup check"));
+        } catch {
+          if (signal.aborted) throw abortReason(signal);
+          throw new BlockedError("Post-setup environment check could not establish a verified result.");
+        }
+        const artifact = await this.store.writeJson(runId, "post-setup-check", result);
+        summary.artifacts.push(artifact);
+        await this.emit({ runId, timestamp: new Date().toISOString(), type: "artifact.created",
+          payload: { path: artifact, kind: "post-setup-check", passed: result.passed } });
+        if (!result.passed) throw new BlockedError(`Post-setup environment check failed: ${result.message}`);
       }
       if (this.targetBindingRecheckAfterSetup) {
         await inspectAndRecordTarget("after-setup");
