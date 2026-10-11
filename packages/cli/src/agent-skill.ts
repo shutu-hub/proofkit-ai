@@ -46,6 +46,13 @@ before concluding no plan exists. A source-focus-unresolved gap means the
 literal term missed retained source hints, not that the feature is absent.
 An oracle-name-unmatched gap likewise requires inspecting the registered
 readers; it does not prove that no business reader applies.
+Review workspaceCandidates when the external workspace has unregistered
+Charter files. These are read-only, bounded hints, including structural issue
+codes; they are never catalog-ready or executable by discovery alone. A
+fallback-unmatched selection means no candidate literally matched the focus.
+Inspect the Charter and source flow, repair missing assertions or Oracles, and
+register a suitable plan only after review. Do not infer core proof from an
+unregistered file or lower the requested level to reuse a quick example.
 
 ## Reuse or author a scenario
 

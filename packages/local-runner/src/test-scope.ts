@@ -3,6 +3,7 @@ import { getTestLevelProfile, requiredCatalogSurfaces, supportsCatalogCharter, s
 import { reconcileRouteDeclarations } from "@proofkit/project";
 import { z, type BusinessOracle, type CapabilityDefinition, type ProjectIntegration } from "@proofkit/runner";
 import { describeInputShape } from "./schema-hints.js";
+import { inspectWorkspaceCandidates } from "./workspace-candidates.js";
 
 type Request = z.output<typeof TestScopeInputSchema>;
 type Check = TestScope["catalog"]["items"][number]["check"];
@@ -62,6 +63,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const capabilityMatches = context.capabilities.filter((item) => matches(item.name, item.description));
   const allOracles = [...context.oracles.map((item) => ({ name: item.name, kind: "registered" as const })), ...config.oracles.map((item) => ({ name: item.name, kind: "configured-http" as const }))];
   const oracleMatches = allOracles.filter((item) => matches(item.name));
+  const workspaceCandidates = await inspectWorkspaceCandidates(context, request.focus, limit);
   const { entryPoints: _entries, routeHints: _routes, ...inventory } = project.inventory;
   const limitations = [
     "Static route-shaped literals and conventional entry points are candidate hints; no execution coverage or product verdict is calculated",
@@ -79,6 +81,8 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   if (focus) limitations.push("Focus is a literal substring filter; the focused view is not whole-project coverage");
   if (inventory.retentionFocus) limitations.push("Focus prioritizes matching source files, entry points and routes before inventory retention caps; totals describe the retained candidate slice, not all project routes");
   if (inventory.retentionFocus && inventory.truncated) limitations.push("File discovery and source reads remain bounded; route-text focus cannot recover declarations from unscanned files, and filesystem focus prioritizes only discovered paths");
+  if (workspaceCandidates.scanStatus === "partial") limitations.push("Workspace Charter candidate discovery is incomplete; directory, file-count, size or read bounds may hide candidates");
+  if (workspaceCandidates.selection === "fallback-unmatched") limitations.push("No unregistered Charter literally matched the focus; bounded fallback candidates are hints, not semantic matches");
   limitations.push(context.workflowInventory.reviewAuthentication?.status === "verified"
     ? "A trusted key authenticated the saved workflow review; semantic completeness and actual execution remain unverified"
     : "A workflow inventory is a reviewable claim only; reviewer identity, completeness and actual execution remain unverified");
@@ -88,7 +92,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const compatibleReady = catalogItems.filter((entry) => entry.check.planReady).length + suiteItems.filter((entry) => entry.check.planReady).length;
   const compatibleMatched = compatibleCharters.length + compatibleSuites.length;
   const compatibleOmitted = compatibleMatched - compatibleChecked;
-  const focusUnresolved = Boolean(focus && !selectedCharters.length && !suites.length && !routes.length && !entries.length && !capabilityMatches.length && !oracleMatches.length);
+  const focusUnresolved = Boolean(focus && !selectedCharters.length && !suites.length && !routes.length && !entries.length && !capabilityMatches.length && !oracleMatches.length && !workspaceCandidates.matched);
   const planningStatus: NonNullable<TestScope["planningReadiness"]>["status"] = compatibleReady ? "catalog-ready"
     : compatibleOmitted || focusUnresolved ? "inspection-incomplete" : "authoring-needed";
   const gaps: PlanningGap[] = [];
@@ -108,6 +112,8 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
     getTestLevelProfile(level).evidencePolicy.requireBusinessOracle
       ? `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive assertion and independent business Oracle.`
       : `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive surface assertion.`);
+  if (workspaceCandidates.total && !compatibleReady) gap("unregistered-workspace-charters", [],
+    "External workspace contains unregistered Charter candidates; review their structural issues and register only an appropriate validated plan.");
   if (!compatibleReady && focus && !routes.length && !entries.length) gap("source-focus-unresolved", [],
     "The literal focus matched no retained source entry or route; inspect the owning paths or try a source-language term before claiming absence.");
   if (!compatibleReady && getTestLevelProfile(level).evidencePolicy.requireBusinessOracle) {
@@ -142,6 +148,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
     })) },
     oracles: { total: allOracles.length, matched: oracleMatches.length, omitted: Math.max(0, oracleMatches.length - limit), items: oracleMatches.slice(0, limit) },
     planningReadiness: { status: planningStatus, compatibleMatched, compatibleChecked, compatibleReady, compatibleOmitted, gaps },
+    workspaceCandidates,
     limitations, next, generatedAt: project.generatedAt,
   });
 }

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,66 @@ afterEach(async () => {
 });
 
 describe("read-only test scope", () => {
+  it("discovers unregistered external Charters as bounded hints without making a plan ready", async () => {
+    const { runner, callbacks } = await fixture();
+    const before = await sourceFiles(runner.root);
+    const candidateDir = join(runner.workspaceRoot, ".proofkit", "charters");
+    await mkdir(candidateDir, { recursive: true });
+    await writeFile(join(candidateDir, "online-resume.yml"), JSON.stringify({
+      intent: "验证简历获取链路", level: "core", actions: [{ kind: "observe" }],
+      assertions: [{ kind: "text-visible", text: "done" }], oracles: ["resume.terminal"],
+    }));
+    await writeFile(join(runner.workspaceRoot, "charters", "unregistered.yml"), JSON.stringify({
+      intent: "another workflow", level: "quick", actions: [], assertions: [{ kind: "title-contains", text: "ready" }],
+    }));
+    const scope = await runner.inspectTestScope({ focus: "简历获取", level: "core" });
+    expect(scope.workspaceCandidates).toMatchObject({ scanStatus: "complete", total: 2, matched: 1, selection: "focused", omitted: 0,
+      items: [{ path: ".proofkit/charters/online-resume.yml", focusMatched: true, parseStatus: "valid", level: "core", actionCount: 1, assertionCount: 1, oracleCount: 1, issues: [] }] });
+    expect(scope.workspaceCandidates?.items.some((item) => item.path === "charters/resume-core.yml")).toBe(false);
+    expect(scope.planningReadiness).toMatchObject({ status: "authoring-needed", compatibleReady: 0,
+      gaps: expect.arrayContaining([expect.objectContaining({ code: "unregistered-workspace-charters" })]) });
+    expect(scope.testVerdict).toBe("not-asserted");
+    expect(await sourceFiles(runner.root)).toEqual(before);
+    for (const callback of Object.values(callbacks)) expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("uses an explicit unmatched fallback and reports structural gaps without exposing Charter content", async () => {
+    const { runner } = await fixture();
+    await writeFile(join(runner.workspaceRoot, "charters", "intake.yml"), JSON.stringify({
+      intent: "private-intent-token", level: "core", actions: [{ kind: "capability", name: "missing.reader" }],
+      assertions: [], oracles: ["missing.oracle"], sideEffectPolicy: "allow",
+    }));
+    await writeFile(join(runner.workspaceRoot, "charters", "broken.yml"), "intent: [private-yaml-token\n");
+    const scope = await runner.inspectTestScope({ focus: "简历获取", limit: 1 });
+    expect(scope.workspaceCandidates).toMatchObject({ total: 2, matched: 0, selection: "fallback-unmatched", omitted: 1 });
+    expect(scope.limitations).toContainEqual(expect.stringContaining("fallback candidates"));
+    const full = await runner.inspectTestScope({ focus: "简历获取", limit: 50 });
+    expect(full.workspaceCandidates?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "charters/intake.yml", parseStatus: "valid", actionCount: 1, assertionCount: 0, oracleCount: 1,
+        issues: ["missing-positive-assertion", "unregistered-capability", "unregistered-oracle"] }),
+      expect.objectContaining({ path: "charters/broken.yml", parseStatus: "invalid", issues: ["invalid-charter"] }),
+    ]));
+    expect(JSON.stringify(full)).not.toContain("private-intent-token");
+    expect(JSON.stringify(full)).not.toContain("private-yaml-token");
+  });
+
+  it("caps candidate reads and enumeration and excludes links and registered files", async () => {
+    const { runner } = await fixture();
+    await writeFile(join(runner.workspaceRoot, "charters", "oversized.yml"), "x".repeat(129 * 1024));
+    const oversized = await runner.inspectTestScope({ focus: "oversized", limit: 50 });
+    expect(oversized.workspaceCandidates?.items).toEqual(expect.arrayContaining([expect.objectContaining({ path: "charters/oversized.yml", parseStatus: "oversized", issues: ["file-too-large"] })]));
+    const secret = join(runner.root, "outside-secret.yml");
+    await writeFile(secret, "intent: outside-secret-token\n");
+    try { await symlink(secret, join(runner.workspaceRoot, "charters", "linked.yml")); }
+    catch (error) { if (!["EPERM", "ENOTSUP"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; }
+    for (let index = 0; index < 105; index++) await writeFile(join(runner.workspaceRoot, "charters", `candidate-${String(index).padStart(3, "0")}.yml`),
+      JSON.stringify({ intent: "candidate", level: "core", assertions: [], actions: [] }));
+    const scope = await runner.inspectTestScope({ limit: 2 });
+    expect(scope.workspaceCandidates).toMatchObject({ scanStatus: "partial", scanTruncated: true, total: 100, omitted: 98 });
+    expect(scope.workspaceCandidates?.items).toHaveLength(2);
+    expect(scope.workspaceCandidates?.items.every((item) => item.path.startsWith("charters/candidate-"))).toBe(true);
+    expect(JSON.stringify(scope)).not.toContain("outside-secret-token");
+  });
   it("retains an eligible alias's reviewed routes before global caps without executing checks", async () => {
     const { runner, callbacks } = await fixture();
     const routePath = "apps/web/src/router.ts";

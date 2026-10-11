@@ -76,6 +76,12 @@ an unknown application's login, isolation, APIs or business invariants merely
 by being installed. Configure those in the external workspace, then verify a
 real workflow. Syntax and MCP connection tests do not establish model behavior.
 
+`inspect_test_scope` also returns bounded `workspaceCandidates` from external
+Charter directories when files have not been registered in the catalog. The
+agent can use their paths and fixed issue codes to find existing examples,
+including a `fallback-unmatched` set for a focus that missed their literal
+names. Candidate discovery does not approve, register or execute a scenario.
+
 For the AIHR reference, explicitly choose `proofkit agent setup --harness
 codex --template aihr --root <AIHR-source> --workspace
 <external-test-workspace> --install-skill` on first setup. This installs the
