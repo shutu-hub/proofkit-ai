@@ -106,6 +106,41 @@ export const ResponseObservationSchema = z.object({
 }).strict();
 export type ResponseObservation = z.infer<typeof ResponseObservationSchema>;
 
+const OracleResponseBindingSchema = z.object({ source: z.literal("response"),
+  stepId: z.string().regex(/^step-\d{3}$/), field: ResponseFieldNameSchema,
+  matchPointer: ResponsePointerSchema }).strict();
+export const ConfiguredHttpOracleSchema = z.object({
+  name: z.string().min(1),
+  url: z.string().url(),
+  query: z.record(z.discriminatedUnion("source", [
+    z.object({ source: z.literal("runId") }),
+    z.object({ source: z.literal("step"), stepId: z.string().regex(/^step-\d{3}$/), field: z.string().min(1) }),
+    OracleResponseBindingSchema,
+  ])).default({}),
+  statusPointer: z.string().startsWith("/"),
+  successValues: z.array(z.string().min(1)).min(1),
+  failureValues: z.array(z.string().min(1)).default([]),
+  expectedStatus: z.number().int().min(100).max(599).default(200),
+  intervalMs: z.number().int().positive().default(500),
+  deadlineMs: z.number().int().positive().default(30_000),
+});
+/** Agent-authored business readers must be bounded and tied to this Run's captured response. */
+export const InlineHttpOracleSchema = ConfiguredHttpOracleSchema.extend({
+  name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9._-]{0,63}$/),
+  url: ResponseEndpointSchema,
+  query: z.record(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/), OracleResponseBindingSchema)
+    .refine((value) => Object.keys(value).length >= 1 && Object.keys(value).length <= 8,
+      "Bind 1-8 query parameters to fields captured in the current Run"),
+  statusPointer: ResponsePointerSchema,
+  successValues: z.array(z.string().min(1).max(128)).min(1).max(16),
+  failureValues: z.array(z.string().min(1).max(128)).max(16).default([]),
+  expectedStatus: z.number().int().min(200).max(299).default(200),
+  intervalMs: z.number().int().min(100).max(10_000).default(500),
+  deadlineMs: z.number().int().min(100).max(300_000).default(30_000),
+}).strict().refine((value) => value.failureValues.every((item) => !value.successValues.includes(item)),
+  "Success and failure values must not overlap");
+export type InlineHttpOracle = z.infer<typeof InlineHttpOracleSchema>;
+
 export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("goto"), url: z.string().url() }),
   z.object({ kind: z.literal("click"), selector: z.string().min(1) }),
@@ -192,6 +227,7 @@ export const TestCharterSchema = z.object({
   actions: z.array(ActionSchema).default([]),
   assertions: z.array(AssertionSchema).default([]),
   oracles: z.array(z.string().min(1)).optional(),
+  httpOracles: z.array(InlineHttpOracleSchema).max(8).optional(),
   // Optional for backward compatibility with existing charters. The planner
   // normalizes an omitted value to an empty list before creating tasks.
   negativeCases: z.array(NegativeCaseSchema).optional(),
@@ -909,22 +945,7 @@ export const ProofkitConfigSchema = z.object({
   run: z.object({
     timeoutMs: z.number().int().positive().max(3_600_000).default(300_000),
   }).default({}),
-  oracles: z.array(z.object({
-    name: z.string().min(1),
-    url: z.string().url(),
-    query: z.record(z.discriminatedUnion("source", [
-      z.object({ source: z.literal("runId") }),
-      z.object({ source: z.literal("step"), stepId: z.string().regex(/^step-\d{3}$/), field: z.string().min(1) }),
-      z.object({ source: z.literal("response"), stepId: z.string().regex(/^step-\d{3}$/), field: ResponseFieldNameSchema,
-        matchPointer: ResponsePointerSchema }).strict(),
-    ])).default({}),
-    statusPointer: z.string().startsWith("/"),
-    successValues: z.array(z.string().min(1)).min(1),
-    failureValues: z.array(z.string().min(1)).default([]),
-    expectedStatus: z.number().int().min(100).max(599).default(200),
-    intervalMs: z.number().int().positive().default(500),
-    deadlineMs: z.number().int().positive().default(30_000),
-  })).default([]),
+  oracles: z.array(ConfiguredHttpOracleSchema).default([]),
   policies: z.object({
     environment: z.enum(["test", "staging", "local"]).default("test"),
     sideEffects: SideEffectPolicySchema.default("confirm"),

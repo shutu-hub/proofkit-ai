@@ -188,8 +188,8 @@ function expectedRunCharter(mission: TestMission, observation: Observation): Tes
 }
 
 function charterExecutionShape(charter: TestCharter): unknown {
-  const { intent, level, mode, preconditions, actions, assertions, oracles, negativeCases, sideEffectPolicy, metadata } = charter;
-  return { intent, level, mode, preconditions, actions, assertions, oracles, negativeCases, sideEffectPolicy, metadata };
+  const { intent, level, mode, preconditions, actions, assertions, oracles, httpOracles, negativeCases, sideEffectPolicy, metadata } = charter;
+  return { intent, level, mode, preconditions, actions, assertions, oracles, httpOracles, negativeCases, sideEffectPolicy, metadata };
 }
 
 function expectedSingleSurfaces(mission: TestMission): Surface[] {

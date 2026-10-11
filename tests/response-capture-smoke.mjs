@@ -172,13 +172,28 @@ try {
       await verifyEvidence(result);
     }
   }
+  for (const surface of ["web", "electron"]) {
+    const inlinePass = await run(inlineCharter("good"), surface);
+    assert.equal(inlinePass.status.mission.verdict, "passed", JSON.stringify(inlinePass.status.mission.findings));
+    assert.equal((await savedRun(inlinePass.evidence.summary.runs[0].runId)).oracles[0]?.verificationKind, "business");
+    const inlineDefect = await run(inlineCharter("wrong-identity"), surface);
+    assert.equal(inlineDefect.status.mission.verdict, "failed", JSON.stringify(inlineDefect.status.mission.findings));
+    assert.ok(inlineDefect.status.mission.findings.some((item) => item.category === "product" && item.status === "confirmed"
+      && item.evidence.some((ref) => ref.kind === "business")));
+    await verifyEvidence(inlinePass); await verifyEvidence(inlineDefect);
+  }
+  const inlineNegative = await run(inlineCharterWithNegative(), "web");
+  assert.equal(inlineNegative.status.mission.verdict, "passed", JSON.stringify(inlineNegative.status.mission.findings));
+  assert.equal(inlineNegative.evidence.summary.expectedRuns, 2);
+  await verifyEvidence(inlineNegative);
   assert.ok(statusReads.length > 0 && !statusReads.includes("1"), "Never query a historical object as the current intake");
   assert.deepEqual(await readdir(source), ["package.json"]);
   assert.equal(await readFile(join(source, "package.json"), "utf8"), manifest);
   console.log(JSON.stringify({ workspace, report: release.evidence.report, missions: results,
     verified: ["web-electron-response-id", "fresh-replay-ids", "six-release-run-identities", "config-only-id-status-check",
       "independent-byte-and-relation-check", "historical-success-rejected", "pending-inconclusive", "duplicate-no-match-stalled-gaps",
-      "chunked-gzip-json", "delayed-request-and-timeout", "business-defect-repair-replay", "unselected-bodies-not-persisted", "no-source-writes"] }, null, 2));
+      "chunked-gzip-json", "delayed-request-and-timeout", "business-defect-repair-replay", "inline-http-oracle-web-electron",
+      "inline-oracle-current-id-mismatch", "inline-oracle-negative-case", "unselected-bodies-not-persisted", "no-source-writes"] }, null, 2));
 } finally {
   await client?.close(); await server?.close();
   if (electron && electron.exitCode === null) {
@@ -203,6 +218,20 @@ function charter(mode, level = "core") {
     assertions: [{ kind: "text-visible", text: "Accepted" }], oracles: ["intake-state", "resume-business"],
     ...(level === "release" ? { negativeCases: [{ caseId: "rejected", title: "Reject unsupported intake", sideEffectPolicy: "allow",
       actions: actions("rejected"), assertions: [{ kind: "text-visible", text: "Rejected" }], oracles: ["intake-rejected", "resume-business"] }] } : {}) });
+}
+function inlineCharter(mode) {
+  return TestCharterSchema.parse({ ...charter(mode), oracles: ["inline-intake-status"],
+    httpOracles: [{ name: "inline-intake-status", url: `${baseUrl}/api/v1/intakes/status`,
+      query: { fileId: { source: "response", stepId: "step-003", field: "fileId", matchPointer: "/data/file_id" } },
+      statusPointer: "/data/state", successValues: ["complete"], failureValues: ["failed"],
+      intervalMs: 100, deadlineMs: 500 }] });
+}
+function inlineCharterWithNegative() {
+  const main = inlineCharter("good");
+  const rejected = charter("good", "release").negativeCases[0];
+  return TestCharterSchema.parse({ ...main, httpOracles: [...main.httpOracles,
+    { ...main.httpOracles[0], name: "inline-rejected-status", successValues: ["rejected"] }],
+    negativeCases: [{ ...rejected, oracles: ["inline-rejected-status"] }] });
 }
 async function call(name, args) {
   const result = await client.callTool({ name, arguments: args });

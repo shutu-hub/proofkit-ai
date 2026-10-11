@@ -430,6 +430,7 @@ export class LocalRunnerService {
       levelSelection: charter.levelSelection ?? levelSelection,
       ...(projectMap ? { planning: withPlanningCoverage(charter.planning, coverage) } : {}),
     });
+    if (normalizedCharter.httpOracles?.length) this.validateInlineHttpOracles("Submitted Charter", normalizedCharter);
     if (selected) this.validateCatalogCharter(selected.entry.id, normalizedCharter, surface);
     else if (input.charter && this.restrictWebOrigins) this.validateMissionCharterSafety("Submitted Charter", normalizedCharter, surface);
     assertMissionSurfaceCoverage(input.intent, requiredCatalogSurfaces(levelSelection.resolved, surface));
@@ -508,12 +509,18 @@ export class LocalRunnerService {
   }
 
   private validateMissionCharterSafety(label: string, charter: TestCharter, surface: LocalAdapterName): void {
-    const availableOracles = new Set([...this.oracles.map((oracle) => oracle.name), ...this.config.oracles.map((oracle) => oracle.name)]);
+    this.validateInlineHttpOracles(label, charter);
+    const availableOracles = new Set([...this.oracles.map((oracle) => oracle.name), ...this.config.oracles.map((oracle) => oracle.name),
+      ...(charter.httpOracles ?? []).map((oracle) => oracle.name)]);
     for (const oracle of [...(charter.oracles ?? []), ...(charter.negativeCases ?? []).flatMap((item) => item.oracles)]) {
       if (!availableOracles.has(oracle)) throw new Error(`${label} references an unregistered Oracle: ${oracle}`);
       const configured = this.config.oracles.find((item) => item.name === oracle);
       if (this.restrictWebOrigins && configured && !isLoopback(new URL(configured.url).hostname)) {
         throw new Error(`${label} requires a loopback Oracle in MCP mode: ${oracle}`);
+      }
+      const inline = charter.httpOracles?.find((item) => item.name === oracle);
+      if (this.restrictWebOrigins && inline && !isLoopback(new URL(inline.url).hostname)) {
+        throw new Error(`${label} requires a loopback inline Oracle in MCP mode: ${oracle}`);
       }
     }
     const availableCapabilities = new Map(this.capabilities.map((capability) => [capability.name, capability]));
@@ -540,6 +547,33 @@ export class LocalRunnerService {
     }
     this.validateCdpEndpoint({ adapter: surface });
     this.validateMobileEndpoint({ adapter: surface });
+  }
+
+  private validateInlineHttpOracles(label: string, charter: TestCharter): void {
+    const definitions = charter.httpOracles ?? [];
+    const names = definitions.map((definition) => definition.name);
+    if (new Set(names).size !== names.length) throw new Error(`${label} has duplicate inline Oracle names`);
+    const registered = new Set([...this.oracles.map((oracle) => oracle.name), ...this.config.oracles.map((oracle) => oracle.name)]);
+    for (const definition of definitions) {
+      if (registered.has(definition.name)) throw new Error(`${label} inline Oracle shadows a registered Oracle: ${definition.name}`);
+      if (this.restrictWebOrigins && !isLoopback(new URL(definition.url).hostname)) {
+        throw new Error(`${label} inline Oracle must use loopback in MCP mode: ${definition.name}`);
+      }
+      const scenarios = [{ name: "main", actions: charter.actions, oracles: charter.oracles ?? [] },
+        ...(charter.negativeCases ?? []).map((item) => ({ name: item.caseId, actions: item.actions, oracles: item.oracles }))];
+      for (const scenario of scenarios.filter((item) => item.oracles.includes(definition.name))) {
+        let hasCurrentId = false;
+        for (const binding of Object.values(definition.query)) {
+          const stepIndex = Number(binding.stepId.slice(5)) - 1;
+          const action = scenario.actions[stepIndex];
+          if (action?.kind !== "captureResponse" || !Object.hasOwn(action.response.fields, binding.field)) {
+            throw new Error(`${label} inline Oracle ${definition.name} must bind a captured field in ${scenario.name}`);
+          }
+          hasCurrentId ||= action.response.fields[binding.field]?.type === "id";
+        }
+        if (!hasCurrentId) throw new Error(`${label} inline Oracle ${definition.name} needs a captured current ID in ${scenario.name}`);
+      }
+    }
   }
 
   async approveMission(missionId: string): Promise<TestMission> {
@@ -1324,6 +1358,7 @@ export class LocalRunnerService {
       const stepId = `step-${String(index + 1).padStart(3, "0")}`;
       return [[stepId, replaySource.steps.find((step) => step.stepId === stepId)?.inputFiles ?? []]];
     })) : undefined;
+    this.validateInlineHttpOracles("Run Charter", charter);
     if (this.restrictWebOrigins) this.validateMissionCharterSafety("MCP Charter", charter, input.adapter ?? "web");
     if (this.restrictWebOrigins && charter.sideEffectPolicy === "allow" && this.config.policies.sideEffects !== "allow") {
       throw new Error("MCP interactive runs require sideEffects=allow in project config");
@@ -1345,7 +1380,8 @@ export class LocalRunnerService {
     const configured = oracleNames.map((name) => {
       const projectOracle = registered.get(name);
       if (projectOracle) return projectOracle;
-      const definition = this.config.oracles.find((oracle) => oracle.name === name);
+      const definition = this.config.oracles.find((oracle) => oracle.name === name)
+        ?? charter.httpOracles?.find((oracle) => oracle.name === name);
       if (!definition) throw new Error(`Oracle is not registered: ${name}`);
       if (this.restrictWebOrigins && !isLoopback(new URL(definition.url).hostname)) throw new Error(`MCP oracle ${name} must use loopback`);
       return configuredHttpOracle(definition);

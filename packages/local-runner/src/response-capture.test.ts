@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CaptureResponseActionSchema, ProofkitConfigSchema, RunSummarySchema, TestCharterSchema, type RunSummary, type Verdict } from "@proofkit/contracts";
+import { CaptureResponseActionSchema, InlineHttpOracleSchema, ProofkitConfigSchema, RunSummarySchema, TestCharterSchema, type RunSummary, type Verdict } from "@proofkit/contracts";
 import { LocalRunnerService } from "./index.js";
 import { installMockRunEvidence } from "./mock-run-evidence.test-helper.js";
 
@@ -38,6 +38,31 @@ describe("MCP response capture policy and Mission evidence", () => {
     await expect(service.createMission({ intent: plan.intent, charter: { ...plan, sideEffectPolicy: "deny" } })).rejects.toThrow("captureResponse requires sideEffectPolicy=allow");
     const denied = await fixture("deny");
     await expect(denied.service.createMission({ intent: plan.intent, charter: plan })).rejects.toThrow("policies.sideEffects=allow");
+  });
+  it("validates an inline business Oracle against its current-response field before Mission persistence", async () => {
+    const { root } = await fixture();
+    const service = new LocalRunnerService({ root, workspaceRoot: root, restrictWebOrigins: true,
+      config: ProofkitConfigSchema.parse({ project: { root }, surfaces: { web: { baseUrl: "http://127.0.0.1:8080/" } },
+        policies: { sideEffects: "allow" } }) });
+    const responseAction = { ...capture, response: { ...capture.response, url: "http://127.0.0.1:8080/api/v1/intakes" } };
+    const inline = InlineHttpOracleSchema.parse({ name: "current-intake", url: "http://127.0.0.1:8080/api/v1/intakes/status",
+      query: { fileId: { source: "response" as const, stepId: "step-001", field: "fileId", matchPointer: "/data/file_id" } },
+      statusPointer: "/data/state", successValues: ["complete"] });
+    const charter = { ...plan, actions: [responseAction], oracles: ["current-intake"], httpOracles: [inline] };
+    const accepted = await service.createMission({ intent: charter.intent, charter });
+    expect(accepted.charter?.httpOracles?.[0]?.query.fileId).toMatchObject(inline.query.fileId!);
+    await expect(service.createMission({ intent: charter.intent, charter: { ...charter,
+      httpOracles: [{ ...inline, query: { fileId: { ...inline.query.fileId!, stepId: "step-002" } } }] } }))
+      .rejects.toThrow("must bind a captured field");
+    await expect(service.createMission({ intent: charter.intent, charter: { ...charter,
+      httpOracles: [{ ...inline, url: "https://remote.example.test/status" }] } }))
+      .rejects.toThrow("loopback");
+    await expect(service.createMission({ intent: charter.intent, charter: { ...charter,
+      httpOracles: [inline, inline] } })).rejects.toThrow("duplicate inline Oracle names");
+    await expect(service.createMission({ intent: charter.intent, charter: { ...charter,
+      actions: [{ ...responseAction, response: { ...responseAction.response,
+        fields: { fileId: { pointer: "/data/file_id", type: "string" as const } } } }] } })).rejects.toThrow("needs a captured current ID");
+    expect((await readFile(join(root, ".proofkit/missions", `${accepted.missionId}.json`), "utf8"))).toContain("current-intake");
   });
 
   it("applies capture permission to direct runs as well as Mission requests", async () => {

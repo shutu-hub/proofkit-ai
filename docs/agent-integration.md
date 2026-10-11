@@ -326,6 +326,41 @@ oracles:
     deadlineMs: 30000
 ```
 
+For a new workflow, the agent may put the same limited GET reader directly in
+the submitted Charter instead of registering it in the external config first.
+This example continues the `captureResponse` Charter above; `step-003` refers
+to that Charter's third action:
+
+```yaml
+oracles: [current-resume-terminal]
+httpOracles:
+  - name: current-resume-terminal
+    url: http://127.0.0.1:8080/api/v1/resume-status
+    query:
+      file_id:
+        source: response
+        stepId: step-003
+        field: fileId
+        matchPointer: /data/file_id
+    statusPointer: /data/status
+    successValues: [completed]
+    failureValues: [failed]
+    intervalMs: 500
+    deadlineMs: 30000
+```
+
+ProofKit validates the name, endpoint, bounds and capture-step references
+before saving the Mission. Every scenario that uses this Oracle must bind at
+least one `id` field captured in that scenario. The reader sends bounded GET
+requests, checks that the independent JSON identifies the current object, and
+then evaluates its declared terminal state. In MCP mode its URL must be on
+loopback. It cannot carry credentials, arbitrary headers or code, and it does
+not create the application's status API. Keep authentication, multiple
+readers and richer file/candidate/job invariants in a trusted external
+workspace connector. An ID mismatch is a failed business check; an absent
+response or terminal state is inconclusive. A one-time HTTP 200 without these
+predicates is not a business pass.
+
 Step IDs are one-based action positions; update the binding if actions are
 inserted. Use the actual API's field pointers and status values. Missing or
 ambiguous response identity is inconclusive. A different independent object

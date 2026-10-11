@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ActionSchema, CaptureResponseActionSchema, ProofkitConfigSchema } from "./index.js";
+import { ActionSchema, CaptureResponseActionSchema, InlineHttpOracleSchema, ProofkitConfigSchema, TestCharterSchema } from "./index.js";
 
 const action = { kind: "captureResponse", name: "intake", trigger: { kind: "click", selector: "#submit" },
   response: { url: "http://127.0.0.1:8080/api/v1/intakes", method: "POST", fields: { fileId: { pointer: "/data/file_id", type: "id" } } } };
@@ -39,5 +39,22 @@ describe("action-scoped response contract", () => {
     for (const change of [{ matchPointer: undefined }, { matchPointer: "/data/~2bad" }, { field: "constructor" }]) {
       expect(ProofkitConfigSchema.safeParse({ oracles: [{ ...oracle, query: { fileId: { ...binding, ...change } } }] }).success).toBe(false);
     }
+  });
+  it("accepts only bounded, response-bound inline business readers", () => {
+    const oracle = { name: "current-intake", url: "http://127.0.0.1:8080/api/v1/intakes/status",
+      query: { fileId: { source: "response", stepId: "step-001", field: "fileId", matchPointer: "/data/file_id" } },
+      statusPointer: "/data/state", successValues: ["complete"], failureValues: ["failed"] };
+    expect(TestCharterSchema.parse({ intent: "Verify current intake", actions: [action],
+      oracles: ["current-intake"], httpOracles: [oracle] }).httpOracles?.[0]).toMatchObject({
+      ...oracle, expectedStatus: 200, intervalMs: 500, deadlineMs: 30000,
+    });
+    for (const change of [
+      { query: {} }, { query: { runId: { source: "runId" } } },
+      { url: "http://127.0.0.1/status?token=private" },
+      { url: "http://user:password@127.0.0.1/status" },
+      { statusPointer: "/data/__proto__/state" },
+      { successValues: ["complete"], failureValues: ["complete"] },
+      { deadlineMs: 300001 }, { script: "return true" },
+    ]) expect(InlineHttpOracleSchema.safeParse({ ...oracle, ...change }).success).toBe(false);
   });
 });

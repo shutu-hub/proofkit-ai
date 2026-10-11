@@ -267,6 +267,18 @@ identity fails even when its status reports success. There is no fallback to
 a historical object. Richer byte, candidate, job and assessment invariants
 remain the responsibility of a trusted workspace connector.
 
+An agent-submitted Charter may carry `httpOracles` with the same identity and
+terminal-state semantics. The inline form is limited to bounded GET polling:
+an endpoint without embedded credentials or query, 1–8 response-bound query
+parameters, at least one current captured ID in each scenario using it, a
+safe identity pointer, terminal values and a finite deadline. Mission creation
+validates references and registered-name collisions; Run creation validates
+them again. MCP requires a loopback endpoint. The frozen Charter and Run-fact
+audit include the inline definition, so replay cannot silently substitute a
+different reader. This supports a new workflow without changing the tested
+source or registering executable connector code. Complex business invariants
+still require a trusted external workspace connector.
+
 `association: action-window` describes temporal association, not causal proof.
 Isolated data, controlled background activity and independent business facts
 remain necessary. Direct replay captures fresh response IDs; they need not
