@@ -232,6 +232,26 @@ safe next actions, and its verified rerun preserved that distinction. These synt
 establish a working path on this host, not a general false-pass rate or live
 AIHR acceptance.
 
+On 2026-10-12, the real Codex CLI host evaluator exercised two optional
+unregistered workspace Charter cases on `70eb10f`. With the per-invocation
+Windows `unelevated` sandbox setting, `candidate-core` passed its Web Mission:
+the host selected the digest-pinned candidate, captured the current response
+file ID and obtained an independent matching terminal read. The separate
+`candidate-electron-defect` case used an owned Electron/CDP fixture and passed
+the evaluator by reporting the seeded wrong-job relation as a failure with
+business evidence. Both had `hostOutcome: evaluated`, `passed: true`, and no
+verifier issues. A default-sandbox attempt stalled before any MCP call, and a
+90-second unelevated attempt timed out while still making tool calls; neither
+is product evidence. These are synthetic fixtures and do not validate live
+AIHR, other hosts or a general model reliability rate. Scope now distinguishes
+a reviewable same-level external Charter from a case that must be authored,
+while still requiring file/source review before the path and digest are used.
+The updated guidance was then exercised by the real Codex CLI in the separate
+`candidate-core-defect` Web case: it reviewed the workspace file and source,
+ran the current-ID scenario, and reported the seeded wrong-job relation as
+`failed`; the host verifier passed with no issues. This remains synthetic
+fixture evidence.
+
 The MCP `await_test_result` tool now waits up to 30 seconds on the saved Mission
 without starting or cancelling it. It returns a compact terminal summary and
 current evidence integrity, a still-running receipt, or a no-owner action. The

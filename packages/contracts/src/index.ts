@@ -962,7 +962,7 @@ export const TestScopeSchema = z.object({
   }),
   /** Additive planning guidance; older saved scope snapshots remain readable. */
   planningReadiness: z.object({
-    status: z.enum(["catalog-ready", "authoring-needed", "inspection-incomplete"]),
+    status: z.enum(["catalog-ready", "candidate-review-needed", "authoring-needed", "inspection-incomplete"]),
     compatibleMatched: ScopeCountSchema,
     compatibleChecked: ScopeCountSchema,
     compatibleReady: ScopeCountSchema,

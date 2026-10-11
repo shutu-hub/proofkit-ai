@@ -264,7 +264,7 @@ Discovery/configuration references:
 
 ## Recommended connection
 
-Read `inspect_test_scope.planningReadiness` before choosing a Charter. Its bounded gaps distinguish level and surface mismatch, invalid or omitted plans, and literal source or Oracle-name misses. `inspection-incomplete` calls for refining the focus or limit; `authoring-needed` calls for a compatible scenario. Neither status is a product verdict, and a matching quick Charter never substitutes for requested core proof.
+Read `inspect_test_scope.planningReadiness` before choosing a Charter. Its bounded gaps distinguish level and surface mismatch, invalid or omitted plans, and literal source or Oracle-name misses. `inspection-incomplete` calls for refining the focus or limit (at most 50); `authoring-needed` calls for a compatible scenario. `candidate-review-needed` means a visible, same-level external Charter has no reported structural issue. Inspect that file and the source flow, then pass its relative path and SHA-256 from the same scope result to `run_test`, or register it. This status does not validate the live target, business data or test result; a matching quick Charter never substitutes for requested core proof.
 
 Register one local MCP server for the project root. Clients with MCP support, including Codex and Claude Code, use the same high-level tools. DeepSeek Harness can use this interface when its harness supports MCP, or invoke the CLI otherwise:
 

@@ -41,6 +41,9 @@ routes are static candidates; counts, omissions and truncation are scope limits.
 Read planningReadiness before selecting a scenario. catalog-ready means only a
 saved plan passed structural checks; it is not runtime readiness. If a quick
 Charter matches a core request, keep core and author or register core proof.
+candidate-review-needed means a same-level workspace file has no reported
+structural issue, but it still needs source-flow review and the normal runtime
+checks before run_test; it is not an acceptance claim. Scope limit is at most 50.
 For inspection-incomplete, refine the literal focus or raise the bounded limit
 before concluding no plan exists. A source-focus-unresolved gap means the
 literal term missed retained source hints, not that the feature is absent.

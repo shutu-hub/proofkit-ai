@@ -99,8 +99,11 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const compatibleMatched = compatibleCharters.length + compatibleSuites.length;
   const compatibleOmitted = compatibleMatched - compatibleChecked;
   const focusUnresolved = Boolean(focus && !selectedCharters.length && !suites.length && !routes.length && !entries.length && !capabilityMatches.length && !oracleMatches.length && !workspaceCandidates.matched);
+  const reviewableCandidate = workspaceCandidates.selection !== "fallback-unmatched"
+    && workspaceCandidates.items.some((item) => item.parseStatus === "valid" && item.level === level && item.sha256 && item.issues.length === 0);
   const planningStatus: NonNullable<TestScope["planningReadiness"]>["status"] = compatibleReady ? "catalog-ready"
-    : compatibleOmitted || focusUnresolved ? "inspection-incomplete" : "authoring-needed";
+    : compatibleOmitted || focusUnresolved ? "inspection-incomplete"
+      : reviewableCandidate ? "candidate-review-needed" : "authoring-needed";
   const gaps: PlanningGap[] = [];
   const gap = (code: PlanningGap["code"], relatedIds: string[], guidance: string) => gaps.push({ code, relatedIds: relatedIds.slice(0, 5), guidance });
   const wrongLevel = selectedCharters.filter((entry) => entry.level !== level);
@@ -115,11 +118,15 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   if (compatibleOmitted) gap("catalog-omitted", [],
     "Compatible catalog details exceeded the response limit; inspect a narrower focus or raise the bounded limit before concluding no plan is ready.");
   if (!compatibleMatched) gap("no-compatible-plan", [],
-    getTestLevelProfile(level).evidencePolicy.requireBusinessOracle
-      ? `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive assertion and independent business Oracle.`
-      : `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive surface assertion.`);
+    reviewableCandidate
+      ? `No registered matching ${level} plan covers the required surface; review the matching workspace candidate and use its pinned path or register it.`
+      : getTestLevelProfile(level).evidencePolicy.requireBusinessOracle
+        ? `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive assertion and independent business Oracle.`
+        : `No registered matching ${level} plan covers the required surface; author or register a Charter with a positive surface assertion.`);
   if (workspaceCandidates.total && !compatibleReady) gap("unregistered-workspace-charters", [],
-    "External workspace contains unregistered Charter candidates; review their structural issues and register only an appropriate validated plan.");
+    reviewableCandidate
+      ? "Review the matching Charter and source flow; then pass its exact relative path and SHA-256 to run_test, or register it. Discovery is not execution approval."
+      : "External workspace contains unregistered Charter candidates; inspect their level and structural issues before authoring or registering a plan.");
   if (!compatibleReady && focus && !routes.length && !entries.length) gap("source-focus-unresolved", [],
     "The literal focus matched no retained source entry or route; inspect the owning paths or try a source-language term before claiming absence.");
   if (!compatibleReady && getTestLevelProfile(level).evidencePolicy.requireBusinessOracle) {
@@ -131,7 +138,8 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const next = [
     "inspect_test_environment",
     "inspect_surface",
-    compatibleReady ? "run_test" : planningStatus === "inspection-incomplete" ? "inspect_test_scope" : "plan_test",
+    compatibleReady || planningStatus === "candidate-review-needed" ? "run_test"
+      : planningStatus === "inspection-incomplete" ? "inspect_test_scope" : "plan_test",
   ];
   return TestScopeSchema.parse({
     schemaVersion: 1, testVerdict: "not-asserted", executionChecks: "not-run",

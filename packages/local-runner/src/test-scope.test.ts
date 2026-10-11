@@ -30,8 +30,12 @@ describe("read-only test scope", () => {
     expect(scope.workspaceCandidates).toMatchObject({ scanStatus: "complete", total: 2, matched: 1, selection: "focused", omitted: 0,
       items: [{ path: ".proofkit/charters/online-resume.yml", sha256: expect.stringMatching(/^[a-f0-9]{64}$/), focusMatched: true, parseStatus: "valid", level: "core", actionCount: 1, assertionCount: 1, oracleCount: 1, issues: [] }] });
     expect(scope.workspaceCandidates?.items.some((item) => item.path === "charters/resume-core.yml")).toBe(false);
-    expect(scope.planningReadiness).toMatchObject({ status: "authoring-needed", compatibleReady: 0,
+    expect(scope.planningReadiness).toMatchObject({ status: "candidate-review-needed", compatibleReady: 0,
       gaps: expect.arrayContaining([expect.objectContaining({ code: "unregistered-workspace-charters" })]) });
+    expect(scope.next.at(-1)).toBe("run_test");
+    const weaker = await runner.inspectTestScope({ focus: "another workflow", level: "core" });
+    expect(weaker.planningReadiness?.status).toBe("authoring-needed");
+    expect(weaker.next.at(-1)).toBe("plan_test");
     expect(scope.testVerdict).toBe("not-asserted");
     expect(await sourceFiles(runner.root)).toEqual(before);
     for (const callback of Object.values(callbacks)) expect(callback).not.toHaveBeenCalled();
