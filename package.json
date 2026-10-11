@@ -36,6 +36,7 @@
     "test:smoke:recovery": "pnpm build && node tests/resource-recovery-smoke.mjs",
     "test:distribution": "node tests/distribution-smoke.mjs",
     "test:git-install": "node tests/git-install-smoke.mjs",
+    "test:git-install:remote": "node tests/git-install-smoke.mjs --remote",
     "benchmark:planner": "pnpm build && node tests/planner-benchmark.mjs",
     "benchmark:host": "pnpm build && node tests/host-evaluation.mjs",
     "benchmark:host:claude": "pnpm build && node tests/host-evaluation.mjs --host claude-code --implicit-skill",

@@ -82,7 +82,7 @@ proofkit --version
 ```
 
 The distribution test packs the project, installs only that tarball in a fresh temporary directory, runs CLI onboarding, and calls the installed MCP server over stdio. A registry release can later use `npm install -g proofkit-ai` with the same two commands.
-`pnpm test:git-install` separately installs the current committed source through npm's Git dependency path and checks the installed CLI and MCP connection.
+`pnpm test:git-install` separately installs the current committed source through npm's Git dependency path and checks the installed CLI and MCP connection. CI runs this local Git gate; `pnpm test:git-install:remote` checks the same commit through public GitHub after pushing it.
 
 The tarball also carries the AIHR reference connector and five example Charters. Select it explicitly during first host setup in a separate test workspace:
 

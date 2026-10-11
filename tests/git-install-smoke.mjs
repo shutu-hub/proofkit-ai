@@ -6,6 +6,10 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const remote = process.argv.includes("--remote");
+if (process.argv.length > 3 || (process.argv[2] && process.argv[2] !== "--remote")) {
+  throw new Error("Usage: git-install-smoke.mjs [--remote]");
+}
 const tempParent = await realpath(tmpdir());
 const scratch = await mkdtemp(join(tempParent, "proofkit-git-install-"));
 try {
@@ -18,8 +22,9 @@ try {
   const sourceBytes = '{"name":"git-install-fixture","version":"1.0.0"}';
   await writeFile(join(source, "package.json"), sourceBytes);
   const npm = await npmExecutable();
+  const packageSpec = remote ? `github:shutu-hub/proofkit-ai#${head}` : `git+${pathToFileURL(root).href}#${head}`;
   await command(npm.executable, [...npm.prefix, "install", "--prefix", install,
-    `git+${pathToFileURL(root).href}#${head}`, "--no-audit", "--no-fund"], scratch, 600_000);
+    packageSpec, "--no-audit", "--no-fund"], scratch, 600_000);
   const installed = join(install, "node_modules", "proofkit-ai");
   const cli = join(installed, "bundle", "main.js");
   await access(cli);
@@ -32,7 +37,7 @@ try {
   assert.equal(setup.localConnection.testVerdict, "not-asserted");
   assert.equal(setup.localConnection.projectRoot, await realpath(source));
   assert.equal(await readFile(join(source, "package.json"), "utf8"), sourceBytes);
-  console.log(JSON.stringify({ commit: head, version: manifest.version,
+  console.log(JSON.stringify({ commit: head, source: remote ? "github" : "local-git", version: manifest.version,
     verified: ["git-package-build", "installed-cli", "installed-mcp-connection", "source-unchanged"] }, null, 2));
 } finally {
   const safeRoot = resolve(scratch);
