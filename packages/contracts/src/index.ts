@@ -389,6 +389,11 @@ export const EnvironmentInspectionSchema = z.object({
   })).max(16),
   omittedHealthChecks: z.number().int().nonnegative(),
   notChecked: z.array(z.enum(["browser-session", "authentication", "fixtures", "integration-preflight", "business-terminal", "project-coverage"])),
+  next: z.array(z.object({
+    action: z.enum(["configure-surface", "check-surface-endpoint", "configure-browser", "check-cdp", "check-health", "declare-health", "confirm-source", "retry-inspection", "inspect-surface"]),
+    basedOn: z.array(z.string()).min(1).max(16),
+    guidance: z.string().min(1).max(240),
+  })).max(9),
 });
 export type EnvironmentInspection = z.infer<typeof EnvironmentInspectionSchema>;
 

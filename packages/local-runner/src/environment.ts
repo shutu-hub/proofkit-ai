@@ -108,8 +108,50 @@ export async function inspectEnvironment(context: Context, input: EnvironmentIns
       status: checks.some((check) => check.status === "blocked") ? "blocked" : checks.some((check) => check.status === "unverified") ? "incomplete" : "checks-passed",
       testVerdict: "not-asserted", checks, omittedHealthChecks,
       notChecked: ["browser-session", "authentication", "fixtures", "integration-preflight", "business-terminal", "project-coverage"],
+      next: recommendNext(checks),
     });
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
+}
+
+function recommendNext(checks: Check[]): EnvironmentInspection["next"] {
+  const next: EnvironmentInspection["next"] = [];
+  const check = (id: string) => checks.find((item) => item.id === id);
+  const add = (action: EnvironmentInspection["next"][number]["action"], basedOn: string[], guidance: string) => {
+    next.push({ action, basedOn, guidance });
+  };
+  if (check("surface-configuration")?.status === "blocked") {
+    add("configure-surface", ["surface-configuration"], "Configure the Web URL or Electron CDP connection in the external test workspace, then repeat inspection.");
+  }
+  if (check("surface-http")?.status === "blocked") {
+    add("check-surface-endpoint", ["surface-http"], "Use the project's documented local start flow and confirm the configured page endpoint, then repeat inspection.");
+  }
+  if (check("browser-executable")?.status === "blocked") {
+    add("configure-browser", ["browser-executable"], "Correct the configured browser executable in the external test workspace, then repeat inspection.");
+  }
+  if (check("cdp-http")?.status === "blocked") {
+    add("check-cdp", ["cdp-http"], "Confirm the local CDP listener or Electron DevToolsActivePort file belongs to the intended app, then repeat inspection.");
+  }
+  const blockedHealth = checks.filter((item) => /^health-\d+$/.test(item.id) && item.status === "blocked").map((item) => item.id);
+  if (blockedHealth.length) {
+    add("check-health", blockedHealth, "Check the declared backend health endpoints in the isolated test environment, then repeat inspection.");
+  }
+  if (check("health-configuration")?.status === "unverified") {
+    add("declare-health", ["health-configuration"], "Declare relevant backend health endpoints in the external test workspace before claiming backend readiness.");
+  }
+  const source = check("source-binding");
+  if (source?.status !== "passed" && source) {
+    add("confirm-source", ["source-binding"], source.targetBinding?.status === "different-project"
+      ? "The observed listener is associated with another checkout; select the intended local app before testing."
+      : "Confirm that the observed listener belongs to the intended source checkout before attributing test results to this project.");
+  }
+  if (check("inspection-deadline")) {
+    add("retry-inspection", ["inspection-deadline"], "The observation deadline expired; retry after the local services settle or increase the bounded timeout.");
+  }
+  if (!checks.some((item) => item.status === "blocked") && !check("inspection-deadline")
+    && source?.targetBinding?.status !== "different-project") {
+    add("inspect-surface", ["surface-configuration"], "Inspect the live Web/Electron surface next; this environment result is not a product test verdict.");
+  }
+  return next;
 }
 
 function isLoopback(hostname: string): boolean {

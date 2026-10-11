@@ -50,6 +50,7 @@ describe("environment inspection", () => {
     }), integration: { name: "no-execution", preflight: hooks.preflight, setup: hooks.setup, oracles: [{ name: "terminal", check: hooks.check }] } });
     const result = await service.inspectEnvironment();
     expect(result).toMatchObject({ status: "checks-passed", testVerdict: "not-asserted", omittedHealthChecks: 0 });
+    expect(result.next).toEqual([expect.objectContaining({ action: "inspect-surface", basedOn: ["surface-configuration"] })]);
     expect(result.notChecked).toContain("authentication");
     expect(result.notChecked).toContain("business-terminal");
     const content = await readFile(result.artifact.path, "utf8");
@@ -67,9 +68,14 @@ describe("environment inspection", () => {
     binding.mockResolvedValue({ status: "different-project", method: "windows-listener-process", expectedProjectRoot: root, observedProjectRoot: join(root, "other"), reason: "Different checkout", observedAt: new Date().toISOString() });
     const config = ProofkitConfigSchema.parse({ project: { root, health: [url] }, surfaces: { web: { baseUrl: url } } });
     const service = new LocalRunnerService({ root, workspaceRoot, config });
-    expect(await service.inspectEnvironment()).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "source-binding", status: "blocked" }), expect.objectContaining({ id: "surface-http", status: "passed" })]) });
+    const blocked = await service.inspectEnvironment();
+    expect(blocked).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "source-binding", status: "blocked" }), expect.objectContaining({ id: "surface-http", status: "passed" })]) });
+    expect(blocked.next).toContainEqual(expect.objectContaining({ action: "confirm-source", basedOn: ["source-binding"] }));
+    expect(blocked.next.some((item) => item.action === "inspect-surface")).toBe(false);
     config.policies.targetBinding = "record";
-    expect((await new LocalRunnerService({ root, workspaceRoot, config }).inspectEnvironment()).status).toBe("incomplete");
+    const recorded = await new LocalRunnerService({ root, workspaceRoot, config }).inspectEnvironment();
+    expect(recorded.status).toBe("incomplete");
+    expect(recorded.next.some((item) => item.action === "inspect-surface")).toBe(false);
   });
   it("inspects a one-time Web URL and binds the source check to that listener without changing configuration", async () => {
     const { root, workspaceRoot, binding } = await fixture();
@@ -109,10 +115,32 @@ describe("environment inspection", () => {
     const { root, workspaceRoot, binding } = await fixture();
     binding.mockResolvedValue({ status: "unverified", method: "unavailable", expectedProjectRoot: root, reason: "Unsupported platform", observedAt: new Date().toISOString() });
     const missing = new LocalRunnerService({ root, workspaceRoot });
-    expect(await missing.inspectEnvironment()).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "surface-configuration", status: "blocked" }), expect.objectContaining({ id: "health-configuration", status: "unverified" })]) });
+    const missingResult = await missing.inspectEnvironment();
+    expect(missingResult).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "surface-configuration", status: "blocked" }), expect.objectContaining({ id: "health-configuration", status: "unverified" })]) });
+    expect(missingResult.next.map((item) => item.action)).toEqual(expect.arrayContaining(["configure-surface", "declare-health", "confirm-source"]));
     const url = await serve((_req, res) => res.end());
     const service = new LocalRunnerService({ root, workspaceRoot, config: ProofkitConfigSchema.parse({ project: { root, health: [url] }, surfaces: { web: { baseUrl: url, executablePath: join(root, "missing-browser") } } }) });
-    expect(await service.inspectEnvironment()).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "browser-executable", status: "blocked" }), expect.objectContaining({ id: "source-binding", status: "unverified" })]) });
+    const result = await service.inspectEnvironment();
+    expect(result).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "browser-executable", status: "blocked" }), expect.objectContaining({ id: "source-binding", status: "unverified" })]) });
+    expect(result.next).toContainEqual(expect.objectContaining({ action: "configure-browser", basedOn: ["browser-executable"] }));
+  });
+  it("grounds blocked endpoint and health advice in observed checks without copying URL secrets", async () => {
+    const { root, workspaceRoot, binding } = await fixture();
+    binding.mockResolvedValue({ status: "unverified", method: "unavailable", expectedProjectRoot: root,
+      reason: "No listener association", observedAt: new Date().toISOString() });
+    const url = await serve((_req, res) => { res.writeHead(503); res.end("private body"); });
+    const service = new LocalRunnerService({ root, workspaceRoot, config: ProofkitConfigSchema.parse({
+      project: { root, health: [`${url}/health?token=secret`] }, surfaces: { web: { baseUrl: url } },
+    }) });
+    const result = await service.inspectEnvironment();
+    expect(result.status).toBe("blocked");
+    expect(result.next).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "check-surface-endpoint", basedOn: ["surface-http"] }),
+      expect.objectContaining({ action: "check-health", basedOn: ["health-1"] }),
+      expect.objectContaining({ action: "confirm-source", basedOn: ["source-binding"] }),
+    ]));
+    expect(result.next.some((item) => item.action === "inspect-surface")).toBe(false);
+    expect(JSON.stringify(result.next)).not.toMatch(/secret|private|token=/);
   });
   it("caps parallel health observations and respects one total deadline even with a late source check", async () => {
     const { root, workspaceRoot, binding } = await fixture();
@@ -125,6 +153,8 @@ describe("environment inspection", () => {
     expect(result.durationMs).toBeLessThan(1000);
     expect(requests).toBe(9);
     expect(result.checks).toContainEqual(expect.objectContaining({ id: "inspection-deadline", status: "unverified" }));
+    expect(result.next).toContainEqual(expect.objectContaining({ action: "retry-inspection", basedOn: ["inspection-deadline"] }));
+    expect(result.next.some((item) => item.action === "inspect-surface")).toBe(false);
   });
   it("propagates cancellation and writes no partial artifact", async () => {
     const { root, workspaceRoot, binding } = await fixture();
@@ -152,7 +182,9 @@ describe("environment inspection", () => {
     expect(paths).toContain("/json/version");
     expect(JSON.stringify(result)).not.toContain("private");
     await writeFile(file, "70000\n");
-    expect(await service.inspectEnvironment({ surface: "electron" })).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "cdp-http", status: "blocked" })]) });
+    const invalidPort = await service.inspectEnvironment({ surface: "electron" });
+    expect(invalidPort).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "cdp-http", status: "blocked" })]) });
+    expect(invalidPort.next).toContainEqual(expect.objectContaining({ action: "check-cdp", basedOn: ["cdp-http"] }));
     await writeFile(file, "9".repeat(5000));
     expect((await service.inspectEnvironment({ surface: "electron" })).status).toBe("blocked");
   });
