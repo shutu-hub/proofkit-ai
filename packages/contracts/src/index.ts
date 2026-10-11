@@ -983,6 +983,7 @@ export const TestScopeSchema = z.object({
     omitted: ScopeCountSchema,
     items: z.array(z.object({
       path: z.string().min(1).max(512),
+      sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
       focusMatched: z.boolean(),
       parseStatus: z.enum(["valid", "invalid", "oversized", "unreadable"]),
       level: TestLevelSchema.optional(),

@@ -11,6 +11,27 @@ afterEach(async () => {
 });
 
 describe("CLI workspace onboarding", () => {
+  it("creates a Mission from a scope-pinned external candidate without changing source", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-cli-pinned-source-"));
+    const workspace = await mkdtemp(join(tmpdir(), "proofkit-cli-pinned-workspace-"));
+    roots.push(root, workspace);
+    await writeFile(join(root, "package.json"), '{"name":"pinned-source"}');
+    await mkdir(join(workspace, ".proofkit", "charters"), { recursive: true });
+    await writeFile(join(workspace, ".proofkit", "config.yaml"), JSON.stringify({ project: { root } }));
+    const path = ".proofkit/charters/quick.yml";
+    await writeFile(join(workspace, ".proofkit", "charters", "quick.yml"), JSON.stringify({
+      intent: "quick candidate", level: "quick", actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny",
+    }));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const run = (...args: string[]) => createProgram().parseAsync(["node", "proofkit", ...args, "--root", root, "--workspace", workspace]);
+    await run("scope", "--level", "quick");
+    const candidate = JSON.parse(String(log.mock.calls[0]?.[0])).workspaceCandidates.items[0];
+    log.mockClear();
+    await run("mission", "create", "快速检查候选流程", "--level", "quick", "--candidate", path, "--candidate-sha256", candidate.sha256);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).charter).toMatchObject({ metadata: { proofkitCandidate: { path, sha256: candidate.sha256 } } });
+    await expect(run("mission", "create", "快速检查候选流程", "--level", "quick", "--candidate", path)).rejects.toThrow("requires the SHA-256");
+    expect(await readFile(join(root, "package.json"), "utf8")).toBe('{"name":"pinned-source"}');
+  });
   it("rejects invalid inspection prerequisites before creating a Run or launching a browser", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-cli-inspection-source-"));
     const workspace = await mkdtemp(join(tmpdir(), "proofkit-cli-inspection-workspace-"));

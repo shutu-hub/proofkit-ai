@@ -65,10 +65,12 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "create_test_mission",
-    "Create a reviewable AI test mission from natural language, a catalog ID, or an agent-submitted structured Charter. When surface is omitted, an unambiguous platform in the intent is used. The tested project is not modified.",
+    "Create a reviewable AI test mission from natural language, a catalog ID, a structured Charter, or a reviewed external-workspace candidate path and scope SHA-256. When surface is omitted, an unambiguous platform in the intent is used. The tested project is not modified.",
     {
       intent: z.string().min(1),
       charter: TestCharterSchema.optional(),
+      charterPath: z.string().min(1).max(512).optional(),
+      charterSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
       charterId: z.string().min(1).optional(),
       suiteId: z.string().min(1).optional(),
       coverage: TestCoverageSchema.optional().describe("declared limits acceptance to the saved scenarios; project requires whole-project workflow coverage proof"),
@@ -80,15 +82,17 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
     },
-    async ({ intent, charter, charterId, suiteId, coverage, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, charter, charterId, suiteId, coverage, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
+    async ({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
   );
 
   server.tool(
     "run_test",
-    "Run a natural-language ProofKit test mission at the requested intensity. When surface is omitted, an unambiguous platform in the intent is used. Supply a structured Charter when no catalog entry covers the requested workflow. Poll status and evidence for the final result.",
+    "Run a natural-language ProofKit test mission at the requested intensity. When surface is omitted, an unambiguous platform in the intent is used. Supply a structured Charter or a reviewed external-workspace candidate path with its scope SHA-256 when no catalog entry covers the workflow. Poll status and evidence for the final result.",
     {
       intent: z.string().min(1),
       charter: TestCharterSchema.optional(),
+      charterPath: z.string().min(1).max(512).optional(),
+      charterSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
       charterId: z.string().min(1).optional(),
       suiteId: z.string().min(1).optional(),
       coverage: TestCoverageSchema.optional().describe("declared limits acceptance to the saved scenarios; project requires whole-project workflow coverage proof"),
@@ -101,8 +105,8 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
       autoApprove: z.boolean().default(true),
     },
-    async ({ intent, charter, charterId, suiteId, coverage, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
-      const mission = await runner.createMission({ intent, charter, charterId, suiteId, coverage, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
+    async ({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
+      const mission = await runner.createMission({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
       const readiness = missionReadiness(mission);
       const started = autoApprove && readiness.ready
         ? await runner.startMission(mission.missionId, { approve: true })

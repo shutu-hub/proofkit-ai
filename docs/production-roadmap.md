@@ -147,6 +147,8 @@ changes; the declared key does not attest to unchanged tool code.
 
 **External Charter discovery (2026-10-11):** scope inspection now scans bounded, non-recursive external Charter directories without registering or executing files. It excludes registered paths and links, returns fixed structural and execution-policy hints, and falls back explicitly when the literal focus misses candidate names. The real AIHR workspace yielded three unregistered core candidates: online and ordinary upload lack positive UI assertions, all three need operator write opt-in, and the MCP boundary additionally requires a workspace policy change before their `allow` scenarios can run. None proves live AIHR readiness or acceptance.
 
+**Pinned candidate execution (2026-10-11):** an agent can now review a valid scope candidate and pass its path and SHA-256 directly to MCP `run_test` or `create_test_mission`; CLI Mission creation exposes the same pair. The shared bounded reader rejects changed, oversized, redirected and non-Charter paths before Mission creation. The ordinary planner and execution policy still gate the frozen Charter. A real MCP fixture ran a quick candidate and then rejected the same path after its bytes changed; this is an isolated contract check, not live AIHR acceptance.
+
 **Goal:** make one-sentence planning useful without allowing unverified model output to become an unsafe command.
 
 - Create a fixed Web/Electron benchmark with known workflows and seeded defects.

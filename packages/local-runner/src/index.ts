@@ -21,6 +21,7 @@ import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from 
 import { summarizeWorkflowExecution } from "./workflow-coverage.js";
 import { admitReviewedWorkflowScope, auditWorkflowReview } from "./workflow-review-audit.js";
 import { inspectTestScope } from "./test-scope.js";
+import { readWorkspaceCharterFile } from "./workspace-charter-file.js";
 import { compareCurrentSource, projectMissionResult } from "./mission-result.js";
 import type { MissionResult } from "@proofkit/contracts";
 import { ResourceRecoveryService } from "./resource-recovery.js";
@@ -98,6 +99,9 @@ export type MissionCreateOptions = {
   surface?: "web" | "electron" | "mobile" | "api";
   adapter?: LocalAdapterName;
   charter?: TestCharter;
+  /** Direct external-workspace candidate, pinned to the digest returned by scope inspection. */
+  charterPath?: string;
+  charterSha256?: string;
   url?: string;
   cdp?: string;
   devtoolsPortFile?: string;
@@ -328,6 +332,30 @@ export class LocalRunnerService {
   }
 
   async createMission(input: MissionCreateOptions): Promise<TestMission> {
+    if (input.charterPath !== undefined) {
+      if (!input.charterSha256) throw new Error("Candidate Charter path requires the SHA-256 returned by scope inspection");
+      if (input.charter || input.charterId || input.suiteId) throw new Error("Candidate Charter path cannot be combined with a submitted Charter or catalog selection");
+      if (input.url || input.expect?.length || input.oracleNames?.length || input.mode || input.sideEffectPolicy) {
+        throw new Error("Candidate Charter path cannot be combined with ad-hoc planning options");
+      }
+      const selectedPath = resolveWithinWorkspace(this.workspaceRoot, input.charterPath);
+      if (this.config.charters.some((entry) => {
+        try { return sameProjectPath(resolveWithinWorkspace(this.workspaceRoot, entry.path), selectedPath); }
+        catch { return false; }
+      })) {
+        throw new Error("Candidate Charter is already registered; select its charterId instead");
+      }
+      const loaded = await readWorkspaceCharterFile(this.workspaceRoot, input.charterPath, input.charterSha256);
+      const requestedLevel = resolveTestLevel(input.intent, input.level).resolved;
+      if (loaded.charter.level !== requestedLevel) {
+        throw new Error(`Candidate Charter level ${loaded.charter.level} does not match requested level ${requestedLevel}`);
+      }
+      return this.createMission({ ...input, level: requestedLevel, charterPath: undefined, charterSha256: undefined,
+        charter: TestCharterSchema.parse({ ...loaded.charter, metadata: { ...loaded.charter.metadata,
+          proofkitCandidate: { path: input.charterPath, sha256: loaded.sha256 } } }),
+      });
+    }
+    if (input.charterSha256 !== undefined) throw new Error("Candidate Charter SHA-256 requires charterPath");
     if (input.surface === "api") throw new Error(`Mission surface is not enabled by the local runner: ${input.surface}`);
     const surface = selectMissionSurface(input.intent, input.surface ?? input.adapter);
     if (input.charter && input.charterId) throw new Error("Supply either a Charter or charterId, not both");

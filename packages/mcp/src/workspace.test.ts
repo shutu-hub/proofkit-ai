@@ -30,6 +30,63 @@ function payload(result: unknown) {
 }
 
 describe("MCP external workspace", () => {
+  it("runs a reviewed workspace candidate by path and digest, then rejects a changed file", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-mcp-candidate-source-"));
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "proofkit-mcp-candidate-workspace-"));
+    let client: Client | undefined;
+    let server: McpServer | undefined;
+    try {
+      vi.spyOn(WebAdapter.prototype, "connect").mockResolvedValue();
+      vi.spyOn(WebAdapter.prototype, "snapshot").mockResolvedValue({ capturedAt: new Date().toISOString(), text: "ready", metadata: {} });
+      vi.spyOn(WebAdapter.prototype, "subscribeEvents").mockResolvedValue(() => {});
+      vi.spyOn(WebAdapter.prototype, "close").mockResolvedValue();
+      vi.spyOn(WebAdapter.prototype, "assert").mockImplementation(async (assertion) => ({ assertion, passed: true, message: "ready", evidence: [] }));
+      await writeFile(join(root, "package.json"), '{"name":"candidate-source"}');
+      await mkdir(join(workspaceRoot, ".proofkit", "charters"), { recursive: true });
+      await writeFile(join(workspaceRoot, ".proofkit", "config.yaml"), JSON.stringify({ project: { root } }));
+      const candidatePath = ".proofkit/charters/quick.yml";
+      const file = join(workspaceRoot, ".proofkit", "charters", "quick.yml");
+      const charter = { intent: "quick candidate", level: "quick", actions: [],
+        assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" };
+      await writeFile(file, JSON.stringify(charter));
+      server = await createProofkitMcp({ root, workspaceRoot });
+      client = await connect(server);
+      const scope = payload(await client.callTool({ name: "inspect_test_scope", arguments: { level: "quick" } }));
+      const candidate = scope.workspaceCandidates.items[0];
+      expect(candidate).toMatchObject({ path: candidatePath, sha256: expect.stringMatching(/^[a-f0-9]{64}$/), parseStatus: "valid" });
+      const selected = { intent: "快速检查候选流程", level: "quick", charterPath: candidatePath, charterSha256: candidate.sha256 };
+      const started = payload(await client.callTool({ name: "run_test", arguments: selected }));
+      expect(started).toMatchObject({ level: "quick", running: true, readiness: { ready: true } });
+      expect((await waitForMission(client, started.missionId)).mission.verdict).toBe("passed");
+      const evidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
+      expect(evidence.testVerdict).toBe("passed");
+      expect(await readFile(join(root, "package.json"), "utf8")).toBe('{"name":"candidate-source"}');
+      const connections = vi.mocked(WebAdapter.prototype.connect).mock.calls.length;
+      await writeFile(file, JSON.stringify({ ...charter, assertions: [{ kind: "text-visible", text: "changed" }] }));
+      const changed = await client.callTool({ name: "run_test", arguments: selected });
+      expect(changed.isError).toBe(true);
+      expect(JSON.stringify(changed.content)).toContain("digest changed");
+      expect(vi.mocked(WebAdapter.prototype.connect).mock.calls).toHaveLength(connections);
+      const missingDigest = await client.callTool({ name: "create_test_mission", arguments: { intent: selected.intent, charterPath: candidatePath } });
+      expect(missingDigest.isError).toBe(true);
+      const corePath = ".proofkit/charters/core.yml";
+      await writeFile(join(workspaceRoot, ".proofkit", "charters", "core.yml"), JSON.stringify({
+        intent: "core candidate", level: "core", actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny",
+      }));
+      const coreScope = payload(await client.callTool({ name: "inspect_test_scope", arguments: { level: "core", focus: "core.yml" } }));
+      const coreCandidate = coreScope.workspaceCandidates.items[0];
+      const core = payload(await client.callTool({ name: "run_test", arguments: {
+        intent: "测试核心候选流程", level: "core", charterPath: corePath, charterSha256: coreCandidate.sha256,
+      } }));
+      expect(core).toMatchObject({ running: false, readiness: { ready: false }, planning: { evidenceGaps: ["business-oracle"] } });
+      expect(vi.mocked(WebAdapter.prototype.connect).mock.calls).toHaveLength(connections);
+    } finally {
+      await client?.close();
+      await server?.close();
+      vi.restoreAllMocks();
+      await Promise.all([root, workspaceRoot].map((path) => rm(path, { recursive: true, force: true })));
+    }
+  });
   it("inspects source-backed test scope through MCP without starting a surface or integration operation", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mcp-scope-source-"));
     const workspaceRoot = await mkdtemp(join(tmpdir(), "proofkit-mcp-scope-workspace-"));

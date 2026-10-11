@@ -1,8 +1,8 @@
-import { lstat, opendir, open } from "node:fs/promises";
+import { lstat, opendir } from "node:fs/promises";
 import { join } from "node:path";
 import { hasPositiveSurfaceAssertion, type ProofkitConfig, type TestScope } from "@proofkit/contracts";
-import { IntentPlanner } from "@proofkit/planner";
 import { resolveWithinWorkspace } from "@proofkit/project";
+import { readWorkspaceCharterFile, WorkspaceCharterFileError } from "./workspace-charter-file.js";
 
 type Candidates = NonNullable<TestScope["workspaceCandidates"]>;
 type Candidate = Candidates["items"][number];
@@ -18,7 +18,6 @@ type CandidateContext = {
 const DIRECTORIES = [[".proofkit", "charters"], ["charters"]] as const;
 const MAX_DIRECTORY_ENTRIES = 256;
 const MAX_CANDIDATES = 100;
-const MAX_FILE_BYTES = 128 * 1024;
 
 /** Read-only, bounded hints. Discovery never registers or executes a Charter. */
 export async function inspectWorkspaceCandidates(context: CandidateContext, focus: string | undefined, limit: number): Promise<Candidates> {
@@ -28,7 +27,6 @@ export async function inspectWorkspaceCandidates(context: CandidateContext, focu
   }).map(pathIdentity));
   const knownCapabilities = new Map(context.capabilities.map((item) => [item.name, item]));
   const knownOracles = new Set([...context.oracles.map((item) => item.name), ...context.config.oracles.map((item) => item.name)]);
-  const planner = new IntentPlanner();
   const found: Array<{ item: Candidate; searchable: string }> = [];
   let partial = false;
   let truncated = false;
@@ -68,68 +66,42 @@ export async function inspectWorkspaceCandidates(context: CandidateContext, focu
       const item: Candidate = { path: relativePath, focusMatched: false, parseStatus: "unreadable", issues: [] };
       let searchable = relativePath;
       try {
-        const info = await lstat(absolute);
-        if (!info.isFile()) continue;
-        if (info.size > MAX_FILE_BYTES) {
+        const { charter, sha256 } = await readWorkspaceCharterFile(context.workspaceRoot, relativePath);
+        item.parseStatus = "valid";
+        item.sha256 = sha256;
+        item.level = charter.level;
+        item.sideEffectPolicy = charter.sideEffectPolicy;
+        item.actionCount = charter.actions.length;
+        item.assertionCount = charter.assertions.length;
+        item.oracleCount = charter.oracles?.length ?? 0;
+        if (!hasPositiveSurfaceAssertion(charter.assertions)) item.issues.push("missing-positive-assertion");
+        if (charter.level !== "quick" && !item.oracleCount) item.issues.push("missing-business-oracle");
+        const actions = [...charter.actions, ...(charter.negativeCases ?? []).flatMap((negative) => negative.actions)];
+        if (actions.some((action) => action.kind === "capability" && !knownCapabilities.has(action.name))) item.issues.push("unregistered-capability");
+        const usedCapabilities = actions.flatMap((action) => action.kind === "capability" ? [knownCapabilities.get(action.name)] : []).filter((item) => item !== undefined);
+        if (usedCapabilities.some((capability) => !capability.environments.includes(context.config.policies.environment))) item.issues.push("capability-environment-mismatch");
+        if (!context.allowCapabilityWrites && usedCapabilities.some((capability) => capability.sideEffect === "write")) item.issues.push("write-opt-in-required");
+        const scenarios = [{ actions: charter.actions, sideEffectPolicy: charter.sideEffectPolicy }, ...(charter.negativeCases ?? [])];
+        if (scenarios.some((scenario) => scenario.actions.some((action) => action.kind === "capability" && knownCapabilities.get(action.name)?.sideEffect === "write" && scenario.sideEffectPolicy !== "allow"
+          || (action.kind === "setInputFiles" || action.kind === "captureResponse"
+            || context.restrictWebOrigins && (action.kind === "click" || action.kind === "fill" || action.kind === "press")) && scenario.sideEffectPolicy !== "allow"))) {
+          item.issues.push("scenario-side-effect-policy-conflict");
+        }
+        if (context.restrictWebOrigins && context.config.policies.sideEffects !== "allow" && scenarios.some((scenario) => scenario.sideEffectPolicy === "allow")) {
+          item.issues.push("mcp-workspace-policy-conflict");
+        }
+        const oracleNames = [...(charter.oracles ?? []), ...(charter.negativeCases ?? []).flatMap((negative) => negative.oracles)];
+        const availableOracles = new Set([...knownOracles, ...(charter.httpOracles ?? []).map((oracle) => oracle.name)]);
+        if (oracleNames.some((oracle) => !availableOracles.has(oracle))) item.issues.push("unregistered-oracle");
+        searchable = [relativePath, charter.intent, ...actions.filter((action) => action.kind === "capability").map((action) => action.name), ...oracleNames].join(" ");
+      } catch (error) {
+        if (error instanceof WorkspaceCharterFileError && error.issue === "invalid-charter") {
+          item.parseStatus = "invalid";
+          item.issues = ["invalid-charter"];
+        } else if (error instanceof WorkspaceCharterFileError && error.issue === "oversized") {
           item.parseStatus = "oversized";
           item.issues = ["file-too-large"];
-          partial = true;
-        } else {
-          const file = await open(absolute, "r");
-          let source: string;
-          try {
-            const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
-            let bytesRead = 0;
-            while (bytesRead < buffer.length) {
-              const read = await file.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
-              if (!read.bytesRead) break;
-              bytesRead += read.bytesRead;
-            }
-            if (bytesRead > MAX_FILE_BYTES) {
-              item.parseStatus = "oversized";
-              item.issues = ["file-too-large"];
-              partial = true;
-              found.push({ item, searchable });
-              continue;
-            }
-            source = buffer.subarray(0, bytesRead).toString("utf8");
-          } finally { await file.close(); }
-          try {
-            const charter = planner.fromYaml(source);
-            item.parseStatus = "valid";
-            item.level = charter.level;
-            item.sideEffectPolicy = charter.sideEffectPolicy;
-            item.actionCount = charter.actions.length;
-            item.assertionCount = charter.assertions.length;
-            item.oracleCount = charter.oracles?.length ?? 0;
-            if (!hasPositiveSurfaceAssertion(charter.assertions)) item.issues.push("missing-positive-assertion");
-            if (charter.level !== "quick" && !item.oracleCount) item.issues.push("missing-business-oracle");
-            const actions = [...charter.actions, ...(charter.negativeCases ?? []).flatMap((negative) => negative.actions)];
-            if (actions.some((action) => action.kind === "capability" && !knownCapabilities.has(action.name))) item.issues.push("unregistered-capability");
-            const usedCapabilities = actions.flatMap((action) => action.kind === "capability" ? [knownCapabilities.get(action.name)] : []).filter((item) => item !== undefined);
-            if (usedCapabilities.some((capability) => !capability.environments.includes(context.config.policies.environment))) item.issues.push("capability-environment-mismatch");
-            if (!context.allowCapabilityWrites && usedCapabilities.some((capability) => capability.sideEffect === "write")) item.issues.push("write-opt-in-required");
-            const scenarios = [{ actions: charter.actions, sideEffectPolicy: charter.sideEffectPolicy }, ...(charter.negativeCases ?? [])];
-            if (scenarios.some((scenario) => scenario.actions.some((action) => action.kind === "capability" && knownCapabilities.get(action.name)?.sideEffect === "write" && scenario.sideEffectPolicy !== "allow"
-              || (action.kind === "setInputFiles" || action.kind === "captureResponse"
-                || context.restrictWebOrigins && (action.kind === "click" || action.kind === "fill" || action.kind === "press")) && scenario.sideEffectPolicy !== "allow"))) {
-              item.issues.push("scenario-side-effect-policy-conflict");
-            }
-            if (context.restrictWebOrigins && context.config.policies.sideEffects !== "allow" && scenarios.some((scenario) => scenario.sideEffectPolicy === "allow")) {
-              item.issues.push("mcp-workspace-policy-conflict");
-            }
-            const oracleNames = [...(charter.oracles ?? []), ...(charter.negativeCases ?? []).flatMap((negative) => negative.oracles)];
-            const availableOracles = new Set([...knownOracles, ...(charter.httpOracles ?? []).map((oracle) => oracle.name)]);
-            if (oracleNames.some((oracle) => !availableOracles.has(oracle))) item.issues.push("unregistered-oracle");
-            searchable = [relativePath, charter.intent, ...actions.filter((action) => action.kind === "capability").map((action) => action.name), ...oracleNames].join(" ");
-          } catch {
-            item.parseStatus = "invalid";
-            item.issues = ["invalid-charter"];
-            partial = true;
-          }
-        }
-      } catch {
-        item.issues = ["file-unavailable"];
+        } else item.issues = ["file-unavailable"];
         partial = true;
       }
       found.push({ item, searchable });

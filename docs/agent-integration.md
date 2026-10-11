@@ -81,6 +81,11 @@ Charter directories when files have not been registered in the catalog. The
 agent can use their paths and fixed issue codes to find existing examples,
 including a `fallback-unmatched` set for a focus that missed their literal
 names. Candidate discovery does not approve, register or execute a scenario.
+For a reviewed candidate, give `run_test` its `charterPath` and `charterSha256`
+from the latest scope result. The Mission entry point rereads that bounded
+external file, rejects a changed digest and applies the normal Charter, level,
+policy and evidence gates. The candidate's parsed contents are frozen into the
+Mission; a later file edit cannot change an already planned Run.
 
 For the AIHR reference, explicitly choose `proofkit agent setup --harness
 codex --template aihr --root <AIHR-source> --workspace

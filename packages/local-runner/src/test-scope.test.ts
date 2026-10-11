@@ -27,7 +27,7 @@ describe("read-only test scope", () => {
     }));
     const scope = await runner.inspectTestScope({ focus: "简历获取", level: "core" });
     expect(scope.workspaceCandidates).toMatchObject({ scanStatus: "complete", total: 2, matched: 1, selection: "focused", omitted: 0,
-      items: [{ path: ".proofkit/charters/online-resume.yml", focusMatched: true, parseStatus: "valid", level: "core", actionCount: 1, assertionCount: 1, oracleCount: 1, issues: [] }] });
+      items: [{ path: ".proofkit/charters/online-resume.yml", sha256: expect.stringMatching(/^[a-f0-9]{64}$/), focusMatched: true, parseStatus: "valid", level: "core", actionCount: 1, assertionCount: 1, oracleCount: 1, issues: [] }] });
     expect(scope.workspaceCandidates?.items.some((item) => item.path === "charters/resume-core.yml")).toBe(false);
     expect(scope.planningReadiness).toMatchObject({ status: "authoring-needed", compatibleReady: 0,
       gaps: expect.arrayContaining([expect.objectContaining({ code: "unregistered-workspace-charters" })]) });

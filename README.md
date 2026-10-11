@@ -124,6 +124,8 @@ High-level Mission creation infers an omitted surface only from explicit Web, El
 
 `workspaceCandidates` lists bounded, unregistered Charter hints from the external test workspace, including missing assertions, business readers and write-policy prerequisites. A focused search with no literal candidate match returns `fallback-unmatched` hints. Candidate files are never automatically registered or marked ready; review the file and the tested workflow before using it.
 
+After reviewing a candidate, pass its `path` and `sha256` from the current scope result as `charterPath` and `charterSha256` to MCP `run_test` or `create_test_mission`. CLI `proofkit mission create` accepts `--candidate <path> --candidate-sha256 <digest>`. ProofKit checks that the file is a direct external-workspace Charter, reads at most 128 KiB, rejects changed bytes and applies the ordinary Mission validation and readiness gates. It freezes the parsed Charter in the Mission; catalog registration is optional for one-off tests.
+
 Observe configured endpoints or a one-time Web candidate before attaching to a page:
 
 ```bash

@@ -50,8 +50,11 @@ Review workspaceCandidates when the external workspace has unregistered
 Charter files. These are read-only, bounded hints, including structural issue
 codes; they are never catalog-ready or executable by discovery alone. A
 fallback-unmatched selection means no candidate literally matched the focus.
-Inspect the Charter and source flow, repair missing assertions or Oracles, and
-register a suitable plan only after review. Do not infer core proof from an
+Inspect the Charter and source flow, and repair missing assertions or Oracles.
+After review, use run_test with charterPath and the exact charterSha256 returned
+by the current scope inspection, or register a reusable catalog entry. A digest
+mismatch means the file changed: inspect it again before planning. Do not
+infer core proof from an
 unregistered file or lower the requested level to reuse a quick example.
 Treat write-opt-in-required and mcp-workspace-policy-conflict as execution
 prerequisites. Do not alter a workspace policy or authorize writes solely to
@@ -73,8 +76,9 @@ when controls or readiness are unknown, then inspect the owning source and
 API contract. Configure readyWhen for a real visible prerequisite if needed.
 These observations return not-asserted and cannot establish a product pass.
 
-If the catalog has no suitable scenario, submit a structured Charter to
-run_test. Read [Charter authoring](references/charter-authoring.md) for this path.
+If the catalog has no suitable scenario, use a reviewed digest-pinned workspace
+candidate or submit a structured Charter to run_test. Read [Charter authoring](references/charter-authoring.md)
+for the structured path.
 Include a positive surface assertion and, for core/release, an independent
 business Oracle for the expected terminal result. If this action returns an ID
 and the project exposes a suitable read-only status API, declare a bounded

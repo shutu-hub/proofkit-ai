@@ -329,6 +329,8 @@ export function createProgram(): Command {
     .option("--root <path>", "project root", ".")
     .option("--surface <surface>", "web, electron or mobile; inferred from an unambiguous intent when omitted")
     .option("--charter <path>", "load a Charter from the test workspace")
+    .option("--candidate <path>", "select an unregistered Charter path from scope inspection")
+    .option("--candidate-sha256 <digest>", "pin --candidate to its scope SHA-256")
     .option("--charter-id <id>", "select a curated test by catalog ID")
     .option("--suite-id <id>", "select an explicit release suite by ID")
     .option("--coverage <scope>", "declared scenarios or project workflow coverage")
@@ -344,6 +346,8 @@ export function createProgram(): Command {
       const created = await runner.createMission({
         intent,
         charter: options.charter ? await loadCharter(resolveWithinWorkspace(runner.workspaceRoot, options.charter)) : undefined,
+        charterPath: options.candidate,
+        charterSha256: options.candidateSha256,
         charterId: options.charterId,
         suiteId: options.suiteId,
         coverage: options.coverage as TestCoverage | undefined,
@@ -545,6 +549,8 @@ type PlanCommandOptions = RootOptions & {
 type MissionCreateCommandOptions = PlanCommandOptions & {
   surface?: string;
   charter?: string;
+  candidate?: string;
+  candidateSha256?: string;
   charterId?: string;
   suiteId?: string;
 };

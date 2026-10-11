@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +35,44 @@ async function fixture() {
 const charter = () => TestCharterSchema.parse({ intent: "verify fixture", level: "quick", actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" });
 
 describe("external test workspace", () => {
+  it("creates a Mission only from a digest-pinned, direct external Charter file", async () => {
+    const { root, workspaceRoot } = await fixture();
+    const directory = join(workspaceRoot, ".proofkit", "charters");
+    await mkdir(directory);
+    const path = ".proofkit/charters/candidate.yml";
+    const file = join(directory, "candidate.yml");
+    await writeFile(file, JSON.stringify(charter()));
+    const service = await LocalRunnerService.create({ root, workspaceRoot, restrictWebOrigins: true });
+    const candidate = (await service.inspectTestScope({ level: "quick" })).workspaceCandidates?.items[0];
+    expect(candidate).toMatchObject({ path, parseStatus: "valid", sha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    const options = { intent: "快速检查候选流程", level: "quick" as const, surface: "web" as const, charterPath: path, charterSha256: candidate!.sha256! };
+    await expect(service.createMission({ ...options, charterSha256: undefined })).rejects.toThrow("requires the SHA-256");
+    await expect(service.createMission({ ...options, intent: "测试候选流程", level: undefined })).rejects.toThrow("does not match requested level core");
+    await expect(service.createMission({ ...options, charter: charter() })).rejects.toThrow("cannot be combined");
+    await expect(service.createMission({ ...options, charterPath: "../source/package.json" })).rejects.toThrow();
+    await expect(service.createMission({ ...options, charterPath: ".proofkit/charters/nested/candidate.yml" })).rejects.toThrow("direct YAML file");
+    const mission = await service.createMission(options);
+    expect(mission.charter).toMatchObject({ intent: "verify fixture", metadata: { proofkitCandidate: { path, sha256: candidate!.sha256 } } });
+    expect(await readdir(root)).toEqual(["package.json"]);
+    const registered = new LocalRunnerService({ root, workspaceRoot, restrictWebOrigins: true, config: ProofkitConfigSchema.parse({
+      charters: [{ id: "candidate-quick", path, aliases: ["candidate"], level: "quick", surfaces: ["web"] }],
+    }) });
+    await expect(registered.createMission(options)).rejects.toThrow("already registered");
+
+    await writeFile(file, JSON.stringify({ ...charter(), assertions: [{ kind: "text-visible", text: "changed" }] }));
+    await expect(service.createMission(options)).rejects.toThrow("digest changed");
+    await writeFile(join(directory, "oversized.yml"), "x".repeat(129 * 1024));
+    await expect(service.createMission({ ...options, charterPath: ".proofkit/charters/oversized.yml" })).rejects.toThrow("read limit");
+    await writeFile(join(directory, "invalid.yml"), "intent: [private-source-value\n");
+    const invalid = await service.inspectTestScope({ level: "quick" });
+    expect(invalid.workspaceCandidates?.items.find((item) => item.path.endsWith("invalid.yml"))).toMatchObject({ parseStatus: "invalid" });
+    expect(JSON.stringify(invalid)).not.toContain("private-source-value");
+    const secret = join(root, "private.yml");
+    await writeFile(secret, JSON.stringify(charter()));
+    try { await symlink(secret, join(directory, "linked.yml")); }
+    catch (error) { if (!["EPERM", "ENOTSUP"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; }
+    await expect(service.createMission({ ...options, charterPath: ".proofkit/charters/linked.yml" })).rejects.toThrow("unavailable or redirected");
+  });
   it.each([
     ["missing version", "recover: async () => []", "explicit connector version"],
     ["blank version", "version: ' ', recover: async () => []", "non-empty string version"],
