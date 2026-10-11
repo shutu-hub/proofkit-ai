@@ -17,6 +17,8 @@ export const hostCases = [
   { id: "inline-core-defect", prompt: "测试简历获取功能，并用项目的只读状态接口核对本次文件 ID 和处理终态", surface: "web", level: "core", coverage: "declared", verdict: "failed", state: "complete", noCatalog: true, noReader: true, wrongIdentity: true, optional: true },
   { id: "electron-core-pass", prompt: "测试 Electron 桌面端的简历获取功能", surface: "electron", level: "core", coverage: "declared", verdict: "passed", state: "complete", optional: true, omitSurfaceInScriptedBaseline: true },
   { id: "electron-core-defect", prompt: "测试 Electron 桌面端的简历获取功能", surface: "electron", level: "core", coverage: "declared", verdict: "failed", state: "complete", wrongRelation: true, optional: true },
+  { id: "inline-electron-pass", prompt: "测试 Electron 桌面端简历获取功能，并用项目的只读状态接口核对本次文件 ID 和处理终态", surface: "electron", level: "core", coverage: "declared", verdict: "passed", state: "complete", noCatalog: true, noReader: true, optional: true, omitSurfaceInScriptedBaseline: true },
+  { id: "inline-electron-defect", prompt: "测试 Electron 桌面端简历获取功能，并用项目的只读状态接口核对本次文件 ID 和处理终态", surface: "electron", level: "core", coverage: "declared", verdict: "failed", state: "complete", noCatalog: true, noReader: true, wrongIdentity: true, optional: true },
 ];
 
 /** Synthetic business facts exercise host behavior without real accounts, data or billable work. */

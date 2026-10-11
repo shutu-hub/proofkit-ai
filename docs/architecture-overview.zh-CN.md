@@ -124,7 +124,7 @@ Mission 采集 Run 证据时，业务事实、断言快照等 artifact 必须同
 
 宿主链路有六个脚本驱动的合成 Web 基线及两个 Electron 基线；脚本调用不代表模型行为。新基线要求点击获取动作、捕获本次文件 ID，并核对独立 Oracle 对同一 ID 的读取来源；八个脚本案例已通过。真实 Codex 使用隐式 Skill 分别通过同样八个隔离案例：快速页面检查、核心通过、错误岗位关联、异步未完成、全项目覆盖缺口、内联 Charter 编写，以及 Electron 核心通过与缺陷。全项目案例没有执行产品 Run，返回 `not-asserted`。此前一轮八个真实宿主案例使用固定历史对象，不能作为本次动作因果的证据；这轮才验证了本次 ID。真实 AIHR 和 Claude Code 宿主验收仍未完成，隔离案例不能推算广泛项目的误报率。
 
-另两个无目录、无预注册业务 Oracle 的可选隔离 Web 案例验证首次使用：真实 Codex 隐式发现 Skill 后，自行提交带 `captureResponse` 与内联 `httpOracles` 的 Charter，分别确认本次 ID 的通过结果和旧 ID 的失败结果；脚本 MCP 基线与真实宿主评测均为 2/2。评测器要求本次捕获字段、独立读取来源、Mission/Run 归属和报告证据一致。此结果证明两个合成接口契约下的宿主行为，不代表任意项目都能自动发现可靠业务读接口。
+另四个无目录、无预注册业务 Oracle 的可选隔离 Web/Electron 案例验证首次使用：真实 Codex 隐式发现 Skill 后，自行提交带 `captureResponse` 与内联 `httpOracles` 的 Charter，在两端分别确认本次 ID 的通过结果和旧 ID 的失败结果；脚本 MCP 基线与真实宿主评测均为 4/4。评测器要求实际适配器、本次捕获字段、独立读取来源、Mission/Run 归属和报告证据一致。此结果证明合成接口契约下的宿主行为，不代表任意项目都能自动发现可靠业务读接口。
 
 另有两个可选 Electron/CDP 案例，通过同一原生 MCP 接口验证核心测试通过和业务关联缺陷；需设置 `PROOFKIT_ELECTRON_PATH`。评测器会核对用户指定的平台与 Mission、Run 页面快照，拒绝把 Web 执行冒充为 Electron 验收。
 

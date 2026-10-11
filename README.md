@@ -249,6 +249,7 @@ host evaluator stops on provider access or MCP cancellation and reports those
 cases as infrastructure-blocked. See [host effectiveness check](docs/agent-integration.md#host-effectiveness-check).
 Set `PROOFKIT_ELECTRON_PATH` and run `pnpm benchmark:host:electron` for the
 two optional native-MCP Electron/CDP cases.
+With the same executable, `node tests/host-evaluation-baseline.mjs --cases inline-electron-pass,inline-electron-defect` checks first-use desktop Charters with no catalog or pre-registered business Oracle. The corresponding real Codex cases use `node tests/host-evaluation.mjs --run --implicit-skill --cases inline-electron-pass,inline-electron-defect`; on this Windows host the isolated evaluator needed `--windows-sandbox unelevated`.
 
 To evaluate an OpenAI-compatible or local model with the same cases, set the endpoint and model before running it:
 
