@@ -199,6 +199,10 @@ try {
   assert.equal(comparison.runs.length, 8);
   const replayEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: replayStarted.mission.missionId } }));
   assert.equal(replayEvidence.summary.comparison.status, "verified-in-scope");
+  const verifiedCompare = await cliCommand("mission", "compare", bad.started.missionId, replayStarted.mission.missionId,
+    "--root", sourceRoot, "--workspace", workspaceRoot);
+  assert.equal(verifiedCompare.code, 0, verifiedCompare.stderr || verifiedCompare.stdout);
+  assert.equal(JSON.parse(verifiedCompare.stdout).status, "verified-in-scope");
   await verifyMissionReports([good.evidence, bad.evidence, replayEvidence]);
   const cli = await promisify(execFile)(process.execPath, [join(repoRoot, "packages", "cli", "dist", "main.js"), "mission", "report", good.started.missionId, "--root", sourceRoot, "--workspace", workspaceRoot], { timeout: 15_000 });
   const cliReport = JSON.parse(cli.stdout);
@@ -399,7 +403,43 @@ try {
   assert.ok(wrongAdapterEvidence.summary.executionAudit.issues.some((issue) => issue.includes("saved Run adapter")));
   await writeFile(savedMissionPath, savedMissionBytes);
   assert.equal(payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } })).testVerdict, "passed");
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, singleReleaseMission: singleStarted.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "single-charter-release-continues-after-product-failure", "saved-run-slot-audit-rejects-wrong-replay-and-duplicate", "saved-run-slot-audit-rejects-borrowed-evidence", "saved-run-facts-reject-wrong-adapter", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
+  const baselineBusinessRef = bad.status.mission.findings.flatMap((finding) => finding.evidence)
+    .find((ref) => ref.kind === "business" && ref.sha256);
+  assert.ok(baselineBusinessRef?.path, "Seeded defect needs a saved business source fact");
+  const baselineFactBytes = await readFile(baselineBusinessRef.path);
+  try {
+    await writeFile(baselineBusinessRef.path, "tampered business source fact");
+    const unverifiedCompare = await cliCommand("mission", "compare", bad.started.missionId, replayStarted.mission.missionId,
+      "--root", sourceRoot, "--workspace", workspaceRoot);
+    assert.equal(unverifiedCompare.code, 2, unverifiedCompare.stderr || JSON.parse(unverifiedCompare.stdout).reason);
+    assert.equal(JSON.parse(unverifiedCompare.stdout).status, "inconclusive");
+  } finally {
+    await writeFile(baselineBusinessRef.path, baselineFactBytes);
+  }
+  const badMissionPath = join(workspaceRoot, ".proofkit", "missions", `${bad.started.missionId}.json`);
+  const badMissionBytes = await readFile(badMissionPath, "utf8");
+  try {
+    const unlinkedBaseline = JSON.parse(badMissionBytes);
+    const finding = unlinkedBaseline.findings.find((item) => item.category === "product" && item.status === "confirmed"
+      && item.evidence.some((ref) => ref.kind === "business"));
+    assert.ok(finding);
+    finding.evidence = [];
+    await writeFile(badMissionPath, JSON.stringify(unlinkedBaseline));
+    const unverifiedReplay = await cliCommand("mission", "replay", bad.started.missionId,
+      "--root", sourceRoot, "--workspace", workspaceRoot);
+    assert.equal(unverifiedReplay.code, 2, unverifiedReplay.stderr || JSON.parse(unverifiedReplay.stdout).comparison?.reason);
+    const replayResult = JSON.parse(unverifiedReplay.stdout);
+    assert.equal(replayResult.verdict, "passed");
+    assert.equal(replayResult.testVerdict, "passed");
+    assert.equal(replayResult.comparison.status, "inconclusive");
+  } finally {
+    await writeFile(badMissionPath, badMissionBytes);
+  }
+  const restoredCompare = await cliCommand("mission", "compare", bad.started.missionId, replayStarted.mission.missionId,
+    "--root", sourceRoot, "--workspace", workspaceRoot);
+  assert.equal(restoredCompare.code, 0, restoredCompare.stderr || restoredCompare.stdout);
+  assert.equal(JSON.parse(restoredCompare.stdout).status, "verified-in-scope");
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, singleReleaseMission: singleStarted.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "single-charter-release-continues-after-product-failure", "saved-run-slot-audit-rejects-wrong-replay-and-duplicate", "saved-run-slot-audit-rejects-borrowed-evidence", "saved-run-facts-reject-wrong-adapter", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "cli-repair-exit-gate", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
   await quickClient?.close();
   await quickMcpServer?.close();
@@ -422,6 +462,15 @@ async function runSuite(mcpClient) {
   const evidence = payload(await mcpClient.callTool({ name: "get_mission_evidence", arguments: { missionId: started.missionId } }));
   assert.equal(evidence.verdict, status.mission.verdict);
   return { started, status, evidence };
+}
+
+async function cliCommand(...args) {
+  return promisify(execFile)(process.execPath, [join(repoRoot, "packages", "cli", "dist", "main.js"), ...args],
+    { timeout: 120_000, maxBuffer: 16 * 1024 * 1024 })
+    .then(({ stdout, stderr }) => ({ code: 0, stdout, stderr }), (error) => {
+      if (typeof error.code !== "number") throw error;
+      return { code: error.code, stdout: error.stdout ?? "", stderr: error.stderr ?? "" };
+    });
 }
 
 async function verifyMissionReports(results) {

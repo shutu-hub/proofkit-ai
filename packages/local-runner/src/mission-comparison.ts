@@ -87,12 +87,17 @@ export async function compareMissionRecords(
   const structuralIssue = gaps.length > 0;
 
   const defects: MissionComparisonDefect[] = [];
+  const failingOracleFacts = new Map<string, Slot[]>();
   for (const slot of slots.filter((item) => item.runKind !== "negative")) {
     const before = baselineRecords.get(slotKey(slot));
     if (!before) continue;
     for (const oracle of before.summary.oracles.filter((item) => item.passed === false)) {
       const beforeFacts = oracleFacts(before, oracle, evidenceDir);
-      if (beforeFacts.length === 0 || !hasConfirmedFinding(baseline, beforeFacts)) continue;
+      for (const fact of beforeFacts) {
+        const key = evidenceFactKey(fact);
+        failingOracleFacts.set(key, [...(failingOracleFacts.get(key) ?? []), slot]);
+      }
+      if (beforeFacts.length === 0 || !hasConfirmedFinding(baseline, beforeFacts, slot)) continue;
       const after = candidateRecords.get(slotKey(slot));
       const afterOracle = after?.summary.oracles.find((item) => item.name === oracle.name);
       const afterFacts = after && afterOracle ? oracleFacts(after, afterOracle, evidenceDir) : [];
@@ -109,6 +114,14 @@ export async function compareMissionRecords(
     }
   }
   if (defects.length === 0) gaps.push("Baseline has no confirmed product defect linked to an independent business source fact.");
+  const baselineFindingIssue = baseline.findings.some((finding) => {
+    if (finding.category !== "product" || finding.status !== "confirmed") return false;
+    const businessEvidence = finding.evidence.filter((ref) => ref.kind === "business");
+    if (businessEvidence.length && businessEvidence.every((ref) => failingOracleFacts.get(evidenceFactKey(ref))
+      ?.some((slot) => findingMatchesSlot(finding, slot)))) return false;
+    gaps.push(`Baseline confirmed finding ${finding.findingId} lacks complete business facts from a failing Oracle in the saved Run scope.`);
+    return true;
+  });
 
   let candidateComplete = candidate.status === "completed" && candidate.verdict === "passed"
     && candidate.plan.graph.tasks.every((task) => task.status === "passed")
@@ -156,7 +169,7 @@ export async function compareMissionRecords(
 
   const reproduced = defects.some((item) => item.outcome === "reproduced");
   const allNotReproduced = defects.length > 0 && defects.every((item) => item.outcome === "not-reproduced");
-  const status: MissionComparison["status"] = structuralIssue
+  const status: MissionComparison["status"] = structuralIssue || baselineFindingIssue
     ? "inconclusive"
     : reproduced ? "defect-reproduced"
       : candidateComplete && allNotReproduced ? "verified-in-scope" : "inconclusive";
@@ -359,11 +372,12 @@ function businessFacts(record: RunRecord, evidenceDir: string): { count: number;
 function oracleFacts(record: RunRecord, oracle: OracleResult, evidenceDir: string): EvidenceRef[] {
   if (oracle.verificationKind === "http-contract") return [];
   if (!oracle.sourceEvidenceCount || !oracle.sourceEvidenceArtifacts?.length) return [];
-  return oracle.sourceEvidenceArtifacts.flatMap((path) => {
+  const facts = oracle.sourceEvidenceArtifacts.flatMap((path) => {
     if (!record.summary.artifacts.includes(path)) return [];
     const ref = record.observation.evidence.find((item) => item.kind === "business" && item.evidenceId === `${record.runId}:${path}`);
     return ref && materialized(ref, record.runId, path, evidenceDir) ? [ref] : [];
   });
+  return facts.length === oracle.sourceEvidenceArtifacts.length ? facts : [];
 }
 
 function hasMaterializedEvidence(record: RunRecord, evidenceDir: string): boolean {
@@ -375,10 +389,20 @@ function materialized(ref: EvidenceRef, runId: string, path: string, evidenceDir
   return Boolean(ref.sha256 && materializedRunArtifact(ref, runId, path, evidenceDir));
 }
 
-function hasConfirmedFinding(mission: TestMission, facts: EvidenceRef[]): boolean {
-  const ids = new Set(facts.map((item) => item.evidenceId));
+function hasConfirmedFinding(mission: TestMission, facts: EvidenceRef[], slot: Slot): boolean {
+  const ids = new Set(facts.map(evidenceFactKey));
   return mission.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"
-    && finding.evidence.some((ref) => ref.kind === "business" && ids.has(ref.evidenceId)));
+    && findingMatchesSlot(finding, slot)
+    && finding.evidence.some((ref) => ref.kind === "business" && ids.has(evidenceFactKey(ref))));
+}
+
+function findingMatchesSlot(finding: TestMission["findings"][number], slot: Slot): boolean {
+  return (!finding.charterId || finding.charterId === slot.charterId)
+    && (!finding.surface || finding.surface === slot.surface);
+}
+
+function evidenceFactKey(ref: EvidenceRef): string {
+  return JSON.stringify([ref.evidenceId, ref.path, ref.sha256]);
 }
 
 function compactEvidence(refs: EvidenceRef[]): EvidenceRef[] {

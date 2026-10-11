@@ -4,7 +4,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
-import type { RunMode, SideEffectPolicy, TestCoverage, TestLevel } from "@proofkit/contracts";
+import type { MissionComparison, RunMode, SideEffectPolicy, TestCoverage, TestLevel } from "@proofkit/contracts";
 import { EvidenceStore } from "@proofkit/evidence";
 import { IntentPlanner, loadCharter } from "@proofkit/planner";
 import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
@@ -438,7 +438,9 @@ export function createProgram(): Command {
       const completed = await runner.waitMission(started.mission.missionId);
       const evidence = await runner.missionEvidence(completed.missionId);
       console.log(JSON.stringify({ missionId: completed.missionId, replayOfMissionId: missionId, status: completed.status, verdict: completed.verdict, testVerdict: evidence.testVerdict, testVerdictReason: evidence.testVerdictReason, comparison: evidence.comparison, summary: evidence.summary, report: evidence.report, reportUnavailable: evidence.reportUnavailable }, null, 2));
-      process.exitCode = missionExitCode(evidence.testVerdict);
+      process.exitCode = evidence.testVerdict === "passed" && (evidence.comparisonUnavailable || evidence.comparison?.baselineVerdict === "failed")
+        ? evidence.comparison ? comparisonExitCode(evidence.comparison.status) : 2
+        : missionExitCode(evidence.testVerdict);
     });
 
   mission.command("compare <baselineMissionId> <candidateMissionId>")
@@ -448,7 +450,7 @@ export function createProgram(): Command {
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       const comparison = await runner.compareMissions(baselineMissionId, candidateMissionId);
       console.log(JSON.stringify(comparison, null, 2));
-      if (comparison.status !== "verified-in-scope") process.exitCode = 1;
+      process.exitCode = comparisonExitCode(comparison.status);
     });
 
   program.command("report <runId>")
@@ -586,6 +588,13 @@ function collect(value: string, previous: string[]): string[] {
 function missionExitCode(testVerdict: string): number {
   if (testVerdict === "passed") return 0;
   if (testVerdict === "failed") return 1;
+  return 2;
+}
+
+/** Repair evidence has the same pass, observed failure, and unknown distinction as Mission acceptance. */
+function comparisonExitCode(status: MissionComparison["status"]): number {
+  if (status === "verified-in-scope") return 0;
+  if (status === "defect-reproduced") return 1;
   return 2;
 }
 

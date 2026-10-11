@@ -127,6 +127,72 @@ describe("Mission repair comparison", () => {
     expect(result.reason).toContain("Source change could not be established");
   });
 
+  it("withdraws a multi-finding repair claim when any confirmed baseline business fact is lost", async () => {
+    const fixture = await createFixture();
+    const runId = "before-primary";
+    const path = `${runId}/artifacts/second-source.json`;
+    const content = '{"second":"defect"}';
+    const absolute = join(fixture.evidenceDir, path);
+    await writeFile(absolute, content);
+    const summaryPath = join(fixture.evidenceDir, runId, "run.json");
+    const summary = RunSummarySchema.parse(JSON.parse(await readFile(summaryPath, "utf8")));
+    summary.artifacts.push(path);
+    summary.oracles.push({ ...summary.oracles[0]!, name: "resume-role", sourceEvidenceArtifacts: [path],
+      sourceEvidenceCount: 1, evidence: [path] });
+    await writeFile(summaryPath, JSON.stringify(summary));
+    const candidateSummaryPath = join(fixture.evidenceDir, "after-primary", "run.json");
+    const candidateSummary = RunSummarySchema.parse(JSON.parse(await readFile(candidateSummaryPath, "utf8")));
+    candidateSummary.oracles.push({ ...candidateSummary.oracles[0]!, name: "resume-role" });
+    await writeFile(candidateSummaryPath, JSON.stringify(candidateSummary));
+    const ref: EvidenceRef = { evidenceId: `${runId}:${path}`, kind: "business", path: absolute,
+      sha256: sha256(content), capturedAt: new Date().toISOString() };
+    fixture.baseline.observations[0]!.evidence.push(ref);
+    fixture.baseline.evidence.push(ref);
+    fixture.baseline.findings.push({ findingId: "second-defect", severity: "high", category: "product", status: "confirmed",
+      title: "Second binding defect", message: "Another saved relation is wrong.", evidence: [ref], createdAt: new Date().toISOString() });
+    expect((await fixture.compare()).status).toBe("verified-in-scope");
+    await writeFile(join(fixture.evidenceDir, runId, "artifacts", "oracle-source.json"), '{"bound":"tampered"}');
+    const stale = await fixture.compare();
+    expect(stale.status).toBe("inconclusive");
+    expect(stale.gaps).toContain("Baseline confirmed finding binding-defect lacks complete business facts from a failing Oracle in the saved Run scope.");
+    expect(stale.defects).toHaveLength(1);
+  });
+
+  it.each(["surface", "charter"] as const)("does not borrow a failing Oracle fact for a finding with a different %s", async (mismatch) => {
+    const fixture = await createFixture();
+    expect((await fixture.compare()).status).toBe("verified-in-scope");
+    if (mismatch === "surface") fixture.baseline.findings[0]!.surface = "electron";
+    else fixture.baseline.findings[0]!.charterId = "another-charter";
+    const result = await fixture.compare();
+    expect(result.status).toBe("inconclusive");
+    expect(result.gaps).toContain("Baseline confirmed finding binding-defect lacks complete business facts from a failing Oracle in the saved Run scope.");
+  });
+
+  it("requires every declared candidate Oracle source artifact to remain materialized", async () => {
+    const fixture = await createFixture();
+    const runId = "after-primary";
+    const path = `${runId}/artifacts/second-source.json`;
+    const content = '{"second":"correct"}';
+    const absolute = join(fixture.evidenceDir, path);
+    await writeFile(absolute, content);
+    const summaryPath = join(fixture.evidenceDir, runId, "run.json");
+    const summary = RunSummarySchema.parse(JSON.parse(await readFile(summaryPath, "utf8")));
+    summary.artifacts.push(path);
+    summary.oracles[0]!.sourceEvidenceArtifacts!.push(path);
+    summary.oracles[0]!.sourceEvidenceCount = 2;
+    await writeFile(summaryPath, JSON.stringify(summary));
+    const ref: EvidenceRef = { evidenceId: `${runId}:${path}`, kind: "business", path: absolute,
+      sha256: sha256(content), capturedAt: new Date().toISOString() };
+    fixture.candidate.observations[0]!.evidence.push(ref);
+    fixture.candidate.evidence.push(ref);
+    expect((await fixture.compare()).status).toBe("verified-in-scope");
+    await rm(absolute);
+    const stale = await fixture.compare();
+    expect(stale.status).toBe("inconclusive");
+    expect(stale.defects[0]?.outcome).toBe("unverified");
+    expect(stale.gaps).toContain("Candidate web/primary lacks a passing assertion, declared Oracle, or independent source fact.");
+  });
+
   it("reports the same defect when the replay Oracle still fails with source facts", async () => {
     const fixture = await createFixture({ candidateVerdict: "failed" });
     const result = await fixture.compare();
