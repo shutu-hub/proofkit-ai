@@ -386,7 +386,7 @@ resources may still be active; a cleanup handle returned later triggers a
 best-effort asynchronous release. The report does not claim that late cleanup
 has finished.
 
-Every task is persisted as `running` before its tool starts and receives a `started` ToolCall with an attempt number. If the local process is restarted, the Agent Loop closes stale started receipts and resumes only side-effect-free or read-only tasks whose `maxAttempts` has not been reached. A task that may write data, has exhausted its attempts, or no longer has a registered tool is marked `blocked` and requires review; ProofKit never blindly replays an interrupted write.
+Every task is persisted as `running` before its tool starts and receives a `started` ToolCall with an attempt number and the tool's side-effect declaration at that moment. After a process crash, automatic retry requires exactly one matching started receipt for the current attempt. Its tool name, side-effect class, Charter ID and input must match the current task and registration, and the Charter or negative case must still forbid writes. A missing legacy declaration, changed registration, changed input, exhausted attempt limit or potentially writing task is `blocked` for review. This records the declared operation class; it cannot prove that trusted tool code itself is pure or unchanged.
 
 `surface.run-charter` and `surface.replay-charter` call `LocalRunnerService.start()`, `wait()` and `replay()`, which in turn reuse the existing `ExecutionRunner`; the Agent does not create a second browser or Electron engine. Primary and replay observations include the surface and source run ID, so the verifier can distinguish a real cross-surface matrix from duplicate evidence. This keeps natural-language use and deterministic CLI/CI use on one lifecycle and one evidence format.
 
@@ -411,7 +411,7 @@ The mission protocol keeps five related records with separate responsibilities:
 | Record | Meaning | Typical contents |
 | --- | --- | --- |
 | `AgentStep` | The agent's decision and control-loop lifecycle | selected task, decision, phase, status, linked tool/observation/evidence IDs |
-| `ToolCall` | The concrete registered tool invocation | tool name, validated input, attempt, execution status, timing and error |
+| `ToolCall` | The concrete registered tool invocation | tool name, declared side-effect class, validated input, attempt, execution status, timing and error |
 | `Observation` | A typed fact observed during planning or execution | project map, surface run summary, business state or runtime event |
 | `Evidence` | A reviewable artifact or reference | snapshot, screenshot, report, business response or event log |
 | `Finding` | A classified outcome that needs attention | severity, category, confidence status and linked evidence |

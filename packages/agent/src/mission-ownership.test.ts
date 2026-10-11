@@ -28,27 +28,27 @@ function registry(discover = vi.fn(async () => ({}))) {
   ]) };
 }
 
-async function fixture() {
+async function fixture(policy: { maxSteps?: number; timeoutMs?: number; sideEffectPolicy?: "allow" } = {}) {
   const root = await mkdtemp(join(tmpdir(), "proofkit-ownership-"));
   roots.push(root);
   const store = new JsonMissionStore(root);
   const parent = registry();
   const agent = new MissionAgent({ store, tools: parent.tools });
-  const mission = await agent.create({ intent: "Verify one owner per Mission", projectRoot: root, surface: "web", policy: { requireApproval: false } });
+  const mission = await agent.create({ intent: "Verify one owner per Mission", projectRoot: root, surface: "web", policy: { requireApproval: false, ...policy } });
   const editable = await store.load(mission.missionId);
   editable.plan.graph.tasks = editable.plan.graph.tasks.map((task) => task.taskId === "reconnaissance" ? { ...task, maxAttempts: 2 } : task);
   await store.save(editable);
   return { root, store, agent, mission, parent };
 }
 
-function startChild(root: string, missionId: string): ChildProcessWithoutNullStreams {
+function startChild(root: string, missionId: string, discoverSideEffect: "none" | "write" = "none"): ChildProcessWithoutNullStreams {
   const moduleUrl = pathToFileURL(join(process.cwd(), "dist", "index.js")).href;
   const script = `
     import { MissionAgent, JsonMissionStore, InMemoryMissionToolRegistry } from ${JSON.stringify(moduleUrl)};
     import { z } from "zod";
     const [root, missionId] = process.argv.slice(1);
     const tools = new InMemoryMissionToolRegistry([
-      { name: "project.discover", description: "wait", sideEffect: "none", environments: ["test"], timeoutMs: 30000, inputSchema: z.object({}), execute: async (_input, { signal }) => {
+      { name: "project.discover", description: "wait", sideEffect: ${JSON.stringify(discoverSideEffect)}, environments: ["test"], timeoutMs: 30000, inputSchema: z.object({}), execute: async (_input, { signal }) => {
         process.stdout.write("TOOL_RUNNING\\n");
         await new Promise((resolve, reject) => {
           if (signal.aborted) return reject(signal.reason);
@@ -127,5 +127,56 @@ describe("cross-process Mission ownership", () => {
     expect(final.plan.graph.tasks.find((task) => task.taskId === "reconnaissance")?.attempts).toBe(2);
     expect(final.findings.some((finding) => finding.title.includes("Recovered interrupted task"))).toBe(true);
     expect(state.parent.discover).toHaveBeenCalledTimes(1);
+  }, 20_000);
+
+  it("refuses a crashed write attempt even if the restarted tool claims to be read-only", async () => {
+    const state = await fixture({ sideEffectPolicy: "allow" });
+    const child = startChild(state.root, state.mission.missionId, "write");
+    await outputContains(child, "TOOL_RUNNING");
+    const started = await state.store.load(state.mission.missionId);
+    expect(started.toolCalls[0]).toMatchObject({ status: "started", sideEffect: "write" });
+    child.kill();
+    await exited(child);
+
+    const final = await state.agent.run(state.mission.missionId);
+    expect(final.status).toBe("blocked");
+    expect(final.verdict).toBe("blocked");
+    expect(final.toolCalls[0]).toMatchObject({ status: "cancelled", sideEffect: "write" });
+    expect(final.findings).toEqual(expect.arrayContaining([expect.objectContaining({
+      title: "Interrupted task requires review: reconnaissance",
+    })]));
+    expect(state.parent.discover).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it("counts the crashed attempt against the persisted Mission step budget", async () => {
+    const state = await fixture({ maxSteps: 3 });
+    const child = startChild(state.root, state.mission.missionId);
+    await outputContains(child, "TOOL_RUNNING");
+    child.kill();
+    await exited(child);
+
+    const final = await state.agent.run(state.mission.missionId);
+    expect(final.status).toBe("blocked");
+    expect(final.findings).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Agent step limit reached" })]));
+    expect(final.agentSteps.map((step) => step.taskId)).toEqual(["reconnaissance", "reconnaissance", "execute-charter"]);
+    expect(final.plan.graph.tasks.find((task) => task.taskId === "verify-result")?.attempts).toBe(0);
+  }, 20_000);
+
+  it("does not restart the execution deadline after a process crash", async () => {
+    const state = await fixture({ timeoutMs: 2_000 });
+    const child = startChild(state.root, state.mission.missionId);
+    await outputContains(child, "TOOL_RUNNING");
+    const started = await state.store.load(state.mission.missionId);
+    expect(started.executionDeadlineAt).toBeDefined();
+    child.kill();
+    await exited(child);
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, Date.parse(started.executionDeadlineAt!) - Date.now() + 50)));
+
+    const final = await state.agent.run(state.mission.missionId);
+    expect(final.status).toBe("cancelled");
+    expect(final.executionDeadlineAt).toBe(started.executionDeadlineAt);
+    expect(final.toolCalls[0]).toMatchObject({ status: "cancelled", sideEffect: "none" });
+    expect(final.findings).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Mission timed out" })]));
+    expect(state.parent.discover).not.toHaveBeenCalled();
   }, 20_000);
 });

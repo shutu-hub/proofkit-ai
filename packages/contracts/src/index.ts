@@ -1125,6 +1125,8 @@ export const ToolCallSchema = z.object({
   taskId: z.string().min(1),
   charterId: CatalogIdSchema.optional(),
   tool: z.string().min(1),
+  /** The declaration in force when this attempt started; absent on legacy receipts. */
+  sideEffect: z.enum(["none", "read", "write"]).optional(),
   attempt: z.number().int().positive().default(1),
   input: z.record(z.string(), z.unknown()).default({}),
   status: z.enum(["started", "succeeded", "failed", "blocked", "cancelled"]),

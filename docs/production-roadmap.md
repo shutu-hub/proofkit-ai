@@ -112,14 +112,21 @@ start and absolute deadline. A resumed owner cannot reset the total timeout;
 expired interrupted read tasks close without retry, and previously saved
 AgentStep/ToolCall attempts count against the Mission-wide step limit. Agent
 regressions cover approval wait, exact-limit completion, expired current and
-legacy Missions, interrupted reads and cumulative steps. This verifies the
-saved-loop policy in local tests, not an OS crash across separate processes.
+legacy Missions, interrupted reads and cumulative steps.
 The real Web/Electron release-suite smoke also passed after the schema change;
 its partial-inventory fixture now exceeds the scanner's current 2,000-route
 retention limit instead of relying on the older 230-route threshold.
 MCP start and nonterminal wait receipts now expose bounded task progress and
 the saved deadline, so a host can keep waiting through cancellation cleanup
 without restarting the Mission or treating progress as a product verdict.
+Forced-exit cross-process regressions now verify that the persisted deadline
+does not restart and the crashed attempt still consumes the Mission step
+budget. Each started ToolCall also records its side-effect declaration;
+automatic recovery requires that declaration, tool name, Charter ID and input
+to match the current registration and task. A legacy receipt without the
+declaration or a crashed write attempt whose replacement tool claims to be
+read-only remains blocked. This prevents a changed registration from making
+an old write attempt replayable; it does not attest to unchanged tool code.
 
 ## Phase 2: measurable AI planning
 

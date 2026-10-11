@@ -204,7 +204,7 @@ describe("MissionAgent", () => {
     await store.save({ ...interrupted, status: "running", currentTaskId: "reconnaissance",
       executionStartedAt: previousStart, executionDeadlineAt: previousDeadline,
       plan: { ...interrupted.plan, graph: { ...interrupted.plan.graph, tasks: runningTask } },
-      toolCalls: [{ toolCallId: "stale-read", taskId: "reconnaissance", tool: "project.discover", attempt: 1,
+      toolCalls: [{ toolCallId: "stale-read", taskId: "reconnaissance", tool: "project.discover", sideEffect: "none", attempt: 1,
         input: {}, status: "started", startedAt: previousStart, evidence: [] }] });
     const interruptedResult = await agent.run(interrupted.missionId);
     expect(interruptedResult.verdict).toBe("cancelled");
@@ -468,6 +468,7 @@ describe("MissionAgent", () => {
       toolCallId: "tool-stale",
       taskId: "reconnaissance",
       tool: "project.discover",
+      sideEffect: "none",
       attempt: 1,
       input: {},
       status: "started",
@@ -489,6 +490,32 @@ describe("MissionAgent", () => {
     expect(result.agentSteps.find((step) => step.taskId === "reconnaissance" && step.status === "succeeded")?.phase).toBe("recover");
   });
 
+  it("does not infer safe replay from a legacy receipt without its original side-effect declaration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-legacy-recovery-"));
+    const store = new JsonMissionStore(root);
+    let calls = 0;
+    const tools = new InMemoryMissionToolRegistry([{ name: "project.discover", description: "discover",
+      sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}),
+      execute: async () => { calls++; return {}; } }]);
+    const agent = new MissionAgent({ store, tools });
+    const created = await agent.create({ intent: "recover legacy mission", projectRoot: root, surface: "web",
+      policy: { requireApproval: false } });
+    const interrupted = await agent.load(created.missionId);
+    interrupted.status = "running";
+    interrupted.currentTaskId = "reconnaissance";
+    interrupted.plan.graph.tasks = interrupted.plan.graph.tasks.map((task) => task.taskId === "reconnaissance"
+      ? { ...task, status: "running" as const, attempts: 1, maxAttempts: 2 } : task);
+    interrupted.toolCalls = [{ toolCallId: "legacy-start", taskId: "reconnaissance", tool: "project.discover",
+      attempt: 1, input: {}, status: "started", evidence: [], startedAt: new Date().toISOString() }];
+    await store.save(interrupted);
+
+    const result = await agent.run(created.missionId);
+    expect(result.status).toBe("blocked");
+    expect(result.toolCalls[0]).toMatchObject({ toolCallId: "legacy-start", status: "cancelled" });
+    expect(result.plan.graph.tasks.find((task) => task.taskId === "reconnaissance")?.attempts).toBe(1);
+    expect(calls).toBe(0);
+  });
+
   it("blocks an interrupted side-effecting task instead of replaying it", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mission-recovery-write-"));
     const store = new JsonMissionStore(root);
@@ -505,15 +532,17 @@ describe("MissionAgent", () => {
     interrupted.plan.graph.tasks = interrupted.plan.graph.tasks.map((task) => task.taskId === "reconnaissance"
       ? { ...task, tool: "write.operation", status: "running" as const, attempts: 1, maxAttempts: 2 }
       : task);
+    interrupted.toolCalls = [{ toolCallId: "tool-stale-write", taskId: "reconnaissance", tool: "write.operation",
+      sideEffect: "write", attempt: 1, input: {}, status: "started", evidence: [], startedAt: new Date().toISOString() }];
     await store.save(interrupted);
 
     const result = await agent.run(created.missionId);
 
     expect(result.status).toBe("blocked");
     expect(result.verdict).toBe("blocked");
-    expect(result.toolCalls).toHaveLength(0);
+    expect(result.toolCalls).toMatchObject([expect.objectContaining({ toolCallId: "tool-stale-write", sideEffect: "write", status: "cancelled" })]);
     expect(result.agentSteps[0]?.status).toBe("blocked");
-    expect(result.findings.some((item) => item.message.includes("side effect"))).toBe(true);
+    expect(result.findings.some((item) => item.message.includes("automatic recovery is disabled"))).toBe(true);
   });
 
   it("does not automatically replay an interrupted negative case with side effects", async () => {
@@ -572,6 +601,10 @@ describe("MissionAgent", () => {
     interrupted.plan.graph.tasks = interrupted.plan.graph.tasks.map((task) => task.taskId === "negative-duplicate-upload"
       ? { ...task, status: "running" as const, attempts: 1, maxAttempts: 2 }
       : { ...task, status: "passed" as const, attempts: 1 });
+    const negativeTask = interrupted.plan.graph.tasks.find((task) => task.taskId === "negative-duplicate-upload")!;
+    interrupted.toolCalls = [{ toolCallId: "negative-start", taskId: negativeTask.taskId, tool: negativeTask.tool,
+      charterId: negativeTask.charterId, sideEffect: "read", attempt: 1, input: negativeTask.input,
+      status: "started", evidence: [], startedAt: new Date().toISOString() }];
     await store.save(interrupted);
 
     const result = await agent.run(created.missionId);
@@ -609,6 +642,10 @@ describe("MissionAgent", () => {
     safeInterrupted.plan.graph.tasks = safeInterrupted.plan.graph.tasks.map((task) => task.taskId === "execute-safe-web"
       ? { ...task, status: "running" as const, attempts: 1, maxAttempts: 2 }
       : task.taskId === "reconnaissance" ? { ...task, status: "passed" as const, attempts: 1 } : task);
+    const safeTask = safeInterrupted.plan.graph.tasks.find((task) => task.taskId === "execute-safe-web")!;
+    safeInterrupted.toolCalls = [{ toolCallId: "safe-start", taskId: safeTask.taskId, tool: safeTask.tool,
+      charterId: safeTask.charterId, sideEffect: "read", attempt: 1, input: safeTask.input,
+      status: "started", evidence: [], startedAt: new Date().toISOString() }];
     await store.save(safeInterrupted);
     const recovered = await agent.run(safeMission.missionId);
     expect(recovered.status).toBe("completed");
@@ -624,6 +661,10 @@ describe("MissionAgent", () => {
     writeInterrupted.plan.graph.tasks = writeInterrupted.plan.graph.tasks.map((task) => task.taskId === "execute-write-web"
       ? { ...task, status: "running" as const, attempts: 1, maxAttempts: 2 }
       : task.taskId === "reconnaissance" ? { ...task, status: "passed" as const, attempts: 1 } : task);
+    const writeTask = writeInterrupted.plan.graph.tasks.find((task) => task.taskId === "execute-write-web")!;
+    writeInterrupted.toolCalls = [{ toolCallId: "write-start", taskId: writeTask.taskId, tool: writeTask.tool,
+      charterId: writeTask.charterId, sideEffect: "read", attempt: 1, input: writeTask.input,
+      status: "started", evidence: [], startedAt: new Date().toISOString() }];
     await store.save(writeInterrupted);
     const blocked = await agent.run(writeMission.missionId);
     expect(blocked.status).toBe("blocked");
