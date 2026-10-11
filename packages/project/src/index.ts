@@ -14,7 +14,9 @@ export { defaultWorkspaceRoot, resolveProjectContext, resolveWithinWorkspace, sa
 export { captureSourceState } from "./source-state.js";
 export { verifySourceLocationHints } from "./source-location-hints.js";
 export { inspectWorkflowInventory } from "./workflow-inventory.js";
-export { authenticateWorkflowReview, signWorkflowReview, workflowReviewDigests } from "./workflow-review.js";
+export { authenticateWorkflowReview, collectWorkflowReviewMaterials, signWorkflowReview, workflowReviewDigests,
+  workflowCharterExecutionSha256 } from "./workflow-review.js";
+export type { WorkflowReviewMaterials } from "./workflow-review.js";
 export { inspectTargetBinding } from "./target-binding.js";
 
 type PackageJson = {

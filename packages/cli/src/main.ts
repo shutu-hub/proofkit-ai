@@ -8,7 +8,7 @@ import type { RunMode, SideEffectPolicy, TestCoverage, TestLevel } from "@proofk
 import { EvidenceStore } from "@proofkit/evidence";
 import { IntentPlanner, loadCharter } from "@proofkit/planner";
 import { LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
-import { captureSourceState, initProject, inspectWorkflowInventory, loadConfig, resolveProjectContext,
+import { captureSourceState, collectWorkflowReviewMaterials, initProject, inspectWorkflowInventory, loadConfig, resolveProjectContext,
   resolveWithinWorkspace, scanProject, signWorkflowReview } from "@proofkit/project";
 import { setupAgent, type AgentHarness } from "./agent-setup.js";
 import { checkAgentConnection } from "./agent-connection.js";
@@ -183,7 +183,8 @@ export function createProgram(): Command {
       const keyInfo = await stat(keyPath);
       if (!keyInfo.isFile() || keyInfo.size > 16_384) throw new Error("Workflow review private key is unavailable or too large");
       const privatePem = await readFile(keyPath, "utf8");
-      const attestation = signWorkflowReview(reviewed.inventory, candidates, options.keyId, privatePem);
+      const materials = await collectWorkflowReviewMaterials(reviewed.inventory, config, map, context.workspaceRoot);
+      const attestation = signWorkflowReview(reviewed.inventory, candidates, materials, options.keyId, privatePem);
       const final = await captureSourceState(root);
       if (!final.complete || final.method !== "git" || final.headSha !== reviewed.inventory.source.headSha
         || final.worktreeSha256 !== reviewed.inventory.source.worktreeSha256) {
@@ -192,6 +193,7 @@ export function createProgram(): Command {
       await writeWorkspaceOutput(context.workspaceRoot, ".proofkit/workflow-review.json", `${JSON.stringify(attestation, null, 2)}\n`);
       console.log(JSON.stringify({ status: "signed", path: ".proofkit/workflow-review.json", keyId: attestation.keyId,
         inventorySha256: attestation.inventorySha256, candidateSha256: attestation.candidateSha256,
+        candidateSetSha256: attestation.candidateSetSha256, charterManifestSha256: attestation.charterManifestSha256,
         acceptance: "unverified-until-executed-and-audited" }, null, 2));
     });
 

@@ -5,7 +5,7 @@ import { workflowChecks, WorkflowInventoryInspectionSchema, WorkflowInventorySch
 import { resolveWithinWorkspace } from "./context.js";
 import { captureSourceState } from "./source-state.js";
 import { auditWorkflowCandidates } from "./workflow-candidate-audit.js";
-import { authenticateWorkflowReview } from "./workflow-review.js";
+import { authenticateWorkflowReview, collectWorkflowReviewMaterials } from "./workflow-review.js";
 
 const INVENTORY_PATH = ".proofkit/workflows.yaml" as const;
 const REVIEW_PATH = ".proofkit/workflow-review.json";
@@ -79,8 +79,11 @@ export async function inspectWorkflowInventory(projectRoot: string, workspaceRoo
   }
   const candidateAudit = project ? auditWorkflowCandidates(project, inventory, config) : undefined;
   const reviewFile = await readWorkflowReviewFile(workspaceRoot);
-  const reviewAuthentication = reviewFile.status === "loaded" && candidateAudit
-    ? authenticateWorkflowReview(inventory, candidateAudit, reviewFile.data,
+  const reviewMaterials = reviewFile.status === "loaded" && project
+    ? await collectWorkflowReviewMaterials(inventory, config, project, workspaceRoot).catch(() => undefined)
+    : undefined;
+  const reviewAuthentication = reviewFile.status === "loaded" && candidateAudit && reviewMaterials
+    ? authenticateWorkflowReview(inventory, candidateAudit, reviewMaterials, reviewFile.data,
       trustedPublicKeys ?? await loadWorkflowReviewTrust(projectRoot, workspaceRoot))
     : { status: reviewFile.status === "missing" ? "missing" : "invalid" } as const;
   const issues = [

@@ -17,24 +17,32 @@ const candidate = WorkflowCandidateAuditSchema.parse({
   unresolvedRouteDeclarations: 0, skippedCandidates: 0, gaps: [], omittedGaps: 0,
   limitations: ["Static candidates cannot prove semantic completeness."],
 });
+const materials = { candidateSetSha256: "c".repeat(64), charterManifest: [{
+  id: "resume-core", catalog: { id: "resume-core", path: "charters/resume.yaml", aliases: ["resume"], level: "core" as const, surfaces: ["web" as const] },
+  fileSha256: "d".repeat(64), executionSha256: "e".repeat(64),
+}] };
 
 describe("workflow review attestation", () => {
   it("authenticates the exact reviewed inventory and candidate audit", () => {
     const keys = generateKeyPairSync("ed25519");
     const privatePem = keys.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
     const publicPem = keys.publicKey.export({ type: "spki", format: "pem" }).toString();
-    const attestation = signWorkflowReview(inventory, candidate, "operator-1", privatePem);
-    expect(authenticateWorkflowReview(inventory, candidate, attestation, { "operator-1": publicPem }))
-      .toEqual({ status: "verified", keyId: "operator-1", candidateSha256: attestation.candidateSha256 });
-    expect(authenticateWorkflowReview(inventory, candidate, attestation, {})).toMatchObject({ status: "untrusted" });
-    const prototypeId = signWorkflowReview(inventory, candidate, "__proto__", privatePem);
-    expect(authenticateWorkflowReview(inventory, candidate, prototypeId, {})).toMatchObject({ status: "untrusted" });
-    expect(authenticateWorkflowReview(inventory, candidate, { ...attestation, signature: "x".repeat(88) },
+    const attestation = signWorkflowReview(inventory, candidate, materials, "operator-1", privatePem);
+    expect(authenticateWorkflowReview(inventory, candidate, materials, attestation, { "operator-1": publicPem }))
+      .toMatchObject({ status: "verified", keyId: "operator-1", candidateSha256: attestation.candidateSha256 });
+    expect(authenticateWorkflowReview(inventory, candidate, materials, attestation, {})).toMatchObject({ status: "untrusted" });
+    const prototypeId = signWorkflowReview(inventory, candidate, materials, "__proto__", privatePem);
+    expect(authenticateWorkflowReview(inventory, candidate, materials, prototypeId, {})).toMatchObject({ status: "untrusted" });
+    expect(authenticateWorkflowReview(inventory, candidate, materials, { ...attestation, signature: "x".repeat(88) },
       { "operator-1": publicPem })).toMatchObject({ status: "invalid" });
     expect(authenticateWorkflowReview({ ...inventory, workflows: [{ ...inventory.workflows[0]!, title: "Different" }] },
-      candidate, attestation, { "operator-1": publicPem })).toMatchObject({ status: "invalid" });
-    expect(authenticateWorkflowReview(inventory, { ...candidate, entryCandidates: 2 }, attestation,
+      candidate, materials, attestation, { "operator-1": publicPem })).toMatchObject({ status: "invalid" });
+    expect(authenticateWorkflowReview(inventory, { ...candidate, entryCandidates: 2 }, materials, attestation,
       { "operator-1": publicPem })).toMatchObject({ status: "invalid" });
+    expect(authenticateWorkflowReview(inventory, candidate, { ...materials, candidateSetSha256: "e".repeat(64) },
+      attestation, { "operator-1": publicPem })).toMatchObject({ status: "invalid" });
+    expect(authenticateWorkflowReview(inventory, candidate, { ...materials, charterManifest: [{ ...materials.charterManifest[0]!, executionSha256: "f".repeat(64) }] },
+      attestation, { "operator-1": publicPem })).toMatchObject({ status: "invalid" });
   });
 
   it("normalizes key order and excludes no signed review field", () => {
@@ -42,8 +50,8 @@ describe("workflow review attestation", () => {
       exclusions: [], workflows: inventory.workflows, review: inventory.review,
       source: { worktreeSha256: inventory.source.worktreeSha256, headSha: inventory.source.headSha }, schemaVersion: 1,
     });
-    expect(workflowReviewDigests(reordered, candidate)).toEqual(workflowReviewDigests(inventory, candidate));
-    expect(workflowReviewDigests({ ...inventory, review: { ...inventory.review!, by: "someone else" } }, candidate).inventorySha256)
-      .not.toBe(workflowReviewDigests(inventory, candidate).inventorySha256);
+    expect(workflowReviewDigests(reordered, candidate, materials)).toEqual(workflowReviewDigests(inventory, candidate, materials));
+    expect(workflowReviewDigests({ ...inventory, review: { ...inventory.review!, by: "someone else" } }, candidate, materials).inventorySha256)
+      .not.toBe(workflowReviewDigests(inventory, candidate, materials).inventorySha256);
   });
 });

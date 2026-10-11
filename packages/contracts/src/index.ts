@@ -737,11 +737,13 @@ export type WorkflowCandidateAudit = z.infer<typeof WorkflowCandidateAuditSchema
 
 /** A signature over the normalized inventory and the exact candidate audit presented to its reviewer. */
 export const WorkflowReviewAttestationSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   algorithm: z.literal("Ed25519"),
   keyId: CatalogIdSchema,
   inventorySha256: z.string().regex(/^[a-f0-9]{64}$/),
   candidateSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  candidateSetSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  charterManifestSha256: z.string().regex(/^[a-f0-9]{64}$/),
   signature: z.string().regex(/^[A-Za-z0-9+/]{86}==$/),
 }).strict();
 export type WorkflowReviewAttestation = z.infer<typeof WorkflowReviewAttestationSchema>;
@@ -751,6 +753,8 @@ export const WorkflowReviewAuthenticationSchema = z.object({
   keyId: CatalogIdSchema.optional(),
   /** This authenticates the declaration only; semantic completeness still requires review judgment. */
   candidateSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  candidateSetSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  charterManifestSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 export type WorkflowReviewAuthentication = z.infer<typeof WorkflowReviewAuthenticationSchema>;
 

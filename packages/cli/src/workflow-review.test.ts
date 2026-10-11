@@ -24,6 +24,7 @@ describe("operator workflow review CLI", () => {
     roots.push(project, workspace, keysRoot);
     await mkdir(join(project, "src"));
     await mkdir(join(workspace, ".proofkit"));
+    await mkdir(join(workspace, "charters"));
     await writeFile(join(project, "package.json"), '{"name":"review-fixture","devDependencies":{"vite":"1"}}');
     await writeFile(join(project, "src", "main.ts"), "export const ready = true;\n");
     await git(project, "init", "-q");
@@ -34,6 +35,7 @@ describe("operator workflow review CLI", () => {
     await writeFile(join(workspace, ".proofkit", "config.yaml"), stringify({ project: { root: project }, charters: [
       { id: "ready-core", path: "charters/ready.yaml", aliases: ["ready core"], level: "core", surfaces: ["web"] },
     ] }));
+    await writeFile(join(workspace, "charters", "ready.yaml"), "intent: Ready flow\nlevel: core\n");
     const inventory = { schemaVersion: 1, source: { headSha: source.headSha, worktreeSha256: source.worktreeSha256 },
       review: { by: "operator", at: new Date().toISOString(), method: "Checked all entry points and business workflows" },
       workflows: [{ id: "ready", title: "Ready flow", sourcePaths: ["src/main.ts"], charterIds: ["ready-core"], surfaces: ["web"] }], exclusions: [] };
@@ -61,6 +63,10 @@ describe("operator workflow review CLI", () => {
       const trusted = await inspectWorkflowInventory(project, workspace, config, source, map);
       expect(trusted.inspection.reviewAuthentication?.status).toBe("verified");
       expect(trusted.inspection.issues).toContain("workflow-inventory-completeness-unverified");
+      await writeFile(join(workspace, "charters", "ready.yaml"), "intent: Weakened flow\nlevel: core\n");
+      expect((await inspectWorkflowInventory(project, workspace, config, source, map)).inspection.reviewAuthentication?.status)
+        .toBe("invalid");
+      await writeFile(join(workspace, "charters", "ready.yaml"), "intent: Ready flow\nlevel: core\n");
       const workspaceTrust = join(workspace, ".proofkit", "trusted-reviewers.json");
       await writeFile(workspaceTrust, JSON.stringify({ "operator-1": publicPem }));
       process.env.PROOFKIT_WORKFLOW_REVIEW_TRUST_PATH = workspaceTrust;
@@ -75,6 +81,12 @@ describe("operator workflow review CLI", () => {
       else process.env.PROOFKIT_WORKFLOW_REVIEW_TRUST_PATH = prior;
     }
     await writeFile(join(workspace, ".proofkit", "workflows.yaml"), stringify(inventory));
+    await writeFile(join(workspace, "charters", "ready.yaml"), "intent: [secret-plan-value\n");
+    await expect(createProgram().parseAsync(["node", "proofkit", "review-workflows", "--root", project,
+      "--workspace", workspace, "--key-id", "operator-1", "--private-key", privatePath]))
+      .rejects.toThrow("Workflow review Charter is invalid");
+    expect(await readFile(join(workspace, ".proofkit", "workflow-review.json"), "utf8")).toBe(`${JSON.stringify(attestation, null, 2)}\n`);
+    await writeFile(join(workspace, "charters", "ready.yaml"), "intent: Ready flow\nlevel: core\n");
     const insideKey = join(workspace, ".proofkit", "private.pem");
     await writeFile(insideKey, await readFile(privatePath));
     await expect(createProgram().parseAsync(["node", "proofkit", "review-workflows", "--root", project,
