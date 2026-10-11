@@ -247,7 +247,7 @@ export class LocalRunnerService {
       sourceState,
       workflowInventory: workflowInventory.inspection,
       integration: this.integration, capabilities: this.capabilities, oracles: this.oracles,
-      allowCapabilityWrites: this.allowCapabilityWrites,
+      allowCapabilityWrites: this.allowCapabilityWrites, restrictWebOrigins: this.restrictWebOrigins,
       checkCharter: async (entry) => {
         const charter = await loadCharter(resolveWithinWorkspace(this.workspaceRoot, entry.path));
         if (charter.level !== entry.level) throw new Error(`Test catalog entry ${entry.id} declares ${entry.level}, but its Charter is ${charter.level}`);

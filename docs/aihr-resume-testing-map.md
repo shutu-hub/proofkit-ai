@@ -8,6 +8,8 @@ ProofKit 不复制 AIHR 业务代码，也不直接开放数据库、任意 SQL�
 
 ## 2026-10-11 本地只读接入检查
 
+后续 `inspect_test_scope({ level: "core", surface: "web", focus: "简历获取" })` 的外部工作区候选扫描发现 3 个未登记的 core Charter。普通上传与在线简历的主场景缺少正向 UI 断言；三者均使用写入 capability，而当前检查没有操作员写入授权。通过 MCP 执行时，工作区 `policies.sideEffects: confirm` 还与这些 Charter 的 `allow` 策略冲突。中文焦点未与候选元数据形成完整字面匹配，因此结果标记为 `fallback-unmatched`。这只是可审阅的规划线索，结论仍为 `not-asserted`；没有运行简历业务，也没有修改 AIHR 源码。
+
 ProofKit 使用外部测试工作区绑定 `AIHR-Microservices` 源码，检查 Web 5173 与网关 `/healthz`。两个 HTTP 端点当时返回 200，但 Web 端口的进程属于另一份 `aihr-livekit-interview-voice` 检出；`inspect_test_environment` 因 `different-project` 返回 `blocked`、`testVerdict: not-asserted`。本次没有连接页面、点击按钮或执行简历业务。端口可达不能替代当前源码的运行证明。
 
 对当前源码执行 `inspect_test_scope` 的 `resume` 字面聚焦扫描，共检查 2110 个文件，保留 40 个匹配路由候选；`truncationReasons: [route-hint-cap]`，且外部工作区没有已审阅的业务流程清单或目录用例。这些数量仅是有界静态候选。下一次真实验收需要同一检出的隔离 Web/Electron 进程、测试租户及简历样本、连接器凭据与清理安排，之后才能执行页面动作和独立业务 Oracle。

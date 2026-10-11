@@ -151,11 +151,11 @@ export function createProgram(): Command {
     });
 
   program.command("scope")
-    .description("Inspect candidate test scope, catalog plan gaps and registered business checks without running tests")
+    .description("Inspect source scope, registered plans, unregistered workspace Charter hints and business checks without running tests")
     .option("--root <path>", "project root", ".")
     .option("--surface <surface>", "web, electron or mobile", "web")
     .option("--level <level>", "quick, core or release", "core")
-    .option("--focus <text>", "literal substring in source paths or registration metadata")
+    .option("--focus <text>", "literal substring in source or Charter metadata; unmatched workspace candidates are shown as fallback")
     .option("--limit <count>", "maximum details per section (1-50)", "20")
     .option("--source-state", "include a bounded Git source fingerprint for workflow inventory authoring")
     .action(async (options: RootOptions & { surface: string; level: string; focus?: string; limit: string; sourceState?: boolean }) => {

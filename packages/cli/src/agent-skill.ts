@@ -53,6 +53,9 @@ fallback-unmatched selection means no candidate literally matched the focus.
 Inspect the Charter and source flow, repair missing assertions or Oracles, and
 register a suitable plan only after review. Do not infer core proof from an
 unregistered file or lower the requested level to reuse a quick example.
+Treat write-opt-in-required and mcp-workspace-policy-conflict as execution
+prerequisites. Do not alter a workspace policy or authorize writes solely to
+clear a candidate hint; confirm isolated test data and the user's scope first.
 
 ## Reuse or author a scenario
 

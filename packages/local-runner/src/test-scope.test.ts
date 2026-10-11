@@ -49,11 +49,56 @@ describe("read-only test scope", () => {
     const full = await runner.inspectTestScope({ focus: "简历获取", limit: 50 });
     expect(full.workspaceCandidates?.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "charters/intake.yml", parseStatus: "valid", actionCount: 1, assertionCount: 0, oracleCount: 1,
-        issues: ["missing-positive-assertion", "unregistered-capability", "unregistered-oracle"] }),
+        issues: ["missing-positive-assertion", "unregistered-capability", "mcp-workspace-policy-conflict", "unregistered-oracle"] }),
       expect.objectContaining({ path: "charters/broken.yml", parseStatus: "invalid", issues: ["invalid-charter"] }),
     ]));
     expect(JSON.stringify(full)).not.toContain("private-intent-token");
     expect(JSON.stringify(full)).not.toContain("private-yaml-token");
+  });
+
+  it("counts selected inline Oracles and reports execution-policy gaps for candidate Charters", async () => {
+    const { runner } = await fixture();
+    await writeFile(join(runner.workspaceRoot, "charters", "inline-reader.yml"), JSON.stringify({
+      intent: "inline reader", level: "core", sideEffectPolicy: "allow",
+      actions: [{ kind: "captureResponse", name: "submit", trigger: { kind: "click", selector: "#submit" },
+        response: { url: "http://127.0.0.1:5173/api/v1/intakes", method: "POST", fields: { fileId: { pointer: "/data/file_id", type: "id" } } } }],
+      assertions: [{ kind: "text-visible", text: "submitted" }], oracles: ["current-file"],
+      httpOracles: [{ name: "current-file", url: "http://127.0.0.1:5173/api/v1/status", query: {
+        fileId: { source: "response", stepId: "step-001", field: "fileId", matchPointer: "/data/file_id" },
+      }, statusPointer: "/data/status", successValues: ["complete"] }],
+    }));
+    const allowedConfig = ProofkitConfigSchema.parse({ ...runner.config, policies: { ...runner.config.policies, sideEffects: "allow" } });
+    const allowed = new LocalRunnerService({ root: runner.root, workspaceRoot: runner.workspaceRoot, config: allowedConfig, restrictWebOrigins: true });
+    const inline = await allowed.inspectTestScope({ focus: "inline-reader" });
+    expect(inline.workspaceCandidates?.items).toEqual([expect.objectContaining({ path: "charters/inline-reader.yml", oracleCount: 1, issues: [] })]);
+    const inlineSource = JSON.parse(await readFile(join(runner.workspaceRoot, "charters", "inline-reader.yml"), "utf8")) as Record<string, unknown>;
+    await writeFile(join(runner.workspaceRoot, "charters", "unused-inline.yml"), JSON.stringify({ ...inlineSource, intent: "unused inline", oracles: [] }));
+    const unused = await allowed.inspectTestScope({ focus: "unused-inline" });
+    expect(unused.workspaceCandidates?.items).toEqual([expect.objectContaining({ path: "charters/unused-inline.yml", oracleCount: 0,
+      issues: ["missing-business-oracle"] })]);
+
+    await writeFile(join(runner.workspaceRoot, "charters", "write-candidate.yml"), JSON.stringify({
+      intent: "write candidate", level: "core", sideEffectPolicy: "allow",
+      actions: [{ kind: "capability", name: "resume.write" }],
+      assertions: [{ kind: "text-visible", text: "done" }], oracles: ["resume.terminal"],
+    }));
+    const restricted = new LocalRunnerService({ root: runner.root, workspaceRoot: runner.workspaceRoot, config: runner.config, restrictWebOrigins: true,
+      integration: { name: "candidate-policy", oracles: [{ name: "resume.terminal", check: vi.fn() }], capabilities: [{
+        name: "resume.write", description: "write fixture", sideEffect: "write", environments: ["staging"], timeoutMs: 1000,
+        inputSchema: z.object({}), outputSchema: z.object({}), execute: vi.fn(), evidence: () => ({}),
+      }] },
+    });
+    const write = await restricted.inspectTestScope({ focus: "write-candidate" });
+    expect(write.workspaceCandidates?.items).toEqual([expect.objectContaining({ path: "charters/write-candidate.yml", issues: [
+      "capability-environment-mismatch", "write-opt-in-required", "mcp-workspace-policy-conflict",
+    ] })]);
+    await writeFile(join(runner.workspaceRoot, "charters", "write-policy.yml"), JSON.stringify({
+      intent: "write policy", level: "quick", sideEffectPolicy: "deny",
+      actions: [{ kind: "capability", name: "resume.write" }], assertions: [{ kind: "text-visible", text: "done" }],
+    }));
+    const policy = await restricted.inspectTestScope({ focus: "write-policy" });
+    expect(policy.workspaceCandidates?.items[0]?.issues).toEqual(expect.arrayContaining(["scenario-side-effect-policy-conflict", "write-opt-in-required"]));
+    expect(write.testVerdict).toBe("not-asserted");
   });
 
   it("caps candidate reads and enumeration and excludes links and registered files", async () => {

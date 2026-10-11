@@ -145,6 +145,8 @@ changes; the declared key does not attest to unchanged tool code.
 
 **Planning guidance update (2026-10-11):** `inspect_test_scope` now returns bounded `planningReadiness` counts and gaps derived from the existing catalog validators. It distinguishes a matching quick Charter from a requested core plan, an omitted compatible plan from no plan, and literal source/reader-name misses from verified absence. A ready release suite is considered even when the focused Charter list is empty. The AIHR external workspace reproduces the core resume-acquisition gap; this is a planning observation, not live business acceptance.
 
+**External Charter discovery (2026-10-11):** scope inspection now scans bounded, non-recursive external Charter directories without registering or executing files. It excludes registered paths and links, returns fixed structural and execution-policy hints, and falls back explicitly when the literal focus misses candidate names. The real AIHR workspace yielded three unregistered core candidates: online and ordinary upload lack positive UI assertions, all three need operator write opt-in, and the MCP boundary additionally requires a workspace policy change before their `allow` scenarios can run. None proves live AIHR readiness or acceptance.
+
 **Goal:** make one-sentence planning useful without allowing unverified model output to become an unsafe command.
 
 - Create a fixed Web/Electron benchmark with known workflows and seeded defects.

@@ -122,6 +122,8 @@ High-level Mission creation infers an omitted surface only from explicit Web, El
 
 `planningReadiness` summarizes only checked catalog candidates. It separates a usable saved plan from authoring work and incomplete inspection, with bounded gap codes for intensity/surface mismatch, invalid or omitted plans, unmatched source focus and business reader names. A `quick` match never satisfies a `core` request; an unmatched literal focus never proves the feature is absent. A ready plan still needs environment, surface and business execution evidence.
 
+`workspaceCandidates` lists bounded, unregistered Charter hints from the external test workspace, including missing assertions, business readers and write-policy prerequisites. A focused search with no literal candidate match returns `fallback-unmatched` hints. Candidate files are never automatically registered or marked ready; review the file and the tested workflow before using it.
+
 Observe configured endpoints or a one-time Web candidate before attaching to a page:
 
 ```bash

@@ -9,8 +9,10 @@ type Candidate = Candidates["items"][number];
 type CandidateContext = {
   workspaceRoot: string;
   config: ProofkitConfig;
-  capabilities: readonly { name: string }[];
+  capabilities: readonly { name: string; sideEffect: "none" | "read" | "write"; environments: readonly ("test" | "staging" | "local")[] }[];
   oracles: readonly { name: string }[];
+  allowCapabilityWrites: boolean;
+  restrictWebOrigins: boolean;
 };
 
 const DIRECTORIES = [[".proofkit", "charters"], ["charters"]] as const;
@@ -24,7 +26,7 @@ export async function inspectWorkspaceCandidates(context: CandidateContext, focu
     try { return [resolveWithinWorkspace(context.workspaceRoot, entry.path)]; }
     catch { return []; }
   }).map(pathIdentity));
-  const knownCapabilities = new Set(context.capabilities.map((item) => item.name));
+  const knownCapabilities = new Map(context.capabilities.map((item) => [item.name, item]));
   const knownOracles = new Set([...context.oracles.map((item) => item.name), ...context.config.oracles.map((item) => item.name)]);
   const planner = new IntentPlanner();
   const found: Array<{ item: Candidate; searchable: string }> = [];
@@ -99,13 +101,26 @@ export async function inspectWorkspaceCandidates(context: CandidateContext, focu
             item.sideEffectPolicy = charter.sideEffectPolicy;
             item.actionCount = charter.actions.length;
             item.assertionCount = charter.assertions.length;
-            item.oracleCount = (charter.oracles?.length ?? 0) + (charter.httpOracles?.length ?? 0);
+            item.oracleCount = charter.oracles?.length ?? 0;
             if (!hasPositiveSurfaceAssertion(charter.assertions)) item.issues.push("missing-positive-assertion");
             if (charter.level !== "quick" && !item.oracleCount) item.issues.push("missing-business-oracle");
             const actions = [...charter.actions, ...(charter.negativeCases ?? []).flatMap((negative) => negative.actions)];
             if (actions.some((action) => action.kind === "capability" && !knownCapabilities.has(action.name))) item.issues.push("unregistered-capability");
+            const usedCapabilities = actions.flatMap((action) => action.kind === "capability" ? [knownCapabilities.get(action.name)] : []).filter((item) => item !== undefined);
+            if (usedCapabilities.some((capability) => !capability.environments.includes(context.config.policies.environment))) item.issues.push("capability-environment-mismatch");
+            if (!context.allowCapabilityWrites && usedCapabilities.some((capability) => capability.sideEffect === "write")) item.issues.push("write-opt-in-required");
+            const scenarios = [{ actions: charter.actions, sideEffectPolicy: charter.sideEffectPolicy }, ...(charter.negativeCases ?? [])];
+            if (scenarios.some((scenario) => scenario.actions.some((action) => action.kind === "capability" && knownCapabilities.get(action.name)?.sideEffect === "write" && scenario.sideEffectPolicy !== "allow"
+              || (action.kind === "setInputFiles" || action.kind === "captureResponse"
+                || context.restrictWebOrigins && (action.kind === "click" || action.kind === "fill" || action.kind === "press")) && scenario.sideEffectPolicy !== "allow"))) {
+              item.issues.push("scenario-side-effect-policy-conflict");
+            }
+            if (context.restrictWebOrigins && context.config.policies.sideEffects !== "allow" && scenarios.some((scenario) => scenario.sideEffectPolicy === "allow")) {
+              item.issues.push("mcp-workspace-policy-conflict");
+            }
             const oracleNames = [...(charter.oracles ?? []), ...(charter.negativeCases ?? []).flatMap((negative) => negative.oracles)];
-            if (oracleNames.some((oracle) => !knownOracles.has(oracle))) item.issues.push("unregistered-oracle");
+            const availableOracles = new Set([...knownOracles, ...(charter.httpOracles ?? []).map((oracle) => oracle.name)]);
+            if (oracleNames.some((oracle) => !availableOracles.has(oracle))) item.issues.push("unregistered-oracle");
             searchable = [relativePath, charter.intent, ...actions.filter((action) => action.kind === "capability").map((action) => action.name), ...oracleNames].join(" ");
           } catch {
             item.parseStatus = "invalid";

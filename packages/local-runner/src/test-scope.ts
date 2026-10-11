@@ -18,6 +18,7 @@ export type ScopeContext = {
   capabilities: CapabilityDefinition<any, any>[];
   oracles: BusinessOracle[];
   allowCapabilityWrites: boolean;
+  restrictWebOrigins: boolean;
   checkCharter(entry: CharterCatalogEntry): Promise<void>;
   checkSuite(entry: SuiteCatalogEntry): Promise<void>;
 };

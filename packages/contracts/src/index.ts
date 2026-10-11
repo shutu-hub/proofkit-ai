@@ -990,7 +990,7 @@ export const TestScopeSchema = z.object({
       actionCount: ScopeCountSchema.optional(),
       assertionCount: ScopeCountSchema.optional(),
       oracleCount: ScopeCountSchema.optional(),
-      issues: z.array(z.enum(["invalid-charter", "file-too-large", "file-unavailable", "missing-positive-assertion", "missing-business-oracle", "unregistered-capability", "unregistered-oracle"])).max(7),
+      issues: z.array(z.enum(["invalid-charter", "file-too-large", "file-unavailable", "missing-positive-assertion", "missing-business-oracle", "unregistered-capability", "unregistered-oracle", "capability-environment-mismatch", "write-opt-in-required", "scenario-side-effect-policy-conflict", "mcp-workspace-policy-conflict"])).max(11),
     })).max(50),
   }).optional(),
   limitations: z.array(z.string()),
