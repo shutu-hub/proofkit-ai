@@ -110,7 +110,9 @@ try {
     surfaces,
     // This fixture server runs in the smoke process, outside the synthetic source checkout.
     policies: { environment: "test", sideEffects: "allow", targetBinding: "record" },
-    run: { timeoutMs: 15_000 },
+    // Hosted Windows can spend over 10 seconds on its first listener lookup.
+    // This suite verifies evidence, not the Run timeout contract.
+    run: { timeoutMs: 60_000 },
     charters: ["resume", "login"].map((flow) => ({ id: flow, path: `.proofkit/charters/${flow}.yml`, aliases: [flow], level: "release", surfaces: ["web", "electron"], routeTargets: [
       { kind: "web", path: `/${flow}`, source: "apps/web/src/router.ts" },
       { kind: "api", method: "POST", path: `/api/v1/${flow}/start`, origin: baseUrl, source: "services/gateway/router.ts" },
@@ -306,7 +308,7 @@ try {
   }
   const quickConfig = ProofkitConfigSchema.parse({ project: { root: sourceRoot }, surfaces,
     policies: { environment: "test", sideEffects: "allow", targetBinding: "record" },
-    run: { timeoutMs: 15_000 },
+    run: { timeoutMs: 60_000 },
     charters: ["resume", "login"].map((flow) => ({ id: flow, path: `.proofkit/charters/${flow}.yml`,
       aliases: [flow], level: "quick", surfaces: [flow === "resume" ? "web" : "electron"],
       routeTargets: [{ kind: "web", path: `/${flow}`, source: "apps/web/src/router.ts" },
@@ -534,7 +536,7 @@ async function verifyMissionReports(results) {
 
 async function waitForMission(mcpClient, missionId) {
   let status;
-  for (let attempt = 0; attempt < 500; attempt++) {
+  for (let attempt = 0; attempt < 1_800; attempt++) {
     status = payload(await mcpClient.callTool({ name: "get_mission_status", arguments: { missionId } }));
     if (["completed", "failed", "blocked", "cancelled"].includes(status.mission.status)) break;
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));

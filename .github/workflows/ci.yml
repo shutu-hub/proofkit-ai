@@ -103,3 +103,4 @@ jobs:
           name: proofkit-release-suite-windows
           path: .proofkit/local-runner-smoke/release-suite-*/test-workspace/.proofkit/
           if-no-files-found: ignore
+          include-hidden-files: true
