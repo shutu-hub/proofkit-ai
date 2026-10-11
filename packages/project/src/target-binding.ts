@@ -9,6 +9,7 @@ import { sameProjectPath } from "./context.js";
 const execFileAsync = promisify(execFile);
 const CODE_EXTENSIONS = /\.(?:cjs|exe|jar|js|mjs|py)$/i;
 const GENERIC_RUNTIMES = new Set(["chrome", "chrome.exe", "chromium", "chromium.exe", "electron", "electron.exe", "java", "java.exe", "msedge", "msedge.exe", "node", "node.exe", "python", "python.exe", "python3", "python3.exe"]);
+const WINDOWS_LISTENER_TIMEOUT_MS = 25_000;
 
 type ListenerProcess = { processId: number; executablePath?: string; commandLine?: string; codePaths?: string[] };
 export type ProcessRootObservation = { processId: number; projectRoot?: string };
@@ -115,7 +116,8 @@ async function windowsListeners(port: number, hostname: string, signal?: AbortSi
   const addresses = targetListenerAddresses(hostname).map((address) => `'${address}'`).join(",");
   const script = `$port=${port}; $addresses=@(${addresses}); $items=@(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop | Where-Object { $addresses -contains $_.LocalAddress } | Select-Object -ExpandProperty OwningProcess -Unique | Select-Object -First 8 | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$_" -ErrorAction Stop | Select-Object ProcessId,ExecutablePath,CommandLine }); ConvertTo-Json -InputObject $items -Compress -Depth 3`;
   const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-    encoding: "utf8", timeout: 10_000, maxBuffer: 256 * 1024, windowsHide: true, signal,
+    // The first NetTCP/CIM query on a fresh hosted Windows runner can exceed 10s.
+    encoding: "utf8", timeout: WINDOWS_LISTENER_TIMEOUT_MS, maxBuffer: 256 * 1024, windowsHide: true, signal,
   });
   const value: unknown = JSON.parse(stdout.trim() || "[]");
   const entries = Array.isArray(value) ? value : [value];
