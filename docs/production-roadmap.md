@@ -117,6 +117,9 @@ saved-loop policy in local tests, not an OS crash across separate processes.
 The real Web/Electron release-suite smoke also passed after the schema change;
 its partial-inventory fixture now exceeds the scanner's current 2,000-route
 retention limit instead of relying on the older 230-route threshold.
+MCP start and nonterminal wait receipts now expose bounded task progress and
+the saved deadline, so a host can keep waiting through cancellation cleanup
+without restarting the Mission or treating progress as a product verdict.
 
 ## Phase 2: measurable AI planning
 

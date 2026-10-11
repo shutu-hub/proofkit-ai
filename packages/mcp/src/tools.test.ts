@@ -166,6 +166,7 @@ describe("ProofKit MCP tools", () => {
         declared: 1,
       },
       readiness: { ready: true, missing: [] },
+      progress: { totalTasks: 2, passedTasks: 1, settledTasks: 1 },
       polling: {
         waitTool: "await_test_result",
         statusTool: "get_mission_status",
@@ -231,17 +232,43 @@ describe("ProofKit MCP tools", () => {
   });
 
   it("reports an active Mission at the wait deadline and does not infer a product verdict", async () => {
-    const missionStatus = vi.fn(async () => ({ mission: fixtureMission("running"), running: true }));
+    const mission = fixtureMission("running");
+    mission.currentTaskId = "execute-charter";
+    mission.executionStartedAt = new Date().toISOString();
+    mission.executionDeadlineAt = new Date(Date.now() + 60_000).toISOString();
+    const missionStatus = vi.fn(async () => ({ mission, running: true }));
     const missionEvidence = vi.fn();
     const runner = { missionStatus, missionEvidence, startMission: vi.fn() } as unknown as LocalRunnerService;
     const { client, server } = await connectedClient(runner);
     try {
       const response = await client.callTool({ name: "await_test_result", arguments: { missionId: "mission-test", timeoutMs: 500 } });
       const payload = JSON.parse(textContent(response));
-      expect(payload).toMatchObject({ state: "still-running", status: "running", running: true, next: ["await_test_result"] });
+      expect(payload).toMatchObject({ state: "still-running", status: "running", running: true,
+        testVerdict: "not-asserted", next: ["await_test_result"],
+        progress: { totalTasks: 2, passedTasks: 1, settledTasks: 1, currentTaskId: "execute-charter",
+          executionStartedAt: mission.executionStartedAt, executionDeadlineAt: mission.executionDeadlineAt,
+          deadlineReached: false } });
+      expect(payload.progress.remainingExecutionMs).toBeGreaterThan(0);
+      expect(payload.progress.remainingExecutionMs).toBeLessThanOrEqual(60_000);
       expect(payload.verdict).toBeUndefined();
       expect(missionEvidence).not.toHaveBeenCalled();
       expect(runner.startMission).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("keeps waiting on an active owner after the execution deadline while cleanup settles", async () => {
+    const mission = fixtureMission("running");
+    mission.executionDeadlineAt = new Date(Date.now() - 1_000).toISOString();
+    const runner = { missionStatus: vi.fn(async () => ({ mission, running: true })),
+      missionEvidence: vi.fn(), startMission: vi.fn() } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "await_test_result", arguments: { missionId: mission.missionId, timeoutMs: 500 } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ state: "still-running", running: true,
+        testVerdict: "not-asserted", progress: { remainingExecutionMs: 0, deadlineReached: true },
+        next: ["await_test_result"] });
+      expect(runner.startMission).not.toHaveBeenCalled();
+      expect(runner.missionEvidence).not.toHaveBeenCalled();
     } finally { await client.close(); await server.close(); }
   });
 

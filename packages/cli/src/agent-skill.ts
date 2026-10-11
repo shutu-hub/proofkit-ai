@@ -90,6 +90,10 @@ bounded wait returns a terminal summary with current evidence integrity, a
 still-running receipt, or a concrete next action if no owner is running. Repeat
 the wait for a still-running Mission; read get_mission_evidence after termination
 for detailed findings and links. Never restart merely because a wait timed out.
+The running receipt reports settled tasks and the saved execution deadline.
+If remainingExecutionMs reaches zero while an owner is still active, it may be
+finishing cancellation and cleanup; keep waiting on that Mission ID until the
+owner settles. Progress is not a product verdict.
 Cancelling the wait does not cancel the Mission.
 When run_test or await_test_result reports awaiting-approval with readiness.ready
 false, no product test ran. Report testVerdict as not-asserted and explain the

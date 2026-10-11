@@ -319,11 +319,12 @@ async function awaitTestResult(runner: LocalRunnerService, missionId: string, ti
         next = ["get_mission_status", "start_mission"];
       }
       return { state: "needs-action" as const, missionId, status, running: false,
-        testVerdict: "not-asserted" as const, readiness, next };
+        testVerdict: "not-asserted" as const, progress: missionProgress(current.mission), readiness, next };
     }
     const remaining = deadline - Date.now();
     if (remaining <= 0) return { state: "still-running" as const, missionId, status,
-      running: true, next: ["await_test_result"] };
+      running: true, testVerdict: "not-asserted" as const,
+      progress: missionProgress(current.mission), next: ["await_test_result"] };
     await delay(Math.min(500, remaining), undefined, signal ? { signal } : undefined);
   }
 }
@@ -360,6 +361,24 @@ function projectInventoryGap(mission: TestMission, readiness: ReturnType<typeof 
     && mission.plan.planning.evidenceGaps.includes("project-workflow-coverage");
 }
 
+function missionProgress(mission: TestMission) {
+  const tasks = mission.plan.graph.tasks;
+  const deadline = mission.executionDeadlineAt ? Date.parse(mission.executionDeadlineAt) : undefined;
+  const now = Date.now();
+  return {
+    totalTasks: tasks.length,
+    passedTasks: tasks.filter((task) => task.status === "passed").length,
+    settledTasks: tasks.filter((task) => ["passed", "failed", "blocked", "skipped"].includes(task.status)).length,
+    ...(mission.currentTaskId ? { currentTaskId: mission.currentTaskId } : {}),
+    ...(mission.executionStartedAt ? { executionStartedAt: mission.executionStartedAt } : {}),
+    ...(deadline !== undefined && Number.isFinite(deadline) ? {
+      executionDeadlineAt: mission.executionDeadlineAt,
+      remainingExecutionMs: Math.max(0, deadline - now),
+      deadlineReached: deadline <= now,
+    } : {}),
+  };
+}
+
 function missionStartResponse(started: { mission: TestMission; running: boolean }, readiness = missionReadiness(started.mission)) {
   const mission = started.mission;
   const profile = mission.plan.executionProfile;
@@ -386,6 +405,7 @@ function missionStartResponse(started: { mission: TestMission; running: boolean 
     level: mission.level,
     surface: mission.surface,
     levelSelection: mission.levelSelection,
+    progress: missionProgress(mission),
     planning: mission.plan.planning,
     executionProfile: profile,
     readiness,

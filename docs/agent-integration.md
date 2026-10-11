@@ -480,6 +480,13 @@ If a one-sentence request has no suitable Charter and the planner cannot supply 
 
 After `run_test` starts, `await_test_result({ missionId })` observes the same Mission for up to 20 seconds by default (maximum 30 seconds). A terminal response includes the saved `verdict`, audited `testVerdict`, bounded summary, current presented-evidence integrity and report path; `still-running` means the agent should call it again with the same ID. `needs-action` means no execution owner is active and identifies the next tool. For an unready Mission, `run_test`, `get_mission_status`, `await_test_result` and `get_mission_evidence` expose `testVerdict: not-asserted`; the wait also repeats the readiness gaps and does not suggest approval. A generated planning report is not a product test result. A wait deadline or MCP cancellation never starts, replays or cancels the Mission. Use `get_mission_evidence` for the detailed findings and evidence links after termination.
 
+Start and nonterminal wait receipts include bounded `progress`: task counts,
+the current task ID and, after execution begins, the persisted deadline and
+remaining execution milliseconds. These are scheduling facts, not acceptance
+evidence. A zero remaining time with an active owner can mean cancellation or
+cleanup is settling; continue waiting on the same Mission ID until the owner
+returns a terminal state.
+
 ## What the agent receives
 
 The status result is intentionally short and structured:
