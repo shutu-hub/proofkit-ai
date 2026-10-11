@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { analyzeRun, selectEvidencedBusinessFailure, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter, resolveElectronCdpUrl } from "@proofkit/adapters";
-import { auditMissionVerdict, createRunId, EvidenceStore, MissionReportStore, sha256 } from "@proofkit/evidence";
+import { auditMissionVerdict, createRunId, EvidenceStore, LocalExecutionOwnership, MissionReportStore, sha256, type LocalExecutionLease } from "@proofkit/evidence";
 import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
@@ -27,7 +27,7 @@ import { readWorkspaceCharterFile } from "./workspace-charter-file.js";
 import { compareCurrentSource, projectMissionResult } from "./mission-result.js";
 import type { MissionResult, MissionRepeatSeriesStatus, MissionStabilityAnalysis } from "@proofkit/contracts";
 import { ResourceRecoveryService } from "./resource-recovery.js";
-import { captureRunEvidence } from "./run-evidence.js";
+import { captureRunEvidence, materializedRunArtifact } from "./run-evidence.js";
 import { auditMissionProofClassification } from "./mission-proof-classification.js";
 import { auditMissionExecution, auditMissionRunFacts } from "./mission-execution-audit.js";
 import { auditMissionAgentTrace } from "./mission-agent-trace-audit.js";
@@ -1413,6 +1413,19 @@ export class LocalRunnerService {
 
   async start(input: LocalRunInput): Promise<LocalRunStatus> {
     await this.ensureWorkspace();
+    const sourceLease = input.replayOfRunId ? await this.acquireReplaySource(input.replayOfRunId) : undefined;
+    try { return await this.startWithSourceLease(input, sourceLease); }
+    catch (error) {
+      await sourceLease?.release();
+      throw error;
+    }
+  }
+
+  private async startWithSourceLease(input: LocalRunInput, sourceLease?: LocalExecutionLease): Promise<LocalRunStatus> {
+    if (input.replayOfRunId) {
+      const source = await this.loadRunSummary(validateRunId(input.replayOfRunId));
+      if (source.status !== "completed" || !source.endedAt) throw new Error("Replay source Run is not complete");
+    }
     const runId = createRunId();
     const controller = new AbortController();
     const onAbort = () => {
@@ -1424,7 +1437,11 @@ export class LocalRunnerService {
     const detachSignal = () => input.signal?.removeEventListener("abort", onAbort);
     const record: LocalRunRecord = { runId, status: "running", controller, promise: Promise.resolve(undefined as never) };
     this.records.set(runId, record);
-    const promise = this.execute(runId, input, controller.signal);
+    // A replay's source stays owned until the child Run has persisted its
+    // source reference (or failed). wait() must not resolve before release.
+    const promise = this.execute(runId, input, controller.signal).finally(async () => {
+      await sourceLease?.release().catch(() => {});
+    });
     record.promise = promise;
     void promise.then((summary) => {
       detachSignal();
@@ -1436,6 +1453,12 @@ export class LocalRunnerService {
       record.error = toError(error).message;
     });
     return this.toStatus(record);
+  }
+
+  private async acquireReplaySource(runId: string): Promise<LocalExecutionLease> {
+    const lease = await new LocalExecutionOwnership(this.evidenceDir, "run").acquire(validateRunId(runId));
+    if (!lease) throw new Error("Replay source Run is active or being recovered");
+    return lease;
   }
 
   async cancel(runId: string, reason = "Run cancelled by user"): Promise<LocalRunStatus> {
@@ -1452,6 +1475,22 @@ export class LocalRunnerService {
     const record = this.records.get(validateRunId(runId));
     if (record) return record.promise;
     return this.loadRunSummary(runId);
+  }
+
+  /** Historical Run reports are evidence: return the saved file without rewriting it. */
+  async savedRunReport(runId: string): Promise<string> {
+    const safeRunId = validateRunId(runId);
+    const lease = await new LocalExecutionOwnership(this.evidenceDir, "run").acquire(safeRunId);
+    if (!lease) throw new Error("Run is active or being recovered; saved report is unavailable");
+    try {
+      const summary = await this.loadRunSummary(safeRunId);
+      if (summary.status !== "completed" || !summary.endedAt) throw new Error("Run is not complete");
+      const path = this.reportPath(safeRunId);
+      const ref: EvidenceRef = { evidenceId: `${safeRunId}:report`, kind: "report", path, capturedAt: summary.endedAt };
+      const materialized = materializedRunArtifact(ref, safeRunId, `${safeRunId}/report.html`, this.evidenceDir);
+      if (!materialized) throw new Error("Saved Run report is unavailable or redirected");
+      return materialized;
+    } finally { await lease.release(); }
   }
 
   async status(runId: string): Promise<LocalRunStatus> {
@@ -1491,8 +1530,15 @@ export class LocalRunnerService {
   }
 
   async replay(runId: string, input: Omit<LocalRunInput, "intent" | "charter" | "charterPath"> = {}): Promise<LocalRunStatus> {
-    const previous = await this.loadRunSummary(validateRunId(runId));
-    return this.start({ ...input, charter: previous.charter, replayOfRunId: previous.runId });
+    await this.ensureWorkspace();
+    const lease = await this.acquireReplaySource(runId);
+    try {
+      const previous = await this.loadRunSummary(validateRunId(runId));
+      return await this.startWithSourceLease({ ...input, charter: previous.charter, replayOfRunId: previous.runId }, lease);
+    } catch (error) {
+      await lease.release();
+      throw error;
+    }
   }
 
   private async execute(runId: string, input: LocalRunInput, signal: AbortSignal): Promise<RunSummary> {

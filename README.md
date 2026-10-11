@@ -373,6 +373,8 @@ proofkit workspace retention --root /path/to/project --workspace /path/to/test-w
 
 The JSON result reports byte counts and marks each Run `retain`, `review`, or `unverified`. Mission records, report snapshots, replay references, active Run owners and integration resource history cause retention. Missing or malformed records make the audit incomplete. `review` means only that no known reference was found; it does not authorize deletion. ProofKit currently has no automatic or CLI evidence deletion, so a Run needed for replay or recovery remains available by default.
 
+`proofkit report <runId>` returns the saved HTML report path for a completed Run. It holds the Run while verifying that file and does not regenerate historical evidence. Independent replay holds the source Run through child completion, so a later retention operation can distinguish an active source from an unreferenced one.
+
 ## Safety and data
 
 - Use a dedicated test profile and test data. CDP attachment controls the selected browser session.

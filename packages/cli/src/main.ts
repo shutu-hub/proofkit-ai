@@ -5,7 +5,6 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { MissionComparison, RunMode, SideEffectPolicy, TestCoverage, TestLevel } from "@proofkit/contracts";
-import { EvidenceStore } from "@proofkit/evidence";
 import { IntentPlanner, loadCharter } from "@proofkit/planner";
 import { inspectEvidenceRetention, LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
 import { captureSourceState, collectWorkflowReviewMaterials, initProject, inspectWorkflowInventory, loadConfig, resolveProjectContext,
@@ -506,14 +505,12 @@ export function createProgram(): Command {
     });
 
   program.command("report <runId>")
-    .description("Regenerate a static report for a run")
+    .description("Return the saved static report for a completed Run without rewriting evidence")
     .option("--root <path>", "project root", ".")
     .option("--evidence-dir <path>", "run artifact directory", ".proofkit/runs")
     .action(async (runId: string, options: RootOptions & { evidenceDir: string }) => {
       const runner = new LocalRunnerService({ root: options.root, workspaceRoot: options.workspace, evidenceDir: options.evidenceDir });
-      const store = new EvidenceStore(runner.evidenceDir);
-      const summary = await runner.wait(runId);
-      console.log(await store.writeReport(summary));
+      console.log(await runner.savedRunReport(runId));
     });
 
   program.command("replay <runId>")
