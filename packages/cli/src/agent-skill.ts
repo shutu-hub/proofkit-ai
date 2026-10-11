@@ -99,6 +99,9 @@ Use inspect_test_environment to observe configured endpoints before attachment.
 For Web/Electron it checks HTTP/CDP and applicable source association; for mobile
 it checks the bounded WebDriver /status ready value without opening a device
 session. Resolve its concrete gaps before dependent actions.
+For an Electron HTTP renderer, check both source-binding for the page server
+and application-source-binding for the CDP process. A reachable CDP endpoint
+or matching page server alone does not identify the app being controlled.
 MCP does not start the configured application command; use the project's
 documented development startup workflow when authorized. Use inspect_surface
 when controls or readiness are unknown, then inspect the owning source and

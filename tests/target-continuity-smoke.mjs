@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { LocalRunnerService } from "../packages/local-runner/dist/index.js";
@@ -20,6 +20,7 @@ const serverPath = join(sourceRoot, "server.mjs");
 const chromePath = process.env.PROOFKIT_BROWSER_PATH ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 let serverChild;
 let ipv6OnlyChild;
+let foreignCdpChild;
 try {
   await mkdir(sourceRoot, { recursive: true });
   await mkdir(join(workspaceRoot, ".proofkit"), { recursive: true });
@@ -62,6 +63,29 @@ server.listen({ port: Number(process.env.PROOFKIT_FIXTURE_PORT), host: "::",
         evidence: [JSON.stringify({ runId, state: "ready" })] };
     },
   }] });
+  const foreignRoot = join(tempRoot, "foreign fixture");
+  const foreignScript = join(foreignRoot, "server.mjs");
+  await mkdir(foreignRoot);
+  await copyFile(serverPath, foreignScript);
+  execFileSync("git", ["init", "-q", foreignRoot], { windowsHide: true });
+  execFileSync("git", ["-C", foreignRoot, "-c", "core.autocrlf=false", "add", "server.mjs"], { windowsHide: true });
+  execFileSync("git", ["-C", foreignRoot, "-c", "user.name=ProofKit Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], { windowsHide: true });
+  const foreignCdpPort = await freePort();
+  const foreignCdpUrl = `http://127.0.0.1:${foreignCdpPort}`;
+  foreignCdpChild = await startServer(foreignCdpPort, false, foreignScript, foreignRoot);
+  const electronEnvironment = await new LocalRunnerService({ root: sourceRoot, workspaceRoot,
+    config: ProofkitConfigSchema.parse({ project: { root: sourceRoot },
+      surfaces: { electron: { targetUrlPrefix: baseUrl, cdpUrl: foreignCdpUrl } } }) }).inspectEnvironment({ surface: "electron" });
+  assert.equal(electronEnvironment.status, "blocked", JSON.stringify(electronEnvironment.checks));
+  assert.equal(electronEnvironment.testVerdict, "not-asserted");
+  assert.equal(electronEnvironment.checks.find((check) => check.id === "source-binding")?.status, "passed");
+  assert.equal(electronEnvironment.checks.find((check) => check.id === "cdp-http")?.status, "passed");
+  const applicationCheck = electronEnvironment.checks.find((check) => check.id === "application-source-binding");
+  assert.equal(applicationCheck?.status, "blocked", JSON.stringify(applicationCheck));
+  assert.equal(applicationCheck.targetBinding?.status, "different-project");
+  assert.equal(applicationCheck.targetBinding?.processId, foreignCdpChild.pid);
+  assert.ok(electronEnvironment.next.some((item) => item.action === "confirm-source"
+    && item.basedOn.includes("application-source-binding")));
   const charter = {
     intent: "Check one local listener and its business state", level: "core", mode: "deterministic",
     preconditions: [], actions: [{ kind: "goto", url: baseUrl }],
@@ -93,7 +117,7 @@ server.listen({ port: Number(process.env.PROOFKIT_FIXTURE_PORT), host: "::",
   assert.equal(execFileSync("git", ["-C", sourceRoot, "status", "--porcelain"], { encoding: "utf8", windowsHide: true }).trim(), "");
   console.log(JSON.stringify({ stableMission: stable.result.missionId, changedMission: changed.result.missionId,
     stablePid: stable.run.targetBinding.processId, changedPid: changed.run.targetBindingAfterRun.processId,
-    verified: ["dual-stack-ipv4-listener", "ipv6-only-exclusion", "real-browser", "oracle-time-replacement", "run-and-mission-verdict", "report"] }, null, 2));
+    verified: ["dual-stack-ipv4-listener", "ipv6-only-exclusion", "electron-page-and-cdp-dual-ownership", "real-browser", "oracle-time-replacement", "run-and-mission-verdict", "report"] }, null, 2));
 
   async function runMission(selectedCharter) {
     const created = await service.createMission({ intent: selectedCharter.intent, surface: "web", charter: selectedCharter });
@@ -107,8 +131,8 @@ server.listen({ port: Number(process.env.PROOFKIT_FIXTURE_PORT), host: "::",
     return { result, run };
   }
 
-  async function startServer(targetPort, ipv6Only = false) {
-    const child = spawn(process.execPath, [serverPath], { cwd: sourceRoot, windowsHide: true,
+  async function startServer(targetPort, ipv6Only = false, script = serverPath, cwd = sourceRoot) {
+    const child = spawn(process.execPath, [script], { cwd, windowsHide: true,
       env: { ...process.env, PROOFKIT_FIXTURE_PORT: String(targetPort), PROOFKIT_IPV6_ONLY: ipv6Only ? "1" : "0" },
       stdio: ["ignore", "pipe", "pipe", "ipc"] });
     let stderr = "";
@@ -128,6 +152,7 @@ server.listen({ port: Number(process.env.PROOFKIT_FIXTURE_PORT), host: "::",
   }
 } finally {
   await stopServer(ipv6OnlyChild);
+  await stopServer(foreignCdpChild);
   await stopServer(serverChild);
   const resolved = await realpath(tempRoot);
   const temporaryParent = await realpath(tmpdir());

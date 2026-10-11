@@ -102,6 +102,20 @@ export async function inspectEnvironment(context: Context, input: EnvironmentIns
       const targetBinding = await bindingFor(bindingUrl);
       return { id: "source-binding", kind: "source-binding", status: targetBinding.status === "matching-process-path" ? "passed" : targetBinding.status === "different-project" && config.policies.targetBinding === "block-different" ? "blocked" : "unverified", message: targetBinding.reason, targetBinding };
     });
+    // An Electron HTTP renderer has two distinct owners: its page server and
+    // the Electron CDP process. A matching page listener cannot identify the app.
+    if (surface === "electron" && hasConnection && /^https?:\/\//i.test(targetUrl ?? "")) {
+      bounded("application-source-binding", "source-binding", async () => {
+        const bindingUrl = await sourceBindingTarget("electron", undefined, electron?.cdpUrl,
+          electron?.devtoolsActivePort ?? process.env.PROOFKIT_ELECTRON_DEVTOOLS_PORT, controller.signal);
+        if (!bindingUrl) return { id: "application-source-binding", kind: "source-binding", status: "unverified",
+          message: "No Electron CDP listener could be resolved; application ownership was not checked." };
+        const targetBinding = await bindingFor(bindingUrl);
+        const status = targetBinding.status === "matching-process-path" ? "passed"
+          : targetBinding.status === "different-project" && config.policies.targetBinding === "block-different" ? "blocked" : "unverified";
+        return { id: "application-source-binding", kind: "source-binding", status, message: targetBinding.reason, targetBinding };
+      });
+    }
     const cdpConfigured = surface === "electron" ? hasConnection : surface === "web" && Boolean(web?.cdpUrl);
     if (cdpConfigured) {
       bounded("cdp-http", "http", async () => {
@@ -184,8 +198,10 @@ function recommendNext(checks: Check[], surface: EnvironmentInspection["surface"
     add("declare-health", ["health-configuration"], "Declare relevant backend health endpoints in the external test workspace before claiming backend readiness.");
   }
   const source = check("source-binding");
+  const application = check("application-source-binding");
   const healthSources = checks.filter((item) => /^health-\d+$/.test(item.id) && item.targetBinding && item.status !== "passed");
-  const sourceIssues = [...(source?.status !== "passed" && source?.targetBinding ? [source] : []), ...healthSources];
+  const sourceIssues = [...(source?.status !== "passed" && source?.targetBinding ? [source] : []),
+    ...(application?.status !== "passed" && application?.targetBinding ? [application] : []), ...healthSources];
   if (sourceIssues.length) {
     add("confirm-source", sourceIssues.map((item) => item.id), sourceIssues.some((item) => item.targetBinding?.status === "different-project")
       ? "The observed listener is associated with another checkout; select the intended local app before testing."

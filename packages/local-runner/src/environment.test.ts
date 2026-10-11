@@ -367,6 +367,47 @@ describe("environment inspection", () => {
       targetBinding: expect.objectContaining({ targetOrigin: url }) }));
     expect(JSON.stringify(result)).not.toContain("private");
   });
+  it("separately checks the Electron CDP owner behind an HTTP renderer before attachment", async () => {
+    const { root, workspaceRoot, binding } = await fixture();
+    const page = await serve((_req, res) => res.end("page"));
+    const cdp = await serve((_req, res) => res.end("private CDP metadata"));
+    binding.mockImplementation(async (_root, target) => {
+      const origin = target ? new URL(target).origin : undefined;
+      const foreign = origin === cdp;
+      return { status: foreign ? "different-project" : "matching-process-path",
+        method: "windows-listener-process", expectedProjectRoot: root,
+        observedProjectRoot: foreign ? join(root, "other") : root, targetOrigin: origin,
+        reason: foreign ? "Different checkout" : "Matching checkout", observedAt: new Date().toISOString() };
+    });
+    const service = new LocalRunnerService({ root, workspaceRoot, config: ProofkitConfigSchema.parse({
+      project: { root }, surfaces: { electron: { cdpUrl: cdp, targetUrlPrefix: `${page}/app` } },
+    }) });
+    const result = await service.inspectEnvironment({ surface: "electron" });
+    expect(result).toMatchObject({ status: "blocked", testVerdict: "not-asserted",
+      checks: expect.arrayContaining([
+        expect.objectContaining({ id: "surface-http", status: "passed" }),
+        expect.objectContaining({ id: "source-binding", status: "passed",
+          targetBinding: expect.objectContaining({ targetOrigin: page }) }),
+        expect.objectContaining({ id: "cdp-http", status: "passed" }),
+        expect.objectContaining({ id: "application-source-binding", status: "blocked",
+          targetBinding: expect.objectContaining({ targetOrigin: cdp, observedProjectRoot: join(root, "other") }) }),
+      ]) });
+    expect(result.next).toContainEqual(expect.objectContaining({ action: "confirm-source", basedOn: ["application-source-binding"] }));
+    expect(result.next.some((item) => item.action === "inspect-surface")).toBe(false);
+    expect(result.notChecked).toContain("browser-session");
+    expect(JSON.stringify(result)).not.toContain("private CDP metadata");
+    expect(await readdir(root)).toEqual(["package.json"]);
+    const recorded = new LocalRunnerService({ root, workspaceRoot, config: ProofkitConfigSchema.parse({
+      project: { root }, surfaces: { electron: { cdpUrl: cdp, targetUrlPrefix: `${page}/app` } },
+      policies: { targetBinding: "record" },
+    }) });
+    const observed = await recorded.inspectEnvironment({ surface: "electron" });
+    expect(observed).toMatchObject({ status: "incomplete", checks: expect.arrayContaining([
+      expect.objectContaining({ id: "application-source-binding", status: "unverified",
+        targetBinding: expect.objectContaining({ status: "different-project" }) }),
+    ]) });
+    expect(observed.next).toContainEqual(expect.objectContaining({ action: "confirm-source", basedOn: ["application-source-binding"] }));
+  });
   it("blocks a file-page Electron Run when its CDP listener belongs to another checkout", async () => {
     const { root, workspaceRoot, binding } = await fixture();
     const cdpUrl = "http://127.0.0.1:9222";
