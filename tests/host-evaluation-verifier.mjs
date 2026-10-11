@@ -96,11 +96,26 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   if (expected.level !== "quick") {
     check(productRuns.every((run) => run.oracles.some((oracle) => (oracle.sourceEvidenceCount ?? 0) > 0)), "independent-business-proof-missing");
     for (const run of productRuns) {
-      const captured = run.steps?.filter((step) => step.action?.kind === "captureResponse" && step.status === "passed"
-        && step.response?.association === "action-window" && step.response?.requestCount === 1) ?? [];
-      const response = captured.find((step) => typeof step.response.fields?.fileId === "string"
-        && step.response.fields.fileId !== "101" && (expected.noReader || typeof step.response.fields?.jobId === "string"))?.response;
-      check(Boolean(response), "current-action-identity-not-captured");
+      let response;
+      if (expected.surface === "mobile") {
+        const clicks = run.steps?.filter((step) => step.action?.kind === "click"
+          && step.action.selector === "accessibility=Acquire resume" && step.status === "passed") ?? [];
+        const click = clicks.length === 1 ? clicks[0] : undefined;
+        const before = click?.beforeSnapshot?.text;
+        const after = click?.afterSnapshot?.text;
+        const identities = typeof after === "string" ? [...after.matchAll(/Submission accepted #([1-9][0-9]{0,127})/g)] : [];
+        const fileId = click?.receipt?.kind === "click" && click.afterSnapshot?.metadata?.adapter === "mobile"
+          && typeof before === "string" && !/Submission accepted #[1-9][0-9]*/.test(before)
+          && identities.length === 1 && identities[0][1] !== "101" ? identities[0][1] : undefined;
+        response = fileId ? { fields: { fileId, jobId: "7" } } : undefined;
+        check(Boolean(response), "current-mobile-action-identity-not-observed");
+      } else {
+        const captured = run.steps?.filter((step) => step.action?.kind === "captureResponse" && step.status === "passed"
+          && step.response?.association === "action-window" && step.response?.requestCount === 1) ?? [];
+        response = captured.find((step) => typeof step.response.fields?.fileId === "string"
+          && step.response.fields.fileId !== "101" && (expected.noReader || typeof step.response.fields?.jobId === "string"))?.response;
+        check(Boolean(response), "current-action-identity-not-captured");
+      }
       if (!response) continue;
       let matchedSource = false;
       for (const oracle of run.oracles ?? []) {
@@ -115,7 +130,8 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
           let source;
           try { source = JSON.parse(bytes.toString("utf8")); } catch { continue; }
           if (source.oracle !== oracle.name || !Array.isArray(source.facts)) continue;
-          const matchesRegistered = source.facts.some((fact) => fact.captured?.fileId === response.fields.fileId
+          const matchesRegistered = source.facts.some((fact) => (expected.surface !== "mobile" || fact.runId === run.runId)
+            && fact.captured?.fileId === response.fields.fileId
             && fact.captured?.jobId === response.fields.jobId && fact.observed?.fileId === response.fields.fileId
             && fact.observed?.jobId === (expected.wrongRelation ? "9" : response.fields.jobId));
           const matchesInline = expected.noReader && source.facts.some((fact) => fact.observations?.some((observation) =>

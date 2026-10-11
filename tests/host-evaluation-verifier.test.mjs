@@ -54,6 +54,27 @@ async function candidateFixture(t) {
   return input;
 }
 
+async function mobileFixture(t, verdict = "passed") {
+  const input = await fixture(t, verdict);
+  input.expected.surface = "mobile";
+  input.expected.wrongRelation = verdict === "failed";
+  input.answer.surface = "mobile";
+  input.calls[1].arguments.surface = "mobile";
+  input.missions[0].surface = "mobile";
+  input.runs[0].steps = [{ action: { kind: "click", selector: "accessibility=Acquire resume" },
+    status: "passed", receipt: { kind: "click" },
+    beforeSnapshot: { metadata: { adapter: "mobile" }, text: "Resume ready\nAcquire resume" },
+    afterSnapshot: { metadata: { adapter: "mobile" }, text: "Resume ready\nSubmission accepted #102" } }];
+  input.runs[0].oracles[0].name = "resume.mobileTerminal";
+  const facts = JSON.stringify({ oracle: "resume.mobileTerminal", facts: [{ runId: "run-1",
+    captured: { fileId: "102", jobId: "7" },
+    observed: { fileId: "102", jobId: verdict === "failed" ? "9" : "7", state: "complete" } }] });
+  await writeFile(input.answer.evidencePaths[0], facts);
+  input.calls[3].result.evidence[0].sha256 = hash(facts);
+  if (verdict === "failed") input.missions[0].findings[0].evidence[0].sha256 = hash(facts);
+  return input;
+}
+
 test("accepts real linked facts for passed, failed and inconclusive host outcomes", async (t) => {
   for (const verdict of ["passed", "failed", "inconclusive"]) assert.deepEqual(await verifyHostSession(await fixture(t, verdict)), { passed: true, issues: [] });
 });
@@ -143,6 +164,26 @@ test("requires a newly captured identity bound to the independent reader", async
   input.runs[0].oracles[0].sourceEvidenceArtifacts = ["run-1/artifacts/oracle-1-source.json"];
   input.calls[3].result.evidence[0].sha256 = hash("different source");
   await rejects(input, "oracle-not-bound-to-current-action");
+});
+test("mobile core links a new UI action identity to independent same-Run business evidence", async (t) => {
+  for (const verdict of ["passed", "failed"]) {
+    const input = await mobileFixture(t, verdict);
+    assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
+  }
+  const historical = await mobileFixture(t);
+  historical.runs[0].steps[0].afterSnapshot.text = "Resume ready\nSubmission accepted #101";
+  await rejects(historical, "current-mobile-action-identity-not-observed");
+  const preexisting = await mobileFixture(t);
+  preexisting.runs[0].steps[0].beforeSnapshot.text = "Submission accepted #102";
+  await rejects(preexisting, "current-mobile-action-identity-not-observed");
+  const wrongRun = await mobileFixture(t, "failed");
+  const facts = JSON.stringify({ oracle: "resume.mobileTerminal", facts: [{ runId: "another-run",
+    captured: { fileId: "102", jobId: "7" }, observed: { fileId: "102", jobId: "9", state: "complete" } }] });
+  await writeFile(wrongRun.answer.evidencePaths[0], facts);
+  wrongRun.calls[3].result.evidence[0].sha256 = hash(facts);
+  wrongRun.missions[0].findings[0].evidence[0].sha256 = hash(facts);
+  await rejects(wrongRun, "oracle-not-bound-to-current-action");
+  await rejects(wrongRun, "seeded-defect-not-evidenced");
 });
 test("requires unchanged workspace contracts and an inline authored Charter", async (t) => {
   const input = await fixture(t);

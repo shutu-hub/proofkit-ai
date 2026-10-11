@@ -131,7 +131,8 @@ node tests/host-evaluation.mjs --run --implicit-skill --cases candidate-core-def
 node tests/host-evaluation.mjs --run --implicit-skill --cases inline-electron-pass,inline-electron-defect
 # Claude Code uses its own Skill and MCP config with the same fixture and verifier:
 node tests/host-evaluation-baseline.mjs --protocol claude-code --cases quick-pass,core-pass,core-defect
-node tests/host-evaluation-baseline.mjs --protocol claude-code --cases mobile-quick-pass
+node tests/host-evaluation-baseline.mjs --protocol claude-code --cases mobile-quick-pass,mobile-core-pass,mobile-core-defect
+node tests/host-evaluation.mjs --run --implicit-skill --cases mobile-core-pass,mobile-core-defect
 node tests/host-evaluation.mjs --run --host claude-code --implicit-skill --cases quick-pass
 ```
 
@@ -151,10 +152,14 @@ the synthetic browser fixture, serializes their responses as Claude-shaped
 same Mission/Run evidence verifier. It writes the transcript beside
 `baseline.json` and reports `modelAdherence: not-evaluated`; it checks protocol
 handling and evidence consistency, not a Claude model run.
-The optional mobile quick case uses the same external workspace and native MCP
-launcher with a local fake W3C WebDriver. It checks the requested mobile surface,
-saved Run adapter, visible text proof and final Mission evidence. A device,
-mobile business Oracle and actual host model behavior remain separate gates.
+The optional mobile cases use the same external workspace and native MCP
+launcher with a local fake W3C WebDriver. `quick` checks the requested surface
+and visible text. The two `core` cases click a native control, observe a fresh
+submission ID on the UI, then query an independent read-only business endpoint
+for that ID. The seeded wrong-job relation fails despite a success label. The
+verifier checks the saved mobile adapter, current-action ID, Run-linked Oracle
+source and SHA-256 evidence. Real Codex implicit-Skill runs passed both core
+cases in this fixture; a device and real mobile business remain separate gates.
 
 Set `PROOFKIT_ELECTRON_PATH` to a local Electron executable and run
 `node tests/host-evaluation-baseline.mjs --cases electron-core-pass,electron-core-defect`

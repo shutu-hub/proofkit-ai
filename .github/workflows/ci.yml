@@ -21,10 +21,12 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:host-verifier
+      - name: Verify mobile MCP and WebDriver lifecycle
+        run: node tests/mobile-smoke.mjs
       - name: Verify scripted Claude protocol and evidence chain
         env:
           PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome
-        run: node tests/host-evaluation-baseline.mjs --protocol claude-code --cases quick-pass,core-defect,project-gap,mobile-quick-pass
+        run: node tests/host-evaluation-baseline.mjs --protocol claude-code --cases quick-pass,core-defect,project-gap,mobile-quick-pass,mobile-core-pass,mobile-core-defect
       - run: pnpm test:distribution
       - name: Verify Linux listener binding
         run: sudo env PROOFKIT_REQUIRE_LINUX_PROC=1 "$(command -v node)" tests/linux-target-binding-smoke.mjs

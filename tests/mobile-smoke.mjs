@@ -156,7 +156,7 @@ async function runMission(expectedVerdict) {
   }
   assert.equal(terminal?.state, "terminal", JSON.stringify(terminal));
   const evidence = payload(await client.callTool({ name: "get_mission_evidence",
-    arguments: { missionId: started.missionId } }));
+    arguments: { missionId: started.missionId, detail: "full" } }));
   assert.equal(evidence.verdict, expectedVerdict, JSON.stringify(evidence.findings));
   assert.equal(evidence.testVerdict, expectedVerdict);
   assert.ok(evidence.evidence.some((item) => item.kind === "screenshot"));

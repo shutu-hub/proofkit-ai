@@ -26,6 +26,8 @@ export const hostCases = [
   { id: "inline-electron-pass", prompt: "测试 Electron 桌面端简历获取功能，并用项目的只读状态接口核对本次文件 ID 和处理终态", surface: "electron", level: "core", coverage: "declared", verdict: "passed", state: "complete", noCatalog: true, noReader: true, optional: true, omitSurfaceInScriptedBaseline: true },
   { id: "inline-electron-defect", prompt: "测试 Electron 桌面端简历获取功能，并用项目的只读状态接口核对本次文件 ID 和处理终态", surface: "electron", level: "core", coverage: "declared", verdict: "failed", state: "complete", noCatalog: true, noReader: true, wrongIdentity: true, optional: true },
   { id: "mobile-quick-pass", prompt: "快速测试移动端简历获取页面", surface: "mobile", level: "quick", coverage: "declared", verdict: "passed", state: "complete", optional: true },
+  { id: "mobile-core-pass", prompt: "测试移动端简历获取功能", surface: "mobile", level: "core", coverage: "declared", verdict: "passed", state: "complete", optional: true },
+  { id: "mobile-core-defect", prompt: "测试移动端简历获取功能", surface: "mobile", level: "core", coverage: "declared", verdict: "failed", state: "complete", wrongRelation: true, optional: true },
 ];
 
 /** Synthetic business facts exercise host behavior without real accounts, data or billable work. */
@@ -57,7 +59,7 @@ export const resumeStatusRoute = '/api/v1/resume-status';
   await Promise.all(Object.entries(sourceFiles).map(([path, content]) => writeFile(join(source, path), content)));
   const records = new Map([["101", { fileId: "101", jobId: "7", state: "complete" }]]);
   let nextId = 101;
-  const mobileSessions = new Set();
+  const mobileSessions = new Map();
   let nextMobileSession = 0;
   const http = createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
@@ -70,13 +72,16 @@ export const resumeStatusRoute = '/api/v1/resume-status';
       if (url.pathname === "/wd/session" && request.method === "POST") {
         request.resume();
         const sessionId = `host-mobile-${++nextMobileSession}`;
-        mobileSessions.add(sessionId);
+        mobileSessions.set(sessionId, { fileId: null });
         return send({ sessionId, capabilities: { platformName: "Android" } });
       }
       const match = url.pathname.match(/^\/wd\/session\/([^/]+)(?:\/(.*))?$/);
       if (!match || !mobileSessions.has(match[1])) return send({ error: "invalid session id" }, 404);
+      const session = mobileSessions.get(match[1]);
       if (!match[2] && request.method === "DELETE") { mobileSessions.delete(match[1]); return send(null); }
-      if (match[2] === "source") return send('<hierarchy><node text="Resume ready" displayed="true"/></hierarchy>');
+      if (match[2] === "source") return send(`<hierarchy><node text="Resume ready" displayed="true"/>`
+        + `<node text="Acquire resume" displayed="true"/>`
+        + (session.fileId ? `<node text="Submission accepted #${session.fileId}" displayed="true"/>` : "") + "</hierarchy>");
       if (match[2] === "url") return send("app://proofkit/resumes");
       if (match[2] === "title") return send("Resume intake");
       if (match[2] === "screenshot") return send("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6px8AAAAASUVORK5CYII=");
@@ -88,12 +93,23 @@ export const resumeStatusRoute = '/api/v1/resume-status';
             if (body.length > 4096) throw new Error("Mobile locator exceeded fixture limit");
           }
           const locator = JSON.parse(body);
-          return send(locator.using === "xpath" && locator.value.includes('"Resume ready"')
-            ? [{ "element-6066-11e4-a52e-4f735466cecf": "ready-label" }] : []);
+          const element = locator.using === "accessibility id" && locator.value === "Acquire resume" ? "acquire-button"
+            : locator.using === "xpath" && locator.value.includes('"Resume ready"') ? "ready-label"
+              : locator.using === "xpath" && locator.value.includes('"Submission accepted"') && session.fileId
+                ? "submitted-label" : null;
+          return send(element ? [{ "element-6066-11e4-a52e-4f735466cecf": element }] : []);
         })().catch(() => send({ error: "invalid argument" }, 400));
         return;
       }
-      if (match[2] === "element/ready-label/displayed") return send(true);
+      if (["element/ready-label/displayed", "element/acquire-button/displayed"].includes(match[2])) return send(true);
+      if (match[2] === "element/submitted-label/displayed") return send(Boolean(session.fileId));
+      if (match[2] === "element/acquire-button/click" && request.method === "POST") {
+        request.resume();
+        const fileId = String(++nextId);
+        records.set(fileId, { fileId, jobId: expected.wrongRelation ? "9" : "7", state: "complete" });
+        session.fileId = fileId;
+        return send(null);
+      }
       return send({ error: "unknown command" }, 404);
     }
     if (request.method === "GET" && url.pathname === "/resume-page.js") {
@@ -150,10 +166,17 @@ export const resumeStatusRoute = '/api/v1/resume-status';
       await waitForDevtools(devtoolsActivePort, () => spawnError ??
         (electron.exitCode === null ? undefined : new Error("Electron exited before CDP was ready")));
     }
-    const plan = (level) => TestCharterSchema.parse(surface === "mobile"
-      ? { intent: "快速检查移动端简历获取页面", level: "quick", sideEffectPolicy: "deny",
+    const plan = (level) => TestCharterSchema.parse(surface === "mobile" && level === "quick"
+      ? { intent: "快速检查移动端简历获取页面", level, sideEffectPolicy: "deny",
         actions: [{ kind: "waitForText", text: "Resume ready", timeoutMs: 1000 }, { kind: "observe" }],
         assertions: [{ kind: "text-visible", text: "Resume ready" }] }
+      : surface === "mobile"
+        ? { intent: "测试本次移动端简历获取功能", level, sideEffectPolicy: "allow",
+          actions: [{ kind: "waitForText", text: "Resume ready", timeoutMs: 1000 },
+            { kind: "click", selector: "accessibility=Acquire resume" },
+            { kind: "waitForText", text: "Submission accepted", timeoutMs: 1000 }],
+          assertions: [{ kind: "text-visible", text: "Submission accepted" }],
+          oracles: ["resume.mobileTerminal"] }
       : level === "quick"
       ? { intent: "快速检查简历获取页面", level, sideEffectPolicy: "deny",
         actions: [{ kind: "goto", url: `${origin}/resumes` }, { kind: "observe" }],
@@ -170,7 +193,7 @@ export const resumeStatusRoute = '/api/v1/resume-status';
         ...(expected.noReader ? { httpOracles: [{ name: "current-resume-status", url: `${origin}/api/v1/resume-status`,
           query: { fileId: { source: "response", stepId: "step-002", field: "fileId", matchPointer: "/data/fileId" } },
           statusPointer: "/data/state", successValues: ["complete"], failureValues: ["failed"], intervalMs: 100, deadlineMs: 1000 }] } : {}) });
-    const catalogLevels = surface === "mobile" ? ["quick"] : ["core", "quick"];
+    const catalogLevels = surface === "mobile" && expected.level === "quick" ? ["quick"] : ["core", "quick"];
     const charters = expected.noCatalog ? [] : catalogLevels.map((level) => ({ id: `resume-${level}`, path: `.proofkit/charters/resume-${level}.yml`,
       aliases: ["简历获取", "简历"], level, surfaces: [surface],
       ...(surface === "mobile" ? {} : { routeTargets: [{ kind: "web", path: "/resumes", source: "resume-page.js" }] }) }));
@@ -188,7 +211,36 @@ export const resumeStatusRoute = '/api/v1/resume-status';
     } else if (expected.candidatePath) {
       await writeFile(join(workspace, expected.candidatePath), JSON.stringify(plan("core")));
     }
-    await writeFile(join(workspace, ".proofkit", "integration.mjs"), expected.noReader
+    await writeFile(join(workspace, ".proofkit", "integration.mjs"), surface === "mobile" && expected.level === "core"
+      ? `export default { name: 'host-evaluation-mobile-fixture', version: '1.0.0', oracles: [{
+      name: 'resume.mobileTerminal', async check({ runId, steps, signal }) {
+        const clicks = steps.filter(step => step.status === 'passed' && step.action.kind === 'click'
+          && step.action.selector === 'accessibility=Acquire resume');
+        const click = clicks.length === 1 ? clicks[0] : undefined;
+        const before = click?.beforeSnapshot?.text ?? '';
+        const after = click?.afterSnapshot?.text ?? '';
+        const identities = [...after.matchAll(/Submission accepted #([1-9][0-9]{0,127})/g)];
+        const fileId = !/Submission accepted #[1-9][0-9]*/.test(before) && identities.length === 1
+          && identities[0][1] !== '101' ? identities[0][1] : undefined;
+        if (!fileId) return { name: 'resume.mobileTerminal', passed: null,
+          message: 'Current mobile action identity was not observed',
+          evidence: [JSON.stringify({ runId, gap: 'current-action-id-missing' })], observedAt: new Date().toISOString() };
+        const response = await fetch(${JSON.stringify(origin + "/api/v1/resumes/")} + fileId, { signal });
+        if (!response.ok) return { name: 'resume.mobileTerminal', passed: null,
+          message: 'Independent mobile business reader is unavailable',
+          evidence: [JSON.stringify({ runId, captured: { fileId, jobId: '7' }, readerStatus: response.status })],
+          observedAt: new Date().toISOString() };
+        const data = (await response.json()).data;
+        const identity = data.fileId === fileId && data.jobId === '7';
+        const passed = !identity ? false : data.state === 'complete' ? true : null;
+        return { name: 'resume.mobileTerminal', passed,
+          message: !identity ? 'Current mobile resume belongs to the wrong job' : passed
+            ? 'Current mobile resume reached terminal success' : 'Mobile worker terminal state is pending',
+          evidence: [JSON.stringify({ runId, captured: { fileId, jobId: '7' }, observed: data })],
+          observedAt: new Date().toISOString() };
+      }
+    }] };`
+      : expected.noReader
       ? "export default { name: 'host-evaluation-fixture', version: '1.0.0', oracles: [] };\n"
       : `export default { name: 'host-evaluation-fixture', version: '1.0.0', oracles: [{
       name: 'resume.terminal', async check(context) {
@@ -216,7 +268,7 @@ export const resumeStatusRoute = '/api/v1/resume-status';
       : expected.noCatalog ? [] : catalogLevels.map((level) => `resume-${level}.yml`);
     const contractPaths = ["config.yaml", "integration.mjs", ...charterNames.map((name) => `charters/${name}`)];
     const contractHashes = await Promise.all(contractPaths.map(async (path) => hash(await readFile(join(workspace, ".proofkit", path)))));
-    return { root, source, workspace, harness, setup, corePlan: surface === "mobile" ? undefined : plan("core"),
+    return { root, source, workspace, harness, setup, corePlan: plan("core"),
       async sourceUnchanged() {
         const paths = await readdir(source);
         return paths.length === Object.keys(sourceFiles).length && (await Promise.all(Object.entries(sourceFiles).map(async ([path, content]) => hash(await readFile(join(source, path))) === hash(content)))).every(Boolean);
