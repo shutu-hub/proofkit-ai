@@ -75,6 +75,12 @@ AIHR 网关请求由 shell renderer 的 backend bridge 发起。当前源码中 
 Playwright Page 的主 frame，但不能证明实际 CDP 目标选择或请求事件可见。能否观察到
 `POST /resume-collection/runs`，以及它是否发生在合理的动作窗口内，仍须先用隔离 CDP
 运行核实。未核实前不扩大 `captureResponse` 到其他页面，避免把无关请求绑定到点击。
+`pnpm test:smoke:electron-ipc` 进一步用真实 Electron/CDP 和隔离 HTTP 服务复现
+UI → preload IPC → 主进程通知 → shell renderer `fetch`：页面网络事件确实包含
+该 POST，`captureResponse` 获取本次 ID，独立 reader 核对后 Run 通过。对照组改由
+主进程 `fetch`，服务端仍创建对象，但页面没有 POST 事件，Run 为 `inconclusive`。
+这验证 ProofKit 对两种请求归属的边界，尚未验证 AIHR 实际运行的 CDP 页签、
+风险确认时序或真实网关请求。
 不能从源码直接认定该捕获可用，也不能把连接器自己创建的 run
 冒充“立即运行”产生的 run。若使用公开列表的前后差集关联本次 run，测试工作空间须独占、
 自动调度须停止，并要求仅出现一个符合来源与时间的新增 run；零个或多个均为
