@@ -187,6 +187,15 @@ server so unattended runs can submit to its in-memory loopback fixture and save
 evidence; connector write capabilities remain disabled. [OpenAI's CLI reference](https://developers.openai.com/codex/cli/reference/)
 documents the workspace flags, and [Windows sandbox guidance](https://developers.openai.com/codex/windows/windows-sandbox/)
 describes the isolation tradeoff of the unelevated fallback.
+The report records elapsed times for the first and last completed MCP call,
+the last completed agent message, and `turn.completed`. If the host times out
+after writing a schema-shaped agent message, the evaluator separately checks
+that message against saved evidence as `provisional`. The case remains
+`incomplete`, its official validation stays failed, and it never increments
+the passing count. In one implicit Skill `candidate-core-defect` run, the
+360-second host deadline expired after a failed product Mission and a candidate
+answer; no official answer file or `turn.completed` event was saved. That run
+is an incomplete host evaluation, not a passing acceptance result.
 It uses only synthetic loopback facts; it does not contact AIHR or authorize
 business writes. Model usage may incur provider charges. A provider access
 failure or cancelled host MCP call is reported as `infrastructure-blocked`,
@@ -284,6 +293,11 @@ Runs sharing one external test workspace execute exclusively, including read-onl
 For a page that renders asynchronously, configure `surfaces.web.readyWhen` or
 `surfaces.electron.readyWhen` once, or override it in
 `inspect_surface({ surface: "web", readyWhen: { text: "Log in", timeoutMs: 5000 } })`.
+Choose text that must already be visible before the action under test. A
+submission success message is an outcome to assert after submission, not an
+inspection prerequisite before it. Inspect again when navigation or another
+state change makes the first observation stale, or when it lacked the needed
+controls; repeated inspection of the same state adds no product proof.
 CLI equivalent: `proofkit inspect --ready-text "Log in" --ready-timeout-ms 5000`.
 The prerequisite uses the existing `waitForText` step, then observes the page;
 it matches visible text containing the configured string in the main frame.

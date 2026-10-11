@@ -80,6 +80,10 @@ MCP does not start the configured application command; use the project's
 documented development startup workflow when authorized. Use inspect_surface
 when controls or readiness are unknown, then inspect the owning source and
 API contract. Configure readyWhen for a real visible prerequisite if needed.
+The readyWhen text must be visible before the action being tested. Do not use
+the success text expected only after a click or submission as inspection
+readiness. Repeat inspect_surface only after the page state changes or the first
+observation lacked the controls needed to author the Charter.
 These observations return not-asserted and cannot establish a product pass.
 
 If the catalog has no suitable scenario, use a reviewed digest-pinned workspace

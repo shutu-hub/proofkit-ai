@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { hash, parseMcpToolEvents, verifyHostSession } from "./host-evaluation-verifier.mjs";
+import { hash, lastStructuredHostAnswer, parseMcpToolEvents, verifyHostSession } from "./host-evaluation-verifier.mjs";
 
 async function fixture(t, verdict = "passed") {
   const workspace = await mkdtemp(join(tmpdir(), "proofkit-host-verifier-"));
@@ -232,4 +232,18 @@ test("parses tool lifecycle events and preserves MCP errors rather than counting
     { type: "item.completed", item: { ...item, id: "call-2", status: "failed", error: { message: "unavailable" } } }];
   const calls = parseMcpToolEvents(events.map((event) => JSON.stringify(event)).join("\n"));
   assert.equal(calls.length, 2); assert.equal(calls[0].result.missionId, "m1"); assert.equal(calls[1].isError, true);
+});
+
+test("only a completed, schema-shaped agent message is a provisional answer", () => {
+  const answer = { missionId: "mission-1", verdict: "failed", level: "core", coverage: "declared",
+    surface: "web", report: "report.html", evidencePaths: ["facts.json"], gaps: [], summary: "Confirmed" };
+  const event = (type, text) => JSON.stringify({ type, item: { type: "agent_message", text } });
+  const trace = [event("item.started", JSON.stringify(answer)),
+    event("item.completed", JSON.stringify({ ...answer, verdict: "unknown" })),
+    event("item.completed", JSON.stringify(answer)),
+    event("item.completed", "A later plain-language summary")].join("\n");
+  assert.deepEqual(lastStructuredHostAnswer(trace), answer);
+  assert.equal(lastStructuredHostAnswer(event("item.started", JSON.stringify(answer))), undefined);
+  assert.equal(lastStructuredHostAnswer(event("item.completed", JSON.stringify({ ...answer, extra: true }))), undefined);
+  assert.equal(lastStructuredHostAnswer(event("item.completed", JSON.stringify({ ...answer, evidencePaths: [42] }))), undefined);
 });

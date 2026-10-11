@@ -58,6 +58,26 @@ process.stdout.write(JSON.stringify({ type: "thread.started" }) + "\\n");
   assert.ok(result.durationMs < 5_000, `Inherited pipe should not stall the evaluator, took ${result.durationMs}ms`);
 });
 
+test("records tool, answer and completion milestones without treating a message as host completion", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "proofkit-host-milestones-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const script = join(root, "fake-host.cjs");
+  await writeFile(script, `
+const emit = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+emit({ type: "item.completed", item: { type: "mcp_tool_call", tool: "inspect_test_scope" } });
+emit({ type: "item.completed", item: { type: "mcp_tool_call", tool: "run_test" } });
+emit({ type: "item.completed", item: { type: "agent_message", text: "{}" } });
+emit({ type: "turn.completed" });
+`);
+  const result = await runHost(process.execPath, [script], root, 10_000, join(root, "events.jsonl"));
+  assert.equal(result.code, 0);
+  assert.equal(result.timedOut, false);
+  assert.ok(result.milestones.firstToolCallAtMs >= 0);
+  assert.ok(result.milestones.lastToolCallAtMs >= result.milestones.firstToolCallAtMs);
+  assert.ok(result.milestones.lastAgentMessageAtMs >= result.milestones.lastToolCallAtMs);
+  assert.ok(result.milestones.turnCompletedAtMs >= result.milestones.lastAgentMessageAtMs);
+});
+
 test("an event file failure rejects without waiting for the host deadline", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "proofkit-host-events-"));
   t.after(() => rm(root, { recursive: true, force: true }));

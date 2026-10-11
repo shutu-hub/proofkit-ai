@@ -41,6 +41,8 @@ export async function runHost(executable, args, cwd, timeoutMs, eventsPath) {
   let eventBytes = 0;
   let stopReason = null;
   let timedOut = false;
+  const milestones = { firstToolCallAtMs: null, lastToolCallAtMs: null,
+    lastAgentMessageAtMs: null, turnCompletedAtMs: null };
   let child;
   let stopping = false;
   const execution = await new Promise((resolveRun, reject) => {
@@ -110,6 +112,15 @@ export async function runHost(executable, args, cwd, timeoutMs, eventsPath) {
       for (const line of lines) {
         let event;
         try { event = JSON.parse(line); } catch { continue; }
+        const elapsed = Date.now() - started;
+        if (event.item?.type === "mcp_tool_call" && event.type === "item.completed") {
+          milestones.firstToolCallAtMs ??= elapsed;
+          milestones.lastToolCallAtMs = elapsed;
+        }
+        if (event.item?.type === "agent_message" && event.type === "item.completed") {
+          milestones.lastAgentMessageAtMs = elapsed;
+        }
+        if (event.type === "turn.completed") milestones.turnCompletedAtMs = elapsed;
         if (event.type === "error") {
           const provider = providerBlocker(event.message);
           if (provider) { stop(provider); break; }
@@ -131,6 +142,6 @@ export async function runHost(executable, args, cwd, timeoutMs, eventsPath) {
     });
   });
   const transcript = await readFile(eventsPath, "utf8");
-  return { ...execution, transcript, blocker: classifyHostBlocker(transcript) ??
+  return { ...execution, milestones, transcript, blocker: classifyHostBlocker(transcript) ??
     (execution.stopReason === "provider-balance" || execution.stopReason === "provider-access" ? execution.stopReason : null) };
 }

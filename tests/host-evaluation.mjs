@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHostFixture, hostCases } from "./host-evaluation-fixture.mjs";
 import { runHost } from "./host-evaluation-runtime.mjs";
-import { parseMcpToolEvents, verifyHostSession } from "./host-evaluation-verifier.mjs";
+import { lastStructuredHostAnswer, parseMcpToolEvents, verifyHostSession } from "./host-evaluation-verifier.mjs";
 
 const requested = argument("--cases");
 const windowsSandbox = argument("--windows-sandbox");
@@ -94,14 +94,22 @@ async function evaluate(fixture, expected, cli, timeoutMs) {
   catch (error) { if (error.code !== "ENOENT") throw error; }
   const hostOutcome = execution.blocker ? "infrastructure-blocked"
     : execution.timedOut || execution.code !== 0 ? "incomplete" : "evaluated";
+  const sourceUnchanged = await fixture.sourceUnchanged();
+  const workspaceContractsUnchanged = await fixture.workspaceContractsUnchanged();
+  const session = { expected, calls, missions, runs, workspace: fixture.workspace,
+    sourceUnchanged, workspaceContractsUnchanged };
   const validation = hostOutcome === "evaluated"
-    ? await verifyHostSession({ expected, answer, calls, missions, runs, workspace: fixture.workspace,
-      sourceUnchanged: await fixture.sourceUnchanged(), workspaceContractsUnchanged: await fixture.workspaceContractsUnchanged() })
+    ? await verifyHostSession({ ...session, answer })
     : { passed: false, issues: [execution.blocker ?? execution.stopReason ?? "host-process-failed"] };
+  // A completed agent message can aid diagnosis, but only a completed host run
+  // with its official answer file is eligible for a passing evaluation.
+  const candidate = hostOutcome === "evaluated" ? undefined : lastStructuredHostAnswer(execution.transcript);
+  const provisional = candidate ? { answer: candidate,
+    validation: await verifyHostSession({ ...session, answer: candidate }) } : null;
   return { caseId: expected.id, prompt: expected.prompt, skillActivation: process.argv.includes("--implicit-skill") ? "implicit" : "explicit",
-    expected: { verdict: expected.verdict, level: expected.level, coverage: expected.coverage, surface: expected.surface }, answer,
+    expected: { verdict: expected.verdict, level: expected.level, coverage: expected.coverage, surface: expected.surface }, answer, provisional,
     hostOutcome, execution: { code: execution.code, timedOut: execution.timedOut, durationMs: execution.durationMs,
-      blocker: execution.blocker, stopReason: execution.stopReason },
+      blocker: execution.blocker, stopReason: execution.stopReason, milestones: execution.milestones },
     tools: calls.map(({ tool, status }) => ({ tool, status })), missionIds: missions.map((item) => item.missionId),
     evidenceRoot: fixture.workspace, events: join(fixture.root, "host-events.jsonl"), validation };
 }

@@ -172,6 +172,33 @@ export function parseMcpToolEvents(jsonl) {
   return [...calls.values()];
 }
 
+/** A completed message is only a candidate until the host exits and writes its official answer. */
+export function lastStructuredHostAnswer(jsonl) {
+  const required = ["missionId", "verdict", "level", "coverage", "surface", "report", "evidencePaths", "gaps", "summary"];
+  const verdicts = new Set(["passed", "failed", "blocked", "cancelled", "inconclusive", "not-asserted"]);
+  const lines = jsonl.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    let event;
+    try { event = JSON.parse(lines[index]); } catch { continue; }
+    if (event.type !== "item.completed" || event.item?.type !== "agent_message"
+      || typeof event.item.text !== "string") continue;
+    let answer;
+    try { answer = JSON.parse(event.item.text); } catch { continue; }
+    if (!answer || Array.isArray(answer) || typeof answer !== "object"
+      || Object.keys(answer).length !== required.length || required.some((key) => !(key in answer))
+      || !(answer.missionId === null || typeof answer.missionId === "string")
+      || !verdicts.has(answer.verdict) || !["quick", "core", "release"].includes(answer.level)
+      || !["declared", "project"].includes(answer.coverage)
+      || !["web", "electron", "mobile"].includes(answer.surface)
+      || !(answer.report === null || typeof answer.report === "string")
+      || !Array.isArray(answer.evidencePaths) || !answer.evidencePaths.every((path) => typeof path === "string")
+      || !Array.isArray(answer.gaps) || !answer.gaps.every((gap) => typeof gap === "string")
+      || typeof answer.summary !== "string") continue;
+    return answer;
+  }
+  return undefined;
+}
+
 function toolResult(result) {
   if (result?.structuredContent) return result.structuredContent;
   const block = result?.content?.find((item) => item.type === "text");
