@@ -89,6 +89,7 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   check(productRuns.every((run) => run.steps.some((step) => step.beforeSnapshot?.metadata?.adapter === (expected.surface ?? "web")
     || step.afterSnapshot?.metadata?.adapter === (expected.surface ?? "web"))), "run-surface-changed");
   check(productRuns.every((run) => run.assertions.some((assertion) => assertion.passed)), "positive-page-proof-missing");
+  const linkedBusinessEvidence = new Map();
   if (expected.level !== "quick") {
     check(productRuns.every((run) => run.oracles.some((oracle) => (oracle.sourceEvidenceCount ?? 0) > 0)), "independent-business-proof-missing");
     for (const run of productRuns) {
@@ -111,15 +112,18 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
           let source;
           try { source = JSON.parse(bytes.toString("utf8")); } catch { continue; }
           if (source.oracle !== oracle.name || !Array.isArray(source.facts)) continue;
-          if (source.facts.some((fact) => fact.captured?.fileId === response.fields.fileId
-            && fact.captured?.jobId === response.fields.jobId && fact.observed?.fileId === response.fields.fileId)) {
-            matchedSource = true;
-          }
-          if (expected.noReader && source.facts.some((fact) => fact.observations?.some((observation) =>
+          const matchesRegistered = source.facts.some((fact) => fact.captured?.fileId === response.fields.fileId
+            && fact.captured?.jobId === response.fields.jobId && fact.observed?.fileId === response.fields.fileId
+            && fact.observed?.jobId === (expected.wrongRelation ? "9" : response.fields.jobId));
+          const matchesInline = expected.noReader && source.facts.some((fact) => fact.observations?.some((observation) =>
             observation.facts?.expected_fileId === response.fields.fileId
             && observation.facts?.observed_fileId === (expected.wrongIdentity ? "101" : response.fields.fileId)
             && observation.facts?.scopeMatches === !expected.wrongIdentity
-            && observation.state === (expected.wrongIdentity ? "failed" : "passed")))) matchedSource = true;
+            && observation.state === (expected.wrongIdentity ? "failed" : "passed")));
+          if ((matchesRegistered || matchesInline) && (expected.verdict !== "failed" || oracle.passed === false)) {
+            matchedSource = true;
+            linkedBusinessEvidence.set(sourcePath, sourceRef.sha256);
+          }
         }
       }
       check(matchedSource, "oracle-not-bound-to-current-action");
@@ -127,7 +131,8 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   }
   if (expected.verdict === "failed") {
     check(mission?.findings.some((finding) => finding.category === "product" && finding.status === "confirmed"
-      && finding.evidence.some((item) => item.kind === "business")), "seeded-defect-not-evidenced");
+      && finding.evidence.some((item) => item.kind === "business"
+        && linkedBusinessEvidence.get(item.path) === item.sha256)), "seeded-defect-not-evidenced");
   }
   if (expected.verdict === "inconclusive") check(answer.gaps.length > 0, "incomplete-business-state-not-explained");
   const refs = observed?.evidence ?? [];

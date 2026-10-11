@@ -18,17 +18,19 @@ async function fixture(t, verdict = "passed") {
   await writeFile(report, "<html>Saved mission result</html>");
   const mission = { missionId: "mission-1", surface: "web", level: "core", status: "completed", verdict,
     plan: { planning: { coverage: { requested: "declared" } } },
-    findings: verdict === "failed" ? [{ category: "product", status: "confirmed", evidence: [{ kind: "business", path: evidencePath }] }] : [] };
+    findings: verdict === "failed" ? [{ category: "product", status: "confirmed",
+      evidence: [{ kind: "business", path: evidencePath, sha256: hash(facts) }] }] : [] };
   const result = { report, summary: { verdict }, evidence: [{ kind: "business", path: evidencePath, sha256: hash(facts) }] };
   const call = (tool, arguments_, result_) => ({ tool, arguments: arguments_, result: result_, status: "completed" });
-  return { workspace, expected: { verdict, level: "core", coverage: "declared" },
+  return { workspace, expected: { verdict, level: "core", coverage: "declared", wrongRelation: verdict === "failed" },
     answer: { missionId: mission.missionId, verdict, level: "core", coverage: "declared", surface: "web", report, evidencePaths: [evidencePath], gaps: verdict === "inconclusive" ? ["Terminal state unavailable"] : [] },
     calls: [call("inspect_test_scope", {}, {}), call("run_test", { level: "core", coverage: "declared", surface: "web" }, { missionId: mission.missionId }),
       call("get_mission_status", { missionId: mission.missionId }, { mission }), call("get_mission_evidence", { missionId: mission.missionId }, result)],
     missions: [mission], runs: [{ runId: "run-1", verdict, steps: [{ beforeSnapshot: { metadata: { adapter: "web" } } },
       { action: { kind: "captureResponse" }, status: "passed", response: { association: "action-window", requestCount: 1,
         fields: { fileId: "102", jobId: "7" } } }],
-      assertions: [{ passed: true }], oracles: [{ name: "resume.terminal", sourceEvidenceCount: 1,
+      assertions: [{ passed: true }], oracles: [{ name: "resume.terminal", passed: verdict === "failed" ? false : verdict === "passed" ? true : null,
+        sourceEvidenceCount: 1,
         sourceEvidenceArtifacts: [sourceArtifact] }] }], sourceUnchanged: true, workspaceContractsUnchanged: true };
 }
 async function rejects(input, issue) {
@@ -91,6 +93,30 @@ test("rejects missing independent proof and product failure without business fac
   const input = await fixture(t, "failed"); input.runs[0].oracles = []; input.missions[0].findings[0].evidence = [];
   await rejects(input, "independent-business-proof-missing"); await rejects(input, "seeded-defect-not-evidenced");
 });
+test("a confirmed defect must link the current action's audited business source", async (t) => {
+  const input = await fixture(t, "failed");
+  input.missions[0].findings[0].evidence[0].sha256 = hash("unrelated source");
+  await rejects(input, "seeded-defect-not-evidenced");
+  input.missions[0].findings[0].evidence[0].sha256 = input.calls[3].result.evidence[0].sha256;
+  input.missions[0].findings[0].evidence[0].path = join(input.workspace, "another-run", "oracle-source.json");
+  await rejects(input, "seeded-defect-not-evidenced");
+});
+test("a seeded wrong-job defect needs the actual mismatched job fact", async (t) => {
+  const input = await fixture(t, "failed");
+  const facts = JSON.stringify({ oracle: "resume.terminal", facts: [{ captured: { fileId: "102", jobId: "7" },
+    observed: { fileId: "102", jobId: "7", state: "complete" } }] });
+  await writeFile(input.answer.evidencePaths[0], facts);
+  input.calls[3].result.evidence[0].sha256 = hash(facts);
+  input.missions[0].findings[0].evidence[0].sha256 = hash(facts);
+  await rejects(input, "oracle-not-bound-to-current-action");
+  await rejects(input, "seeded-defect-not-evidenced");
+});
+test("a seeded business defect cannot be credited to a passing Oracle", async (t) => {
+  const input = await fixture(t, "failed");
+  input.runs[0].oracles[0].passed = true;
+  await rejects(input, "oracle-not-bound-to-current-action");
+  await rejects(input, "seeded-defect-not-evidenced");
+});
 test("requires a newly captured identity bound to the independent reader", async (t) => {
   const input = await fixture(t);
   input.runs[0].steps[1].response.fields.fileId = "101";
@@ -150,6 +176,7 @@ test("requires a submitted response-bound reader and current identity in its ind
     }] }] });
     await writeFile(input.answer.evidencePaths[0], facts);
     input.calls[3].result.evidence[0].sha256 = hash(facts);
+    if (wrongIdentity) input.missions[0].findings[0].evidence[0].sha256 = hash(facts);
     assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
     delete input.calls[1].arguments.charter.httpOracles;
     await rejects(input, "response-bound-inline-oracle-not-submitted");

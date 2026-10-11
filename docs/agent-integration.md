@@ -124,7 +124,10 @@ node tests/host-evaluation.mjs --run --implicit-skill --cases inline-core-pass,i
 # Unregistered external Charter: discover, review, then run with its path and SHA-256:
 node tests/host-evaluation-baseline.mjs --cases candidate-core
 node tests/host-evaluation.mjs --run --implicit-skill --cases candidate-core
-# Set PROOFKIT_ELECTRON_PATH before the optional desktop cases:
+# Set PROOFKIT_ELECTRON_PATH before cases containing Electron.
+# Seed a wrong job relation behind a successful UI submission, on Web and Electron:
+node tests/host-evaluation-baseline.mjs --cases candidate-core-defect,candidate-electron-defect
+node tests/host-evaluation.mjs --run --implicit-skill --cases candidate-core-defect,candidate-electron-defect
 node tests/host-evaluation.mjs --run --implicit-skill --cases inline-electron-pass,inline-electron-defect
 ```
 
@@ -160,6 +163,15 @@ extra `sideEffectPolicy` argument in the next. After the Skill and MCP tool
 descriptions stated both constraints, a third run used one successful
 `run_test` call with the candidate path and digest. This is one synthetic
 scenario, not a measured cross-project success rate.
+The optional `candidate-core-defect` and `candidate-electron-defect` cases
+seed a wrong job relation while the page reports a successful submission.
+The scripted baseline and an initial real Codex host run passed 2/2; each
+real case used one successful path-based `run_test` call. A stricter verifier
+then required the confirmed product Finding to reference the current Run's
+digest-checked business source. The Web re-run passed within 240 seconds; the
+Electron host completed its Mission but timed out before its final answer at
+240 seconds, then passed a separate 360-second run in 88 seconds. Host latency
+is variable, so the timed-out attempt remains an incomplete evaluation.
 In the scripted baseline, `core-pass` omits `surface` to check the ordinary Web fallback. The optional `electron-core-pass` also omits it, checking desktop intent selection through the full MCP and Electron path when an Electron executable is provided.
 The `run_test` start receipt returns the selected `surface` and full `executionProfile.surfaceMatrix`, so the host can inspect the saved execution target even when it omitted the input platform.
 
