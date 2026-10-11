@@ -61,7 +61,7 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 - Inspect Windows and Linux loopback listeners before Web/Electron actions and block an evidenced different Git checkout by default. Retain matching or unverified process-path status in Run/Mission evidence without claiming served-byte attestation. The Linux `/proc` socket-inode path passed a privileged Ubuntu runner smoke; ordinary-user process access still needs broader host validation.
 - Run an integration preflight before project setup, adapter connection or write capabilities. A failed preflight is `blocked` with a sanitized `preflight.json` artifact.
 - Resolve `fill` environment references only at action execution, retain names rather than values in Mission/Run evidence, and block missing variables before adapter connection. Literal fixture values remain an explicit persisted input.
-- Persist task attempts and recover interrupted read-only tasks; block interrupted side-effecting tasks for review instead of replaying them blindly.
+- Persist task attempts and recover interrupted read-only tasks only when their recorded tool recovery key still matches; block side-effecting, unversioned or changed tools for review.
 - Claim an OS-owned per-Mission execution endpoint before approval or recovery, join a live owner from another CLI/MCP process, route remote cancellation, and release ownership automatically on process exit.
 - Claim OS-owned exclusive Run leases for the external test workspace and configured CDP/WebDriver attachment target before setup and surface attachment. Electron port-file attachments lease an existing resolved endpoint before setup, reacquire the final endpoint after setup when it changes, and pin the adapter to it. Block a concurrent Run with saved evidence, and retain leases until normal or late cleanup settles. This serializes Runs that share one workspace or explicit target on a host, including different port files resolving to one endpoint; shared business accounts/backends and cross-host use require their own isolation policy.
 - Never let a rejected Mission promise leave a durable mission in an unexplained running state.
@@ -121,12 +121,15 @@ the saved deadline, so a host can keep waiting through cancellation cleanup
 without restarting the Mission or treating progress as a product verdict.
 Forced-exit cross-process regressions now verify that the persisted deadline
 does not restart and the crashed attempt still consumes the Mission step
-budget. Each started ToolCall also records its side-effect declaration;
-automatic recovery requires that declaration, tool name, Charter ID and input
-to match the current registration and task. A legacy receipt without the
-declaration or a crashed write attempt whose replacement tool claims to be
-read-only remains blocked. This prevents a changed registration from making
-an old write attempt replayable; it does not attest to unchanged tool code.
+budget. Each started ToolCall also records its side-effect declaration and an
+optional recovery key. Automatic recovery requires both values, tool name,
+Charter ID and input to match the current registration and task. Local Runner
+hashes its source/workspace binding, effective configuration, evidence path,
+connector name/version and execution restrictions into a versioned key.
+Unversioned or directly injected operations omit it. A legacy receipt, changed
+key or crashed write attempt whose replacement claims to be read-only remains
+blocked. Connector authors must advance versions when behavior or imported code
+changes; the declared key does not attest to unchanged tool code.
 
 ## Phase 2: measurable AI planning
 

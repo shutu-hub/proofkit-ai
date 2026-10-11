@@ -386,7 +386,9 @@ resources may still be active; a cleanup handle returned later triggers a
 best-effort asynchronous release. The report does not claim that late cleanup
 has finished.
 
-Every task is persisted as `running` before its tool starts and receives a `started` ToolCall with an attempt number and the tool's side-effect declaration at that moment. After a process crash, automatic retry requires exactly one matching started receipt for the current attempt. Its tool name, side-effect class, Charter ID and input must match the current task and registration, and the Charter or negative case must still forbid writes. A missing legacy declaration, changed registration, changed input, exhausted attempt limit or potentially writing task is `blocked` for review. This records the declared operation class; it cannot prove that trusted tool code itself is pure or unchanged.
+Every task is persisted as `running` before its tool starts and receives a `started` ToolCall with an attempt number, the tool's side-effect declaration and an optional recovery key. After a process crash, automatic retry requires exactly one matching started receipt for the current attempt. Its tool name, side-effect class, recovery key, Charter ID and input must match the current task and registration, and the Charter or negative case must still forbid writes. A missing legacy declaration/key, changed registration, changed input, exhausted attempt limit or potentially writing task is `blocked` for review. Custom `MissionTool` implementations must supply and maintain a recovery key to opt into automatic retry. The key is a declared compatibility contract; it cannot prove that trusted tool code itself is pure or unchanged.
+
+The built-in Local Runner uses a versioned SHA-256 key over its source/workspace binding, effective test configuration, evidence directory, connector name/version and execution restrictions. It omits the key for unversioned connectors or directly injected operations whose implementation has no portable version. A changed configuration or connector version therefore blocks retry of an interrupted task. Connector authors must advance their version when behavior or imported code changes; Git source fingerprints and runtime target checks remain separate evidence, and this key is not code signing.
 
 `surface.run-charter` and `surface.replay-charter` call `LocalRunnerService.start()`, `wait()` and `replay()`, which in turn reuse the existing `ExecutionRunner`; the Agent does not create a second browser or Electron engine. Primary and replay observations include the surface and source run ID, so the verifier can distinguish a real cross-surface matrix from duplicate evidence. This keeps natural-language use and deterministic CLI/CI use on one lifecycle and one evidence format.
 
@@ -411,7 +413,7 @@ The mission protocol keeps five related records with separate responsibilities:
 | Record | Meaning | Typical contents |
 | --- | --- | --- |
 | `AgentStep` | The agent's decision and control-loop lifecycle | selected task, decision, phase, status, linked tool/observation/evidence IDs |
-| `ToolCall` | The concrete registered tool invocation | tool name, declared side-effect class, validated input, attempt, execution status, timing and error |
+| `ToolCall` | The concrete registered tool invocation | tool name, declared side-effect class, recovery key, validated input, attempt, execution status, timing and error |
 | `Observation` | A typed fact observed during planning or execution | project map, surface run summary, business state or runtime event |
 | `Evidence` | A reviewable artifact or reference | snapshot, screenshot, report, business response or event log |
 | `Finding` | A classified outcome that needs attention | severity, category, confidence status and linked evidence |

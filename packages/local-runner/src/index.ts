@@ -167,6 +167,7 @@ export class LocalRunnerService {
   private readonly capabilities: CapabilityDefinition<any, any>[];
   private readonly allowCapabilityWrites: boolean;
   private readonly plannerProvider?: PlannerProvider;
+  private readonly missionRecoveryKey?: string;
   private readonly missionAgent: MissionAgent;
   private readonly missionRecords = new Map<string, MissionRecord>();
   private readonly missionStarts = new Map<string, Promise<MissionStatus>>();
@@ -187,6 +188,17 @@ export class LocalRunnerService {
     this.capabilities = [...(this.integration?.capabilities ?? []), ...(options.capabilities ?? [])];
     this.allowCapabilityWrites = options.allowCapabilityWrites ?? false;
     this.plannerProvider = options.plannerProvider;
+    // Direct injected operations have no portable implementation version. A
+    // workspace connector must declare one before its interrupted tasks can
+    // be retried in a new process.
+    const versionedIntegration = !this.integration || (typeof this.integration.version === "string" && this.integration.version.trim().length > 0);
+    if (versionedIntegration && !options.oracles?.length && !options.capabilities?.length) {
+      this.missionRecoveryKey = `local-runner-v1:${sha256(JSON.stringify({
+        projectRoot: this.root, workspaceRoot: this.workspaceRoot, evidenceDir: this.evidenceDir,
+        config: this.config, integration: this.integration ? { name: this.integration.name, version: this.integration.version } : null,
+        restrictWebOrigins: this.restrictWebOrigins, allowCapabilityWrites: this.allowCapabilityWrites,
+      }))}`;
+    }
     this.missionAgent = new MissionAgent({
       store: new ProjectMissionStore(context),
       tools: new InMemoryMissionToolRegistry(this.createMissionTools()),
@@ -1191,7 +1203,7 @@ export class LocalRunnerService {
       });
       return { ...result, observations: [...(result.observations ?? []), observation] };
     };
-    return [
+    const tools: MissionTool[] = [
       { name: "project.discover", description: "Inspect the local project without modifying it.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
       { name: "surface.inspect", description: "Inspect the configured Web or Electron surface without declaring a product verdict.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: 40_000, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({}), execute: inspect },
       { name: "surface.run-charter", description: "Run a validated charter through the existing deterministic runner and collect evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ charter: TestCharterSchema.optional(), charterId: z.string().optional(), adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runCharter },
@@ -1199,6 +1211,7 @@ export class LocalRunnerService {
       { name: "surface.run-negative-charter", description: "Run an explicitly declared negative or recovery Charter and collect independent evidence.", sideEffect: "read", environments: ["test", "staging", "local"], timeoutMs: this.config.run.timeoutMs, cancellationGraceMs: SURFACE_CANCELLATION_GRACE_MS, inputSchema: z.object({ charterId: z.string().optional(), negativeCase: NegativeCaseSchema, adapter: z.enum(["web", "electron", "mobile"]).optional() }), execute: runNegativeCharter },
       { name: "mission.verify", description: "Verify the terminal verdict and evidence completeness of the preceding run.", sideEffect: "none", environments: ["test", "staging", "local"], timeoutMs: 30_000, inputSchema: z.object({}), execute: verify },
     ];
+    return tools.map((tool) => ({ ...tool, recoveryKey: this.missionRecoveryKey }));
   }
 
   private runEvidence(summary: RunSummary): EvidenceRef[] {

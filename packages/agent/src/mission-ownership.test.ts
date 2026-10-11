@@ -22,7 +22,7 @@ afterEach(async () => {
 
 function registry(discover = vi.fn(async () => ({}))) {
   return { discover, tools: new InMemoryMissionToolRegistry([
-    { name: "project.discover", description: "discover", sideEffect: "none" as const, environments: ["test" as const], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
+    { name: "project.discover", description: "discover", sideEffect: "none" as const, recoveryKey: "fixture-discover-v1", environments: ["test" as const], timeoutMs: 30_000, inputSchema: z.object({}), execute: discover },
     { name: "surface.run-charter", description: "run", sideEffect: "read" as const, environments: ["test" as const], timeoutMs: 30_000, inputSchema: z.object({}).passthrough(), execute: async () => ({ verdict: "passed" as const }) },
     { name: "mission.verify", description: "verify", sideEffect: "none" as const, environments: ["test" as const], timeoutMs: 30_000, inputSchema: z.object({}), execute: async () => ({ verdict: "passed" as const }) },
   ]) };
@@ -41,14 +41,14 @@ async function fixture(policy: { maxSteps?: number; timeoutMs?: number; sideEffe
   return { root, store, agent, mission, parent };
 }
 
-function startChild(root: string, missionId: string, discoverSideEffect: "none" | "write" = "none"): ChildProcessWithoutNullStreams {
+function startChild(root: string, missionId: string, discoverSideEffect: "none" | "write" = "none", recoveryKey = "fixture-discover-v1"): ChildProcessWithoutNullStreams {
   const moduleUrl = pathToFileURL(join(process.cwd(), "dist", "index.js")).href;
   const script = `
     import { MissionAgent, JsonMissionStore, InMemoryMissionToolRegistry } from ${JSON.stringify(moduleUrl)};
     import { z } from "zod";
     const [root, missionId] = process.argv.slice(1);
     const tools = new InMemoryMissionToolRegistry([
-      { name: "project.discover", description: "wait", sideEffect: ${JSON.stringify(discoverSideEffect)}, environments: ["test"], timeoutMs: 30000, inputSchema: z.object({}), execute: async (_input, { signal }) => {
+      { name: "project.discover", description: "wait", sideEffect: ${JSON.stringify(discoverSideEffect)}, recoveryKey: ${JSON.stringify(recoveryKey)}, environments: ["test"], timeoutMs: 30000, inputSchema: z.object({}), execute: async (_input, { signal }) => {
         process.stdout.write("TOOL_RUNNING\\n");
         await new Promise((resolve, reject) => {
           if (signal.aborted) return reject(signal.reason);
@@ -142,6 +142,22 @@ describe("cross-process Mission ownership", () => {
     expect(final.status).toBe("blocked");
     expect(final.verdict).toBe("blocked");
     expect(final.toolCalls[0]).toMatchObject({ status: "cancelled", sideEffect: "write" });
+    expect(final.findings).toEqual(expect.arrayContaining([expect.objectContaining({
+      title: "Interrupted task requires review: reconnaissance",
+    })]));
+    expect(state.parent.discover).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it("refuses a crashed read attempt after the tool recovery contract changes", async () => {
+    const state = await fixture();
+    const child = startChild(state.root, state.mission.missionId, "none", "fixture-discover-v0");
+    await outputContains(child, "TOOL_RUNNING");
+    child.kill();
+    await exited(child);
+
+    const final = await state.agent.run(state.mission.missionId);
+    expect(final.status).toBe("blocked");
+    expect(final.toolCalls[0]).toMatchObject({ status: "cancelled", recoveryKey: "fixture-discover-v0" });
     expect(final.findings).toEqual(expect.arrayContaining([expect.objectContaining({
       title: "Interrupted task requires review: reconnaissance",
     })]));

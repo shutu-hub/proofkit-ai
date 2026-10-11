@@ -1127,6 +1127,8 @@ export const ToolCallSchema = z.object({
   tool: z.string().min(1),
   /** The declaration in force when this attempt started; absent on legacy receipts. */
   sideEffect: z.enum(["none", "read", "write"]).optional(),
+  /** Opaque tool/version/context identity required for automatic crash retry. */
+  recoveryKey: z.string().min(1).max(128).optional(),
   attempt: z.number().int().positive().default(1),
   input: z.record(z.string(), z.unknown()).default({}),
   status: z.enum(["started", "succeeded", "failed", "blocked", "cancelled"]),

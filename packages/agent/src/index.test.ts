@@ -165,7 +165,7 @@ describe("MissionAgent", () => {
     const store = new JsonMissionStore(root);
     const calls: string[] = [];
     const tools = new InMemoryMissionToolRegistry([
-      { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000,
+      { name: "project.discover", description: "discover", sideEffect: "none", recoveryKey: "fixture-discover-v1", environments: ["test"], timeoutMs: 1000,
         inputSchema: z.object({}), execute: async () => { calls.push("discover"); return {}; } },
       { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000,
         inputSchema: z.object({}).passthrough(), execute: async () => { calls.push("run"); return { verdict: "passed" as const }; } },
@@ -204,7 +204,7 @@ describe("MissionAgent", () => {
     await store.save({ ...interrupted, status: "running", currentTaskId: "reconnaissance",
       executionStartedAt: previousStart, executionDeadlineAt: previousDeadline,
       plan: { ...interrupted.plan, graph: { ...interrupted.plan.graph, tasks: runningTask } },
-      toolCalls: [{ toolCallId: "stale-read", taskId: "reconnaissance", tool: "project.discover", sideEffect: "none", attempt: 1,
+      toolCalls: [{ toolCallId: "stale-read", taskId: "reconnaissance", tool: "project.discover", sideEffect: "none", recoveryKey: "fixture-discover-v1", attempt: 1,
         input: {}, status: "started", startedAt: previousStart, evidence: [] }] });
     const interruptedResult = await agent.run(interrupted.missionId);
     expect(interruptedResult.verdict).toBe("cancelled");
@@ -452,7 +452,7 @@ describe("MissionAgent", () => {
     const store = new JsonMissionStore(root);
     const calls: string[] = [];
     const tools = new InMemoryMissionToolRegistry([
-      { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => { calls.push("discover"); return {}; } },
+      { name: "project.discover", description: "discover", sideEffect: "none", recoveryKey: "fixture-discover-v1", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => { calls.push("discover"); return {}; } },
       { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}).passthrough(), execute: async () => { calls.push("run"); return { verdict: "passed" as const }; } },
       { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => { calls.push("verify"); return { verdict: "passed" as const }; } },
     ]);
@@ -469,6 +469,7 @@ describe("MissionAgent", () => {
       taskId: "reconnaissance",
       tool: "project.discover",
       sideEffect: "none",
+      recoveryKey: "fixture-discover-v1",
       attempt: 1,
       input: {},
       status: "started",
@@ -490,12 +491,15 @@ describe("MissionAgent", () => {
     expect(result.agentSteps.find((step) => step.taskId === "reconnaissance" && step.status === "succeeded")?.phase).toBe("recover");
   });
 
-  it("does not infer safe replay from a legacy receipt without its original side-effect declaration", async () => {
+  it.each([
+    ["side-effect declaration", { recoveryKey: "fixture-discover-v1" }],
+    ["recovery key", { sideEffect: "none" }],
+  ] as const)("does not infer safe replay from a legacy receipt without its %s", async (_label, recorded) => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-legacy-recovery-"));
     const store = new JsonMissionStore(root);
     let calls = 0;
     const tools = new InMemoryMissionToolRegistry([{ name: "project.discover", description: "discover",
-      sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}),
+      sideEffect: "none", recoveryKey: "fixture-discover-v1", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}),
       execute: async () => { calls++; return {}; } }]);
     const agent = new MissionAgent({ store, tools });
     const created = await agent.create({ intent: "recover legacy mission", projectRoot: root, surface: "web",
@@ -506,7 +510,7 @@ describe("MissionAgent", () => {
     interrupted.plan.graph.tasks = interrupted.plan.graph.tasks.map((task) => task.taskId === "reconnaissance"
       ? { ...task, status: "running" as const, attempts: 1, maxAttempts: 2 } : task);
     interrupted.toolCalls = [{ toolCallId: "legacy-start", taskId: "reconnaissance", tool: "project.discover",
-      attempt: 1, input: {}, status: "started", evidence: [], startedAt: new Date().toISOString() }];
+      ...recorded, attempt: 1, input: {}, status: "started", evidence: [], startedAt: new Date().toISOString() }];
     await store.save(interrupted);
 
     const result = await agent.run(created.missionId);
@@ -520,7 +524,7 @@ describe("MissionAgent", () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-mission-recovery-write-"));
     const store = new JsonMissionStore(root);
     const tools = new InMemoryMissionToolRegistry([
-      { name: "write.operation", description: "write", sideEffect: "write", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({ verdict: "passed" as const }) },
+      { name: "write.operation", description: "write", sideEffect: "write", recoveryKey: "fixture-write-v1", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({ verdict: "passed" as const }) },
       { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}).passthrough(), execute: async () => ({ verdict: "passed" as const }) },
       { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({ verdict: "passed" as const }) },
     ]);
@@ -533,7 +537,7 @@ describe("MissionAgent", () => {
       ? { ...task, tool: "write.operation", status: "running" as const, attempts: 1, maxAttempts: 2 }
       : task);
     interrupted.toolCalls = [{ toolCallId: "tool-stale-write", taskId: "reconnaissance", tool: "write.operation",
-      sideEffect: "write", attempt: 1, input: {}, status: "started", evidence: [], startedAt: new Date().toISOString() }];
+      sideEffect: "write", recoveryKey: "fixture-write-v1", attempt: 1, input: {}, status: "started", evidence: [], startedAt: new Date().toISOString() }];
     await store.save(interrupted);
 
     const result = await agent.run(created.missionId);
@@ -554,6 +558,7 @@ describe("MissionAgent", () => {
         name: "surface.run-negative-charter",
         description: "negative run",
         sideEffect: "read",
+        recoveryKey: "fixture-negative-v1",
         environments: ["test"],
         timeoutMs: 1000,
         inputSchema: z.object({}).passthrough(),
@@ -603,7 +608,7 @@ describe("MissionAgent", () => {
       : { ...task, status: "passed" as const, attempts: 1 });
     const negativeTask = interrupted.plan.graph.tasks.find((task) => task.taskId === "negative-duplicate-upload")!;
     interrupted.toolCalls = [{ toolCallId: "negative-start", taskId: negativeTask.taskId, tool: negativeTask.tool,
-      charterId: negativeTask.charterId, sideEffect: "read", attempt: 1, input: negativeTask.input,
+      charterId: negativeTask.charterId, sideEffect: "read", recoveryKey: "fixture-negative-v1", attempt: 1, input: negativeTask.input,
       status: "started", evidence: [], startedAt: new Date().toISOString() }];
     await store.save(interrupted);
 
@@ -621,7 +626,7 @@ describe("MissionAgent", () => {
     const calls: string[] = [];
     const tools = new InMemoryMissionToolRegistry([
       { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({}) },
-      { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}).passthrough(), execute: async (_input, context) => { calls.push(context.task.taskId); return { verdict: "passed" as const }; } },
+      { name: "surface.run-charter", description: "run", sideEffect: "read", recoveryKey: "fixture-surface-v1", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}).passthrough(), execute: async (_input, context) => { calls.push(context.task.taskId); return { verdict: "passed" as const }; } },
       { name: "surface.replay-charter", description: "replay", sideEffect: "read", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}).passthrough(), execute: async () => ({ verdict: "passed" as const }) },
       { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => ({ verdict: "passed" as const }) },
     ]);
@@ -644,7 +649,7 @@ describe("MissionAgent", () => {
       : task.taskId === "reconnaissance" ? { ...task, status: "passed" as const, attempts: 1 } : task);
     const safeTask = safeInterrupted.plan.graph.tasks.find((task) => task.taskId === "execute-safe-web")!;
     safeInterrupted.toolCalls = [{ toolCallId: "safe-start", taskId: safeTask.taskId, tool: safeTask.tool,
-      charterId: safeTask.charterId, sideEffect: "read", attempt: 1, input: safeTask.input,
+      charterId: safeTask.charterId, sideEffect: "read", recoveryKey: "fixture-surface-v1", attempt: 1, input: safeTask.input,
       status: "started", evidence: [], startedAt: new Date().toISOString() }];
     await store.save(safeInterrupted);
     const recovered = await agent.run(safeMission.missionId);
@@ -663,7 +668,7 @@ describe("MissionAgent", () => {
       : task.taskId === "reconnaissance" ? { ...task, status: "passed" as const, attempts: 1 } : task);
     const writeTask = writeInterrupted.plan.graph.tasks.find((task) => task.taskId === "execute-write-web")!;
     writeInterrupted.toolCalls = [{ toolCallId: "write-start", taskId: writeTask.taskId, tool: writeTask.tool,
-      charterId: writeTask.charterId, sideEffect: "read", attempt: 1, input: writeTask.input,
+      charterId: writeTask.charterId, sideEffect: "read", recoveryKey: "fixture-surface-v1", attempt: 1, input: writeTask.input,
       status: "started", evidence: [], startedAt: new Date().toISOString() }];
     await store.save(writeInterrupted);
     const blocked = await agent.run(writeMission.missionId);

@@ -102,8 +102,11 @@ report was generated. Follow the returned next actions; do not approve an
 evidence-deficient Mission.
 Cancel with cancel_mission if the user requests a stop. Do not repeat a write
 scenario blindly after interruption; inspect saved status and resources first.
-An interrupted task without its original tool side-effect receipt, or whose
-tool declaration changed across restart, requires review before any retry.
+An interrupted task without its original tool side-effect receipt and recovery
+key, or whose declaration/key changed across restart, requires review before
+any retry. A connector recovery key depends on its declared version and test
+context; it cannot prove unchanged code. Review the connector and affected
+resources before choosing any new run.
 inspect_run_resources is observational; recover_run_resources requires a
 recoverable orphan, the original connector and existing write authorization.
 Resource recovery does not change the original product verdict.

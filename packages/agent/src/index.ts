@@ -61,6 +61,8 @@ export type MissionTool<Input = unknown> = {
   name: string;
   description: string;
   sideEffect: "none" | "read" | "write";
+  /** Stable only while this tool's implementation and execution context are compatible for crash retry. */
+  recoveryKey?: string;
   environments: Array<MissionPolicy["environment"]>;
   timeoutMs: number;
   /** Time allowed for an aborted tool to close resources and return evidence. */
@@ -668,7 +670,7 @@ export class MissionAgent {
         ? `Mission tool ${task.tool} is no longer registered; the interrupted task cannot be resumed safely.`
         : task.attempts >= task.maxAttempts
           ? `Task ${task.taskId} already used all ${task.maxAttempts} allowed attempts before the process stopped.`
-          : `Task ${task.taskId} may have produced a side effect or lacks an unchanged, recorded safe tool invocation; automatic recovery is disabled and requires review.`;
+          : `Task ${task.taskId} may have produced a side effect or lacks an unchanged tool recovery key and safe invocation receipt; automatic recovery is disabled and requires review.`;
       const blockedTask = { ...task, status: "blocked" as const, error: reason };
       recovered = updateTask(recovered, blockedTask, { currentTaskId: recovered.currentTaskId === task.taskId ? undefined : recovered.currentTaskId });
       recovered = {
@@ -702,6 +704,7 @@ export class MissionAgent {
       charterId: task.charterId,
       tool: tool?.name ?? task.tool,
       sideEffect: tool?.sideEffect,
+      recoveryKey: tool?.recoveryKey,
       attempt: runningTask.attempts,
       input: task.input,
       status: "started",
@@ -750,7 +753,7 @@ export class MissionAgent {
       }
       const output = tool.outputSchema ? tool.outputSchema.parse(result.output) : result.output;
       const finishedAt = new Date().toISOString();
-      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, charterId: task.charterId, tool: tool.name, sideEffect: tool.sideEffect, attempt: runningTask.attempts, input: task.input, status: "succeeded", startedAt, endedAt: finishedAt, durationMs: Date.now() - Date.parse(startedAt), evidence: result.evidence ?? [] });
+      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, charterId: task.charterId, tool: tool.name, sideEffect: tool.sideEffect, recoveryKey: tool.recoveryKey, attempt: runningTask.attempts, input: task.input, status: "succeeded", startedAt, endedAt: finishedAt, durationMs: Date.now() - Date.parse(startedAt), evidence: result.evidence ?? [] });
       const failedVerdict = result.verdict === "failed" || result.verdict === "blocked" || result.verdict === "cancelled";
       const stepStatus = result.verdict === "blocked"
         ? "blocked"
@@ -799,7 +802,7 @@ export class MissionAgent {
           : toolTimedOut ? `Mission tool ${tool.name} timed out.`
             : `Mission tool ${tool.name} failed without a verified result; inspect trusted local diagnostics.`;
       const detail = cleanupUnsettled ? `${safeError} Tool cleanup did not finish; resources may still be active.` : safeError;
-      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, charterId: task.charterId, tool: tool.name, sideEffect: tool.sideEffect, attempt: runningTask.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: detail, evidence: cancelledResult?.evidence ?? [] });
+      const call = ToolCallSchema.parse({ toolCallId, taskId: task.taskId, charterId: task.charterId, tool: tool.name, sideEffect: tool.sideEffect, recoveryKey: tool.recoveryKey, attempt: runningTask.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error: detail, evidence: cancelledResult?.evidence ?? [] });
       const agentStep = completeAgentStep(startedMission.agentSteps, agentStepId, {
         status,
         endedAt: new Date().toISOString(),
@@ -863,8 +866,10 @@ function failTask(mission: TestMission, taskId: string, toolCallId: string, agen
   const task = mission.plan.graph.tasks.find((candidate) => candidate.taskId === taskId);
   if (!task) throw new Error(`Task not found: ${taskId}`);
   const nextTask = { ...task, status, error } as TaskNode;
-  const sideEffect = mission.toolCalls.find((candidate) => candidate.toolCallId === toolCallId)?.sideEffect;
-  const call = ToolCallSchema.parse({ toolCallId, taskId, charterId: task.charterId, tool: task.tool, sideEffect, attempt: task.attempts, input: task.input, status, startedAt, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error });
+  const startedCall = mission.toolCalls.find((candidate) => candidate.toolCallId === toolCallId);
+  const call = ToolCallSchema.parse({ toolCallId, taskId, charterId: task.charterId, tool: task.tool, sideEffect: startedCall?.sideEffect,
+    recoveryKey: startedCall?.recoveryKey, attempt: task.attempts, input: task.input, status, startedAt,
+    endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error });
   const agentStep = completeAgentStep(mission.agentSteps, agentStepId, { status, endedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt), error });
   return { ...updateTask(mission, nextTask, { currentTaskId: undefined }), status: status === "blocked" ? "blocked" : "failed", verdict: status === "blocked" ? "blocked" : "failed", agentSteps: replaceAgentStep(mission.agentSteps, agentStep), toolCalls: replaceToolCall(mission.toolCalls, call), findings: [...mission.findings, finding(`task-${taskId}`, status === "blocked" ? "high" : "medium", status === "blocked" ? "environment" : "product", `Task ${taskId} did not complete`, error)] };
 }
@@ -931,7 +936,8 @@ function isSafeToRecover(mission: TestMission, task: TaskNode, tool: MissionTool
   const receipt = receipts[0]!;
   // A changed registration, missing legacy declaration or changed task input
   // cannot establish that replaying the interrupted attempt is side-effect-free.
-  if (receipt.sideEffect !== tool.sideEffect || receipt.tool !== task.tool
+  if (!tool.recoveryKey || receipt.recoveryKey !== tool.recoveryKey
+    || receipt.sideEffect !== tool.sideEffect || receipt.tool !== task.tool
     || receipt.charterId !== task.charterId || !isDeepStrictEqual(receipt.input, task.input)) return false;
   const charterId = task.charterId ?? (typeof task.input.charterId === "string" ? task.input.charterId : undefined);
   const charter = mission.suite
