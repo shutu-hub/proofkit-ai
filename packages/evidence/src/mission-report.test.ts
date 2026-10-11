@@ -58,6 +58,28 @@ describe("Mission report", () => {
       testVerdictReason: expect.stringContaining("reviewed source scope") });
   });
 
+  it("labels an audited project pass as the reviewed source workflow scope", async () => {
+    const workspace = await root();
+    const path = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "business.json"));
+    const evidence = ref(path, createHash("sha256").update("fact").digest("hex"));
+    const input = result(workspace, [evidence]);
+    input.verdict = "passed";
+    input.proofClassification = explicitProof(true);
+    input.planning = { source: "workflow-inventory", confidence: 1, assumptions: [], missingInputs: [], evidenceGaps: [],
+      coverage: { requested: "project", source: "explicit", reason: "whole project", inventory: "bounded",
+        workflowCoverage: "unmeasured", gaps: [] } };
+    input.scope.workflowReviewAudit = { status: "verified", keyId: "operator", scope: "reviewed-source-workflows" };
+    const store = new MissionReportStore(workspace);
+    input.acceptanceEvidenceIntegrity = await store.inspectMissionEvidence([evidence], new Set(["run-1"]));
+    const snapshot = await store.writeReportSnapshot(input);
+    expect(snapshot.result).toMatchObject({ testVerdict: "passed",
+      testVerdictReason: expect.stringContaining("signed, source-bound reviewed workflow inventory") });
+    const markup = await readFile(snapshot.path, "utf8");
+    expect(markup).toContain("Reviewed source workflows");
+    expect(markup).toContain("review quality determines whether its business list is semantically complete");
+    expect(markup).not.toContain("Whole-project workflow coverage has not been proven.");
+  });
+
   it("does not accept a saved pass without a recomputed execution-slot audit", async () => {
     const workspace = await root();
     const input = result(workspace);

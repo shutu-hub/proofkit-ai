@@ -80,6 +80,7 @@ export type MissionPlanInput = {
   workflowInventory?: TestMission["workflowInventory"];
   workflowInventoryInspection?: TestMission["workflowInventoryInspection"];
   workflowReview?: TestMission["workflowReview"];
+  workflowReviewAdmission?: TestMission["workflowReviewAdmission"];
   levelSelection?: TestLevelSelection;
 };
 
@@ -462,6 +463,7 @@ export class MissionAgent {
       workflowInventory: input.workflowInventory,
       workflowInventoryInspection: input.workflowInventoryInspection,
       workflowReview: input.workflowReview,
+      workflowReviewAdmission: input.workflowReviewAdmission,
       plan,
       createdAt: now,
       updatedAt: now,

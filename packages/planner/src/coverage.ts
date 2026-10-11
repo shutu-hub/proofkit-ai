@@ -45,7 +45,8 @@ export function assessPlanningCoverage(intent: string, projectMap?: ProjectMap, 
 export function planningCoverageRequirements(coverage: PlanningCoverage): Pick<PlanningQuality, "missingInputs" | "evidenceGaps"> {
   if (coverage.requested === "declared") return { missingInputs: [], evidenceGaps: [] };
   return {
-    missingInputs: ["全项目业务流程清单与可度量的执行覆盖证明"],
+    missingInputs: coverage.gaps.includes("project-workflow-coverage")
+      ? ["全项目业务流程清单与可度量的执行覆盖证明"] : [],
     evidenceGaps: [...coverage.gaps],
   };
 }

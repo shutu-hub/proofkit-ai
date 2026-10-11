@@ -28,6 +28,7 @@
     "test:smoke:response": "pnpm build && node tests/response-capture-smoke.mjs",
     "test:smoke:electron-ipc": "pnpm build && node tests/electron-ipc-response-smoke.mjs",
     "test:smoke:ci-gate": "pnpm build && node tests/mission-ci-gate-smoke.mjs",
+    "test:smoke:reviewed-workflow": "pnpm build && node tests/reviewed-workflow-smoke.mjs",
     "test:smoke:manual-intake": "pnpm build && node tests/aihr-manual-intake-smoke.mjs",
     "test:smoke:lifecycle": "pnpm build && node tests/integration-lifecycle-smoke.mjs",
     "test:smoke:recovery": "pnpm build && node tests/resource-recovery-smoke.mjs",

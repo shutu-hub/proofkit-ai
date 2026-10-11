@@ -71,7 +71,12 @@ external workflow inventory and report that full-project acceptance is not
 established. Do not launch a separate declared-scope Mission as a substitute
 or attach a declared Mission's report to the project Mission ID. Create a
 reviewed inventory only when its workflow list and source links are supported;
-static routes alone cannot prove that list is complete.
+static routes alone cannot prove that list is complete. A newly created core or
+release project Mission can be admitted only with an externally trusted signed
+review, a complete candidate scan without exclusions and an exact Charter ×
+surface matrix. After execution, use the audited testVerdict and
+workflowReviewAudit.scope. A pass is limited to reviewed source workflows;
+quick checks and previously saved Missions cannot gain this pass later.
 
 Keep the returned missionId. Call await_test_result for that same Mission. Its
 bounded wait returns a terminal summary with current evidence integrity, a

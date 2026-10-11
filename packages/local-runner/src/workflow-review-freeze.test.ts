@@ -57,7 +57,8 @@ describe("Mission workflow review snapshot", () => {
       const mission = await runner.createMission({ intent: "测试整个项目", level: "core", surface: "web" });
       expect(mission.workflowInventoryInspection?.reviewAuthentication?.status).toBe("verified");
       expect(mission.workflowReview).toMatchObject({ attestation: { keyId: "operator" }, materials: { charterManifest: [{ id: "ready-core" }] } });
-      expect(mission.plan.planning?.evidenceGaps).toContain("project-workflow-coverage");
+      expect(mission.workflowReviewAdmission).toMatchObject({ keyId: "operator", scope: "reviewed-source-workflows" });
+      expect(mission.plan.planning?.evidenceGaps).not.toContain("project-workflow-coverage");
       const reopened = new LocalRunnerService({ root: project, workspaceRoot: workspace, config });
       expect((await reopened.missionStatus(mission.missionId)).mission.workflowReview).toEqual(mission.workflowReview);
       const evidence = await reopened.missionEvidence(mission.missionId);

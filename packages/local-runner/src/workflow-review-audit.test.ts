@@ -6,7 +6,7 @@ import {
   TestSuiteSchema, WorkflowExecutionCoverageSchema, WorkflowInventorySchema, type TestMission,
 } from "@proofkit/contracts";
 import { auditWorkflowCandidates, signWorkflowReview, workflowCandidateSetSha256, workflowCharterExecutionSha256 } from "@proofkit/project";
-import { auditWorkflowReview } from "./workflow-review-audit.js";
+import { admitReviewedWorkflowScope, auditWorkflowReview } from "./workflow-review-audit.js";
 
 const now = new Date().toISOString();
 const headSha = "a".repeat(40);
@@ -31,6 +31,18 @@ const materials = { candidateSetSha256: "c".repeat(64), charterManifest: [{ id: 
   fileSha256: "d".repeat(64), executionSha256: workflowCharterExecutionSha256(charter) }] };
 
 describe("frozen project workflow review audit", () => {
+  it("admits only the reviewed level and its exact suite before execution", async () => {
+    const mission = await fixture();
+    const scope = { level: mission.level, projectRoot: mission.projectRoot, workspaceRoot: mission.workspaceRoot,
+      workflowInventory: mission.workflowInventory, workflowInventoryInspection: mission.workflowInventoryInspection,
+      workflowReview: mission.workflowReview, suite: mission.suite, projectMap: map };
+    expect(await admitReviewedWorkflowScope(scope, trust)).toMatchObject({ keyId: "reviewer",
+      scope: "reviewed-source-workflows" });
+    expect(await admitReviewedWorkflowScope({ ...scope, level: "quick" }, trust)).toBeUndefined();
+    expect(await admitReviewedWorkflowScope({ ...scope, level: "release" }, trust)).toBeUndefined();
+    expect(await admitReviewedWorkflowScope(scope, {})).toBeUndefined();
+  });
+
   it("authenticates only the signed source map, exact Charter and completed business matrix", async () => {
     const mission = await fixture();
     const execution = completeExecution();
@@ -46,6 +58,8 @@ describe("frozen project workflow review audit", () => {
     expect((await auditWorkflowReview(mission, { ...execution, sourceBinding: "changed" }, trust)).reason).toBe("source-mismatch");
     expect((await auditWorkflowReview(mission, { ...execution, evidencedChecks: 0, status: "partial" }, trust)).reason)
       .toBe("execution-incomplete");
+    delete mission.workflowReviewAdmission;
+    expect((await auditWorkflowReview(mission, execution, trust)).reason).toBe("missing-admission");
   });
 
   it("rejects a changed Charter, candidate detail, omitted workflow and false review", async () => {
@@ -75,8 +89,8 @@ async function fixture(): Promise<TestMission> {
     surfaces: ["web"], charters: [{ charterId: "resume-core", charter, surfaces: ["web"], routeTargets: [] }], uncoveredCharterIds: [] });
   const plan = await new DeterministicMissionPlanner().plan({ intent: "测试整个项目", projectRoot: "/source", workspaceRoot: "/workspace", surface: "web", policy, suite });
   plan.planning = { source: "workflow-inventory", confidence: 0, assumptions: [], missingInputs: [],
-    evidenceGaps: ["project-workflow-coverage"], coverage: { requested: "project", source: "inferred", reason: "whole project",
-      inventory: "bounded", workflowCoverage: "unmeasured", gaps: ["project-workflow-coverage"] } };
+    evidenceGaps: [], coverage: { requested: "project", source: "inferred", reason: "whole project",
+      inventory: "bounded", workflowCoverage: "unmeasured", gaps: [] } };
   return TestMissionSchema.parse({ missionId: "mission-review", intent: "测试整个项目", projectRoot: "/source", workspaceRoot: "/workspace",
     surface: "web", level: "core", policy, status: "completed", verdict: "inconclusive", suite, plan,
     workflowInventory: inventory,
@@ -86,6 +100,8 @@ async function fixture(): Promise<TestMission> {
       uncoveredSurfaces: [], omittedUncoveredSurfaces: 0, missingSourcePaths: [], omittedMissingSourcePaths: 0,
       candidateAudit: candidate, issues: ["workflow-inventory-completeness-unverified"], omittedIssues: 0 },
     workflowReview: { materials: signedMaterials, attestation: signWorkflowReview(inventory, candidate, signedMaterials, "reviewer", privatePem) },
+    workflowReviewAdmission: { keyId: "reviewer", candidateSetSha256: signedMaterials.candidateSetSha256,
+      scope: "reviewed-source-workflows" },
     observations: [{ observationId: "discover", source: "planner", kind: "project.discovered", data: map, observedAt: now }],
     createdAt: now, updatedAt: now });
 }

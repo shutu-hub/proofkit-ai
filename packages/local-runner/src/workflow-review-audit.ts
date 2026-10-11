@@ -1,23 +1,75 @@
 import {
-  ProjectMapSchema, ProofkitConfigSchema, WorkflowReviewAuditSchema, workflowChecks, suiteChecks,
-  type TestMission, type WorkflowExecutionCoverage, type WorkflowReviewAudit, type WorkflowReviewAuthentication,
+  ProjectMapSchema, ProofkitConfigSchema, WorkflowReviewAdmissionSchema, WorkflowReviewAuditSchema, workflowChecks, suiteChecks,
+  type ProjectMap, type TestMission, type WorkflowExecutionCoverage, type WorkflowReviewAdmission,
+  type WorkflowReviewAudit, type WorkflowReviewAuthentication,
 } from "@proofkit/contracts";
 import {
   authenticateWorkflowReview, auditWorkflowCandidates, loadWorkflowReviewTrust,
   workflowCandidateSetSha256, workflowCharterExecutionSha256, workflowReviewDigests,
 } from "@proofkit/project";
+import type { RouteCoverageSummary } from "./suite-verifier.js";
 
 const unverified = (reason: NonNullable<WorkflowReviewAudit["reason"]>): WorkflowReviewAudit =>
   WorkflowReviewAuditSchema.parse({ status: "unverified", reason });
 
+type ReviewScope = Pick<TestMission, "level" | "projectRoot" | "workspaceRoot" | "workflowInventory"
+  | "workflowInventoryInspection" | "workflowReview" | "suite"> & { projectMap: ProjectMap };
+
+/** Admission is issued only while creating a new core/release Mission with a complete signed scope. */
+export async function admitReviewedWorkflowScope(scope: ReviewScope,
+  trustedPublicKeys?: Readonly<Record<string, string>>): Promise<WorkflowReviewAdmission | undefined> {
+  const review = await checkReviewFoundation(scope, trustedPublicKeys);
+  if (review.status !== "verified" || !review.keyId || !scope.workflowReview) return undefined;
+  return WorkflowReviewAdmissionSchema.parse({ keyId: review.keyId,
+    candidateSetSha256: scope.workflowReview.materials.candidateSetSha256, scope: "reviewed-source-workflows" });
+}
+
 /** Recheck the frozen, source-bound review against this Mission's saved project map and suite. */
 export async function auditWorkflowReview(mission: TestMission, execution?: WorkflowExecutionCoverage,
-  trustedPublicKeys?: Readonly<Record<string, string>>): Promise<WorkflowReviewAudit> {
+  trustedPublicKeys?: Readonly<Record<string, string>>, routeCoverage?: RouteCoverageSummary): Promise<WorkflowReviewAudit> {
   if (mission.plan.planning?.coverage?.requested !== "project") return { status: "not-applicable" };
   if (mission.level === "quick") return unverified("surface-only");
-  const inventory = mission.workflowInventory;
-  const inspection = mission.workflowInventoryInspection;
-  const snapshot = mission.workflowReview;
+  if (!mission.workflowReviewAdmission || mission.plan.planning?.evidenceGaps.includes("project-workflow-coverage")) {
+    return unverified("missing-admission");
+  }
+  const mapObservations = mission.observations.filter((item) => item.kind === "project.discovered" && item.source === "planner");
+  if (mapObservations.length === 0 && !["completed", "failed", "blocked", "cancelled"].includes(mission.status)) {
+    return unverified("execution-incomplete");
+  }
+  const map = mapObservations.length === 1 ? ProjectMapSchema.safeParse(mapObservations[0]!.data) : undefined;
+  if (!map?.success) return unverified("candidate-mismatch");
+  const review = await checkReviewFoundation({ level: mission.level, projectRoot: mission.projectRoot,
+    workspaceRoot: mission.workspaceRoot, workflowInventory: mission.workflowInventory,
+    workflowInventoryInspection: mission.workflowInventoryInspection, workflowReview: mission.workflowReview,
+    suite: mission.suite, projectMap: map.data }, trustedPublicKeys);
+  if (review.status !== "verified") return review;
+  if (mission.workflowReviewAdmission.keyId !== review.keyId
+    || mission.workflowReviewAdmission.candidateSetSha256 !== mission.workflowReview?.materials.candidateSetSha256) {
+    return unverified("missing-admission");
+  }
+  if (!execution) return unverified("execution-incomplete");
+  if (execution.sourceBinding !== "matching") return unverified("source-mismatch");
+  const expectedPairs = mission.workflowInventory!.workflows.flatMap((workflow) => workflowChecks(workflow)
+    .flatMap((check) => check.surfaces.map((surface) => `${check.charterId}/${surface}`)));
+  if (execution.status !== "all-declared-evidenced" || execution.requiredProof !== "business"
+    || execution.requiredChecks !== expectedPairs.length || execution.evidencedChecks !== expectedPairs.length
+    || execution.gaps.length || execution.omittedGaps || execution.suiteId !== mission.suite?.suiteId) {
+    return unverified("execution-incomplete");
+  }
+  const routeCount = mission.workflowInventoryInspection!.candidateAudit!.routeCandidates;
+  if (routeCount && (!routeCoverage || routeCoverage.inventoryTruncated || routeCoverage.candidateRoutes !== routeCount
+    || routeCoverage.mappedCandidates !== routeCount || routeCoverage.observedCandidates !== routeCount
+    || routeCoverage.gaps.length || routeCoverage.omittedGaps || routeCoverage.unresolvedTargets.length
+    || routeCoverage.omittedUnresolvedTargets)) return unverified("route-coverage-incomplete");
+  return review;
+}
+
+async function checkReviewFoundation(scope: ReviewScope,
+  trustedPublicKeys?: Readonly<Record<string, string>>): Promise<WorkflowReviewAudit> {
+  if (scope.level === "quick") return unverified("surface-only");
+  const inventory = scope.workflowInventory;
+  const inspection = scope.workflowInventoryInspection;
+  const snapshot = scope.workflowReview;
   if (!inventory || !inspection?.candidateAudit || !snapshot) return unverified("missing-frozen-review");
   const candidate = inspection.candidateAudit;
   if (inspection.status !== "loaded" || inspection.sourceMatch !== "matching" || !inspection.reviewDeclared
@@ -31,25 +83,20 @@ export async function auditWorkflowReview(mission: TestMission, execution?: Work
     || candidate.unresolvedRouteDeclarations || candidate.skippedCandidates || candidate.gaps.length || candidate.omittedGaps) {
     return unverified("inventory-gaps");
   }
-  if (!["completed", "failed", "blocked", "cancelled"].includes(mission.status)
-    && !mission.observations.some((item) => item.kind === "project.discovered")) {
-    return unverified("execution-incomplete");
-  }
-  const mapObservations = mission.observations.filter((item) => item.kind === "project.discovered" && item.source === "planner");
-  const map = mapObservations.length === 1 ? ProjectMapSchema.safeParse(mapObservations[0]!.data) : undefined;
-  if (!map?.success || workflowCandidateSetSha256(map.data) !== snapshot.materials.candidateSetSha256) {
+  if (workflowCandidateSetSha256(scope.projectMap) !== snapshot.materials.candidateSetSha256) {
     return unverified("candidate-mismatch");
   }
   const manifest = snapshot.materials.charterManifest;
   try {
     const catalog = ProofkitConfigSchema.parse({ charters: manifest.map((item) => item.catalog) });
-    const measured = auditWorkflowCandidates(map.data, inventory, catalog);
+    const measured = auditWorkflowCandidates(scope.projectMap, inventory, catalog);
     if (workflowReviewDigests(inventory, measured, snapshot.materials).candidateSha256 !== snapshot.attestation.candidateSha256) {
       return unverified("candidate-mismatch");
     }
   } catch { return unverified("review-invalid"); }
-  const suite = mission.suite;
-  if (!suite || suite.origin !== "workflow-inventory" || suite.uncoveredCharterIds.length) return unverified("suite-mismatch");
+  const suite = scope.suite;
+  if (!suite || suite.origin !== "workflow-inventory" || suite.level !== scope.level
+    || suite.uncoveredCharterIds.length) return unverified("suite-mismatch");
   const expectedPairs = inventory.workflows.flatMap((workflow) => workflowChecks(workflow)
     .flatMap((check) => check.surfaces.map((surface) => `${check.charterId}/${surface}`))).sort();
   const actualPairs = suiteChecks(suite).map((check) => `${check.charterId}/${check.surface}`).sort();
@@ -68,18 +115,11 @@ export async function auditWorkflowReview(mission: TestMission, execution?: Work
       return unverified("charter-mismatch");
     }
   }
-  const keys = trustedPublicKeys ?? await loadWorkflowReviewTrust(mission.projectRoot, mission.workspaceRoot ?? mission.projectRoot);
+  const keys = trustedPublicKeys ?? await loadWorkflowReviewTrust(scope.projectRoot, scope.workspaceRoot ?? scope.projectRoot);
   let auth: WorkflowReviewAuthentication;
   try { auth = authenticateWorkflowReview(inventory, candidate, snapshot.materials, snapshot.attestation, keys); }
   catch { return unverified("review-invalid"); }
   if (auth.status === "untrusted") return unverified("review-untrusted");
   if (auth.status !== "verified") return unverified("review-invalid");
-  if (!execution) return unverified("execution-incomplete");
-  if (execution.sourceBinding !== "matching") return unverified("source-mismatch");
-  if (execution.status !== "all-declared-evidenced" || execution.requiredProof !== "business"
-    || execution.requiredChecks !== expectedPairs.length || execution.evidencedChecks !== expectedPairs.length
-    || execution.gaps.length || execution.omittedGaps || execution.suiteId !== suite.suiteId) {
-    return unverified("execution-incomplete");
-  }
   return WorkflowReviewAuditSchema.parse({ status: "verified", keyId: auth.keyId, scope: "reviewed-source-workflows" });
 }

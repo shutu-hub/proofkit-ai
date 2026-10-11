@@ -19,7 +19,7 @@ import { hasCompleteCleanupEvidence } from "./cleanup-evidence.js";
 import { ProjectMissionStore } from "./mission-store.js";
 import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from "./suite-verifier.js";
 import { summarizeWorkflowExecution } from "./workflow-coverage.js";
-import { auditWorkflowReview } from "./workflow-review-audit.js";
+import { admitReviewedWorkflowScope, auditWorkflowReview } from "./workflow-review-audit.js";
 import { inspectTestScope } from "./test-scope.js";
 import { projectMissionResult } from "./mission-result.js";
 import type { MissionResult } from "@proofkit/contracts";
@@ -361,9 +361,22 @@ export class LocalRunnerService {
     if (projectSuite || selectedSuite) {
       const suite = projectSuite ?? await this.loadSuite(selectedSuite!.entry);
       assertMissionSurfaceCoverage(input.intent, suiteChecks(suite).map((check) => check.surface));
-      suite.charters = suite.charters.map((item) => ({ ...item,
-        charter: TestCharterSchema.parse({ ...item.charter, planning: withPlanningCoverage(item.charter.planning, coverage) }),
-      }));
+      const workflowReviewAdmission = projectSuite && projectMap && workflowInventory?.reviewSnapshot
+        ? await admitReviewedWorkflowScope({ level: suite.level, projectRoot: this.root, workspaceRoot: this.workspaceRoot,
+          workflowInventory: inventory, workflowInventoryInspection: inspection,
+          workflowReview: workflowInventory.reviewSnapshot, suite, projectMap })
+        : undefined;
+      const plannedCoverage = workflowReviewAdmission
+        ? { ...coverage, gaps: coverage.gaps.filter((gap) => gap !== "project-workflow-coverage") }
+        : coverage;
+      suite.charters = suite.charters.map((item) => {
+        const planning = withPlanningCoverage(item.charter.planning, plannedCoverage);
+        return { ...item, charter: TestCharterSchema.parse({ ...item.charter, planning: workflowReviewAdmission
+          ? { ...planning, missingInputs: planning.missingInputs.filter((value) =>
+            value !== "全项目业务流程清单与可度量的执行覆盖证明"),
+            evidenceGaps: planning.evidenceGaps.filter((value) => value !== "project-workflow-coverage") }
+          : planning }) };
+      });
       const sideEffectPolicy: SideEffectPolicy = suite.charters.some((item) => item.charter.sideEffectPolicy === "allow")
         ? "allow" : suite.charters.some((item) => item.charter.sideEffectPolicy === "confirm") ? "confirm" : "deny";
       if (input.policy?.sideEffectPolicy && input.policy.sideEffectPolicy !== sideEffectPolicy) {
@@ -381,6 +394,7 @@ export class LocalRunnerService {
         workflowInventory: workflowInventory?.inventory,
         workflowInventoryInspection: workflowInventory?.inspection,
         workflowReview: workflowInventory?.reviewSnapshot,
+        workflowReviewAdmission,
         levelSelection,
         policy: { ...input.policy, level: suite.level, sideEffectPolicy, timeoutMs },
       });
@@ -714,7 +728,7 @@ export class LocalRunnerService {
     const running = await this.missionAgent.isRunning(mission.missionId);
     const suiteScope = summarizeSuiteScope(mission, this.evidenceDir);
     const workflowExecution = summarizeWorkflowExecution(mission, suiteScope);
-    const workflowReviewAudit = await auditWorkflowReview(mission, workflowExecution);
+    const workflowReviewAudit = await auditWorkflowReview(mission, workflowExecution, undefined, suiteScope?.routeCoverage);
     const runFacts = new Map<string, Promise<RunSummary>>();
     const loadAuditRun = (runId: string): Promise<RunSummary> => {
       let pending = runFacts.get(runId);
@@ -837,6 +851,7 @@ export class LocalRunnerService {
       workflowInventory: previous.workflowInventory,
       workflowInventoryInspection: previous.workflowInventoryInspection,
       workflowReview: previous.workflowReview,
+      workflowReviewAdmission: previous.workflowReviewAdmission,
       levelSelection: previous.levelSelection,
       policy: { ...previous.policy, requireApproval: false },
     });

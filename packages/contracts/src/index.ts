@@ -775,10 +775,19 @@ export const WorkflowReviewSnapshotSchema = z.object({
 }).strict();
 export type WorkflowReviewSnapshot = z.infer<typeof WorkflowReviewSnapshotSchema>;
 
+/** Frozen proof that a new Mission was admitted against the reviewed scope before execution. */
+export const WorkflowReviewAdmissionSchema = z.object({
+  keyId: CatalogIdSchema,
+  candidateSetSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  scope: z.literal("reviewed-source-workflows"),
+}).strict();
+export type WorkflowReviewAdmission = z.infer<typeof WorkflowReviewAdmissionSchema>;
+
 export const WorkflowReviewAuditSchema = z.object({
   status: z.enum(["not-applicable", "unverified", "verified"]),
   reason: z.enum(["missing-frozen-review", "inventory-gaps", "review-untrusted", "review-invalid", "candidate-mismatch",
-    "charter-mismatch", "suite-mismatch", "source-mismatch", "execution-incomplete", "surface-only"]).optional(),
+    "charter-mismatch", "suite-mismatch", "source-mismatch", "execution-incomplete", "surface-only", "missing-admission",
+    "route-coverage-incomplete"]).optional(),
   keyId: CatalogIdSchema.optional(),
   /** Verified means the reviewed source snapshot and required Run slots passed the current audit. */
   scope: z.literal("reviewed-source-workflows").optional(),
@@ -1321,6 +1330,7 @@ export const TestMissionSchema = z.object({
   workflowInventory: WorkflowInventorySchema.optional(),
   workflowInventoryInspection: WorkflowInventoryInspectionSchema.optional(),
   workflowReview: WorkflowReviewSnapshotSchema.optional(),
+  workflowReviewAdmission: WorkflowReviewAdmissionSchema.optional(),
   plan: MissionPlanSchema,
   agentSteps: z.array(AgentStepSchema).default([]),
   toolCalls: z.array(ToolCallSchema).default([]),

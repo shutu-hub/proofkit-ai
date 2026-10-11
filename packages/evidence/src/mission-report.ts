@@ -165,7 +165,9 @@ export function auditMissionVerdict(result: MissionResult, integrity: MissionEvi
   if ((!full && integrity.status !== "intact") || (saved === "passed" && (integrity.status === "degraded" || integrity.status === "no-evidence"))) {
     return { testVerdict: "inconclusive", testVerdictReason: "Saved result has unavailable or incompletely audited presented evidence; rerun before claiming current acceptance." };
   }
-  return { testVerdict: saved };
+  return saved === "passed" && result.planning?.coverage?.requested === "project"
+    ? { testVerdict: "passed", testVerdictReason: "Pass is limited to the signed, source-bound reviewed workflow inventory and its audited Run matrix." }
+    : { testVerdict: saved };
 }
 
 function renderMissionReport(result: MissionResult, links: Map<string, EvidenceLink>): string {
@@ -178,7 +180,9 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
         : `<span class="unavailable" title="Legacy evidence has no saved digest.">${html(label)} integrity unverified</span>`;
   }).join(" ");
   const coverage = result.planning?.coverage;
-  const scopeLabel = coverage?.requested === "project" ? "Whole project requested" : coverage?.requested === "declared" ? "Declared scenarios" : "Acceptance scope not recorded";
+  const scopeLabel = coverage?.requested === "project" && result.scope.workflowReviewAudit?.status === "verified"
+    ? "Reviewed source workflows" : coverage?.requested === "project" ? "Whole project requested"
+      : coverage?.requested === "declared" ? "Declared scenarios" : "Acceptance scope not recorded";
   const outcome = result.verdict ?? "not evaluated";
   const route = result.scope.routeCoverage;
   const workflowInventory = result.scope.workflowInventory;
@@ -218,7 +222,10 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
     result.proofClassification?.requiredBusinessRuns !== undefined ? `Required Run business proof: ${result.proofClassification.requiredRunsWithPassingBusiness ?? 0}/${result.proofClassification.requiredBusinessRuns} primary/replay Run(s) have a classified passing business Oracle.` : undefined,
     result.confirmedProductFindings ? `Confirmed product finding proof: ${result.proofClassification?.findingsLinkedToFailingBusiness ?? 0}/${result.confirmedProductFindings} finding(s) link to a classified failing business Oracle in the same Run.` : undefined,
     result.proofClassification?.unlinkedFindingIds?.length ? `Unlinked finding IDs: ${result.proofClassification.unlinkedFindingIds.join(", ")}${result.proofClassification.omittedUnlinkedFindingIds ? ` and ${result.proofClassification.omittedUnlinkedFindingIds} more` : ""}.` : undefined,
-    coverage?.requested === "project" ? "Whole-project workflow coverage has not been proven." : "Acceptance applies to the saved scenarios. Whole-project workflow coverage has not been measured.",
+    coverage?.requested === "project" && result.scope.workflowReviewAudit?.status === "verified"
+      ? "Acceptance covers the signed source workflow inventory; review quality determines whether its business list is semantically complete."
+      : coverage?.requested === "project" ? "Whole-project workflow coverage has not been proven."
+        : "Acceptance applies to the saved scenarios. Whole-project workflow coverage has not been measured.",
     coverage?.inventory === "partial" || route?.inventoryTruncated ? "The source inventory is partial; it cannot establish complete project coverage." : undefined,
     !coverage ? "This saved Mission has no recorded acceptance scope." : undefined,
     result.scope.uncoveredCharterIds.length ? `Registered scenarios outside this Mission matrix: ${result.scope.uncoveredCharterIds.join(", ")}.` : undefined,
