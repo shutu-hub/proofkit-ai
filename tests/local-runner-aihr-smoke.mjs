@@ -131,6 +131,9 @@ try {
   assert.ok(defaultSummary.oracles.every((oracle) => oracle.passed === true));
   assert.equal(defaultSummary.steps[1].capabilityOutput.fileSha256, fixtureSha256);
   assert.ok(defaultSummary.artifacts.some((artifact) => artifact.endsWith("/preflight.json")), "AIHR preflight evidence is missing");
+  assert.ok(defaultSummary.artifacts.some((artifact) => artifact.endsWith("/post-run-check.json")), "AIHR gateway continuity evidence is missing");
+  assert.equal(defaultSummary.integrationPostRunCheck?.passed, true);
+  assert.equal(defaultSummary.integrationPostRunCheck?.evidence.gatewayContinuity, "unverified");
 
   // The real MCP entrypoint selects the saved Charter from one sentence.
   const success = await runMcpMission(mcpClient, "测试简历获取");

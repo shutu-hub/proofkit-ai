@@ -279,6 +279,53 @@ describe("ExecutionRunner", () => {
     expect(quick.targetBindingAfterRun).toBeUndefined();
   });
 
+  it("withdraws a product result when a connector endpoint changes before surface cleanup", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-integration-continuity-"));
+    for (const productPassed of [true, false]) {
+      const runId = productPassed ? "gateway-product-pass" : "gateway-product-failure";
+      const adapter = new FakeAdapter();
+      let closed = false;
+      adapter.close = async () => { closed = true; };
+      const summary = await new ExecutionRunner(adapter, { evidenceDir: root,
+        oracles: [{ name: "business-terminal", async check() { return {
+          name: "business-terminal", passed: productPassed, message: "independent business reader",
+          evidence: ['{"terminal":true}'], observedAt: new Date().toISOString(),
+        }; } }],
+        postRunCheck: async () => {
+          expect(closed).toBe(false);
+          return { passed: false, message: "Gateway listener changed.", evidence: { gatewayContinuity: "changed" } };
+        },
+      }).run({ intent: "verify business state", level: "core", mode: "deterministic", preconditions: [],
+        actions: [], assertions: [], oracles: ["business-terminal"], sideEffectPolicy: "deny", metadata: {},
+      }, runId);
+      expect(summary).toMatchObject({ verdict: "inconclusive", integrationPostRunCheck: {
+        passed: false, evidence: { gatewayContinuity: "changed" },
+      } });
+      expect(summary.oracles[0]?.passed).toBe(productPassed);
+      expect(summary.artifacts).toContain(`${runId}/artifacts/post-run-check.json`);
+      expect(JSON.parse(await readFile(join(root, runId, "artifacts", "post-run-check.json"), "utf8")))
+        .toMatchObject({ passed: false, evidence: { gatewayContinuity: "changed" } });
+      expect(closed).toBe(true);
+    }
+  });
+
+  it("keeps a post-run connector exception out of saved evidence and the product verdict", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-integration-post-run-error-"));
+    const summary = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root,
+      oracles: [{ name: "business-terminal", async check() { return {
+        name: "business-terminal", passed: true, message: "independent business reader",
+        evidence: ['{"terminal":true}'], observedAt: new Date().toISOString(),
+      }; } }],
+      postRunCheck: async () => { throw new Error("private gateway token must not persist"); },
+    }).run({ intent: "verify business state", level: "core", mode: "deterministic", preconditions: [],
+      actions: [], assertions: [], oracles: ["business-terminal"], sideEffectPolicy: "deny", metadata: {},
+    }, "gateway-post-run-error");
+    expect(summary.verdict).toBe("inconclusive");
+    expect(summary.findings.join(" ")).toContain("Integration endpoint could not be checked after this Run.");
+    expect(await readFile(join(root, "gateway-post-run-error", "run.json"), "utf8"))
+      .not.toContain("private gateway token");
+  });
+
   it("checks an Electron application listener separately from its HTTP page listener", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-application-binding-"));
     let applicationChecks = 0;

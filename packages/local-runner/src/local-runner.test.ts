@@ -497,6 +497,11 @@ describe("LocalRunnerService", () => {
     const legacyRun = await auditMissionRunFacts(completed, structural, async (runId) => summaries.get(runId)!);
     expect(legacyRun.issues).toEqual(expect.arrayContaining([expect.stringContaining("saved Run adapter is missing")]));
     electronSummary.execution = originalExecution;
+    electronSummary.integrationPostRunCheck = { passed: false, message: "Gateway changed.",
+      evidence: { gatewayContinuity: "changed" } };
+    const wrongPostRunCheck = await auditMissionRunFacts(completed, structural, async (runId) => summaries.get(runId)!);
+    expect(wrongPostRunCheck.issues).toEqual(expect.arrayContaining([expect.stringContaining("post-run integration check")]));
+    delete electronSummary.integrationPostRunCheck;
 
     const missionPath = join(root, ".proofkit", "missions", `${created.missionId}.json`);
     const saved = await readFile(missionPath, "utf8");

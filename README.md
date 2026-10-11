@@ -29,6 +29,7 @@ See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for
 - Observes read-only business HTTP endpoints through a redacted oracle instead of treating a UI click as proof of success.
 - Accepts programmatically registered, schema-validated project capabilities; only an explicit evidence projection is persisted.
 - Runs an optional integration preflight before setup, browser connection or capability execution; a failed environment or test-scope check is blocked with a `preflight.json` artifact.
+- Lets trusted connectors recheck their actual endpoints after setup and at Run completion. A changed verified listener or gateway configuration makes the product result inconclusive and saves `post-run-check.json`; the AIHR reference connector uses this for its gateway.
 - Supports explicit negative Charters such as duplicate submission and requires their expected outcome and evidence to be present in the Mission result.
 - Keeps configuration, connectors, Missions and run evidence in an external test workspace for new projects, with compatibility for existing project-local layouts.
 - Loads an optional workspace-owned `.proofkit/integration.mjs` module for typed capabilities, business oracles, test setup and cleanup.

@@ -23,12 +23,19 @@ export function createIntegration({ z: injectedZ, workspaceRoot, config, inspect
   const billingRead = readBillingUsageCapability(state);
   const desktopAcquisition = createDesktopResumeAcquisitionOracle({ z, resolveEnv, positiveString, getOrNull, aihrFetch,
     pollPipeline, observeResumeCollectionPipeline, evaluateResumePipeline, resumePipelineEvidence });
-  const gatewayCheck = (input, phase) => aihrPreflight(input, desktopAcquisition, inspectEndpointBinding,
-    config?.policies?.targetBinding ?? "block-different", phase);
+  const targetBindingPolicy = config?.policies?.targetBinding ?? "block-different";
+  const gatewayCheck = async (input, phase) => {
+    const { result, gatewayBinding, gatewayBaseUrl } = await aihrPreflight(input, desktopAcquisition, inspectEndpointBinding,
+      targetBindingPolicy, phase);
+    if (phase === "after setup" && state.has(input.runId)) {
+      Object.assign(state.get(input.runId), { gatewayBinding: gatewayBinding ?? null, gatewayBaseUrl });
+    }
+    return result;
+  };
 
   return {
     name: "aihr-resume-workflows",
-    version: "0.2.3",
+    version: "0.2.4",
     capabilities: [
       createResumeRunCapability(state),
       createResumeFileUploadCapability(state, workspaceRoot),
@@ -45,6 +52,7 @@ export function createIntegration({ z: injectedZ, workspaceRoot, config, inspect
       createManualCandidateIntakeOracle({ z, resolveEnv, positiveString, getOrNull, pollPipeline }), desktopAcquisition],
     preflight: (input) => gatewayCheck(input, "before setup"),
     postSetupCheck: (input) => gatewayCheck(input, "after setup"),
+    postRunCheck: (input) => aihrPostRunCheck(input, state, inspectEndpointBinding, targetBindingPolicy),
     setup: async ({ runId }) => {
       state.set(runId, { createdAt: new Date().toISOString() });
       return () => state.delete(runId);
@@ -53,19 +61,9 @@ export function createIntegration({ z: injectedZ, workspaceRoot, config, inspect
 }
 
 async function aihrPreflight({ charter, environment, signal }, desktopAcquisition, inspectEndpointBinding, targetBindingPolicy, phase) {
-  const actionNames = charter.actions
-    .filter((action) => action.kind === "capability")
-    .map((action) => action.name);
-  const oracleNames = charter.oracles ?? [];
-  const manualIntake = oracleNames.includes("aihr.manualCandidateIntake") || charter.actions.some((action) =>
-    action.kind === "captureResponse" && action.response.method === "POST"
-      && new URL(action.response.url).pathname.endsWith("/resume-collection/candidate-intakes"));
-  const interactiveSurfaceActions = charter.actions.filter((action) =>
-    ["click", "fill", "press", "setInputFiles", "captureResponse"].includes(action.kind));
-  const usesAihrBusinessContract = manualIntake || actionNames.some((name) => name.startsWith("aihr."))
-    || oracleNames.some((name) => name.startsWith("aihr.")) || interactiveSurfaceActions.length > 0;
+  const { actionNames, oracleNames, manualIntake, interactiveSurfaceActions, usesAihrBusinessContract } = aihrBusinessUsage(charter);
   if (!usesAihrBusinessContract && charter.level === "quick" && charter.sideEffectPolicy === "deny") {
-    return {
+    return { gatewayBinding: undefined, gatewayBaseUrl: undefined, result: {
       passed: true,
       message: "AIHR business preflight skipped: this quick Charter uses only surface assertions.",
       evidence: {
@@ -74,7 +72,7 @@ async function aihrPreflight({ charter, environment, signal }, desktopAcquisitio
         capabilityCount: 0,
         oracleCount: 0,
       },
-    };
+    } };
   }
   const writeActions = actionNames.filter((name) => [
     "aihr.createResumeCollectionRun",
@@ -147,7 +145,7 @@ async function aihrPreflight({ charter, environment, signal }, desktopAcquisitio
   if (actionNames.includes("aihr.uploadResumeFile") && !env("AIHR_PROOFKIT_FIXTURE_PATH")) {
     errors.push("AIHR_PROOFKIT_FIXTURE_PATH is required for resume uploads");
   }
-  return {
+  return { gatewayBinding, gatewayBaseUrl: baseUrl, result: {
     passed: errors.length === 0,
     message: errors.length > 0 ? errors.join("; ")
       : gatewayBinding?.status === "different-project" ? "AIHR scope checks passed; gateway listener belongs to another Git checkout (record policy)."
@@ -176,6 +174,69 @@ async function aihrPreflight({ charter, environment, signal }, desktopAcquisitio
         gatewayBindingProcessId: gatewayBinding.processId ?? 0,
       } : {}),
     },
+  } };
+}
+
+function aihrBusinessUsage(charter) {
+  const actionNames = charter.actions.filter((action) => action.kind === "capability").map((action) => action.name);
+  const oracleNames = charter.oracles ?? [];
+  const manualIntake = oracleNames.includes("aihr.manualCandidateIntake") || charter.actions.some((action) =>
+    action.kind === "captureResponse" && action.response.method === "POST"
+      && new URL(action.response.url).pathname.endsWith("/resume-collection/candidate-intakes"));
+  const interactiveSurfaceActions = charter.actions.filter((action) =>
+    ["click", "fill", "press", "setInputFiles", "captureResponse"].includes(action.kind));
+  const usesAihrBusinessContract = manualIntake || actionNames.some((name) => name.startsWith("aihr."))
+    || oracleNames.some((name) => name.startsWith("aihr.")) || interactiveSurfaceActions.length > 0;
+  return { actionNames, oracleNames, manualIntake, interactiveSurfaceActions, usesAihrBusinessContract };
+}
+
+async function aihrPostRunCheck({ runId, charter, signal }, state, inspectEndpointBinding, targetBindingPolicy) {
+  const { usesAihrBusinessContract } = aihrBusinessUsage(charter);
+  if (!usesAihrBusinessContract && charter.level === "quick" && charter.sideEffectPolicy === "deny") {
+    return { passed: true, message: "AIHR gateway continuity not required for this read-only quick Charter.",
+      evidence: { integrationRequired: false, gatewayContinuity: "not-required" } };
+  }
+  const before = state.get(runId)?.gatewayBinding;
+  const recordedBaseUrl = state.get(runId)?.gatewayBaseUrl;
+  const baseUrl = env("AIHR_PROOFKIT_API_BASE_URL") ?? "http://127.0.0.1:8080/api/v1";
+  const configurationStable = recordedBaseUrl !== undefined && recordedBaseUrl === baseUrl;
+  let parsed;
+  try { parsed = new URL(baseUrl); } catch { /* A changed or invalid URL cannot prove continuity. */ }
+  const loopback = parsed && /^https?:$/.test(parsed.protocol)
+    && ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
+  const after = loopback ? await inspectEndpointBinding(baseUrl, signal) : undefined;
+  const baselineVerified = before?.status === "matching-process-path" && Boolean(before.processId);
+  const continuity = !configurationStable ? "changed" : !baselineVerified ? "unverified"
+    : !after || after.status === "unverified" || !after.processId ? "unverified"
+      : sameGatewayProcess(before, after) ? "stable" : "changed";
+  const foreignBlocked = after?.status === "different-project" && targetBindingPolicy === "block-different";
+  const passed = configurationStable && !foreignBlocked && (!baselineVerified || continuity === "stable");
+  return {
+    passed,
+    message: passed ? continuity === "stable" ? "AIHR gateway listener remained associated with the same process through Run completion."
+      : "AIHR gateway continuity is unverified; no process continuity claim is made."
+      : foreignBlocked ? "AIHR gateway listener belongs to another Git checkout after the Run."
+        : "AIHR gateway configuration or process changed or could not be verified after the Run.",
+    evidence: { integrationRequired: true, gatewayContinuity: continuity, gatewayConfigurationStable: configurationStable,
+      ...gatewayBindingEvidence("before", before), ...gatewayBindingEvidence("after", after) },
+  };
+}
+
+function sameGatewayProcess(before, after) {
+  const root = (value) => process.platform === "win32" ? value.replaceAll("\\", "/").toLowerCase() : value;
+  return Boolean(before.status === "matching-process-path" && after.status === "matching-process-path"
+    && before.processId === after.processId && before.targetOrigin === after.targetOrigin
+    && before.observedProjectRoot && after.observedProjectRoot
+    && root(before.observedProjectRoot) === root(after.observedProjectRoot));
+}
+
+function gatewayBindingEvidence(phase, binding) {
+  const label = phase === "before" ? "Before" : "After";
+  return {
+    [`gateway${label}BindingStatus`]: binding?.status ?? "not-inspected",
+    [`gateway${label}BindingOrigin`]: binding?.targetOrigin ?? "unknown",
+    [`gateway${label}BindingProjectRoot`]: binding?.observedProjectRoot ?? "unknown",
+    [`gateway${label}BindingProcessId`]: binding?.processId ?? 0,
   };
 }
 

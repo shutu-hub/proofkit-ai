@@ -917,6 +917,44 @@ describe("AIHR project integration", () => {
       charter: gatewayBusinessCharter(), signal: controller.signal })).rejects.toThrow("stop gateway inspection");
   });
 
+  it("records stable and replaced AIHR gateway processes at Run completion", async () => {
+    const root = await createIntegrationProject();
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "http://127.0.0.1:8080/api/v1?private=ignored";
+    configureBusinessScope();
+    let processId = 314;
+    const binding = vi.spyOn(project, "inspectTargetBinding").mockImplementation(async (selectedRoot, targetUrl) => ({
+      status: "matching-process-path", method: "windows-listener-process", expectedProjectRoot: selectedRoot,
+      observedProjectRoot: root, targetOrigin: new URL(targetUrl!).origin, processId,
+      reason: "The gateway process is associated with the selected checkout.", observedAt: new Date().toISOString(),
+    }));
+    const service = await LocalRunnerService.create({ root });
+    const { preflight, setup, postSetupCheck, postRunCheck } = service.integration ?? {};
+    if (!preflight || !setup || !postSetupCheck || !postRunCheck) throw new Error("AIHR gateway lifecycle checks are missing");
+    const context = { runId: "gateway-continuity", environment: "test" as const, charter: gatewayBusinessCharter(),
+      signal: new AbortController().signal };
+    expect((await preflight(context)).passed).toBe(true);
+    const cleanup = await setup({ ...context, emit: async () => {} });
+    expect((await postSetupCheck(context)).passed).toBe(true);
+    const stable = await postRunCheck(context);
+    expect(stable).toMatchObject({ passed: true, evidence: { gatewayContinuity: "stable",
+      gatewayBeforeBindingProcessId: 314, gatewayAfterBindingProcessId: 314 } });
+    processId = 315;
+    const replaced = await postRunCheck(context);
+    expect(replaced).toMatchObject({ passed: false, evidence: { gatewayContinuity: "changed",
+      gatewayBeforeBindingProcessId: 314, gatewayAfterBindingProcessId: 315 } });
+    processId = 314;
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "http://127.0.0.1:8080/api/v2?private=changed";
+    const reconfigured = await postRunCheck(context);
+    expect(reconfigured).toMatchObject({ passed: false, evidence: {
+      gatewayContinuity: "changed", gatewayConfigurationStable: false,
+      gatewayBeforeBindingProcessId: 314, gatewayAfterBindingProcessId: 314,
+    } });
+    expect(JSON.stringify(replaced)).not.toContain("private=ignored");
+    expect(JSON.stringify(reconfigured)).not.toContain("private=changed");
+    expect(binding).toHaveBeenCalledTimes(5);
+    if (typeof cleanup === "function") await cleanup();
+  });
+
   it("blocks the actual upload key outside the test scope before connecting or writing", async () => {
     const gateway = await startCollectionGatewayMock({ fixtureSha256: "a".repeat(64) });
     servers.push(gateway.server);

@@ -38,6 +38,25 @@ export function analyzeRun(input: FailureAnalyzerInput): FailureAnalysis {
 
   if (summary.verdict === "passed" && runtimeFindings.length === 0) return {};
 
+  // An Oracle's facts may be real, but a changed or unverified listener means
+  // they cannot be attributed to the tested source throughout this Run.
+  const continuityGap = summary.verdict === "inconclusive" && (
+    summary.targetContinuity === "changed" || summary.targetContinuity === "unverified"
+    || summary.applicationContinuity === "changed" || summary.applicationContinuity === "unverified"
+    || summary.integrationPostRunCheck?.passed === false);
+  if (continuityGap) {
+    const paths = summary.artifacts.filter((path) => /\/(?:post-run-check|target-binding-after-run|application-binding-after-run)\.json$/.test(path));
+    const boundaryEvidence = evidenceForPaths(evidence, paths, summary.runId);
+    const message = "The tested application or integration endpoint could not be associated with one stable process through Run completion.";
+    const boundary = FailureBoundarySchema.parse({ kind: "environment", message,
+      evidence: boundaryEvidence, observedAt: summary.endedAt ?? summary.startedAt });
+    return { boundary, finding: FindingSchema.parse({
+      findingId: `finding-${summary.runId}-endpoint-continuity`, severity: "high", category: "environment",
+      status: "unverified", title: "Test endpoint continuity was not established", message,
+      evidence: boundaryEvidence, createdAt: boundary.observedAt,
+    }) };
+  }
+
   const environmentBlocker = summary.verdict === "blocked"
     ? runtimeFindings.find((finding) => finding.category === "environment" && finding.status === "confirmed" && finding.affectsVerdict)
     : undefined;

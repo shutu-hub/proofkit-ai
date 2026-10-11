@@ -64,6 +64,9 @@ function validateIntegration(value: unknown, path: string): ProjectIntegration {
   if (integration.postSetupCheck !== undefined && typeof integration.postSetupCheck !== "function") {
     throw new Error(`Integration ${path} postSetupCheck must be a function`);
   }
+  if (integration.postRunCheck !== undefined && typeof integration.postRunCheck !== "function") {
+    throw new Error(`Integration ${path} postRunCheck must be a function`);
+  }
   if (integration.setup !== undefined && typeof integration.setup !== "function") {
     throw new Error(`Integration ${path} setup must be a function`);
   }

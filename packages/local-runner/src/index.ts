@@ -979,6 +979,7 @@ export class LocalRunnerService {
           applicationBinding: summary.applicationBinding,
           applicationBindingAfterRun: summary.applicationBindingAfterRun,
           applicationContinuity: summary.applicationContinuity,
+          integrationPostRunCheck: summary.integrationPostRunCheck,
           integrationCleanup: summary.integrationCleanup,
           businessEvidence: summary.oracles.reduce((count, oracle) => count + (oracle.verificationKind !== "http-contract" && (oracle.sourceEvidenceArtifacts ?? []).some((path) =>
             evidence.some((item) => item.kind === "business" && item.evidenceId === `${summary.runId}:${path}`))
@@ -995,7 +996,10 @@ export class LocalRunnerService {
       // the raw run verdict in the observation and report the normalized
       // scenario verdict to the Mission Agent.
       const expectedFailureOutcome = runKind === "negative" && expectedVerdict !== undefined && expectedVerdict !== "passed";
-      const failedOracle = selectEvidencedBusinessFailure(summary, evidence);
+      const provenanceGap = summary.targetContinuity === "changed" || summary.targetContinuity === "unverified"
+        || summary.applicationContinuity === "changed" || summary.applicationContinuity === "unverified"
+        || summary.integrationPostRunCheck?.passed === false;
+      const failedOracle = provenanceGap ? undefined : selectEvidencedBusinessFailure(summary, evidence);
       const verifiedSourceLocations = expectedFailureOutcome || outcomeMatched === true || !failedOracle
         ? [] : await verifySourceLocationHints(this.root, failedOracle.sourceLocations ?? []);
       const analysis = expectedFailureOutcome ? {} : outcomeMatched === true ? {} : analyzeRun({ summary, evidence, verifiedSourceLocations });
@@ -1517,6 +1521,7 @@ export class LocalRunnerService {
       replayOfRunId: input.replayOfRunId,
       preflight,
       postSetupCheck,
+      postRunCheck: this.integration?.postRunCheck,
       signal,
       timeoutMs: this.config.run.timeoutMs,
       runtimeQuality: this.config.policies.runtime,

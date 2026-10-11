@@ -64,6 +64,22 @@ describe("analyzeRun", () => {
     expect(result.repairSuggestion?.status).toBe("proposed");
   });
 
+  it("does not diagnose a product defect when gateway continuity invalidates its source", () => {
+    const source = "run-fixture/artifacts/oracle-1-source.json";
+    const continuity = "run-fixture/artifacts/post-run-check.json";
+    const result = analyzeRun({ summary: summary({ verdict: "inconclusive",
+      integrationPostRunCheck: { passed: false, message: "Gateway process changed.", evidence: { gatewayContinuity: "changed" } },
+      artifacts: [source, continuity],
+      oracles: [{ name: "resume-terminal", passed: false, message: "wrong job binding",
+        evidence: [source], sourceEvidenceCount: 1, sourceEvidenceArtifacts: [source], observedAt: capturedAt }],
+    }), evidence: [evidence(source, "business"), evidence(continuity, "report")] });
+    expect(result.boundary?.kind).toBe("environment");
+    expect(result.finding).toMatchObject({ category: "environment", status: "unverified",
+      evidence: [expect.objectContaining({ path: continuity })] });
+    expect(result.diagnosis).toBeUndefined();
+    expect(result.repairSuggestion).toBeUndefined();
+  });
+
   it("keeps an earlier UI mismatch as first failure while diagnosing a later evidenced business defect", () => {
     const snapshot = "run-fixture/artifacts/assertion-001-snapshot.json";
     const source = "run-fixture/artifacts/oracle-1-source.json";

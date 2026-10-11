@@ -1,5 +1,5 @@
 import { createRunId, EvidenceStore, LocalExecutionOwnership, type LocalExecutionLease } from "@proofkit/evidence";
-import { hasIncompleteIntegrationCleanup, OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, TargetBindingSchema, type IntegrationSetupPolicy, type RuntimeFinding } from "@proofkit/contracts";
+import { hasIncompleteIntegrationCleanup, IntegrationCheckResultSchema, OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, TargetBindingSchema, type IntegrationSetupPolicy, type RuntimeFinding } from "@proofkit/contracts";
 import { z } from "zod";
 import { InputFileError, inputFileFacts, resolveInputFiles, sameInputFileFacts, type InputFileFact, type SurfaceActionContext } from "./input-files.js";
 import { IntegrationLifecycle, releaseLateIntegration, validateSetupPolicy, type IntegrationRecoveryContext, type IntegrationSetup, type IntegrationSetupEntry } from "./integration-lifecycle.js";
@@ -82,6 +82,7 @@ export type ProjectIntegration = {
   oracles?: BusinessOracle[];
   preflight?: IntegrationPreflight;
   postSetupCheck?: IntegrationPreflight;
+  postRunCheck?: IntegrationPreflight;
   setup?: IntegrationSetup;
   setupPolicy?: IntegrationSetupPolicy;
   /** Trusted connector reopens resources by their persisted scope; must not replay product actions. */
@@ -165,6 +166,8 @@ export type ExecutionOptions = {
   preflight?: IntegrationPreflight;
   /** Trusted host check after setup handles are registered, before browser attachment. */
   postSetupCheck?: IntegrationPreflight;
+  /** Trusted connector check before surface cleanup; failures invalidate product attribution. */
+  postRunCheck?: IntegrationPreflight;
   setup?: IntegrationSetup | Array<IntegrationSetup | IntegrationSetupEntry>;
   setupPolicy?: IntegrationSetupPolicy;
   targetBinding?: (signal: AbortSignal) => Promise<TargetBinding>;
@@ -207,6 +210,7 @@ export class ExecutionRunner {
   private readonly integration?: { name: string; version?: string };
   private readonly preflight?: IntegrationPreflight;
   private readonly postSetupCheck?: IntegrationPreflight;
+  private readonly postRunCheck?: IntegrationPreflight;
   private readonly projectRoot?: string;
   private readonly workspaceRoot?: string;
   private readonly runtimeQuality: RuntimeQualityPolicy;
@@ -247,6 +251,7 @@ export class ExecutionRunner {
     this.webEvidenceOrigin = options.webEvidenceOrigin;
     this.preflight = options.preflight;
     this.postSetupCheck = options.postSetupCheck;
+    this.postRunCheck = options.postRunCheck;
     this.projectRoot = options.projectRoot;
     this.workspaceRoot = options.workspaceRoot;
     this.runtimeQuality = RuntimeQualityPolicySchema.parse(options.runtimeQuality ?? {});
@@ -655,6 +660,36 @@ export class ExecutionRunner {
           }
         }
       }
+      if (surfaceAttached && this.postRunCheck && !signal.aborted) {
+        try {
+          const result = IntegrationCheckResultSchema.parse(await withAbort(this.postRunCheck({
+            runId, charter, environment: this.environment, projectRoot: this.projectRoot,
+            workspaceRoot: this.workspaceRoot, signal,
+          }), signal, "Integration post-run check"));
+          summary.integrationPostRunCheck = result;
+          const artifact = await this.store.writeJson(runId, "post-run-check", result);
+          summary.artifacts.push(artifact);
+          await this.emit({ runId, timestamp: new Date().toISOString(), type: "artifact.created",
+            payload: { path: artifact, kind: "post-run-check", passed: result.passed } });
+          if (!result.passed) {
+            const gap = new InconclusiveError("integration-post-run-check-failed", "Integration endpoint continuity changed or could not be verified after this Run.");
+            summary.findings.push(gap.message);
+            if (mayReplaceWithContinuityGap(executionError)) executionError = gap;
+          }
+        } catch {
+          if (!signal.aborted) {
+            const gap = new InconclusiveError("integration-post-run-check-unavailable", "Integration endpoint could not be checked after this Run.");
+            summary.integrationPostRunCheck = { passed: false, message: gap.message,
+              evidence: { checkStatus: "unavailable" } };
+            try {
+              const artifact = await this.store.writeJson(runId, "post-run-check", summary.integrationPostRunCheck);
+              if (!summary.artifacts.includes(artifact)) summary.artifacts.push(artifact);
+            } catch { /* The saved Run fact still prevents product attribution. */ }
+            summary.findings.push(gap.message);
+            if (mayReplaceWithContinuityGap(executionError)) executionError = gap;
+          }
+        }
+      }
       try { await unsubscribe(); } catch (error) { executionError ??= safeRunError(error); summary.findings.push("Adapter event subscription cleanup failed; inspect trusted local diagnostics."); }
       try { await this.adapter.close(); } catch (error) { executionError ??= safeRunError(error); summary.findings.push("Adapter close failed; inspect trusted local diagnostics."); }
       await pendingEvents;
@@ -697,7 +732,8 @@ export class ExecutionRunner {
     const independentBusinessFailure = summary.oracles.some((oracle) => oracle.verificationKind !== "http-contract"
       && oracle.passed === false && (oracle.sourceEvidenceCount ?? 0) > 0);
     const targetContinuityGap = summary.targetContinuity === "changed" || summary.targetContinuity === "unverified"
-      || summary.applicationContinuity === "changed" || summary.applicationContinuity === "unverified";
+      || summary.applicationContinuity === "changed" || summary.applicationContinuity === "unverified"
+      || summary.integrationPostRunCheck?.passed === false;
     summary.verdict = environmentBlocked && !independentBusinessFailure
       ? "blocked"
       : targetContinuityGap && baseVerdict !== "blocked" && baseVerdict !== "cancelled"
@@ -915,11 +951,7 @@ function summarySafeId(value: string): string {
 }
 
 function preflightResult(value: IntegrationPreflightResult): IntegrationPreflightResult {
-  return z.object({
-    passed: z.boolean(),
-    message: z.string().min(1),
-    evidence: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
-  }).parse(value);
+  return IntegrationCheckResultSchema.parse(value);
 }
 
 function safeRunError(error: unknown): Error {

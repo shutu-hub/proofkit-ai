@@ -170,6 +170,9 @@ export async function auditMissionRunFacts(
     if (!isDeepStrictEqual(run.integrationCleanup, observation.data.integrationCleanup)) {
       issue(`${label}: saved Run cleanup differs from the Mission observation.`);
     }
+    if (!isDeepStrictEqual(run.integrationPostRunCheck, observation.data.integrationPostRunCheck)) {
+      issue(`${label}: saved Run post-run integration check differs from the Mission observation.`);
+    }
     if (mission.workflowReviewAdmission && mission.level !== "quick") {
       if (surface !== "web" && surface !== "electron") {
         issue(`${label}: reviewed project acceptance cannot verify this surface's application source.`);

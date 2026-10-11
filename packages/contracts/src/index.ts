@@ -457,6 +457,13 @@ export const IntegrationCleanupSchema = z.object({
   if (cleanup.status === "not-required" && cleanup.declaredResources !== 0) context.addIssue({ code: "custom", message: "Declared resources require cleanup" });
 });
 export type IntegrationCleanup = z.infer<typeof IntegrationCleanupSchema>;
+/** A connector environment check is evidence about test provenance, not a product Oracle. */
+export const IntegrationCheckResultSchema = z.object({
+  passed: z.boolean(),
+  message: z.string().min(1),
+  evidence: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
+});
+export type IntegrationCheckResult = z.infer<typeof IntegrationCheckResultSchema>;
 export const IntegrationCleanupArtifactSchema = z.object({
   runId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
   startedAt: z.string().datetime(),
@@ -505,6 +512,7 @@ export const RunSummarySchema = z.object({
   applicationBinding: TargetBindingSchema.optional(),
   applicationBindingAfterRun: TargetBindingSchema.optional(),
   applicationContinuity: TargetContinuitySchema.optional(),
+  integrationPostRunCheck: IntegrationCheckResultSchema.optional(),
   integrationCleanup: IntegrationCleanupSchema.optional(),
   artifacts: z.array(z.string()).default([]),
   findings: z.array(z.string()).default([]),
@@ -1444,6 +1452,7 @@ export const MissionRunResultSchema = z.object({
   applicationBinding: TargetBindingSchema.optional(),
   applicationBindingAfterRun: TargetBindingSchema.optional(),
   applicationContinuity: TargetContinuitySchema.optional(),
+  integrationPostRunCheck: IntegrationCheckResultSchema.optional(),
   integrationCleanup: IntegrationCleanupSchema.optional(),
   evidence: z.array(EvidenceRefSchema).max(6),
   omittedEvidence: z.number().int().nonnegative(),

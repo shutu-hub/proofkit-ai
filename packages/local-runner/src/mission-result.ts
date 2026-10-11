@@ -1,4 +1,4 @@
-import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, ReplayConsistencySchema, SourceStateSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionExecutionAudit, type MissionProofClassification, type MissionResult, type MissionRunResult, type MissionSurface, type Observation, type ReplayConsistency, type SourceState, type TaskNode, type TestMission, type WorkflowExecutionCoverage, type WorkflowReviewAudit } from "@proofkit/contracts";
+import { IntegrationCheckResultSchema, IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, ReplayConsistencySchema, SourceStateSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionExecutionAudit, type MissionProofClassification, type MissionResult, type MissionRunResult, type MissionSurface, type Observation, type ReplayConsistency, type SourceState, type TaskNode, type TestMission, type WorkflowExecutionCoverage, type WorkflowReviewAudit } from "@proofkit/contracts";
 import type { SuiteScopeSummary } from "./suite-verifier.js";
 
 type RunKind = MissionRunResult["runKind"];
@@ -196,6 +196,7 @@ function projectRun(mission: TestMission, task: TaskNode | undefined, observatio
   const applicationBinding = TargetBindingSchema.safeParse(data.applicationBinding);
   const finalApplicationBinding = TargetBindingSchema.safeParse(data.applicationBindingAfterRun);
   const cleanup = IntegrationCleanupSchema.safeParse(data.integrationCleanup);
+  const postRunCheck = IntegrationCheckResultSchema.safeParse(data.integrationPostRunCheck);
   const runId = stringValue(data.runId);
   const verdict = VerdictSchema.safeParse(data.verdict);
   const expected = VerdictSchema.safeParse(data.expectedVerdict ?? (runKind === "negative" ? negative?.expectedVerdict ?? "passed" : undefined));
@@ -226,6 +227,7 @@ function projectRun(mission: TestMission, task: TaskNode | undefined, observatio
     applicationBinding: applicationBinding.success ? applicationBinding.data : undefined,
     applicationBindingAfterRun: finalApplicationBinding.success ? finalApplicationBinding.data : undefined,
     applicationContinuity: data.applicationContinuity === "stable" || data.applicationContinuity === "changed" || data.applicationContinuity === "unverified" ? data.applicationContinuity : undefined,
+    integrationPostRunCheck: postRunCheck.success ? postRunCheck.data : undefined,
     integrationCleanup: cleanup.success ? cleanup.data : undefined,
     evidence: evidence.items,
     omittedEvidence: evidence.omitted,
