@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { classifyTargetBinding, inspectTargetBinding, parseLinuxListeningInodes } from "./target-binding.js";
+import { classifyTargetBinding, inspectTargetBinding, parseLinuxListeningInodes, windowsCommandCodePaths } from "./target-binding.js";
 
 const expectedRoot = "D:/code/AIHR";
 const origin = "http://localhost:5174";
 
 describe("target binding", () => {
+  it("extracts only absolute Windows script arguments, whether quoted or not", () => {
+    expect(windowsCommandCodePaths('"C:\\Program Files\\nodejs\\node.exe" C:\\work\\app\\server.mjs --cache="C:\\other\\cache.js"'))
+      .toEqual(["C:\\Program Files\\nodejs\\node.exe", "C:\\work\\app\\server.mjs"]);
+    expect(windowsCommandCodePaths('node "C:\\work space\\app\\server.js" relative.js')).toEqual(["C:\\work space\\app\\server.js"]);
+    expect(windowsCommandCodePaths('node "C:\\unfinished.js')).toEqual([]);
+  });
+
   it("distinguishes a matching listener process path from a different checkout", () => {
     expect(classifyTargetBinding(expectedRoot, origin, [{ processId: 12, projectRoot: expectedRoot }]))
       .toMatchObject({ status: "matching-process-path", processId: 12 });

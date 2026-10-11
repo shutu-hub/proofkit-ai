@@ -54,7 +54,7 @@ createServer((request, response) => {
     charters: [{ id: "resume-core", path: "charters/resume.yaml", aliases: ["resume"], level: "core", surfaces: ["web"],
       routeTargets: routes.map((route) => ({ kind: "web", path: route.path, source: route.source })) }],
     oracles: [{ name: "resume-terminal", url: `${origin}/state`, statusPointer: "/data/status", successValues: ["done"] }],
-    run: { timeoutMs: 20_000 } };
+    run: { timeoutMs: 20_000 }, policies: { targetBinding: "record" } };
   await writeFile(join(workspace, ".proofkit", "config.yaml"), JSON.stringify(config));
   await writeFile(join(workspace, "charters", "resume.yaml"), JSON.stringify({ intent: "Verify resume workflow", level: "core",
     actions: [{ kind: "goto", url: baseUrl }], assertions: [{ kind: "text-visible", text: "Resume ready" }],
@@ -93,6 +93,7 @@ createServer((request, response) => {
   assert.equal(result.workflowReviewAudit?.status, "verified");
   assert.equal(result.proofClassification?.status, "explicit");
   assert.equal(result.summary.executionAudit?.status, "complete");
+  assert.deepEqual(result.targetBindings.map(({ binding }) => binding.status), ["matching-process-path"], JSON.stringify(result.targetBindings));
   const cliCheck = ["bundle/main.js", "mission", "check", mission.missionId, "--root", source, "--workspace", workspace];
   const passedCheck = await runFile(process.execPath, cliCheck, { timeout: 20_000 });
   assert.equal(JSON.parse(passedCheck.stdout).testVerdict, "passed");
@@ -128,6 +129,32 @@ createServer((request, response) => {
   assert.equal(legacyCompleted.verdict, "inconclusive");
   assert.equal(legacyResult.testVerdict, "inconclusive");
   assert.equal(legacyResult.workflowReviewAudit?.reason, "missing-admission");
+
+  const otherSource = join(scratch, "other-source");
+  await mkdir(otherSource);
+  const originalServer = await readFile(join(source, "test-server.mjs"), "utf8");
+  await writeFile(join(otherSource, "test-server.mjs"), originalServer.replace(".listen(0,", ".listen(Number(process.argv[2]),"));
+  await runFile("git", ["-C", otherSource, "init", "-q"], { timeout: 10_000 });
+  const stopped = new Promise((done) => server.once("exit", done));
+  server.kill();
+  await stopped;
+  server = spawn(process.execPath, [join(otherSource, "test-server.mjs"), String(port)],
+    { cwd: otherSource, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  assert.equal(await serverPort(server), port);
+  const foreignMission = await runner.createMission({ intent: "测试整个项目核心流程", level: "core", surface: "web" });
+  assert.equal(foreignMission.workflowReviewAdmission?.keyId, "fixture-reviewer");
+  await runner.startMission(foreignMission.missionId, { approve: true });
+  const foreignCompleted = await runner.waitMission(foreignMission.missionId);
+  const foreignResult = await runner.missionEvidence(foreignMission.missionId);
+  assert.equal(foreignCompleted.verdict, "passed", JSON.stringify(foreignResult, null, 2));
+  assert.equal(foreignResult.workflowReviewAudit?.status, "verified");
+  assert.deepEqual(foreignResult.targetBindings.map(({ binding }) => binding.status), ["different-project"]);
+  assert.equal(foreignResult.summary.executionAudit?.status, "incomplete");
+  assert.ok(foreignResult.summary.executionAudit?.issues.some((issue) => issue.includes("reviewed source checkout")));
+  assert.equal(foreignResult.testVerdict, "inconclusive");
+  await assert.rejects(runFile(process.execPath, ["bundle/main.js", "mission", "check", foreignMission.missionId,
+    "--root", source, "--workspace", workspace], { timeout: 20_000 }), (error) =>
+    error.code === 2 && JSON.parse(error.stdout).testVerdict === "inconclusive");
 
   await writeFile(trustPath, "{}");
   const revoked = await runner.missionEvidence(mission.missionId);

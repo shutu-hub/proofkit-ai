@@ -80,13 +80,25 @@ export function classifyTargetBinding(expectedProjectRoot: string, targetOrigin:
 }
 
 function runtimeCodePaths(listener: ListenerProcess): string[] {
-  const candidates = [listener.executablePath, ...quotedWindowsPaths(listener.commandLine ?? "")]
+  const candidates = [listener.executablePath, ...windowsCommandCodePaths(listener.commandLine ?? "")]
     .filter((path): path is string => typeof path === "string" && CODE_EXTENSIONS.test(path));
   return [...new Set(candidates.filter((path) => !GENERIC_RUNTIMES.has(basename(path).toLowerCase()) && existsSync(path)).map((path) => resolve(path)))].slice(0, 8);
 }
 
-function quotedWindowsPaths(commandLine: string): string[] {
-  return [...commandLine.matchAll(/"([A-Za-z]:[\\/][^"]+)"/g)].map((match) => match[1]!).filter((path) => CODE_EXTENSIONS.test(path));
+export function windowsCommandCodePaths(commandLine: string): string[] {
+  const arguments_: string[] = [];
+  let argument = "";
+  let quoted = false;
+  for (const character of commandLine) {
+    if (character === '"') { quoted = !quoted; continue; }
+    if (/\s/.test(character) && !quoted) {
+      if (argument) arguments_.push(argument);
+      argument = "";
+    } else argument += character;
+  }
+  if (quoted) return [];
+  if (argument) arguments_.push(argument);
+  return arguments_.filter((path) => /^[A-Za-z]:[\\/]/.test(path) && CODE_EXTENSIONS.test(path));
 }
 
 async function windowsListeners(port: number, hostname: string, signal?: AbortSignal): Promise<ListenerProcess[]> {

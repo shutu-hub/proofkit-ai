@@ -1,6 +1,7 @@
 import { relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { MissionExecutionAuditSchema, TestCharterSchema, suiteChecks, type MissionExecutionAudit, type Observation, type RunSummary, type TestCharter, type TestMission } from "@proofkit/contracts";
+import { MissionExecutionAuditSchema, TargetBindingSchema, TestCharterSchema, suiteChecks, type MissionExecutionAudit, type Observation, type RunSummary, type TargetBinding, type TestCharter, type TestMission } from "@proofkit/contracts";
+import { sameProjectPath } from "@proofkit/project";
 
 type Surface = "web" | "electron" | "mobile" | "api";
 type Slot = { charterId?: string; surface: Surface; kind: "primary" | "replay" | "negative"; negativeCaseId?: string; expectedVerdict?: string };
@@ -169,8 +170,40 @@ export async function auditMissionRunFacts(
     if (!isDeepStrictEqual(run.integrationCleanup, observation.data.integrationCleanup)) {
       issue(`${label}: saved Run cleanup differs from the Mission observation.`);
     }
+    if (mission.workflowReviewAdmission && mission.level !== "quick") {
+      if (surface !== "web" && surface !== "electron") {
+        issue(`${label}: reviewed project acceptance cannot verify this surface's application source.`);
+      } else {
+        const before = TargetBindingSchema.safeParse(observation.data.targetBinding);
+        const after = TargetBindingSchema.safeParse(observation.data.targetBindingAfterRun);
+        if (!before.success || !reviewedBindingMatches(before.data, run.targetBinding, mission.projectRoot)) {
+          issue(`${label}: listener process was not verified under the reviewed source checkout.`);
+        }
+        if (!after.success || !reviewedBindingMatches(after.data, run.targetBindingAfterRun, mission.projectRoot)
+          || !before.success || !sameTargetProcess(before.data, after.data)
+          || run.targetContinuity !== "stable" || observation.data.targetContinuity !== "stable") {
+          issue(`${label}: listener process continuity was not verified through Run completion.`);
+        }
+      }
+    }
   }
   return MissionExecutionAuditSchema.parse({ ...previous, status: issues.length || omittedIssues ? "incomplete" : "complete", issues, omittedIssues });
+}
+
+function reviewedBindingMatches(observed: TargetBinding, saved: TargetBinding | undefined, projectRoot: string): boolean {
+  return isDeepStrictEqual(observed, saved) && observed.status === "matching-process-path"
+    && observed.processId !== undefined && observed.targetOrigin !== undefined
+    && observed.observedProjectRoot !== undefined
+    && sameProjectPath(observed.expectedProjectRoot, projectRoot)
+    && sameProjectPath(observed.observedProjectRoot, projectRoot);
+}
+
+function sameTargetProcess(before: TargetBinding, after: TargetBinding): boolean {
+  return before.status === "matching-process-path" && after.status === "matching-process-path"
+    && before.processId !== undefined && before.processId === after.processId
+    && before.targetOrigin !== undefined && before.targetOrigin === after.targetOrigin
+    && before.observedProjectRoot !== undefined && after.observedProjectRoot !== undefined
+    && sameProjectPath(before.observedProjectRoot, after.observedProjectRoot);
 }
 
 function expectedRunCharter(mission: TestMission, observation: Observation): TestCharter | undefined {
