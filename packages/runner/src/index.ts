@@ -136,10 +136,6 @@ export class InvalidFileInputControlError extends Error {
   constructor() { super("Selected control is not an input[type=file]."); }
 }
 
-class RunnerOperationError extends Error {
-  override readonly name = "RunnerOperationError";
-}
-
 /** Missing or ambiguous observation is not proof of a product defect. */
 export class InconclusiveError extends Error {
   override readonly name = "InconclusiveError";
@@ -956,9 +952,10 @@ function preflightResult(value: IntegrationPreflightResult): IntegrationPrefligh
 
 function safeRunError(error: unknown): Error {
   if (error instanceof BlockedError || error instanceof CancelledError || error instanceof RunTimeoutError
-    || error instanceof InconclusiveError || error instanceof RunnerOperationError
+    || error instanceof InconclusiveError
     || error instanceof AmbiguousSurfaceTargetError || error instanceof InvalidFileInputControlError) return error;
-  return new RunnerOperationError("Run operation failed without a verified result; inspect trusted local diagnostics.");
+  return new InconclusiveError("runner-operation-unverified",
+    "Run operation failed without a verified result; inspect trusted local diagnostics.");
 }
 
 function assertFillEnvironment(actions: readonly Action[]): void {
@@ -1022,7 +1019,8 @@ async function withAbort<T>(promise: Promise<T>, signal: AbortSignal, label: str
     if (signal.aborted) throw abortReason(signal);
     if (error instanceof InconclusiveError || error instanceof InputFileError
       || error instanceof AmbiguousSurfaceTargetError || error instanceof InvalidFileInputControlError) throw error;
-    throw new RunnerOperationError(`${label} failed without a verified result; inspect trusted local diagnostics.`);
+    throw new InconclusiveError("runner-operation-unverified",
+      `${label} failed without a verified result; inspect trusted local diagnostics.`);
   } finally {
     if (onAbort) signal.removeEventListener("abort", onAbort);
   }
@@ -1057,7 +1055,8 @@ async function withResourceAbort<T>(promise: Promise<T>, signal: AbortSignal, la
     if (graceExpired) throw error;
     if (signal.aborted) throw abortReason(signal);
     if (error instanceof TargetLeaseConflictError) throw error;
-    throw new RunnerOperationError(`${label} failed without a verified result; inspect trusted local diagnostics.`);
+    throw new InconclusiveError("runner-operation-unverified",
+      `${label} failed without a verified result; inspect trusted local diagnostics.`);
   } finally {
     if (timer) clearTimeout(timer);
     if (onAbort) signal.removeEventListener("abort", onAbort);

@@ -118,7 +118,7 @@ describe("integration resource lifecycle", () => {
       async () => { throw new Error("application startup failed"); },
     ];
     const summary = await new ExecutionRunner(adapter(), configuration).run(charter, "partial-setup");
-    expect(calls).toEqual(["tenant"]); expect(summary.verdict).toBe("failed");
+    expect(calls).toEqual(["tenant"]); expect(summary.verdict).toBe("inconclusive");
     expect(summary.integrationCleanup).toMatchObject({ status: "unverified", declaredResources: 1, verifiedResources: 1 });
   });
 

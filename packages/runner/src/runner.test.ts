@@ -120,8 +120,9 @@ describe("ExecutionRunner", () => {
         actions: [{ kind: "fill", selector: "#password", value: { env: envName } }],
         assertions: [], sideEffectPolicy: "allow", metadata: {},
       }, "fill-env-error");
-      expect(summary.verdict).toBe("failed");
+      expect(summary.verdict).toBe("inconclusive");
       expect(summary.steps[0]?.error).toContain("step-001 action failed without a verified result");
+      expect(summary.steps[0]?.artifacts).toContain("fill-env-error/artifacts/step-001-response-gap.json");
       const persisted = JSON.stringify(summary)
         + await readFile(join(root, "fill-env-error", "events.jsonl"), "utf8")
         + await readFile(join(root, "fill-env-error", "run.json"), "utf8");
@@ -163,7 +164,7 @@ describe("ExecutionRunner", () => {
       actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
       sideEffectPolicy: "allow", metadata: {},
     }, "adapter-error-run");
-    expect(summary.verdict).toBe("failed");
+    expect(summary.verdict).toBe("inconclusive");
     expect(summary.findings).toContain("Adapter close failed; inspect trusted local diagnostics.");
     expect(summary.findings.some((item) => item.includes("screenshot unavailable"))).toBe(true);
     const persisted = JSON.stringify(summary)
@@ -396,7 +397,7 @@ describe("ExecutionRunner", () => {
   it("rechecks the listener before surface cleanup when an assertion throws", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-target-assertion-error-"));
     for (const [name, finalPid, expectedVerdict, expectedContinuity] of [
-      ["stable", 12, "failed", "stable"],
+      ["stable", 12, "inconclusive", "stable"],
       ["replaced", 13, "inconclusive", "changed"],
     ] as const) {
       let checks = 0;

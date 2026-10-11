@@ -47,7 +47,7 @@ describe("bounded fixture input", () => {
     const root = await workspace(); await writeFile(join(root, reference), "fixture");
     const surface = adapter(); vi.mocked(surface.act).mockRejectedValue(new Error("ambiguous selector"));
     const summary = await new ExecutionRunner(surface, { workspaceRoot: root, evidenceDir: join(root, "runs"), allowFileUploads: true }).run(charter());
-    expect(summary.verdict).toBe("failed");
+    expect(summary.verdict).toBe("inconclusive");
     expect(summary.artifacts.some((path) => path.endsWith("step-001-input-files.json"))).toBe(true);
     expect(summary.steps[0]?.inputFiles?.[0]?.sizeBytes).toBe(7);
   });
