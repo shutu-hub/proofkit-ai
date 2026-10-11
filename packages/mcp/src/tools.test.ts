@@ -89,6 +89,19 @@ describe("ProofKit MCP tools", () => {
       expect(runner.inspectEnvironment).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   });
+  it("routes a one-time Web environment URL through the MCP origin policy", async () => {
+    const runner = { config: { surfaces: { web: { baseUrl: "https://staging.example.com/" } } },
+      inspectEnvironment: vi.fn(async () => ({ status: "incomplete", testVerdict: "not-asserted" })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      expect((await client.callTool({ name: "inspect_test_environment", arguments: { url: "https://other.example.com/" } })).isError).toBe(true);
+      expect((await client.callTool({ name: "inspect_test_environment", arguments: { surface: "electron", url: "http://127.0.0.1:9000/" } })).isError).toBe(true);
+      expect(runner.inspectEnvironment).not.toHaveBeenCalled();
+      const response = await client.callTool({ name: "inspect_test_environment", arguments: { url: "http://127.0.0.1:9000/preview" } });
+      expect(response.isError).not.toBe(true);
+      expect(runner.inspectEnvironment).toHaveBeenCalledWith({ surface: "web", timeoutMs: 10000, url: "http://127.0.0.1:9000/preview" }, expect.any(AbortSignal));
+    } finally { await client.close(); await server.close(); }
+  });
 
   it("validates reconnaissance prerequisites and propagates MCP cancellation to the inspector", async () => {
     let markStarted!: () => void;

@@ -10,7 +10,19 @@ type Context = { root: string; workspaceRoot: string; config: ProofkitConfig; re
 
 /** Observations only: never start an app, attach a browser, or invoke integration hooks. */
 export async function inspectEnvironment(context: Context, input: EnvironmentInspectionInput, inspectionId: string, signal?: AbortSignal): Promise<EnvironmentInspection> {
-  const { surface, timeoutMs } = EnvironmentInspectionInputSchema.parse(input);
+  const { surface, url, timeoutMs } = EnvironmentInspectionInputSchema.parse(input);
+  if (url && surface !== "web") throw new Error("Only Web environment inspection accepts a URL override");
+  if (url) {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) {
+      throw new Error("Web environment inspection requires an HTTP URL without credentials");
+    }
+    const configured = context.config.surfaces.web?.baseUrl;
+    if (context.restrictWebOrigins && !isLoopback(parsed.hostname)
+      && (!configured || new URL(configured).origin !== parsed.origin)) {
+      throw new Error("MCP Web environment inspection is restricted to loopback or the configured Web origin");
+    }
+  }
   signal?.throwIfAborted();
   const started = performance.now();
   const observedAt = new Date().toISOString();
@@ -44,11 +56,11 @@ export async function inspectEnvironment(context: Context, input: EnvironmentIns
     });
   };
   try {
-    const targetUrl = surface === "web" ? config.surfaces.web?.baseUrl : config.surfaces.electron?.targetUrlPrefix;
+    const targetUrl = surface === "web" ? url ?? config.surfaces.web?.baseUrl : config.surfaces.electron?.targetUrlPrefix;
     const web = config.surfaces.web;
     const electron = config.surfaces.electron;
-    const hasConnection = surface === "web" ? Boolean(web?.baseUrl || web?.cdpUrl) : Boolean(electron?.cdpUrl || electron?.devtoolsActivePort || process.env.PROOFKIT_ELECTRON_DEVTOOLS_PORT);
-    checks.push({ id: "surface-configuration", kind: "configuration", status: hasConnection ? "passed" : "blocked", message: hasConnection ? "A surface connection is configured; attachment is checked separately by inspect_surface." : "Configure a Web baseUrl/CDP endpoint or an Electron CDP endpoint/DevToolsActivePort file." });
+    const hasConnection = surface === "web" ? Boolean(url || web?.baseUrl || web?.cdpUrl) : Boolean(electron?.cdpUrl || electron?.devtoolsActivePort || process.env.PROOFKIT_ELECTRON_DEVTOOLS_PORT);
+    checks.push({ id: "surface-configuration", kind: "configuration", status: hasConnection ? "passed" : "blocked", message: hasConnection ? url ? "A one-time Web endpoint was supplied; browser attachment is checked separately by inspect_surface." : "A surface connection is configured; attachment is checked separately by inspect_surface." : "Configure a Web baseUrl/CDP endpoint or an Electron CDP endpoint/DevToolsActivePort file." });
     if (surface === "web" && !web?.cdpUrl && web?.executablePath) {
       bounded("browser-executable", "configuration", async () => {
         const exists = await stat(web.executablePath!).then((info) => info.isFile()).catch(() => false);

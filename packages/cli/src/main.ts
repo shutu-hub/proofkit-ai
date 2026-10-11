@@ -82,13 +82,14 @@ export function createProgram(): Command {
     });
 
   program.command("environment")
-    .description("Observe configured HTTP endpoints and source association without starting the app or running a test")
+    .description("Observe configured or one-time Web HTTP endpoints and source association without starting the app or running a test")
     .option("--root <path>", "project root", ".")
     .option("--surface <surface>", "web or electron", "web")
+    .option("--url <url>", "one-time Web HTTP endpoint; does not change workspace configuration")
     .option("--timeout-ms <milliseconds>", "total observation deadline (100-15000)", "10000")
-    .action(async (options: RootOptions & { surface: string; timeoutMs: string }) => {
+    .action(async (options: RootOptions & { surface: string; url?: string; timeoutMs: string }) => {
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
-      const inspection = await runner.inspectEnvironment({ surface: options.surface as "web" | "electron", timeoutMs: Number(options.timeoutMs) });
+      const inspection = await runner.inspectEnvironment({ surface: options.surface as "web" | "electron", url: options.url, timeoutMs: Number(options.timeoutMs) });
       console.log(JSON.stringify(inspection, null, 2));
       process.exitCode = inspection.status === "checks-passed" ? 0 : inspection.status === "blocked" ? 1 : 2;
     });

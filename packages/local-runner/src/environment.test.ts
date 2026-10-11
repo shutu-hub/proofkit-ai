@@ -71,6 +71,40 @@ describe("environment inspection", () => {
     config.policies.targetBinding = "record";
     expect((await new LocalRunnerService({ root, workspaceRoot, config }).inspectEnvironment()).status).toBe("incomplete");
   });
+  it("inspects a one-time Web URL and binds the source check to that listener without changing configuration", async () => {
+    const { root, workspaceRoot, binding } = await fixture();
+    const candidate = await serve((_req, res) => res.end("candidate response"));
+    const configured = "http://127.0.0.1:1/old";
+    const config = ProofkitConfigSchema.parse({ project: { root }, surfaces: { web: { baseUrl: configured } } });
+    const service = new LocalRunnerService({ root, workspaceRoot, config });
+    const result = await service.inspectEnvironment({ url: `${candidate}/preview?token=secret#fragment` });
+    expect(result).toMatchObject({ status: "incomplete", testVerdict: "not-asserted" });
+    expect(result.checks).toContainEqual(expect.objectContaining({ id: "surface-http", status: "passed", http: expect.objectContaining({ endpoint: `${candidate}/preview` }) }));
+    expect(result.checks).toContainEqual(expect.objectContaining({ id: "source-binding", status: "passed", targetBinding: expect.objectContaining({ targetOrigin: candidate }) }));
+    expect(binding).toHaveBeenCalledWith(root, `${candidate}/preview?token=secret#fragment`, expect.any(AbortSignal));
+    expect(JSON.stringify(result)).not.toContain("secret");
+    expect(await readFile(result.artifact.path, "utf8")).not.toContain("secret");
+    expect(config.surfaces.web?.baseUrl).toBe(configured);
+
+    binding.mockResolvedValue({ status: "different-project", method: "windows-listener-process",
+      expectedProjectRoot: root, observedProjectRoot: join(root, "other"), targetOrigin: candidate,
+      reason: "Different checkout", observedAt: new Date().toISOString() });
+    expect(await service.inspectEnvironment({ url: candidate })).toMatchObject({ status: "blocked", checks: expect.arrayContaining([
+      expect.objectContaining({ id: "surface-http", status: "passed" }),
+      expect.objectContaining({ id: "source-binding", status: "blocked" }),
+    ]) });
+  });
+  it("validates Web overrides before any request or snapshot", async () => {
+    const { root, workspaceRoot } = await fixture();
+    const service = new LocalRunnerService({ root, workspaceRoot, restrictWebOrigins: true });
+    for (const input of [
+      { surface: "electron" as const, url: "http://127.0.0.1:1" },
+      { url: "file:///tmp/page.html" },
+      { url: "http://user:pass@127.0.0.1:1/" },
+      { url: "https://example.com/" },
+    ]) await expect(service.inspectEnvironment(input)).rejects.toThrow();
+    await expect(readdir(workspaceRoot)).rejects.toThrow();
+  });
   it("keeps missing health, source association and browser prerequisites visible", async () => {
     const { root, workspaceRoot, binding } = await fixture();
     binding.mockResolvedValue({ status: "unverified", method: "unavailable", expectedProjectRoot: root, reason: "Unsupported platform", observedAt: new Date().toISOString() });

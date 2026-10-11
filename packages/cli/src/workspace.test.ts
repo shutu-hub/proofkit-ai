@@ -46,6 +46,28 @@ describe("CLI workspace onboarding", () => {
       await expect(createProgram().parseAsync(["node", "proofkit", "environment", "--root", root, "--workspace", workspace, "--timeout-ms", "NaN"])).rejects.toThrow();
     } finally { process.exitCode = exitCode; }
   });
+  it("accepts a one-time Web environment URL without rewriting the workspace configuration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-cli-candidate-source-"));
+    const workspace = await mkdtemp(join(tmpdir(), "proofkit-cli-candidate-workspace-"));
+    roots.push(root, workspace);
+    await writeFile(join(root, "package.json"), '{"name":"candidate-source"}');
+    await mkdir(join(workspace, ".proofkit"));
+    const configPath = join(workspace, ".proofkit", "config.yaml");
+    const config = JSON.stringify({ project: { root }, surfaces: { web: { baseUrl: "http://127.0.0.1:1/old" } } });
+    await writeFile(configPath, config);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitCode = process.exitCode;
+    try {
+      await createProgram().parseAsync(["node", "proofkit", "environment", "--root", root, "--workspace", workspace,
+        "--url", "http://127.0.0.1:2/candidate?private=hidden", "--timeout-ms", "500"]);
+      const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(result.testVerdict).toBe("not-asserted");
+      expect(result.checks).toContainEqual(expect.objectContaining({ id: "surface-http", http: expect.objectContaining({ endpoint: "http://127.0.0.1:2/candidate" }) }));
+      expect(JSON.stringify(result)).not.toContain("hidden");
+      expect(await readFile(configPath, "utf8")).toBe(config);
+      expect(await readdir(root)).toEqual(["package.json"]);
+    } finally { process.exitCode = exitCode; }
+  });
 
   it("returns bounded static scope with defaults and validates level, surface and limit inputs", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-cli-scope-source-"));

@@ -28,9 +28,13 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "inspect_test_environment",
-    "Observe configured Web/Electron HTTP endpoints and source association with a total deadline. Saves a workspace artifact; starts no app, browser, test or connector operation. This does not prove login, business readiness or product correctness.",
+    "Observe configured Web/Electron endpoints, or a one-time Web URL, and source association with a total deadline. Saves a workspace artifact; starts no app, browser, test or connector operation. This does not prove login, business readiness or product correctness.",
     EnvironmentInspectionInputSchema.shape,
-    async (input, extra) => result(await runner.inspectEnvironment(input, extra.signal)),
+    async (input, extra) => {
+      if (input.url && input.surface !== "web") throw new Error("Only Web environment inspection accepts a URL override");
+      const url = surfaceUrl(input.url, runner);
+      return result(await runner.inspectEnvironment(url ? { ...input, url } : input, extra.signal));
+    },
   );
 
   server.tool(
