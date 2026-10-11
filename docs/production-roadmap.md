@@ -433,6 +433,15 @@ The adapter now bounds each WebDriver response before parsing, leaves unavailabl
 
 **Current distribution evidence:** `pnpm test:distribution` builds one `proofkit-ai` tarball, installs it in a fresh directory without the repository's `node_modules`, runs CLI onboarding, and calls the installed MCP server over stdio. The internal `@proofkit/*` modules are bundled into the two entrypoints. A direct npm Git installation initially succeeded while omitting both bundled entrypoints; a Git-specific `prepare` path now installs the pinned workspace toolchain and builds before npm packs its declared files. A fresh local-Git install produced both binaries and a connected MCP setup without touching the tested source. `pnpm test:git-install` is an explicit regression gate for this slower install path. The [hosted CI matrix](https://github.com/shutu-hub/proofkit-ai/actions/runs/38170828221) passes packed-package and local-Git installation checks on Ubuntu, Windows and macOS, including installed CLI/MCP connection and tested-source isolation. npm publication and device-backed release acceptance remain open.
 
+**AIHR setup feedback (2026-10-12):** the current external AIHR workspace has no
+Electron CDP target or declared backend health endpoint. A fresh read-only
+environment inspection `environment-20261011221013-fad7ea57` returned
+`blocked`/`not-asserted` with only
+`configure-surface` and `declare-health` as next actions. Source ownership is
+still unverified, but ProofKit no longer asks an agent to confirm an observed
+listener when it had no endpoint to inspect. No AIHR process was started and no
+business action was executed; this is a clearer setup result, not acceptance.
+
 The tarball now includes the AIHR reference connector and five example Charters. Its installed CLI exports them to a new external workspace with `template install aihr`, reuses identical files and rejects conflicting files without overwriting them or writing to the tested source. The distribution smoke checks these boundaries and confirms that no Mission or Run starts. Examples still need isolated AIHR configuration, reviewed UI assertions and business readers; packaging does not establish live acceptance.
 
 **AIHR first setup (2026-10-11):** `agent setup --template aihr` now installs the reference in the external workspace before the generic starter connector is created. The emitted Skill explains explicit selection, connector review and example Charter limits. Setup rejects a simultaneous connection check or host registration, because those would load the trusted connector before review. Existing generic or custom connectors still conflict without overwrite. CLI and installed-tarball tests cover fresh setup, repeat use, conflict protection and the absence of a Mission; this does not exercise an AIHR business workflow.

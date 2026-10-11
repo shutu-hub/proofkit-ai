@@ -271,13 +271,17 @@ describe("environment inspection", () => {
     ]) await expect(service.inspectEnvironment(input)).rejects.toThrow();
     await expect(readdir(workspaceRoot)).rejects.toThrow();
   });
-  it("keeps missing health, source association and browser prerequisites visible", async () => {
+  it("keeps missing health and browser prerequisites visible without inventing a source target", async () => {
     const { root, workspaceRoot, binding } = await fixture();
     binding.mockResolvedValue({ status: "unverified", method: "unavailable", expectedProjectRoot: root, reason: "Unsupported platform", observedAt: new Date().toISOString() });
     const missing = new LocalRunnerService({ root, workspaceRoot });
     const missingResult = await missing.inspectEnvironment();
     expect(missingResult).toMatchObject({ status: "blocked", checks: expect.arrayContaining([expect.objectContaining({ id: "surface-configuration", status: "blocked" }), expect.objectContaining({ id: "health-configuration", status: "unverified" })]) });
-    expect(missingResult.next.map((item) => item.action)).toEqual(expect.arrayContaining(["configure-surface", "declare-health", "confirm-source"]));
+    expect(missingResult.checks).toContainEqual(expect.objectContaining({ id: "source-binding", status: "unverified",
+      message: expect.stringContaining("No surface target") }));
+    expect(missingResult.next.map((item) => item.action)).toEqual(expect.arrayContaining(["configure-surface", "declare-health"]));
+    expect(missingResult.next.some((item) => item.action === "confirm-source")).toBe(false);
+    expect(binding).not.toHaveBeenCalled();
     const url = await serve((_req, res) => res.end());
     const service = new LocalRunnerService({ root, workspaceRoot, config: ProofkitConfigSchema.parse({ project: { root, health: [url] }, surfaces: { web: { baseUrl: url, executablePath: join(root, "missing-browser") } } }) });
     const result = await service.inspectEnvironment();

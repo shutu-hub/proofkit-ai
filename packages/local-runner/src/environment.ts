@@ -97,6 +97,8 @@ export async function inspectEnvironment(context: Context, input: EnvironmentIns
         surface === "electron" ? electron?.cdpUrl : web?.cdpUrl,
         surface === "electron" ? electron?.devtoolsActivePort ?? process.env.PROOFKIT_ELECTRON_DEVTOOLS_PORT : undefined,
         controller.signal);
+      if (!bindingUrl) return { id: "source-binding", kind: "source-binding", status: "unverified",
+        message: "No surface target could be resolved; configure its endpoint before checking source ownership." };
       const targetBinding = await bindingFor(bindingUrl);
       return { id: "source-binding", kind: "source-binding", status: targetBinding.status === "matching-process-path" ? "passed" : targetBinding.status === "different-project" && config.policies.targetBinding === "block-different" ? "blocked" : "unverified", message: targetBinding.reason, targetBinding };
     });
@@ -183,7 +185,7 @@ function recommendNext(checks: Check[], surface: EnvironmentInspection["surface"
   }
   const source = check("source-binding");
   const healthSources = checks.filter((item) => /^health-\d+$/.test(item.id) && item.targetBinding && item.status !== "passed");
-  const sourceIssues = [...(source?.status !== "passed" && source ? [source] : []), ...healthSources];
+  const sourceIssues = [...(source?.status !== "passed" && source?.targetBinding ? [source] : []), ...healthSources];
   if (sourceIssues.length) {
     add("confirm-source", sourceIssues.map((item) => item.id), sourceIssues.some((item) => item.targetBinding?.status === "different-project")
       ? "The observed listener is associated with another checkout; select the intended local app before testing."
