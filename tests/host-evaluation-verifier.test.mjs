@@ -37,6 +37,21 @@ async function rejects(input, issue) {
   assert.ok(result.issues.includes(issue), JSON.stringify(result.issues));
 }
 
+async function candidateFixture(t) {
+  const input = await fixture(t);
+  const path = ".proofkit/charters/resume-core.yml";
+  const content = "reviewed core charter";
+  await mkdir(join(input.workspace, ".proofkit", "charters"), { recursive: true });
+  await writeFile(join(input.workspace, path), content);
+  const sha256 = hash(content);
+  input.expected.noCatalog = true;
+  input.expected.candidatePath = path;
+  input.calls[0].result = { workspaceCandidates: { items: [{ path, sha256, parseStatus: "valid", focusMatched: true, issues: [] }] } };
+  input.calls[1].arguments = { level: "core", coverage: "declared", surface: "web", charterPath: path, charterSha256: sha256 };
+  input.missions[0].charter = { metadata: { proofkitCandidate: { path, sha256 } } };
+  return input;
+}
+
 test("accepts real linked facts for passed, failed and inconclusive host outcomes", async (t) => {
   for (const verdict of ["passed", "failed", "inconclusive"]) assert.deepEqual(await verifyHostSession(await fixture(t, verdict)), { passed: true, issues: [] });
 });
@@ -98,6 +113,24 @@ test("requires unchanged workspace contracts and an inline authored Charter", as
   await rejects(input, "authored-charter-not-submitted-inline");
   input.calls[1].arguments.charter = { actions: [{ kind: "captureResponse" }] };
   assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
+});
+
+test("requires a reviewed digest-pinned workspace Charter and the same saved Mission source", async (t) => {
+  const input = await candidateFixture(t);
+  assert.deepEqual(await verifyHostSession(input), { passed: true, issues: [] });
+  input.calls[1].arguments.charterSha256 = hash("different source");
+  await rejects(input, "candidate-path-and-digest-not-used");
+  input.calls[1].arguments.charterSha256 = input.calls[0].result.workspaceCandidates.items[0].sha256;
+  delete input.calls[1].arguments.charterPath;
+  input.calls[1].arguments.charter = { actions: [{ kind: "observe" }] };
+  await rejects(input, "candidate-path-and-digest-not-used");
+  delete input.calls[1].arguments.charter;
+  input.calls[1].arguments.charterPath = input.expected.candidatePath;
+  input.calls[0].result.workspaceCandidates.items[0].sha256 = hash("stale review");
+  await rejects(input, "candidate-not-reviewed-from-current-scope");
+  input.calls[0].result.workspaceCandidates.items[0].sha256 = input.calls[1].arguments.charterSha256;
+  input.missions[0].charter.metadata.proofkitCandidate.path = "charters/other.yml";
+  await rejects(input, "saved-candidate-source-mismatch");
 });
 test("requires a submitted response-bound reader and current identity in its independent HTTP facts", async (t) => {
   for (const wrongIdentity of [false, true]) {

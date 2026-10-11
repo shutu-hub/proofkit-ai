@@ -338,6 +338,9 @@ export class LocalRunnerService {
       if (input.url || input.expect?.length || input.oracleNames?.length || input.mode || input.sideEffectPolicy) {
         throw new Error("Candidate Charter path cannot be combined with ad-hoc planning options");
       }
+      // Let the shared candidate reader reject redirected files consistently
+      // before resolving the path for catalog identity comparison.
+      const loaded = await readWorkspaceCharterFile(this.workspaceRoot, input.charterPath, input.charterSha256);
       const selectedPath = resolveWithinWorkspace(this.workspaceRoot, input.charterPath);
       if (this.config.charters.some((entry) => {
         try { return sameProjectPath(resolveWithinWorkspace(this.workspaceRoot, entry.path), selectedPath); }
@@ -345,7 +348,6 @@ export class LocalRunnerService {
       })) {
         throw new Error("Candidate Charter is already registered; select its charterId instead");
       }
-      const loaded = await readWorkspaceCharterFile(this.workspaceRoot, input.charterPath, input.charterSha256);
       const requestedLevel = resolveTestLevel(input.intent, input.level).resolved;
       if (loaded.charter.level !== requestedLevel) {
         throw new Error(`Candidate Charter level ${loaded.charter.level} does not match requested level ${requestedLevel}`);

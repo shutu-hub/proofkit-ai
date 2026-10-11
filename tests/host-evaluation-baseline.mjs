@@ -57,7 +57,14 @@ async function evaluate(fixture, expected) {
     if (scope.testVerdict !== "not-asserted") throw new Error("Scope inspection unexpectedly claims acceptance");
     const input = { intent: expected.prompt, level: expected.level, coverage: expected.coverage,
       ...(expected.omitSurfaceInScriptedBaseline ? {} : { surface: expected.surface }) };
-    if (expected.noCatalog || expected.coverage === "project") {
+    if (expected.candidatePath) {
+      const candidate = scope.workspaceCandidates?.items.find((item) => item.path === expected.candidatePath);
+      if (candidate?.parseStatus !== "valid" || !candidate.sha256 || candidate.issues.length) {
+        throw new Error(`Reviewed workspace candidate is unavailable: ${expected.candidatePath}`);
+      }
+      input.charterPath = candidate.path;
+      input.charterSha256 = candidate.sha256;
+    } else if (expected.noCatalog || expected.coverage === "project") {
       input.charter = expected.noCatalog ? fixture.corePlan
         : JSON.parse(await readFile(join(fixture.workspace, ".proofkit", "charters", "resume-core.yml"), "utf8"));
     }

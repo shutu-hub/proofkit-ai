@@ -220,7 +220,7 @@ describe("MCP external workspace", () => {
       await client?.close();
       await server?.close();
       vi.restoreAllMocks();
-      await Promise.all([root, workspaceRoot].map((path) => rm(path, { recursive: true, force: true })));
+      await Promise.all([root, workspaceRoot].map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
     }
   });
 

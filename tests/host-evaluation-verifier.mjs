@@ -19,7 +19,18 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   check(answer.surface === (expected.surface ?? "web"), "answer-surface-changed");
   check(answer.verdict === expected.verdict, "answer-verdict-does-not-match-case");
   const starts = successful.filter((call) => ["run_test", "create_test_mission"].includes(call.tool));
-  if (expected.noCatalog) {
+  let reviewedCandidate;
+  if (expected.candidatePath) {
+    const scope = successful.find((call) => call.tool === "inspect_test_scope")?.result;
+    reviewedCandidate = scope?.workspaceCandidates?.items?.find((item) => item.path === expected.candidatePath);
+    const source = await readOwned(join(workspace, expected.candidatePath), workspace);
+    check(reviewedCandidate?.parseStatus === "valid" && reviewedCandidate?.focusMatched === true
+      && reviewedCandidate.issues?.length === 0 && typeof reviewedCandidate.sha256 === "string"
+      && source !== null && reviewedCandidate.sha256 === hash(source), "candidate-not-reviewed-from-current-scope");
+    check(starts.length > 0 && starts.every((call) => call.arguments.charterPath === expected.candidatePath
+      && call.arguments.charterSha256 === reviewedCandidate?.sha256 && !call.arguments.charter
+      && !call.arguments.charterId && !call.arguments.suiteId), "candidate-path-and-digest-not-used");
+  } else if (expected.noCatalog) {
     check(starts.some((call) => call.tool === "run_test" && call.arguments.charter
       && typeof call.arguments.charter === "object" && !call.arguments.charterId && !call.arguments.suiteId), "authored-charter-not-submitted-inline");
   }
@@ -57,6 +68,11 @@ export async function verifyHostSession({ expected, answer, calls, missions, run
   const mission = missions.find((item) => item.missionId === answer.missionId);
   check(Boolean(mission), "answer-mission-not-saved");
   check(missions.length === 1, "unexpected-mission-restart");
+  if (expected.candidatePath) {
+    check(mission?.charter?.metadata?.proofkitCandidate?.path === expected.candidatePath
+      && mission?.charter?.metadata?.proofkitCandidate?.sha256 === reviewedCandidate?.sha256,
+    "saved-candidate-source-mismatch");
+  }
   check(mission?.verdict === expected.verdict, "saved-verdict-does-not-match-case");
   check(["completed", "failed", "blocked", "cancelled"].includes(mission?.status), "mission-not-terminal");
   const statusReads = successful.filter((call) => call.tool === "get_mission_status"

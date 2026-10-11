@@ -136,6 +136,8 @@ Mission 采集 Run 证据时，业务事实、断言快照等 artifact 必须同
 
 另四个无目录、无预注册业务 Oracle 的可选隔离 Web/Electron 案例验证首次使用：真实 Codex 隐式发现 Skill 后，自行提交带 `captureResponse` 与内联 `httpOracles` 的 Charter，在两端分别确认本次 ID 的通过结果和旧 ID 的失败结果；脚本 MCP 基线与真实宿主评测均为 4/4。评测器要求实际适配器、本次捕获字段、独立读取来源、Mission/Run 归属和报告证据一致。此结果证明合成接口契约下的宿主行为，不代表任意项目都能自动发现可靠业务读接口。
 
+未登记 Charter 的可选 `candidate-core` 案例已通过脚本 MCP 基线与三次真实 Codex 隐式 Skill 评测（各次均为 1/1）。评测器核对 `inspect_test_scope` 返回的相对路径和 SHA-256、实际 `run_test` 参数、Mission 保存的候选来源，以及本次简历文件 ID 与独立读取证据。前两次通过时，宿主分别误用绝对路径、额外传入 `sideEffectPolicy`，收到工具拒绝后修正。Skill 与 MCP 工具说明补齐参数约束后，第三次只有一次成功的 `run_test` 调用。首次评测时，夹具源码未公开候选连接器使用的详情接口，模型合理地改用内联状态读取，因此路径选择案例未通过；夹具补齐可审查的接口契约后才得到上述通过结果。这仍是单个合成案例，不能推算多项目使用的成功率。
+
 另有两个可选 Electron/CDP 案例，通过同一原生 MCP 接口验证核心测试通过和业务关联缺陷；需设置 `PROOFKIT_ELECTRON_PATH`。评测器会核对用户指定的平台与 Mission、Run 页面快照，拒绝把 Web 执行冒充为 Electron 验收。
 
 ## 当前边界与下一阶段

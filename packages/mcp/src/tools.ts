@@ -65,7 +65,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "create_test_mission",
-    "Create a reviewable AI test mission from natural language, a catalog ID, a structured Charter, or a reviewed external-workspace candidate path and scope SHA-256. When surface is omitted, an unambiguous platform in the intent is used. The tested project is not modified.",
+    "Create a reviewable AI test mission from natural language, a catalog ID, a structured Charter, or a reviewed external-workspace candidate path and scope SHA-256. Use the candidate's relative path exactly as returned by workspaceCandidates; do not combine it with charter, charterId, suiteId, url, expect, oracleNames, mode or sideEffectPolicy. When surface is omitted, an unambiguous platform in the intent is used. The tested project is not modified.",
     {
       intent: z.string().min(1),
       charter: TestCharterSchema.optional(),
@@ -87,7 +87,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "run_test",
-    "Run a natural-language ProofKit test mission at the requested intensity. When surface is omitted, an unambiguous platform in the intent is used. Supply a structured Charter or a reviewed external-workspace candidate path with its scope SHA-256 when no catalog entry covers the workflow. Poll status and evidence for the final result.",
+    "Run a natural-language ProofKit test mission at the requested intensity. When surface is omitted, an unambiguous platform in the intent is used. Supply a structured Charter or a reviewed external-workspace candidate relative path and scope SHA-256 when no catalog entry covers the workflow. Do not combine that path with charter, charterId, suiteId, url, expect, oracleNames, mode or sideEffectPolicy; the candidate file owns these settings. Poll status and evidence for the final result.",
     {
       intent: z.string().min(1),
       charter: TestCharterSchema.optional(),

@@ -121,6 +121,9 @@ node tests/host-evaluation-baseline.mjs
 node tests/host-evaluation.mjs --run --cases core-pass,core-defect,core-pending,project-gap,quick-pass,author-core
 # No catalog or registered business Oracle; the host must author an inline reader:
 node tests/host-evaluation.mjs --run --implicit-skill --cases inline-core-pass,inline-core-defect
+# Unregistered external Charter: discover, review, then run with its path and SHA-256:
+node tests/host-evaluation-baseline.mjs --cases candidate-core
+node tests/host-evaluation.mjs --run --implicit-skill --cases candidate-core
 # Set PROOFKIT_ELECTRON_PATH before the optional desktop cases:
 node tests/host-evaluation.mjs --run --implicit-skill --cases inline-electron-pass,inline-electron-defect
 ```
@@ -143,6 +146,20 @@ the verifier requires a failed business result rather than accepting its
 `host-evaluation-baseline.mjs --cases inline-core-pass,inline-core-defect`
 or `--cases inline-electron-pass,inline-electron-defect`
 when checking the scripted transport without a model.
+The optional `candidate-core` case leaves a complete core Charter in the
+external workspace without registering it. The scripted baseline takes its
+path and SHA-256 from `inspect_test_scope.workspaceCandidates`; the real host
+must independently review the source and use that same digest-pinned path.
+The verifier rejects an inline replacement, a stale digest, a changed Charter,
+or a Mission that does not retain the selected candidate's path and digest.
+Both evaluations run against an isolated synthetic product, so this case
+measures host behavior rather than AIHR acceptance.
+The scripted baseline and three real Codex implicit-Skill runs passed (1/1 in
+each run). The host recovered from an absolute-path error in one run and an
+extra `sideEffectPolicy` argument in the next. After the Skill and MCP tool
+descriptions stated both constraints, a third run used one successful
+`run_test` call with the candidate path and digest. This is one synthetic
+scenario, not a measured cross-project success rate.
 In the scripted baseline, `core-pass` omits `surface` to check the ordinary Web fallback. The optional `electron-core-pass` also omits it, checking desktop intent selection through the full MCP and Electron path when an Electron executable is provided.
 The `run_test` start receipt returns the selected `surface` and full `executionProfile.surfaceMatrix`, so the host can inspect the saved execution target even when it omitted the input platform.
 

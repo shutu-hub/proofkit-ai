@@ -51,11 +51,17 @@ Charter files. These are read-only, bounded hints, including structural issue
 codes; they are never catalog-ready or executable by discovery alone. A
 fallback-unmatched selection means no candidate literally matched the focus.
 Inspect the Charter and source flow, and repair missing assertions or Oracles.
-After review, use run_test with charterPath and the exact charterSha256 returned
-by the current scope inspection, or register a reusable catalog entry. A digest
+After review, use run_test with the relative charterPath exactly as returned
+by workspaceCandidates and the exact charterSha256 from the same scope
+inspection, or register a reusable catalog entry. Do not convert the candidate
+path to an absolute filesystem path. A digest
 mismatch means the file changed: inspect it again before planning. Do not
 infer core proof from an
 unregistered file or lower the requested level to reuse a quick example.
+The candidate file owns its actions, Oracles, mode and side-effect policy;
+do not combine charterPath with charter, charterId, suiteId, url, expect,
+oracleNames, mode or sideEffectPolicy tool arguments. Keep the requested
+intent, level, surface and coverage in the call.
 Treat write-opt-in-required and mcp-workspace-policy-conflict as execution
 prerequisites. Do not alter a workspace policy or authorize writes solely to
 clear a candidate hint; confirm isolated test data and the user's scope first.

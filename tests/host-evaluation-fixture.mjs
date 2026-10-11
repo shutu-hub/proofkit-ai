@@ -13,6 +13,8 @@ export const hostCases = [
   { id: "project-gap", prompt: "测试整个项目的所有功能", surface: "web", level: "core", coverage: "project", verdict: "not-asserted", state: "complete" },
   { id: "quick-pass", prompt: "快速测试简历获取页面", surface: "web", level: "quick", coverage: "declared", verdict: "passed", state: "complete" },
   { id: "author-core", prompt: "测试简历获取功能", surface: "web", level: "core", coverage: "declared", verdict: "passed", state: "complete", noCatalog: true },
+  { id: "candidate-core", prompt: "测试简历获取功能", surface: "web", level: "core", coverage: "declared", verdict: "passed", state: "complete",
+    noCatalog: true, candidatePath: ".proofkit/charters/resume-core.yml", optional: true },
   { id: "inline-core-pass", prompt: "测试简历获取功能，并用项目的只读状态接口核对本次文件 ID 和处理终态", surface: "web", level: "core", coverage: "declared", verdict: "passed", state: "complete", noCatalog: true, noReader: true, optional: true },
   { id: "inline-core-defect", prompt: "测试简历获取功能，并用项目的只读状态接口核对本次文件 ID 和处理终态", surface: "web", level: "core", coverage: "declared", verdict: "failed", state: "complete", noCatalog: true, noReader: true, wrongIdentity: true, optional: true },
   { id: "electron-core-pass", prompt: "测试 Electron 桌面端的简历获取功能", surface: "electron", level: "core", coverage: "declared", verdict: "passed", state: "complete", optional: true, omitSurfaceInScriptedBaseline: true },
@@ -37,7 +39,10 @@ export async function acquireResume() {
   return (await response.json()).data;
 }
 `,
-    "resume-api.js": `// Independent reader contract for the resume workflow.
+    "resume-api.js": `// Independent reader contracts for the resume workflow.
+// POST /api/v1/resumes returns { code: 'SUCCESS', data: { fileId: string, jobId: string } }.
+// GET /api/v1/resumes/:fileId returns { code: 'SUCCESS', data: { fileId: string, jobId: string, state: 'pending'|'complete'|'failed' } }.
+// The returned fileId and jobId must equal the current POST response; jobId '7' is the requested job.
 // GET /api/v1/resume-status?fileId=<the fileId returned by POST /api/v1/resumes>
 // Response: { code: 'SUCCESS', data: { fileId: string, state: 'pending'|'complete'|'failed' } }
 // The response's data.fileId must equal the current POST response fileId.
@@ -129,6 +134,8 @@ export const resumeStatusRoute = '/api/v1/resume-status';
     await writeFile(join(workspace, ".proofkit", "config.yaml"), JSON.stringify(config));
     if (!expected.noCatalog) {
       for (const level of ["core", "quick"]) await writeFile(join(workspace, ".proofkit", "charters", `resume-${level}.yml`), JSON.stringify(plan(level)));
+    } else if (expected.candidatePath) {
+      await writeFile(join(workspace, expected.candidatePath), JSON.stringify(plan("core")));
     }
     await writeFile(join(workspace, ".proofkit", "integration.mjs"), expected.noReader
       ? "export default { name: 'host-evaluation-fixture', version: '1.0.0', oracles: [] };\n"
@@ -153,10 +160,10 @@ export const resumeStatusRoute = '/api/v1/resume-status';
       }
     }] };`);
     const setup = await setupAgent({ root: source, workspaceRoot: workspace, harness: "codex", installSkill: true, skillsDir: join(harness, ".agents", "skills") });
-    const contractPaths = ["config.yaml", "integration.mjs",
-      ...(expected.noCatalog ? [] : ["charters/resume-core.yml", "charters/resume-quick.yml"])];
+    const charterNames = expected.candidatePath ? ["resume-core.yml"]
+      : expected.noCatalog ? [] : ["resume-core.yml", "resume-quick.yml"];
+    const contractPaths = ["config.yaml", "integration.mjs", ...charterNames.map((name) => `charters/${name}`)];
     const contractHashes = await Promise.all(contractPaths.map(async (path) => hash(await readFile(join(workspace, ".proofkit", path)))));
-    const charterNames = expected.noCatalog ? [] : ["resume-core.yml", "resume-quick.yml"];
     return { root, source, workspace, harness, setup, corePlan: plan("core"),
       async sourceUnchanged() {
         const paths = await readdir(source);
