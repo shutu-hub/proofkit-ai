@@ -458,6 +458,16 @@ export function createProgram(): Command {
       process.exitCode = comparisonExitCode(comparison.status);
     });
 
+  mission.command("stability <missionIds...>")
+    .description("Re-audit 3–5 ordered Mission samples without running the project")
+    .option("--root <path>", "project root", ".")
+    .action(async (missionIds: string[], options: RootOptions) => {
+      const runner = new LocalRunnerService({ root: resolve(options.root), workspaceRoot: options.workspace });
+      const analysis = await runner.analyzeMissionStability(missionIds);
+      console.log(JSON.stringify(analysis, null, 2));
+      process.exitCode = analysis.status === "uniform-pass" ? 0 : analysis.status === "inconclusive" ? 2 : 1;
+    });
+
   program.command("report <runId>")
     .description("Regenerate a static report for a run")
     .option("--root <path>", "project root", ".")

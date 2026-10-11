@@ -15,6 +15,7 @@ import { BlockedError, CancelledError, ExecutionRunner, z, type BusinessOracle, 
 import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
 import { auditComparisonCurrentSource, compareMissionRecords } from "./mission-comparison.js";
+import { analyzeMissionStability as analyzeMissionStabilityRecords } from "./mission-stability.js";
 import { hasCompleteCleanupEvidence } from "./cleanup-evidence.js";
 import { ProjectMissionStore } from "./mission-store.js";
 import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from "./suite-verifier.js";
@@ -23,7 +24,7 @@ import { admitReviewedWorkflowScope, auditWorkflowReview } from "./workflow-revi
 import { inspectTestScope } from "./test-scope.js";
 import { readWorkspaceCharterFile } from "./workspace-charter-file.js";
 import { compareCurrentSource, projectMissionResult } from "./mission-result.js";
-import type { MissionResult } from "@proofkit/contracts";
+import type { MissionResult, MissionStabilityAnalysis } from "@proofkit/contracts";
 import { ResourceRecoveryService } from "./resource-recovery.js";
 import { captureRunEvidence } from "./run-evidence.js";
 import { auditMissionProofClassification } from "./mission-proof-classification.js";
@@ -890,6 +891,18 @@ export class LocalRunnerService {
     const current = currentSourceState ?? ((candidate.verdict === "passed" || candidate.verdict === "failed")
       && finalSourceState?.complete && finalSourceState.method === "git" ? await captureSourceState(this.root) : undefined);
     return auditComparisonCurrentSource(savedComparison, finalSourceState, current);
+  }
+
+  async analyzeMissionStability(missionIds: string[]): Promise<MissionStabilityAnalysis> {
+    if (missionIds.length < 3 || missionIds.length > 5) throw new Error("Stability analysis requires 3 to 5 ordered Missions");
+    if (new Set(missionIds).size !== missionIds.length) throw new Error("Stability analysis requires distinct Missions");
+    const samples = [];
+    for (const id of missionIds) {
+      const mission = await this.missionAgent.load(validateMissionId(id));
+      const evidence = await this.missionEvidence(id);
+      samples.push({ mission, result: evidence.summary, sourceState: evidence.sourceState, finalSourceState: evidence.finalSourceState });
+    }
+    return analyzeMissionStabilityRecords(samples, (runId) => this.loadRunSummary(runId));
   }
 
   async replayMission(missionId: string, options: { approve?: boolean } = {}): Promise<MissionStatus> {

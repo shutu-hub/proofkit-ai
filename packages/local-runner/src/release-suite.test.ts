@@ -19,6 +19,26 @@ afterEach(async () => {
 });
 
 describe("explicit release suites", () => {
+  it("re-audits three direct replay Missions as distinct evidenced samples", async () => {
+    const service = await createSuiteService();
+    execFileSync("git", ["init", "-q"], { cwd: service.root });
+    execFileSync("git", ["add", "."], { cwd: service.root });
+    execFileSync("git", ["-c", "user.name=ProofKit", "-c", "user.email=proofkit@example.invalid", "commit", "-qm", "fixture"], { cwd: service.root });
+    stubRuns(service, { matchingTarget: true });
+    const first = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical", policy: { requireApproval: false } });
+    await service.startMission(first.missionId);
+    expect((await service.waitMission(first.missionId)).verdict).toBe("passed");
+    const second = await service.replayMission(first.missionId, { approve: true });
+    expect((await service.waitMission(second.mission.missionId)).verdict).toBe("passed");
+    const third = await service.replayMission(second.mission.missionId, { approve: true });
+    expect((await service.waitMission(third.mission.missionId)).verdict).toBe("passed");
+    const audited = await service.missionEvidence(first.missionId);
+    expect(audited.testVerdict, audited.testVerdictReason).toBe("passed");
+    const analysis = await service.analyzeMissionStability([first.missionId, second.mission.missionId, third.mission.missionId]);
+    expect(analysis).toMatchObject({ status: "uniform-pass", passes: 3, failures: 0, gaps: [] });
+    expect(analysis.samples.every((sample) => sample.expectedRuns === 12 && sample.observedRuns === 12)).toBe(true);
+  });
+
   it("requires fresh approval when a suite has an interactive negative case under deny-policy Charters", async () => {
     const service = await createSuiteService();
     const charterPath = join(service.workspaceRoot, ".proofkit", "charters", "login.yml");
@@ -537,7 +557,7 @@ async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[];
   return LocalRunnerService.create({ root, workspaceRoot });
 }
 
-function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; wrongVisitedOrigin?: string; missingTargetBinding?: string; fileElectron?: boolean; wrongFileDocument?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-response" | "redacted" } = {}) {
+function stubRuns(service: LocalRunnerService, options: { matchingTarget?: boolean; failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; wrongVisitedOrigin?: string; missingTargetBinding?: string; fileElectron?: boolean; wrongFileDocument?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-response" | "redacted" } = {}) {
   installMockRunEvidence(service);
   const summaries = new Map<string, RunSummary>();
   const started: Array<{ charterId: string; surface: LocalAdapterName; negativeCaseId?: string }> = [];
@@ -557,8 +577,10 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     const routePattern = options.dynamicResume && charterId === "resume" ? "/resumes/:id" : `/${charterId}`;
     const verdict: Verdict = failed ? "failed" : "passed";
     const now = new Date().toISOString();
-    const oracleArtifact = `${runId}/oracle.json`;
-    const sourceArtifact = `${runId}/oracle-source.json`;
+    const artifactRoot = options.matchingTarget ? `${runId}/artifacts` : runId;
+    const oracleArtifact = `${artifactRoot}/oracle.json`;
+    const sourceArtifact = `${artifactRoot}/oracle-source.json`;
+    const snapshotArtifact = `${artifactRoot}/snapshot.json`;
     const summary: RunSummary = {
       runId, projectRoot: service.root, workspaceRoot: service.workspaceRoot,
       execution: { adapter: surface, ...(replayOfRunId ? { replayOfRunId } : {}) },
@@ -572,14 +594,19 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
             fileDocumentSha256: createHash("sha256").update(`${new URL(fileDocument).host}${new URL(fileDocument).pathname}`).digest("hex"),
             matchedRoutePaths: visited ? [routePattern] : [] } : {} },
       }],
-      assertions: kind === "negative" ? [] : [{ assertion: charter.assertions[0]!, passed: true, message: "visible", evidence: [`${runId}/snapshot.json`] }],
+      assertions: kind === "negative" ? [] : [{ assertion: charter.assertions[0]!, passed: true, message: "visible", evidence: [snapshotArtifact] }],
       oracles: charter.oracles?.length ? [{ name: `${charterId}-oracle`, verificationKind: "business", passed: !failed, message: failed ? "business state is wrong" : "business state is done", evidence: missing ? [oracleArtifact] : [sourceArtifact, oracleArtifact], sourceEvidenceCount: missing ? 0 : 1, sourceEvidenceArtifacts: missing ? [] : [sourceArtifact], observedAt: now }] : [],
-      artifacts: [`${runId}/snapshot.json`, ...(charter.oracles?.length ? [...(missing ? [] : [sourceArtifact]), oracleArtifact] : [])],
+      artifacts: [snapshotArtifact, ...(charter.oracles?.length ? [...(missing ? [] : [sourceArtifact]), oracleArtifact] : [])],
       findings: [],
       ...(options.missingTargetBinding === `${charterId}/${surface}/${kind}` ? {} : { targetBinding: {
-        status: "unverified" as const, method: "unavailable" as const, expectedProjectRoot: service.root,
+        status: options.matchingTarget ? "matching-process-path" as const : "unverified" as const,
+        method: options.matchingTarget ? "windows-listener-process" as const : "unavailable" as const, expectedProjectRoot: service.root,
         targetOrigin: "http://127.0.0.1:8765", reason: "Fixture target origin", observedAt: now,
       } }),
+      ...(options.matchingTarget && surface === "electron" ? { applicationBinding: {
+        status: "matching-process-path" as const, method: "windows-listener-process" as const,
+        expectedProjectRoot: service.root, targetOrigin: "http://127.0.0.1:9222", reason: "Fixture Electron process", observedAt: now,
+      } } : {}),
     };
     summaries.set(runId, summary);
     return summary;

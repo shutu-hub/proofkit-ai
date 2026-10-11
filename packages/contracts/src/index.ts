@@ -1514,6 +1514,29 @@ export const ReplayConsistencySchema = z.object({
 });
 export type ReplayConsistency = z.infer<typeof ReplayConsistencySchema>;
 
+/** A bounded, re-audited sequence of the same Mission scope. Variable outcomes are an investigation signal, not a diagnosed flaky test. */
+export const MissionStabilityAnalysisSchema = z.object({
+  status: z.enum(["uniform-pass", "uniform-failure", "variable-outcome", "inconclusive"]),
+  missionIds: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/)).min(3).max(5),
+  scopeHash: z.string().regex(/^[a-f0-9]{64}$/),
+  sourceHeadSha: z.string().regex(/^[a-f0-9]{40}$/).optional(),
+  sourceWorktreeSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  passes: z.number().int().nonnegative(),
+  failures: z.number().int().nonnegative(),
+  samples: z.array(z.object({
+    missionId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+    replayOfMissionId: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional(),
+    testVerdict: z.union([VerdictSchema, z.literal("not-asserted")]),
+    expectedRuns: z.number().int().nonnegative(),
+    observedRuns: z.number().int().nonnegative(),
+    evidence: z.array(EvidenceRefSchema).max(4),
+  })).min(3).max(5),
+  gaps: z.array(z.string().min(1)).max(20),
+  omittedGaps: z.number().int().nonnegative(),
+  checkedAt: z.string().datetime(),
+});
+export type MissionStabilityAnalysis = z.infer<typeof MissionStabilityAnalysisSchema>;
+
 /** Current readability of the bounded Mission presentation, separate from its saved acceptance verdict. */
 export const MissionEvidenceIntegritySchema = z.object({
   status: z.enum(["intact", "degraded", "partial", "no-evidence"]),

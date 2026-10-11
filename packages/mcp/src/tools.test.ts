@@ -33,6 +33,7 @@ describe("ProofKit MCP tools", () => {
       "cancel_mission",
       "replay_mission",
       "compare_missions",
+      "analyze_mission_stability",
       "plan_test",
       "start_run",
       "get_run_status",
@@ -51,7 +52,7 @@ describe("ProofKit MCP tools", () => {
     for (const name of ["discover_project", "inspect_test_scope", "list_test_charters", "list_test_suites", "get_mission_status"]) {
       expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).toBe(true);
     }
-    for (const name of ["inspect_test_environment", "inspect_surface", "create_test_mission", "run_test", "get_mission_evidence"]) {
+    for (const name of ["inspect_test_environment", "inspect_surface", "create_test_mission", "run_test", "get_mission_evidence", "analyze_mission_stability"]) {
       expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).not.toBe(true);
     }
 
@@ -87,6 +88,19 @@ describe("ProofKit MCP tools", () => {
       expect(runner.replayMission).toHaveBeenCalledWith("mission-before", { approve: false });
       await client.callTool({ name: "replay_mission", arguments: { missionId: "mission-before", approve: true } });
       expect(runner.replayMission).toHaveBeenLastCalledWith("mission-before", { approve: true });
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("passes a bounded ordered Mission chain to read-only stability analysis", async () => {
+    const runner = { analyzeMissionStability: vi.fn(async () => ({ status: "variable-outcome", passes: 2, failures: 1 })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const missionIds = ["mission-a", "mission-b", "mission-c"];
+      const response = await client.callTool({ name: "analyze_mission_stability", arguments: { missionIds } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ status: "variable-outcome", passes: 2, failures: 1 });
+      expect(runner.analyzeMissionStability).toHaveBeenCalledWith(missionIds);
+      expect((await client.callTool({ name: "analyze_mission_stability", arguments: { missionIds: missionIds.slice(0, 2) } })).isError).toBe(true);
+      expect(runner.analyzeMissionStability).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   });
 

@@ -34,8 +34,8 @@ export async function compareMissionRecords(
   evidenceDir: string,
   loadRun: (runId: string) => Promise<RunSummary>,
 ): Promise<MissionComparison> {
-  const baselineScopeHash = scopeHash(baseline);
-  const candidateScopeHash = scopeHash(candidate);
+  const baselineScopeHash = missionScopeHash(baseline);
+  const candidateScopeHash = missionScopeHash(candidate);
   const baselineSourceState = sourceStateFor(baseline);
   const baselineFinalSourceState = sourceStateFor(baseline, "project.source-state-final");
   const candidateSourceState = sourceStateFor(candidate);
@@ -311,7 +311,7 @@ function sourceStability(start: SourceState | undefined, end: SourceState | unde
     : "unknown";
 }
 
-function scopeHash(mission: TestMission): string {
+export function missionScopeHash(mission: TestMission): string {
   return sha256(canonical({
     projectRoot: resolve(mission.projectRoot),
     workspaceRoot: resolve(mission.workspaceRoot ?? mission.projectRoot),

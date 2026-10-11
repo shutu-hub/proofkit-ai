@@ -179,6 +179,13 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "analyze_mission_stability",
+    "Re-audit three to five ordered Missions from one direct-replay chain. Requires matching source, scope, target, file inputs and business proof. Variable outcomes are an investigation signal, not a flaky-test diagnosis. This tool never starts a Run but may refresh report snapshots in the test workspace.",
+    { missionIds: z.array(z.string().min(1)).min(3).max(5) },
+    async ({ missionIds }) => result(await runner.analyzeMissionStability(missionIds)),
+  );
+
+  server.tool(
     "plan_test",
     "Turn a natural-language intent into a validated, reviewable ProofKit Test Charter. Planning does not execute the project.",
     {

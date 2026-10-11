@@ -218,8 +218,10 @@ process.exit(3);
   const binClient = new Client({ name: "proofkit-installed-bin-smoke", version: "1" });
   try {
     await withDeadline(binClient.connect(binTransport), 10_000, "Installed MCP binary connection");
-    assert.ok((await binClient.listTools()).tools.some((tool) => tool.name === "run_test"));
-    assert.ok((await binClient.listTools()).tools.some((tool) => tool.name === "await_test_result"));
+    const installedTools = (await binClient.listTools()).tools;
+    assert.ok(installedTools.some((tool) => tool.name === "run_test"));
+    assert.ok(installedTools.some((tool) => tool.name === "await_test_result"));
+    assert.ok(installedTools.some((tool) => tool.name === "analyze_mission_stability"));
   } finally { await binClient.close(); }
   const transport = new StdioClientTransport({ command: emittedServer.command, args: emittedServer.args,
     env: { ...mcpEnv, ...emittedServer.env } });

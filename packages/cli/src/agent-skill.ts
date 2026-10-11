@@ -190,6 +190,10 @@ use approve_test_plan and start_mission after review. Preserve the original
 scope and fixture bytes, then compare_missions after the replay finishes.
 Report verified-in-scope only when the comparison says so. A different scenario
 or passing page cannot certify the original defect or the entire project.
+For variability investigation, gather three to five separately authorized
+direct-replay Missions and call analyze_mission_stability with their IDs in
+execution order. A variable-outcome result is evidence of changed outcomes,
+not a flaky-test root-cause diagnosis. Do not reuse one Run as several samples.
 Read the comparison again when reporting: candidateSourceFreshness changed or
 unavailable withdraws a saved repair or reproduced-defect claim to inconclusive.
 historicalStatus describes the saved result, not the current checkout.
