@@ -15,6 +15,19 @@ test("provider access outranks an MCP cancellation; ordinary model output is not
   assert.equal(classifyHostBlocker(JSON.stringify({ type: "item.completed", item: {
     type: "agent_message", text: "The example says 403 Forbidden: insufficient balance" } })), null);
   assert.equal(classifyHostBlocker(JSON.stringify(events[0])), "mcp-tool-call-cancelled");
+  assert.equal(classifyHostBlocker(JSON.stringify({ type: "system", subtype: "api_retry",
+    error_status: 401, error: "authentication_failed" })), "provider-access");
+});
+
+test("a Claude API authentication retry stops before its backoff loop", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "proofkit-claude-runtime-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const script = join(root, "fake-claude.cjs");
+  await writeFile(script, 'process.stdout.write(JSON.stringify({type:"system",subtype:"api_retry",error_status:401,error:"authentication_failed"})+"\\n"); setInterval(()=>{},1000);');
+  const result = await runHost(process.execPath, [script], root, 10_000, join(root, "events.jsonl"));
+  assert.equal(result.blocker, "provider-access");
+  assert.equal(result.stopReason, "provider-access");
+  assert.ok(result.durationMs < 5_000);
 });
 
 test("a decisive provider error stops the owned host process before its retry loop", async (t) => {

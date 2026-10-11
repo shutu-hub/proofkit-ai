@@ -49,6 +49,47 @@ test("host evaluator stops after a provider blocker and does not score later cas
   }
 });
 
+test("Claude host evaluator uses an isolated MCP config and stops an authentication retry", async (t) => {
+  const toolsRoot = await mkdtemp(join(tmpdir(), "proofkit-fake-claude-"));
+  let evaluationRoot;
+  t.after(async () => {
+    if (evaluationRoot) await rm(evaluationRoot, { recursive: true, force: true });
+    await rm(toolsRoot, { recursive: true, force: true });
+  });
+  const cli = join(toolsRoot, "fake-claude.js");
+  const argvPath = join(toolsRoot, "argv.json");
+  await writeFile(cli, `require("node:fs").writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));
+    process.stdout.write(JSON.stringify({type:"system",subtype:"api_retry",error_status:401,error:"authentication_failed"})+"\\n"); setInterval(()=>{},1000);`);
+  const child = spawn(process.execPath, ["tests/host-evaluation.mjs", "--run", "--host", "claude-code",
+    "--implicit-skill", "--cases", "quick-pass,core-defect", "--timeout-ms", "10000"], {
+    cwd: repo, windowsHide: true, shell: false,
+    env: { ...process.env, PROOFKIT_CLAUDE_CLI: cli }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "", stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+  const code = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  const lines = stdout.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  evaluationRoot = lines[0]?.evaluationRoot;
+  assert.equal(code, 1, stderr);
+  const report = JSON.parse(await readFile(join(evaluationRoot, "host-evaluation.json"), "utf8"));
+  assert.equal(report.evaluation, "real-claude-code-host");
+  assert.equal(report.attempted, 1);
+  assert.equal(report.stoppedBy, "provider-access");
+  assert.deepEqual(report.notRun, ["core-defect"]);
+  const argv = JSON.parse(await readFile(argvPath, "utf8"));
+  assert.ok(argv.includes("--strict-mcp-config"));
+  assert.ok(argv.includes("--json-schema"));
+  assert.ok(argv.includes("--no-session-persistence"));
+  assert.ok(argv.includes("dontAsk"));
+  assert.ok(argv.some((value) => /mcp__proofkit-[a-f0-9]+__\*/.test(value)));
+  const config = JSON.parse(await readFile(argv[argv.indexOf("--mcp-config") + 1], "utf8"));
+  assert.equal(Object.keys(config.mcpServers).length, 1);
+});
+
 test("a timed-out host preserves a candidate answer without scoring it as a pass", async (t) => {
   const toolsRoot = await mkdtemp(join(tmpdir(), "proofkit-fake-host-timeout-"));
   let evaluationRoot;

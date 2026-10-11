@@ -13,11 +13,9 @@ export function classifyHostBlocker(jsonl) {
   for (const line of jsonl.split(/\r?\n/)) {
     let event;
     try { event = JSON.parse(line); } catch { continue; }
-    if (event.type === "error") {
-      const provider = providerBlocker(event.message);
-      if (provider) return provider;
-    }
-    if (event.item?.type === "mcp_tool_call" && event.item.status === "failed"
+    const provider = eventProviderBlocker(event);
+    if (provider) return provider;
+    if (event?.item?.type === "mcp_tool_call" && event.item.status === "failed"
       && /user cancelled MCP tool call/i.test(JSON.stringify(event.item.error ?? event.item.result ?? {}))) {
       approvalCancelled = true;
     }
@@ -29,6 +27,15 @@ function providerBlocker(message) {
   if (typeof message !== "string") return null;
   if (/insufficient[ _-]*(?:balance|quota)|quota[ _-]*exceeded|billing[ _-]*(?:limit|error)/i.test(message)) return "provider-balance";
   if (/\b(?:401 Unauthorized|403 Forbidden)\b|invalid[ _-]*(?:api[ _-]*)?key|authentication[ _-]*failed/i.test(message)) return "provider-access";
+  return null;
+}
+
+function eventProviderBlocker(event) {
+  if (event?.type === "error") return providerBlocker(event.message);
+  if (event?.type === "system" && event.subtype === "api_retry") {
+    if (event.error_status === 401 || event.error_status === 403) return "provider-access";
+    return providerBlocker(event.error);
+  }
   return null;
 }
 
@@ -113,18 +120,25 @@ export async function runHost(executable, args, cwd, timeoutMs, eventsPath) {
         let event;
         try { event = JSON.parse(line); } catch { continue; }
         const elapsed = Date.now() - started;
-        if (event.item?.type === "mcp_tool_call" && event.type === "item.completed") {
+        if (event?.item?.type === "mcp_tool_call" && event.type === "item.completed") {
           milestones.firstToolCallAtMs ??= elapsed;
           milestones.lastToolCallAtMs = elapsed;
         }
-        if (event.item?.type === "agent_message" && event.type === "item.completed") {
+        if (event?.type === "assistant" && Array.isArray(event.message?.content)
+          && event.message.content.some((block) => block.type === "tool_use")) {
+          milestones.firstToolCallAtMs ??= elapsed;
+          milestones.lastToolCallAtMs = elapsed;
+        }
+        if (event?.item?.type === "agent_message" && event.type === "item.completed") {
           milestones.lastAgentMessageAtMs = elapsed;
         }
-        if (event.type === "turn.completed") milestones.turnCompletedAtMs = elapsed;
-        if (event.type === "error") {
-          const provider = providerBlocker(event.message);
-          if (provider) { stop(provider); break; }
+        if (event?.type === "assistant" && Array.isArray(event.message?.content)
+          && event.message.content.some((block) => block.type === "text")) {
+          milestones.lastAgentMessageAtMs = elapsed;
         }
+        if (event?.type === "turn.completed" || event?.type === "result") milestones.turnCompletedAtMs = elapsed;
+        const provider = eventProviderBlocker(event);
+        if (provider) { stop(provider); break; }
       }
     });
     events.on("drain", () => child.stdout.resume());

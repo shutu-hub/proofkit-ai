@@ -253,6 +253,8 @@ On 2026-10-11, `pnpm test:smoke:electron:file` exercised a temporary `file:` Ele
 
 The subsequent URL evidence projection hides undeclared HTTP paths in runtime events, surface snapshots and action receipts, and hides Electron file paths behind a document SHA-256 checked against the configured target. The file-route smoke now asserts that eight Runs retain route coverage without storing the concrete resume ID or file URL in `run.json` and `events.jsonl`. Declared configuration URLs, relative paths in visible UI text, connector evidence and screenshot pixels remain outside this projection.
 
+The host evaluator now accepts `--host claude-code` and reuses the same source fixture, native MCP server and saved-evidence verifier as Codex. It parses Claude stream tool results only after completion, requires the official structured final answer, isolates MCP configuration, and stops promptly on provider authentication retries. Unit tests cover the stream and blocker contracts. The local Claude CLI initialized `quick-pass` on 2026-10-12 with the generated Skill and ProofKit MCP tools visible, but its configured provider returned 401 before any tool call. Claude model effectiveness remains unverified. The pending real-host gate is a passing Claude quick/core/defect set with the source and workspace unchanged.
+
 **Gate:** publish benchmark results for every enabled planner and refuse a green verdict when the generated plan has no independent business proof. Missing level-specific evidence, a required release surface, or a required replay is `inconclusive`, with the first missing boundary recorded.
 
 ## Phase 3: AIHR business vertical

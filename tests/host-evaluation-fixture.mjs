@@ -28,7 +28,7 @@ export const hostCases = [
 ];
 
 /** Synthetic business facts exercise host behavior without real accounts, data or billable work. */
-export async function createHostFixture(root, expected) {
+export async function createHostFixture(root, expected, agentHarness = "codex") {
   const source = join(root, "source");
   const workspace = join(root, "workspace");
   const harness = join(root, "harness");
@@ -163,7 +163,8 @@ export const resumeStatusRoute = '/api/v1/resume-status';
           evidence: [JSON.stringify({ captured: { fileId, jobId }, expected: { jobId: '7', state: 'complete' }, observed: data })], observedAt: new Date().toISOString() };
       }
     }] };`);
-    const setup = await setupAgent({ root: source, workspaceRoot: workspace, harness: "codex", installSkill: true, skillsDir: join(harness, ".agents", "skills") });
+    const setup = await setupAgent({ root: source, workspaceRoot: workspace, harness: agentHarness, installSkill: true,
+      skillsDir: join(harness, agentHarness === "codex" ? ".agents" : ".claude", "skills") });
     const charterNames = expected.candidatePath ? ["resume-core.yml"]
       : expected.noCatalog ? [] : ["resume-core.yml", "resume-quick.yml"];
     const contractPaths = ["config.yaml", "integration.mjs", ...charterNames.map((name) => `charters/${name}`)];

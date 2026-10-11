@@ -129,7 +129,20 @@ node tests/host-evaluation.mjs --run --implicit-skill --cases candidate-core
 node tests/host-evaluation-baseline.mjs --cases candidate-core-defect,candidate-electron-defect
 node tests/host-evaluation.mjs --run --implicit-skill --cases candidate-core-defect,candidate-electron-defect
 node tests/host-evaluation.mjs --run --implicit-skill --cases inline-electron-pass,inline-electron-defect
+# Claude Code uses its own Skill and MCP config with the same fixture and verifier:
+node tests/host-evaluation.mjs --run --host claude-code --implicit-skill --cases quick-pass
 ```
+
+The Claude evaluator runs `claude -p` with the generated `.claude/skills`
+directory, `--strict-mcp-config`, an explicit tool allowlist and a structured
+answer schema. It pairs Claude stream tool calls with completed tool results
+before applying the same saved Mission, Run and evidence verifier. A local
+2026-10-12 attempt loaded the generated `proofkit-test` Skill and listed the
+ProofKit MCP tools in Claude's initialization event, then stopped on a provider
+401 before any MCP call. It was classified `infrastructure-blocked`; discovery
+is verified, but Claude model behavior and product acceptance are not. Set
+`PROOFKIT_CLAUDE_CLI` to a native executable or JavaScript entrypoint when the
+CLI is not on the evaluator's default path.
 
 Set `PROOFKIT_ELECTRON_PATH` to a local Electron executable and run
 `node tests/host-evaluation-baseline.mjs --cases electron-core-pass,electron-core-defect`
