@@ -677,7 +677,7 @@ export class LocalRunnerService {
     const suiteScope = summarizeSuiteScope(mission, this.evidenceDir);
     const workflowExecution = summarizeWorkflowExecution(mission, suiteScope);
     const proofClassification = await auditMissionProofClassification(mission, (runId) => this.loadRunSummary(runId));
-    const executionAudit = auditMissionExecution(mission);
+    const executionAudit = auditMissionExecution(mission, this.evidenceDir);
     const referencedRunIds = new Set(mission.observations.flatMap((item) => {
       const id = item.kind === "surface.run" ? item.data.runId
         : item.kind === "surface.inspected" ? item.data.inspectionId : undefined;
@@ -1049,7 +1049,7 @@ export class LocalRunnerService {
       const executionProfile = context.mission.plan.executionProfile;
       const expectedSurfaces = executionProfile.surfaceMatrix;
       const missing: string[] = [];
-      const executionAudit = auditMissionExecution(context.mission, false);
+      const executionAudit = auditMissionExecution(context.mission, this.evidenceDir, false);
       missing.push(...executionAudit.issues);
       if (executionAudit.omittedIssues) missing.push(`还有 ${executionAudit.omittedIssues} 个 Run 匹配问题`);
       if (!hasPositiveSurfaceAssertion(context.mission.charter?.assertions ?? [])) missing.push("至少一个正向表面断言");

@@ -364,9 +364,23 @@ try {
   const duplicateEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } }));
   assert.equal(duplicateEvidence.testVerdict, "inconclusive");
   assert.ok(duplicateEvidence.summary.executionAudit.issues.some((issue) => issue.includes("expected one Run observation, found 2")));
+  const borrowedMission = JSON.parse(savedMissionBytes);
+  const borrower = borrowedMission.observations.find((item) => item.kind === "surface.run"
+    && item.charterId === "resume" && item.data.surface === "web" && item.data.runKind === "primary");
+  const lender = borrowedMission.observations.find((item) => item.kind === "surface.run"
+    && item.charterId === "resume" && item.data.surface === "electron" && item.data.runKind === "primary");
+  assert.ok(borrower && lender);
+  const borrowedReport = lender.evidence.find((ref) => ref.kind === "report");
+  assert.ok(borrowedReport);
+  borrower.evidence.push(borrowedReport);
+  await writeFile(savedMissionPath, JSON.stringify(borrowedMission));
+  const borrowedEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } }));
+  assert.equal(borrowedEvidence.acceptanceEvidenceIntegrity.status, "intact");
+  assert.equal(borrowedEvidence.testVerdict, "inconclusive");
+  assert.ok(borrowedEvidence.summary.executionAudit.issues.some((issue) => issue.includes("does not belong to its Run")));
   await writeFile(savedMissionPath, savedMissionBytes);
   assert.equal(payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } })).testVerdict, "passed");
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, singleReleaseMission: singleStarted.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "single-charter-release-continues-after-product-failure", "saved-run-slot-audit-rejects-wrong-replay-and-duplicate", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, singleReleaseMission: singleStarted.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "single-charter-release-continues-after-product-failure", "saved-run-slot-audit-rejects-wrong-replay-and-duplicate", "saved-run-slot-audit-rejects-borrowed-evidence", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
   await quickClient?.close();
   await quickMcpServer?.close();

@@ -1,3 +1,4 @@
+import { relative } from "node:path";
 import { MissionExecutionAuditSchema, suiteChecks, type MissionExecutionAudit, type Observation, type TestMission } from "@proofkit/contracts";
 
 type Surface = "web" | "electron" | "mobile" | "api";
@@ -8,7 +9,7 @@ const TOOL: Record<Slot["kind"], string> = {
 };
 
 /** Audit every declared execution slot, including entries omitted from the compact report. */
-export function auditMissionExecution(mission: TestMission, requirePass = true): MissionExecutionAudit {
+export function auditMissionExecution(mission: TestMission, evidenceDir: string, requirePass = true): MissionExecutionAudit {
   const issues: string[] = [];
   let omittedIssues = 0;
   const issue = (message: string) => {
@@ -91,6 +92,12 @@ export function auditMissionExecution(mission: TestMission, requirePass = true):
     if (previous) issue(`${label}: Run ID is already used by ${previous}.`);
     else runOwners.set(runId, label);
     if (observation.evidence.length === 0) issue(`${label}: no Run evidence was saved.`);
+    for (const ref of observation.evidence) {
+      const path = relative(evidenceDir, ref.path).replaceAll("\\", "/");
+      if (!path.startsWith(`${runId}/`) || ref.evidenceId !== `${runId}:${path}`) {
+        issue(`${label}: cited evidence does not belong to its Run.`);
+      }
+    }
     if (observation.data.charterId !== slot.charterId) issue(`${label}: observation Charter identity differs from its slot.`);
     if (slot.kind !== "negative" && observation.data.negativeCaseId !== undefined) issue(`${label}: unexpected negative-case identity.`);
     if (task && task.output && typeof task.output === "object" && !Array.isArray(task.output)

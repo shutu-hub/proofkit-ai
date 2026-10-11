@@ -499,6 +499,17 @@ describe("LocalRunnerService", () => {
     expect(ambiguous).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
       summary: { executionAudit: { status: "incomplete", unexpectedObservations: 2 } } });
     expect(ambiguous.summary.executionAudit?.issues).toEqual(expect.arrayContaining([expect.stringContaining("expected one Run observation, found 2")]));
+
+    const borrowed = JSON.parse(saved) as TestMission;
+    const webPrimary = borrowed.observations.find((item) => item.kind === "surface.run" && item.data.surface === "web" && item.data.runKind === "primary")!;
+    const electronPrimary = borrowed.observations.find((item) => item.kind === "surface.run" && item.data.surface === "electron" && item.data.runKind === "primary")!;
+    webPrimary.evidence.push(electronPrimary.evidence.find((ref) => ref.kind === "report")!);
+    await writeFile(missionPath, JSON.stringify(borrowed));
+    const wrongOwner = await service.missionEvidence(created.missionId);
+    expect(wrongOwner).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      summary: { executionAudit: { status: "incomplete" } } });
+    expect(wrongOwner.acceptanceEvidenceIntegrity.status).toBe(accepted.acceptanceEvidenceIntegrity.status);
+    expect(wrongOwner.summary.executionAudit?.issues).toEqual(expect.arrayContaining([expect.stringContaining("does not belong to its Run")]));
   });
 
   it("requires business proof in every release replay, not just in the aggregate", async () => {
