@@ -973,6 +973,14 @@ export const TestScopeSchema = z.object({
       guidance: z.string().min(1).max(240),
     })).max(8),
   }).optional(),
+  /** Configuration hints only; endpoint reachability and app identity need environment inspection. */
+  targetConfiguration: z.object({
+    required: z.array(z.object({
+      surface: z.enum(["web", "electron", "mobile"]),
+      status: z.enum(["configured", "missing", "default-driver"]),
+    })).min(1).max(2),
+    runtimeChecked: z.literal(false),
+  }).optional(),
   /** Candidate files are hints only; catalog registration and normal Run validation are separate. */
   workspaceCandidates: z.object({
     scanStatus: z.enum(["complete", "partial"]),

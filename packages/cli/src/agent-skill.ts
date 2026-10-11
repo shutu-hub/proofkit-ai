@@ -71,6 +71,13 @@ clear a candidate hint; confirm isolated test data and the user's scope first.
 Prefer an eligible, plan-ready catalog Charter or explicit release suite that
 matches the requested behavior. Use charterId or suiteId when aliases are
 ambiguous. Plan readiness does not prove login, fixtures or running services.
+Read targetConfiguration.required for every required surface. A missing
+Electron connection needs an external-workspace CDP endpoint or port file;
+a missing Web connection can use a one-time URL for ad-hoc Web planning, but
+a selected Charter needs a configured Web target. A mobile default-driver
+entry is only the default WebDriver address, not an attached device or app.
+targetConfiguration.runtimeChecked is always false; verify the actual target
+with inspect_test_environment before relying on it.
 
 Use inspect_test_environment to observe configured endpoints before attachment.
 For Web/Electron it checks HTTP/CDP and applicable source association; for mobile

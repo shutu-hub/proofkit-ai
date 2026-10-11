@@ -38,6 +38,8 @@ flowchart TD
 
 `inspect_test_scope.planningReadiness` 汇总已核对目录场景的兼容数量、就绪数量与省略数量，并给出分级不匹配、用例无效、字面焦点未命中等具体缺口。它只帮助宿主 AI 决定复用、补写或重新缩小检索范围；`quick` 用例不能充当 `core` 验收，目录就绪也不证明运行环境或业务结果。
 
+同一结果的 `targetConfiguration.required` 逐项列出本级别需要的 Web、Electron 或移动端连接是否已声明。缺少 Electron CDP/端口文件时直接显示 `missing`；Web 临时检查或即席规划可用一次性 URL，选用已有 Charter 执行时仍需配置 Web 目标；未配置移动端时显示 `default-driver`，只代表默认 WebDriver 地址。`runtimeChecked: false` 明确表示未检查端点、设备、登录或源码归属，随后仍需运行 `inspect_test_environment`。
+
 1. 初次接入：绑定源项目和外部测试工作区，配置 Web 地址或 Electron CDP，并声明必要业务检查。
 2. AI 先用 `inspect_test_scope` 看源码候选入口及现有场景，用 `inspect_test_environment` 检查已配置端点和源码关联，再用 `inspect_surface` 看真实页面与定位线索。
 3. `run_test` 复用目录用例，或接收 AI 提交的结构化 Charter；缺少必要断言或业务检查时报告缺口。

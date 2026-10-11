@@ -9,6 +9,7 @@ import { LocalRunnerService } from "./index.js";
 const roots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -288,6 +289,7 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
   });
 
   it("does not invent ready core coverage for a project with no catalog or business checks", async () => {
+    vi.stubEnv("PROOFKIT_ELECTRON_DEVTOOLS_PORT", undefined);
     const { runner } = await fixture();
     const bare = new LocalRunnerService({ root: runner.root, workspaceRoot: runner.workspaceRoot, config: ProofkitConfigSchema.parse({}) });
     const scope = await bare.inspectTestScope();
@@ -297,6 +299,26 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
       gaps: expect.arrayContaining([expect.objectContaining({ code: "no-registered-oracle" })]) });
     expect(scope.routes).toMatchObject({ mapped: 0, unmapped: 5 });
     expect(scope.testVerdict).toBe("not-asserted");
+    expect(scope.targetConfiguration).toEqual({ required: [{ surface: "web", status: "missing" }], runtimeChecked: false });
+    const desktop = await bare.inspectTestScope({ surface: "electron", focus: "resume" });
+    expect(desktop.targetConfiguration).toEqual({ required: [{ surface: "electron", status: "missing" }], runtimeChecked: false });
+    const mobile = await bare.inspectTestScope({ surface: "mobile" });
+    expect(mobile.targetConfiguration).toEqual({ required: [{ surface: "mobile", status: "default-driver" }], runtimeChecked: false });
+    expect(desktop.testVerdict).toBe("not-asserted");
+    vi.stubEnv("PROOFKIT_ELECTRON_DEVTOOLS_PORT", "D:/isolated/DevToolsActivePort");
+    const attachedDesktop = await bare.inspectTestScope({ surface: "electron" });
+    expect(attachedDesktop.targetConfiguration?.required).toEqual([{ surface: "electron", status: "configured" }]);
+  });
+
+  it("shows the full release connection matrix without probing either target", async () => {
+    const { runner, callbacks } = await fixture();
+    const scope = await runner.inspectTestScope({ level: "release", surface: "web" });
+    expect(scope.targetConfiguration).toEqual({ required: [
+      { surface: "web", status: "configured" }, { surface: "electron", status: "configured" },
+    ], runtimeChecked: false });
+    expect(scope.limitations).toContainEqual(expect.stringContaining("endpoint reachability"));
+    expect(scope.testVerdict).toBe("not-asserted");
+    for (const callback of Object.values(callbacks)) expect(callback).not.toHaveBeenCalled();
   });
 
   it("explains an AIHR-like core focus without treating a matching quick Charter as core coverage", async () => {

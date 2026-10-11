@@ -21,7 +21,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "inspect_test_scope",
-    "Read candidate source entry points, route declarations, registered and unregistered workspace Charter hints, plan gaps, and business capabilities/Oracles. Optional focus is a literal substring. This does not register or run tests or prove coverage.",
+    "Read candidate source entry points, route declarations, required surface connection declarations, registered and unregistered workspace Charter hints, plan gaps, and business capabilities/Oracles. Optional focus is a literal substring. Target configuration is not a runtime check; this does not register or run tests or prove coverage.",
     TestScopeInputSchema.shape,
     READ_ONLY_TOOL,
     async (input) => result(await runner.inspectTestScope(input)),

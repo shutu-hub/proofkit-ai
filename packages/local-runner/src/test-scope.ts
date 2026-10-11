@@ -27,6 +27,10 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const { project, config } = context;
   const { level, surface, limit } = request;
   const requiredSurfaces = requiredCatalogSurfaces(level, surface);
+  const targetConfiguration = {
+    required: requiredSurfaces.map((required) => ({ surface: required, status: targetConnectionStatus(config, required) })),
+    runtimeChecked: false as const,
+  };
   const focus = request.focus?.normalize("NFKC").toLowerCase();
   const matches = (...values: Array<string | undefined>) => !focus || values.some((value) => value?.normalize("NFKC").toLowerCase().includes(focus));
   const eligibleCharters = config.charters.filter((entry) => supportsCatalogCharter(entry, level, surface));
@@ -67,6 +71,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const workspaceCandidates = await inspectWorkspaceCandidates(context, request.focus, limit);
   const { entryPoints: _entries, routeHints: _routes, ...inventory } = project.inventory;
   const limitations = [
+    "Target configuration is a read-only declaration check; endpoint reachability, process ownership, login and business readiness require separate inspection or execution",
     "Static route-shaped literals and conventional entry points are candidate hints; no execution coverage or product verdict is calculated",
     "Gin routes use conservative file-local prefix composition; other extractors report literals, do not compose relative child routes, and can include non-router literals",
     "Declarations from eligible catalog entries can be mapped even when their saved plan is invalid; mapping is not proof of a ready or tested workflow",
@@ -149,9 +154,17 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
     })) },
     oracles: { total: allOracles.length, matched: oracleMatches.length, omitted: Math.max(0, oracleMatches.length - limit), items: oracleMatches.slice(0, limit) },
     planningReadiness: { status: planningStatus, compatibleMatched, compatibleChecked, compatibleReady, compatibleOmitted, gaps },
+    targetConfiguration,
     workspaceCandidates,
     limitations, next, generatedAt: project.generatedAt,
   });
+}
+
+function targetConnectionStatus(config: ProofkitConfig, surface: "web" | "electron" | "mobile"): "configured" | "missing" | "default-driver" {
+  if (surface === "web") return config.surfaces.web?.baseUrl || config.surfaces.web?.cdpUrl ? "configured" : "missing";
+  if (surface === "electron") return config.surfaces.electron?.cdpUrl || config.surfaces.electron?.devtoolsActivePort
+    || process.env.PROOFKIT_ELECTRON_DEVTOOLS_PORT ? "configured" : "missing";
+  return config.surfaces.mobile ? "configured" : "default-driver";
 }
 
 /** Parser messages can include raw Charter values; return locations and categories instead. */
