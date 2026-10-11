@@ -68,8 +68,6 @@ runs:
     - uses: actions/setup-node@v4
       with:
         node-version: '22'
-        cache: pnpm
-        cache-dependency-path: ${{ github.action_path }}/pnpm-lock.yaml
     - name: Build ProofKit from this action revision
       shell: bash
       working-directory: ${{ github.action_path }}

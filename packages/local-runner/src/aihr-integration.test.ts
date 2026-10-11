@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { getEventListeners } from "node:events";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -575,7 +576,7 @@ describe("AIHR project integration", () => {
     const gateway = await startCollectionGatewayMock({ fixtureSha256 });
     servers.push(gateway.server);
     const workspaceRoot = await createIntegrationProject(fixtureBytes);
-    const root = await mkdtemp(join(process.env.TEMP ?? process.env.TMP ?? ".", "proofkit-aihr-source-"));
+    const root = await mkdtemp(join(tmpdir(), "proofkit-aihr-source-"));
     roots.push(root);
     const service = await LocalRunnerService.create({ root, workspaceRoot });
     const integration = service.integration;
@@ -967,7 +968,7 @@ describe("AIHR project integration", () => {
 });
 
 async function createIntegrationProject(fixtureBytes?: Buffer): Promise<string> {
-  const root = await mkdtemp(join(process.env.TEMP ?? process.env.TMP ?? ".", "proofkit-aihr-integration-"));
+  const root = await mkdtemp(join(tmpdir(), "proofkit-aihr-integration-"));
   roots.push(root);
   await mkdir(join(root, ".proofkit"), { recursive: true });
   const source = resolve(dirname(fileURLToPath(import.meta.url)), "../../../.proofkit/integration.mjs");

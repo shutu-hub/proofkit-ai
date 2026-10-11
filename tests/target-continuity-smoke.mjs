@@ -3,7 +3,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { LocalRunnerService } from "../packages/local-runner/dist/index.js";
 import { inspectTargetBinding } from "../packages/project/dist/index.js";
 import { ProofkitConfigSchema } from "../packages/contracts/dist/index.js";
@@ -121,9 +121,10 @@ server.listen(Number(process.env.PROOFKIT_FIXTURE_PORT), "127.0.0.1", () => proc
 } finally {
   await stopServer(serverChild);
   const resolved = await realpath(tempRoot);
-  const temporaryParent = resolve(tmpdir());
+  const temporaryParent = await realpath(tmpdir());
   const location = relative(temporaryParent, resolved);
-  if (!location || location === ".." || location.startsWith(`..${sep}`) || isAbsolute(location)) {
+  if (!location.startsWith("proofkit-listener-smoke-") || location.includes(sep)
+    || location === ".." || location.startsWith(`..${sep}`) || isAbsolute(location)) {
     throw new Error("Refusing to delete an unexpected fixture directory");
   }
   await rm(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
