@@ -149,7 +149,12 @@ and level, a compact outcome, the first actionable failure and its evidence,
 plus any missing acceptance obligations. Distinguish failed business facts from
 blocked access/environment, cancelled work and inconclusive evidence. A console
 error alone is not a confirmed product defect. Cite evidence for a diagnosis;
-inspect the relevant source before proposing a change.
+inspect the relevant source before proposing a change. diagnosis.sourceLocations
+contains existing files to investigate, not proof that a line caused the bug.
+For a concrete repair hypothesis, connect the independent failed business fact
+to a specific code branch or contract and cite both the evidence artifact and
+the current source location. If that connection cannot be established, say what
+remains unknown instead of presenting the generic saved suggestion as a fix.
 For release Missions, inspect summary.replayConsistency. A divergent primary
 and replay verdict is an observed difference to investigate, not proof of
 flakiness. An unverified pair may lack a Run, a replay source link or hashed
@@ -190,6 +195,9 @@ use approve_test_plan and start_mission after review. Preserve the original
 scope and fixture bytes, then compare_missions after the replay finishes.
 Report verified-in-scope only when the comparison says so. A different scenario
 or passing page cannot certify the original defect or the entire project.
+Report sourceChange alongside the comparison; changed source proves only that
+the fingerprint changed, while the passing replay proves the observed defect
+did not recur in the tested scope. Neither alone proves code-level causality.
 For variability investigation, gather three to five separately authorized
 direct-replay Missions and call analyze_mission_stability with their IDs in
 execution order. A variable-outcome result is evidence of changed outcomes,
@@ -330,5 +338,9 @@ business Oracle fails with preserved independent source facts. An action error,
 failed page assertion or runtime signal cannot certify the intended rejection.
 A declared suite certifies its saved workflows only. Static route
 mapping or all-green declared cases cannot prove whole-project workflow coverage;
-that coverage gate is still unimplemented and must remain visible.
+for a core or release project Mission, use a complete candidate scan, a trusted
+signed workflow review and the exact declared Charter × surface matrix. The
+audited pass then covers only those reviewed source workflows, not every
+possible business behavior. A quick check or an older Mission cannot be
+upgraded to this claim after execution.
 `;
