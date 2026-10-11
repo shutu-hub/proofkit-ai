@@ -35,7 +35,9 @@ export function summarizeWorkflowExecution(mission: TestMission, suiteScope?: Su
   }
   const sourceBinding = compareSourceBinding(mission);
   const limitations = [
-    "The inventory's completeness and reviewer identity are not independently verified.",
+    inspection?.reviewAuthentication?.status === "verified"
+      ? "The reviewer signature authenticates a source-bound scope; semantic completeness still depends on the review."
+      : "The inventory's completeness and reviewer identity are not independently verified.",
     ...(mission.level === "quick" ? ["Quick checks establish declared surface assertions, not independent business terminal state."] : []),
     ...(!inventory ? ["No valid frozen workflow inventory is available for this Mission."] : []),
     ...(!suiteScope ? ["No verified multi-Charter suite result is available; single-Charter Runs cannot establish the declared project matrix."] : []),

@@ -79,6 +79,7 @@ export type MissionPlanInput = {
   suite?: TestSuite;
   workflowInventory?: TestMission["workflowInventory"];
   workflowInventoryInspection?: TestMission["workflowInventoryInspection"];
+  workflowReview?: TestMission["workflowReview"];
   levelSelection?: TestLevelSelection;
 };
 
@@ -460,6 +461,7 @@ export class MissionAgent {
       suite: input.suite,
       workflowInventory: input.workflowInventory,
       workflowInventoryInspection: input.workflowInventoryInspection,
+      workflowReview: input.workflowReview,
       plan,
       createdAt: now,
       updatedAt: now,

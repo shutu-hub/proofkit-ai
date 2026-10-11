@@ -758,6 +758,33 @@ export const WorkflowReviewAuthenticationSchema = z.object({
 });
 export type WorkflowReviewAuthentication = z.infer<typeof WorkflowReviewAuthenticationSchema>;
 
+export const WorkflowReviewMaterialsSchema = z.object({
+  candidateSetSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  charterManifest: z.array(z.object({
+    id: CatalogIdSchema,
+    catalog: CharterCatalogEntrySchema,
+    fileSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    executionSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  }).strict()).min(1).max(256),
+}).strict();
+export type WorkflowReviewMaterials = z.infer<typeof WorkflowReviewMaterialsSchema>;
+
+export const WorkflowReviewSnapshotSchema = z.object({
+  attestation: WorkflowReviewAttestationSchema,
+  materials: WorkflowReviewMaterialsSchema,
+}).strict();
+export type WorkflowReviewSnapshot = z.infer<typeof WorkflowReviewSnapshotSchema>;
+
+export const WorkflowReviewAuditSchema = z.object({
+  status: z.enum(["not-applicable", "unverified", "verified"]),
+  reason: z.enum(["missing-frozen-review", "inventory-gaps", "review-untrusted", "review-invalid", "candidate-mismatch",
+    "charter-mismatch", "suite-mismatch", "source-mismatch", "execution-incomplete", "surface-only"]).optional(),
+  keyId: CatalogIdSchema.optional(),
+  /** Verified means the reviewed source snapshot and required Run slots passed the current audit. */
+  scope: z.literal("reviewed-source-workflows").optional(),
+});
+export type WorkflowReviewAudit = z.infer<typeof WorkflowReviewAuditSchema>;
+
 export const WorkflowInventoryInspectionSchema = z.object({
   status: z.enum(["missing", "invalid", "loaded"]),
   path: z.literal(".proofkit/workflows.yaml"),
@@ -1293,6 +1320,7 @@ export const TestMissionSchema = z.object({
   /** Frozen workspace declaration and diagnostic state for a project-scope request. */
   workflowInventory: WorkflowInventorySchema.optional(),
   workflowInventoryInspection: WorkflowInventoryInspectionSchema.optional(),
+  workflowReview: WorkflowReviewSnapshotSchema.optional(),
   plan: MissionPlanSchema,
   agentSteps: z.array(AgentStepSchema).default([]),
   toolCalls: z.array(ToolCallSchema).default([]),
@@ -1523,6 +1551,7 @@ export const MissionResultSchema = z.object({
     uncoveredCharterIds: z.array(CatalogIdSchema),
     workflowInventory: WorkflowInventoryInspectionSchema.optional(),
     workflowExecution: WorkflowExecutionCoverageSchema.optional(),
+    workflowReviewAudit: WorkflowReviewAuditSchema.optional(),
     routeCoverage: z.object({
       inventoryTruncated: z.boolean(),
       candidateRoutes: z.number().int().nonnegative(),

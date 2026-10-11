@@ -1,7 +1,9 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
-import { workflowChecks, WorkflowInventoryInspectionSchema, WorkflowInventorySchema, type ProjectMap, type ProofkitConfig, type SourceState, type WorkflowInventory, type WorkflowInventoryInspection } from "@proofkit/contracts";
+import { workflowChecks, WorkflowInventoryInspectionSchema, WorkflowInventorySchema, WorkflowReviewAttestationSchema,
+  WorkflowReviewSnapshotSchema, type ProjectMap, type ProofkitConfig, type SourceState, type WorkflowInventory,
+  type WorkflowInventoryInspection, type WorkflowReviewSnapshot } from "@proofkit/contracts";
 import { resolveWithinWorkspace } from "./context.js";
 import { captureSourceState } from "./source-state.js";
 import { auditWorkflowCandidates } from "./workflow-candidate-audit.js";
@@ -18,6 +20,7 @@ export async function inspectWorkflowInventory(projectRoot: string, workspaceRoo
   trustedPublicKeys?: Readonly<Record<string, string>>): Promise<{
   inventory?: WorkflowInventory;
   inspection: WorkflowInventoryInspection;
+  reviewSnapshot?: WorkflowReviewSnapshot;
 }> {
   const base = { path: INVENTORY_PATH, reviewDeclared: false, workflowCount: 0, linkedWorkflowCount: 0, exclusionCount: 0,
     missingCharterIds: [], omittedMissingCharterIds: 0, uncoveredSurfaces: [], omittedUncoveredSurfaces: 0,
@@ -82,6 +85,9 @@ export async function inspectWorkflowInventory(projectRoot: string, workspaceRoo
   const reviewMaterials = reviewFile.status === "loaded" && project
     ? await collectWorkflowReviewMaterials(inventory, config, project, workspaceRoot).catch(() => undefined)
     : undefined;
+  const parsedAttestation = WorkflowReviewAttestationSchema.safeParse(reviewFile.data);
+  const reviewSnapshot = parsedAttestation.success && reviewMaterials
+    ? WorkflowReviewSnapshotSchema.parse({ attestation: parsedAttestation.data, materials: reviewMaterials }) : undefined;
   const reviewAuthentication = reviewFile.status === "loaded" && candidateAudit && reviewMaterials
     ? authenticateWorkflowReview(inventory, candidateAudit, reviewMaterials, reviewFile.data,
       trustedPublicKeys ?? await loadWorkflowReviewTrust(projectRoot, workspaceRoot))
@@ -106,6 +112,7 @@ export async function inspectWorkflowInventory(projectRoot: string, workspaceRoo
   const missingPaths = [...missingSourcePaths].sort();
   return {
     inventory,
+    ...(reviewSnapshot ? { reviewSnapshot } : {}),
     inspection: WorkflowInventoryInspectionSchema.parse({
       status: "loaded", path: INVENTORY_PATH, sourceMatch, reviewDeclared: Boolean(inventory.review), reviewAuthentication,
       workflowCount: inventory.workflows.length, linkedWorkflowCount, exclusionCount: inventory.exclusions.length,
@@ -132,7 +139,7 @@ async function readWorkflowReviewFile(workspaceRoot: string): Promise<{ status: 
 }
 
 /** Trust is selected by the operator, outside the project and test workspace. */
-async function loadWorkflowReviewTrust(projectRoot: string, workspaceRoot: string): Promise<Readonly<Record<string, string>>> {
+export async function loadWorkflowReviewTrust(projectRoot: string, workspaceRoot: string): Promise<Readonly<Record<string, string>>> {
   const configured = process.env.PROOFKIT_WORKFLOW_REVIEW_TRUST_PATH;
   if (!configured || !isAbsolute(configured)) return {};
   try {

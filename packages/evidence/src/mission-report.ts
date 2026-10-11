@@ -131,6 +131,10 @@ export class MissionReportStore {
 export function auditMissionVerdict(result: MissionResult, integrity: MissionEvidenceIntegrity): Pick<MissionResult, "testVerdict" | "testVerdictReason"> {
   const saved = result.verdict ?? "not-asserted";
   if (saved !== "passed" && saved !== "failed") return { testVerdict: saved };
+  if (saved === "passed" && result.planning?.coverage?.requested === "project"
+    && result.scope.workflowReviewAudit?.status !== "verified") {
+    return { testVerdict: "inconclusive", testVerdictReason: "The saved whole-project pass lacks a currently verified reviewed source scope and matching workflow Runs." };
+  }
   if (saved === "passed" && result.executionAudit?.status !== "complete") {
     return { testVerdict: "inconclusive", testVerdictReason: "Saved Mission has missing, duplicated or mismatched execution Runs; rerun the declared scope before claiming acceptance." };
   }
@@ -179,6 +183,7 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
   const route = result.scope.routeCoverage;
   const workflowInventory = result.scope.workflowInventory;
   const workflowExecution = result.scope.workflowExecution;
+  const workflowReviewAudit = result.scope.workflowReviewAudit;
   const executionAudit = result.executionAudit;
   const unavailable = [...links.values()].filter((link) => !link.href).length;
   const unverified = [...new Map(collectEvidence(result).map((ref) => [evidenceKey(ref), ref])).values()].filter((ref) => !ref.sha256).length;
@@ -226,6 +231,8 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
     ...(workflowInventory?.candidateAudit?.gaps.slice(0, 5) ?? []).map((gap) => `Candidate review: ${gap.source}${gap.path ? ` · ${gap.path}` : ""} · ${gap.reason}.`),
     workflowInventory?.candidateAudit?.omittedGaps ? `${workflowInventory.candidateAudit.omittedGaps} candidate review gaps are omitted from the bounded summary.` : undefined,
     workflowExecution ? `Declared workflow execution: ${workflowExecution.evidencedChecks}/${workflowExecution.requiredChecks} Charter/platform checks and ${workflowExecution.evidencedWorkflowCount}/${workflowExecution.workflowCount} workflows evidenced; required proof ${workflowExecution.requiredProof ?? "not recorded"}; source binding ${workflowExecution.sourceBinding}. This does not prove the inventory is complete.` : undefined,
+    workflowReviewAudit && workflowReviewAudit.status !== "not-applicable"
+      ? `Reviewed source scope: ${workflowReviewAudit.status}${workflowReviewAudit.reason ? ` (${workflowReviewAudit.reason})` : ""}. A verified review authenticates the declared scope, not an unknowable universal workflow list.` : undefined,
     ...(workflowExecution?.gaps.slice(0, 10) ?? []).map((gap) => `Missing workflow check: ${gap.workflowId} · ${gap.charterId}/${gap.surface} · ${gap.reason}.`),
     workflowExecution?.gaps.length && workflowExecution.gaps.length > 10 ? `${workflowExecution.gaps.length - 10} more workflow check gaps are in summary.json.` : undefined,
     workflowExecution?.omittedGaps ? `${workflowExecution.omittedGaps} workflow check gaps are omitted from the bounded summary.` : undefined,

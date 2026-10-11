@@ -98,6 +98,8 @@ Mission 创建时会核对自然语言中明确且唯一的力度提示与宿主
 
 审阅者现在可用 `proofkit review-workflows --root <project> --workspace <external-workspace> --key-id <id> --private-key <external-private.pem>` 对规范化清单、完整候选集合、候选审计及已登记 Charter 清单签名，生成外部工作区的 `.proofkit/workflow-review.json`。命令要求源码指纹一致、候选扫描完整且非空、无遗漏候选或排除、Charter×平台映射完整且文件有效；私钥必须位于源项目和测试工作区之外。运行 ProofKit 的操作者通过 `PROOFKIT_WORKFLOW_REVIEW_TRUST_PATH` 指向这两处目录之外的 JSON 公钥表（`{"<id>":"-----BEGIN PUBLIC KEY-----..."}`）。`inspect_test_scope` 会返回审阅签名的 `missing`、`untrusted`、`invalid` 或 `verified` 状态。签名绑定清单内容、审阅声明、源码指纹、每个候选的完整记录、Charter 注册信息、文件摘要及执行语义摘要；即使扫描统计数量不变，候选或用例变化也需重新审阅和签名。它只认证声明来源及被签名的范围，不能由密码学证明审阅者找全了业务语义；现阶段即使签名有效，全项目通过门禁仍保持关闭。
 
+新 Mission 会冻结审阅签名与材料。`get_mission_evidence` 和 CLI 检查会对冻结的候选地图、Charter 执行语义、受信公钥、源码首尾指纹及本次 Charter×平台业务运行重新审计，返回 `workflowReviewAudit`。审阅签名或当前信任来源失效、候选/Charter 对不上、缺少 Run 或业务证明时，审计为 `unverified`；历史 Mission 的原始 verdict 不被改写。即使有人把旧全项目 Mission 的保存 verdict 改成 `passed`，缺少当前审阅审计也会把 `testVerdict` 降为 `inconclusive`。这一步建立了验收依据，尚未自动解除规划中的 `project-workflow-coverage` 缺口。
+
 Web 路由覆盖要求本次 Run 的页面 URL 与配置的 HTTP origin 一致。Electron `file:` hash 路由还要求页面是配置的同一 HTML 文件；适配器只保存文件 URL 的 SHA-256 和唯一匹配的声明路由模式（如 `/resumes/:id`），汇总层用配置文件重新核对摘要，不保存本地文件路径或 hash 中的具体 ID。Web/Electron/Mobile 页面快照与动作回执的 HTTP URL 只保存唯一匹配的已声明路径模式；其他非根路径保存为 `/__redacted__`。运行事件和诊断采用同样的模式投影，运行信号筛选仍使用内存中的原始 URL；API 覆盖还核对方法、origin、状态和未脱敏的路由匹配标记。缺少目标绑定、路由声明歧义或访问同前缀的其他文件都不能计入覆盖。文件摘要不能防止猜测常见本地路径；Charter 和配置中的显式 URL、页面可见文字里的相对路径、截图像素及连接器自定义证据不受这层 URL 投影保护，测试数据仍应隔离和脱敏。
 
 结果分为 `passed`、`failed`、`blocked`、`cancelled`、`inconclusive`。产品缺陷需有证据支持；登录、环境或覆盖缺口按实际原因报告。修复比较只确认原缺陷在相同测试范围内未再复现。

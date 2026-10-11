@@ -5,22 +5,13 @@ import {
   ProjectMapSchema, TestCharterSchema, WorkflowCandidateAuditSchema, WorkflowInventorySchema, WorkflowReviewAttestationSchema,
   WorkflowReviewAuthenticationSchema,
   workflowChecks, type ProofkitConfig, type ProjectMap, type TestCharter, type WorkflowCandidateAudit,
-  type WorkflowInventory, type WorkflowReviewAttestation,
+  type WorkflowInventory, type WorkflowReviewAttestation, type WorkflowReviewMaterials,
   type WorkflowReviewAuthentication,
 } from "@proofkit/contracts";
 import { resolveWithinWorkspace } from "./context.js";
 
 const DOMAIN = "proofkit.workflow-review.v2\nreviewed inventory claims the complete business workflow scope for its source fingerprint\n";
 const MAX_CHARTER_BYTES = 1024 * 1024;
-export type WorkflowReviewMaterials = {
-  candidateSetSha256: string;
-  charterManifest: Array<{
-    id: string;
-    catalog: ProofkitConfig["charters"][number];
-    fileSha256: string;
-    executionSha256: string;
-  }>;
-};
 
 /** Keep YAML spelling and object-key order out of the signed identity. Arrays retain their declared order. */
 function canonical(value: unknown): string {
@@ -46,14 +37,18 @@ export function workflowCharterExecutionSha256(charter: TestCharter): string {
   return hash({ ...execution, metadata: declaredMetadata });
 }
 
-/** Bind the complete discovered candidate set and the exact workspace Charter files, not only summary counts. */
-export async function collectWorkflowReviewMaterials(inventory: WorkflowInventory, config: ProofkitConfig,
-  project: ProjectMap, workspaceRoot: string): Promise<WorkflowReviewMaterials> {
+export function workflowCandidateSetSha256(project: ProjectMap): string {
   const sourceInventory = ProjectMapSchema.parse(project).inventory;
-  const candidateSetSha256 = hash({ ...sourceInventory,
+  return hash({ ...sourceInventory,
     entryPoints: [...sourceInventory.entryPoints].sort((a, b) => canonical(a) < canonical(b) ? -1 : canonical(a) > canonical(b) ? 1 : 0),
     routeHints: [...sourceInventory.routeHints].sort((a, b) => canonical(a) < canonical(b) ? -1 : canonical(a) > canonical(b) ? 1 : 0),
   });
+}
+
+/** Bind the complete discovered candidate set and the exact workspace Charter files, not only summary counts. */
+export async function collectWorkflowReviewMaterials(inventory: WorkflowInventory, config: ProofkitConfig,
+  project: ProjectMap, workspaceRoot: string): Promise<WorkflowReviewMaterials> {
+  const candidateSetSha256 = workflowCandidateSetSha256(project);
   const catalog = new Map(config.charters.map((entry) => [entry.id, entry]));
   const ids = [...new Set(inventory.workflows.flatMap((workflow) => workflowChecks(workflow).map((check) => check.charterId)))].sort();
   if (ids.length === 0 || ids.length > 256) throw new Error("Workflow review Charter manifest is empty or too large");

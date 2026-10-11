@@ -45,6 +45,19 @@ async function file(path: string, content = "fact"): Promise<string> {
 }
 
 describe("Mission report", () => {
+  it("does not accept a saved project pass without a current frozen-review audit", async () => {
+    const workspace = await root();
+    const input = result(workspace);
+    input.verdict = "passed";
+    input.proofClassification = explicitProof(true);
+    input.planning = { source: "workflow-inventory", confidence: 1, assumptions: [], missingInputs: [], evidenceGaps: [],
+      coverage: { requested: "project", source: "explicit", reason: "whole project", inventory: "bounded",
+        workflowCoverage: "unmeasured", gaps: [] } };
+    const snapshot = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(snapshot.result).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("reviewed source scope") });
+  });
+
   it("does not accept a saved pass without a recomputed execution-slot audit", async () => {
     const workspace = await root();
     const input = result(workspace);

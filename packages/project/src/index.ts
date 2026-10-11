@@ -13,10 +13,10 @@ import { BoundedInventory } from "./bounded-inventory.js";
 export { defaultWorkspaceRoot, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, type ProjectContext, type ProjectContextOptions } from "./context.js";
 export { captureSourceState } from "./source-state.js";
 export { verifySourceLocationHints } from "./source-location-hints.js";
-export { inspectWorkflowInventory } from "./workflow-inventory.js";
+export { inspectWorkflowInventory, loadWorkflowReviewTrust } from "./workflow-inventory.js";
+export { auditWorkflowCandidates } from "./workflow-candidate-audit.js";
 export { authenticateWorkflowReview, collectWorkflowReviewMaterials, signWorkflowReview, workflowReviewDigests,
-  workflowCharterExecutionSha256 } from "./workflow-review.js";
-export type { WorkflowReviewMaterials } from "./workflow-review.js";
+  workflowCandidateSetSha256, workflowCharterExecutionSha256 } from "./workflow-review.js";
 export { inspectTargetBinding } from "./target-binding.js";
 
 type PackageJson = {

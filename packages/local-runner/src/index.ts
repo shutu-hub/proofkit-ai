@@ -19,6 +19,7 @@ import { hasCompleteCleanupEvidence } from "./cleanup-evidence.js";
 import { ProjectMissionStore } from "./mission-store.js";
 import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from "./suite-verifier.js";
 import { summarizeWorkflowExecution } from "./workflow-coverage.js";
+import { auditWorkflowReview } from "./workflow-review-audit.js";
 import { inspectTestScope } from "./test-scope.js";
 import { projectMissionResult } from "./mission-result.js";
 import type { MissionResult } from "@proofkit/contracts";
@@ -379,6 +380,7 @@ export class LocalRunnerService {
         suite,
         workflowInventory: workflowInventory?.inventory,
         workflowInventoryInspection: workflowInventory?.inspection,
+        workflowReview: workflowInventory?.reviewSnapshot,
         levelSelection,
         policy: { ...input.policy, level: suite.level, sideEffectPolicy, timeoutMs },
       });
@@ -446,6 +448,7 @@ export class LocalRunnerService {
       charter: normalizedCharter,
       workflowInventory: workflowInventory?.inventory,
       workflowInventoryInspection: workflowInventory?.inspection,
+      workflowReview: workflowInventory?.reviewSnapshot,
       levelSelection,
       policy: { ...input.policy, level: levelSelection.resolved, sideEffectPolicy: normalizedCharter.sideEffectPolicy },
     });
@@ -663,6 +666,7 @@ export class LocalRunnerService {
     planning?: TestMission["plan"]["planning"];
     workflowInventoryInspection?: TestMission["workflowInventoryInspection"];
     workflowExecution?: import("@proofkit/contracts").WorkflowExecutionCoverage;
+    workflowReviewAudit?: import("@proofkit/contracts").WorkflowReviewAudit;
     executionProfile: TestMission["plan"]["executionProfile"];
     suiteScope?: SuiteScopeSummary;
     taskSummary: Array<{
@@ -710,6 +714,7 @@ export class LocalRunnerService {
     const running = await this.missionAgent.isRunning(mission.missionId);
     const suiteScope = summarizeSuiteScope(mission, this.evidenceDir);
     const workflowExecution = summarizeWorkflowExecution(mission, suiteScope);
+    const workflowReviewAudit = await auditWorkflowReview(mission, workflowExecution);
     const runFacts = new Map<string, Promise<RunSummary>>();
     const loadAuditRun = (runId: string): Promise<RunSummary> => {
       let pending = runFacts.get(runId);
@@ -735,7 +740,7 @@ export class LocalRunnerService {
       ...mission.repairSuggestions.flatMap((suggestion) => suggestion.evidence),
     ];
     const acceptanceEvidenceIntegrity = await this.missionReports.inspectMissionEvidence(missionReferences, referencedRunIds);
-    let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, comparison, comparisonUnavailable, proofClassification, executionAudit }), acceptanceEvidenceIntegrity };
+    let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, workflowReviewAudit, comparison, comparisonUnavailable, proofClassification, executionAudit }), acceptanceEvidenceIntegrity };
     let report: string | undefined;
     let reportUnavailable: string | undefined;
     let evidenceIntegrity: MissionEvidenceIntegrity;
@@ -768,6 +773,7 @@ export class LocalRunnerService {
       planning: mission.plan.planning,
       workflowInventoryInspection: mission.workflowInventoryInspection,
       workflowExecution,
+      workflowReviewAudit,
       executionProfile: mission.plan.executionProfile,
       suiteScope,
       taskSummary: mission.plan.graph.tasks.map((task) => ({
@@ -830,6 +836,7 @@ export class LocalRunnerService {
       suite: previous.suite,
       workflowInventory: previous.workflowInventory,
       workflowInventoryInspection: previous.workflowInventoryInspection,
+      workflowReview: previous.workflowReview,
       levelSelection: previous.levelSelection,
       policy: { ...previous.policy, requireApproval: false },
     });
