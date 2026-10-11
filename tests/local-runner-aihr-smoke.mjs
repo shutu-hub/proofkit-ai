@@ -226,7 +226,9 @@ try {
   desktopActions[2] = { ...desktopActions[2], response: { ...desktopActions[2].response,
     url: `${baseUrl}/api/v1/resume-collection/runs` }, followUp: { ...desktopActions[2].followUp, waitMs: 100 },
     requestStartTimeoutMs: 1000, requestWindowMs: 100, timeoutMs: 3000 };
-  const desktopCharter = TestCharterSchema.parse({ ...desktopReference, actions: desktopActions,
+  const desktopCharter = TestCharterSchema.parse({ ...desktopReference,
+    intent: surface === "web" ? "验证 AIHR 浏览器端立即运行产生的本次 BOSS 简历处理和岗位评估" : desktopReference.intent,
+    actions: desktopActions,
     metadata: { aihrDesktop: { ...desktopReference.metadata.aihrDesktop, captureStepId: "step-003", maxWaitMs: 1000, pollIntervalMs: 20 } } });
   mode = "success";
   const desktopPassed = await runMission(service, desktopCharter);

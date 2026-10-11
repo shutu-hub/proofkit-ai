@@ -15,7 +15,7 @@ const MAX_GATEWAY_RESPONSE_BYTES = 8 * 1024 * 1024;
  * service endpoints. This keeps the integration useful for a user checkout
  * and makes every observation reproduce the same path as the desktop app.
  */
-export function createIntegration({ z: injectedZ, workspaceRoot }) {
+export function createIntegration({ z: injectedZ, workspaceRoot, config, inspectEndpointBinding }) {
   // Keep the module dependency-free for external test workspaces. The runner injects the
   // schema runtime when loading this factory.
   z = injectedZ;
@@ -23,10 +23,12 @@ export function createIntegration({ z: injectedZ, workspaceRoot }) {
   const billingRead = readBillingUsageCapability(state);
   const desktopAcquisition = createDesktopResumeAcquisitionOracle({ z, resolveEnv, positiveString, getOrNull, aihrFetch,
     pollPipeline, observeResumeCollectionPipeline, evaluateResumePipeline, resumePipelineEvidence });
+  const gatewayCheck = (input, phase) => aihrPreflight(input, desktopAcquisition, inspectEndpointBinding,
+    config?.policies?.targetBinding ?? "block-different", phase);
 
   return {
     name: "aihr-resume-workflows",
-    version: "0.2.2",
+    version: "0.2.3",
     capabilities: [
       createResumeRunCapability(state),
       createResumeFileUploadCapability(state, workspaceRoot),
@@ -41,7 +43,8 @@ export function createIntegration({ z: injectedZ, workspaceRoot }) {
     oracles: [createResumeCollectionPipelineOracle(state), createOnlineResumePipelineOracle(state), createResumeUploadIdempotencyOracle(state),
       createBillingUsageOracle(state, billingRead),
       createManualCandidateIntakeOracle({ z, resolveEnv, positiveString, getOrNull, pollPipeline }), desktopAcquisition],
-    preflight: (input) => aihrPreflight(input, desktopAcquisition),
+    preflight: (input) => gatewayCheck(input, "before setup"),
+    postSetupCheck: (input) => gatewayCheck(input, "after setup"),
     setup: async ({ runId }) => {
       state.set(runId, { createdAt: new Date().toISOString() });
       return () => state.delete(runId);
@@ -49,7 +52,7 @@ export function createIntegration({ z: injectedZ, workspaceRoot }) {
   };
 }
 
-async function aihrPreflight({ charter, environment }, desktopAcquisition) {
+async function aihrPreflight({ charter, environment, signal }, desktopAcquisition, inspectEndpointBinding, targetBindingPolicy, phase) {
   const actionNames = charter.actions
     .filter((action) => action.kind === "capability")
     .map((action) => action.name);
@@ -95,6 +98,14 @@ async function aihrPreflight({ charter, environment }, desktopAcquisition) {
   if (!loopback && env("AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT") !== "true") {
     errors.push("remote AIHR endpoints require AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT=true");
   }
+  // Inspect the gateway actually used by aihrFetch, even when project.health is empty.
+  // The runner-owned helper retains only bounded process/source facts and strips URL paths,
+  // queries and credentials before they can enter the preflight artifact.
+  const gatewayBinding = loopback && /^https?:$/.test(parsed.protocol)
+    ? await inspectEndpointBinding(baseUrl, signal) : undefined;
+  if (gatewayBinding?.status === "different-project" && targetBindingPolicy === "block-different") {
+    errors.push(`AIHR gateway listener belongs to another Git checkout ${phase}`);
+  }
   if (!["test", "local"].includes(environment)) errors.push(`AIHR business or interactive tests require test or local environment, received ${environment}`);
 
   const scope = env("AIHR_PROOFKIT_TEST_SCOPE");
@@ -138,7 +149,10 @@ async function aihrPreflight({ charter, environment }, desktopAcquisition) {
   }
   return {
     passed: errors.length === 0,
-    message: errors.length === 0 ? "AIHR test scope and endpoint preflight passed." : errors.join("; "),
+    message: errors.length > 0 ? errors.join("; ")
+      : gatewayBinding?.status === "different-project" ? "AIHR scope checks passed; gateway listener belongs to another Git checkout (record policy)."
+      : gatewayBinding?.status === "unverified" ? "AIHR scope checks passed; local gateway source ownership remains unverified."
+      : "AIHR test scope and endpoint preflight passed.",
     evidence: {
       environment,
       apiHost: parsed?.hostname ?? "invalid",
@@ -152,6 +166,15 @@ async function aihrPreflight({ charter, environment }, desktopAcquisition) {
       credentialConfigured,
       actorConfigured,
       clientItemKeyNamespaced: Boolean(scopeValid && uploadKeyChecks.length > 0 && uploadKeyChecks.every(Boolean)),
+      gatewayBindingStatus: gatewayBinding?.status ?? "not-inspected",
+      ...(gatewayBinding ? {
+        gatewayBindingMethod: gatewayBinding.method,
+        gatewayBindingReason: gatewayBinding.reason,
+        gatewayBindingOrigin: gatewayBinding.targetOrigin ?? "unknown",
+        gatewayBindingExpectedProjectRoot: gatewayBinding.expectedProjectRoot,
+        gatewayBindingObservedProjectRoot: gatewayBinding.observedProjectRoot ?? "unknown",
+        gatewayBindingProcessId: gatewayBinding.processId ?? 0,
+      } : {}),
     },
   };
 }

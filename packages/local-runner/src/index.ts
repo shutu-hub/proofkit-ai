@@ -1485,6 +1485,7 @@ export class LocalRunnerService {
           observedProjectRoot: foreign.observedProjectRoot ?? "unknown", listenerProcessId: foreign.processId ?? 0 } }
       : undefined;
     const integrationPreflight = this.integration?.preflight;
+    const integrationPostSetupCheck = this.integration?.postSetupCheck;
     const preflight: IntegrationPreflight | undefined = healthOrigins.length ? async (context) => {
       const foreign = await firstForeignHealth(context.signal);
       const observed = healthResult(foreign, "preflight");
@@ -1493,6 +1494,15 @@ export class LocalRunnerService {
       const connector = await integrationPreflight(context);
       return observed ? { ...connector, evidence: { ...connector.evidence, ...observed.evidence } } : connector;
     } : integrationPreflight;
+    const checkHealthAfterSetup = healthOrigins.length > 0 && Boolean(setup || integrationSetup);
+    const postSetupCheck: IntegrationPreflight | undefined = checkHealthAfterSetup || integrationPostSetupCheck ? async (context) => {
+      const foreign = checkHealthAfterSetup ? await firstForeignHealth(context.signal) : undefined;
+      const observed = healthResult(foreign, "after-setup");
+      if (observed && !observed.passed) return observed;
+      if (!integrationPostSetupCheck) return observed ?? { passed: true, message: "Declared local health listener source checks completed after setup." };
+      const connector = await integrationPostSetupCheck(context);
+      return observed ? { ...connector, evidence: { ...connector.evidence, ...observed.evidence } } : connector;
+    } : undefined;
     return new ExecutionRunner(adapter, {
       projectRoot: this.root,
       workspaceRoot: this.workspaceRoot,
@@ -1506,11 +1516,7 @@ export class LocalRunnerService {
       expectedInputFiles,
       replayOfRunId: input.replayOfRunId,
       preflight,
-      ...(healthOrigins.length && (setup || integrationSetup) ? { postSetupCheck: async (context: Parameters<IntegrationPreflight>[0]) => {
-        const foreign = await firstForeignHealth(context.signal);
-        return healthResult(foreign, "after-setup")
-          ?? { passed: true, message: "Declared local health listener source checks completed after setup." };
-      } } : {}),
+      postSetupCheck,
       signal,
       timeoutMs: this.config.run.timeoutMs,
       runtimeQuality: this.config.policies.runtime,

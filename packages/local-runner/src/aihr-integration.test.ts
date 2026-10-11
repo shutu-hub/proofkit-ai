@@ -10,6 +10,7 @@ import { WebAdapter } from "@proofkit/adapters";
 import { analyzeRun } from "@proofkit/agent";
 import { TestCharterSchema, type TestCharter } from "@proofkit/contracts";
 import { loadCharter } from "@proofkit/planner";
+import * as project from "@proofkit/project";
 import { LocalRunnerService } from "./index.js";
 
 const roots: string[] = [];
@@ -810,6 +811,112 @@ describe("AIHR project integration", () => {
     expect(result.message).toContain("AIHR_PROOFKIT_TEST_SCOPE");
   });
 
+  it("blocks a foreign AIHR gateway without a declared health endpoint before page connection", async () => {
+    const root = await createIntegrationProject();
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "http://127.0.0.1:8080/api/v1?private=ignored";
+    configureBusinessScope();
+    const inspected: string[] = [];
+    vi.spyOn(project, "inspectTargetBinding").mockImplementation(async (selectedRoot, targetUrl) => {
+      inspected.push(targetUrl ?? "");
+      if (!targetUrl) return { status: "unverified", method: "unavailable", expectedProjectRoot: selectedRoot,
+        reason: "No surface target URL was configured.", observedAt: new Date().toISOString() };
+      return { status: "different-project", method: "windows-listener-process", expectedProjectRoot: selectedRoot,
+        observedProjectRoot: resolve(root, "../foreign-checkout"), targetOrigin: new URL(targetUrl!).origin,
+        processId: 314, reason: "The gateway listener belongs to another Git checkout.", observedAt: new Date().toISOString() };
+    });
+    const connect = vi.spyOn(WebAdapter.prototype, "connect").mockRejectedValue(new Error("must not connect"));
+    const service = await LocalRunnerService.create({ root });
+    expect(service.config.project.health).toEqual([]);
+    const started = await service.start({ charter: gatewayBusinessCharter() });
+    const summary = await service.wait(started.runId);
+    expect(summary.verdict).toBe("blocked");
+    expect(summary.findings.join(" ")).toContain("AIHR gateway listener belongs to another Git checkout before setup");
+    expect(connect).not.toHaveBeenCalled();
+    expect(inspected).toContain(process.env.AIHR_PROOFKIT_API_BASE_URL);
+    const path = summary.artifacts.find((item) => item.endsWith("/preflight.json"));
+    expect(path).toBeDefined();
+    const saved = JSON.parse(await readFile(join(service.evidenceDir, path!), "utf8"));
+    expect(saved).toMatchObject({ passed: false, evidence: {
+      gatewayBindingStatus: "different-project", gatewayBindingObservedProjectRoot: resolve(root, "../foreign-checkout"),
+      gatewayBindingProcessId: 314, gatewayBindingOrigin: "http://127.0.0.1:8080",
+    } });
+    expect(JSON.stringify(saved)).not.toContain("private=ignored");
+  });
+
+  it("records a foreign gateway under record policy and rechecks it after setup", async () => {
+    const root = await createIntegrationProject();
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "http://127.0.0.1:8080/api/v1";
+    configureBusinessScope();
+    const binding = vi.spyOn(project, "inspectTargetBinding").mockImplementation(async (selectedRoot, targetUrl) => ({
+      status: "different-project", method: "windows-listener-process", expectedProjectRoot: selectedRoot,
+      observedProjectRoot: resolve(root, "../foreign-checkout"), targetOrigin: new URL(targetUrl!).origin,
+      reason: "The gateway listener belongs to another Git checkout.", observedAt: new Date().toISOString(),
+    }));
+    const defaults = (await LocalRunnerService.create({ root })).config;
+    const service = await LocalRunnerService.create({ root, config: {
+      ...defaults, policies: { ...defaults.policies, targetBinding: "record" },
+    } });
+    const preflight = service.integration?.preflight;
+    const postSetupCheck = service.integration?.postSetupCheck;
+    if (!preflight || !postSetupCheck) throw new Error("AIHR gateway checks are missing");
+    const context = { runId: "record-gateway", environment: "test" as const, charter: gatewayBusinessCharter(),
+      signal: new AbortController().signal };
+    const before = await preflight(context);
+    const after = await postSetupCheck(context);
+    expect(before).toMatchObject({ passed: true, evidence: { gatewayBindingStatus: "different-project" } });
+    expect(after).toMatchObject({ passed: true, evidence: { gatewayBindingStatus: "different-project" } });
+    expect(binding).toHaveBeenCalledTimes(2);
+    expect(before.message).toContain("record policy");
+  });
+
+  it("blocks a gateway that changes to a foreign checkout during setup", async () => {
+    const root = await createIntegrationProject();
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "http://127.0.0.1:8080/api/v1";
+    configureBusinessScope();
+    let gatewayInspections = 0;
+    vi.spyOn(project, "inspectTargetBinding").mockImplementation(async (selectedRoot, targetUrl) => {
+      if (!targetUrl) return { status: "unverified", method: "unavailable", expectedProjectRoot: selectedRoot,
+        reason: "No surface target URL was configured.", observedAt: new Date().toISOString() };
+      gatewayInspections += 1;
+      return gatewayInspections === 1
+        ? { status: "unverified", method: "unavailable", expectedProjectRoot: selectedRoot,
+          targetOrigin: new URL(targetUrl).origin, reason: "No listener yet.", observedAt: new Date().toISOString() }
+        : { status: "different-project", method: "windows-listener-process", expectedProjectRoot: selectedRoot,
+          observedProjectRoot: resolve(root, "../foreign-checkout"), targetOrigin: new URL(targetUrl).origin,
+          reason: "The gateway listener belongs to another Git checkout.", observedAt: new Date().toISOString() };
+    });
+    const connect = vi.spyOn(WebAdapter.prototype, "connect").mockRejectedValue(new Error("must not connect"));
+    const service = await LocalRunnerService.create({ root });
+    const started = await service.start({ charter: gatewayBusinessCharter() });
+    const summary = await service.wait(started.runId);
+    expect(summary.verdict).toBe("blocked");
+    expect(summary.findings.join(" ")).toContain("AIHR gateway listener belongs to another Git checkout after setup");
+    expect(gatewayInspections).toBe(2);
+    expect(connect).not.toHaveBeenCalled();
+    const beforePath = summary.artifacts.find((item) => item.endsWith("/preflight.json"));
+    const afterPath = summary.artifacts.find((item) => item.endsWith("/post-setup-check.json"));
+    expect(beforePath && afterPath).toBeTruthy();
+    expect(JSON.parse(await readFile(join(service.evidenceDir, beforePath!), "utf8")))
+      .toMatchObject({ passed: true, evidence: { gatewayBindingStatus: "unverified" } });
+    expect(JSON.parse(await readFile(join(service.evidenceDir, afterPath!), "utf8")))
+      .toMatchObject({ passed: false, evidence: { gatewayBindingStatus: "different-project" } });
+  });
+
+  it("propagates cancellation during gateway ownership inspection", async () => {
+    const root = await createIntegrationProject();
+    process.env.AIHR_PROOFKIT_API_BASE_URL = "http://127.0.0.1:8080/api/v1";
+    configureBusinessScope();
+    vi.spyOn(project, "inspectTargetBinding").mockImplementation(async (_selectedRoot, _targetUrl, signal) => {
+      signal?.throwIfAborted();
+      throw new Error("inspection unexpectedly continued");
+    });
+    const service = await LocalRunnerService.create({ root });
+    const controller = new AbortController();
+    controller.abort(new Error("stop gateway inspection"));
+    await expect(service.integration?.preflight?.({ runId: "cancel-gateway", environment: "test",
+      charter: gatewayBusinessCharter(), signal: controller.signal })).rejects.toThrow("stop gateway inspection");
+  });
+
   it("blocks the actual upload key outside the test scope before connecting or writing", async () => {
     const gateway = await startCollectionGatewayMock({ fixtureSha256: "a".repeat(64) });
     servers.push(gateway.server);
@@ -880,6 +987,7 @@ describe("AIHR project integration", () => {
   });
 
   it("allows a quick UI-only charter without AIHR business scope", async () => {
+    const binding = vi.spyOn(project, "inspectTargetBinding");
     const service = await LocalRunnerService.create({ root: await createIntegrationProject() });
     const preflight = service.integration?.preflight;
     if (!preflight) throw new Error("AIHR integration preflight is missing");
@@ -904,6 +1012,7 @@ describe("AIHR project integration", () => {
       evidence: { integrationRequired: false },
     });
     expect(result.message).toContain("quick Charter");
+    expect(binding).not.toHaveBeenCalled();
   });
 
   it("blocks an interactive quick Charter without isolated actor credentials", async () => {
@@ -966,6 +1075,23 @@ describe("AIHR project integration", () => {
     expect(result.evidence).toMatchObject({ credentialConfigured: true, actorConfigured: false });
   });
 });
+
+function configureBusinessScope(): void {
+  process.env.AIHR_PROOFKIT_TEST_SCOPE = "proofkit:gateway-check";
+  process.env.AIHR_PROOFKIT_ACCESS_TOKEN = "fixture-token";
+  process.env.AIHR_PROOFKIT_ENTERPRISE_ID = "1";
+  process.env.AIHR_PROOFKIT_WORKSPACE_ID = "2";
+  process.env.AIHR_PROOFKIT_USER_ID = "3";
+}
+
+function gatewayBusinessCharter(): TestCharter {
+  return TestCharterSchema.parse({
+    intent: "verify an isolated AIHR resume file",
+    level: "core", mode: "deterministic", sideEffectPolicy: "deny",
+    actions: [{ kind: "capability", name: "aihr.readResumeFile", input: { fileId: "901" } }],
+    assertions: [], metadata: {},
+  });
+}
 
 async function createIntegrationProject(fixtureBytes?: Buffer): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "proofkit-aihr-integration-"));

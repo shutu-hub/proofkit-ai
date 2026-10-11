@@ -81,6 +81,7 @@ export type ProjectIntegration = {
   capabilities?: CapabilityDefinition<any, any>[];
   oracles?: BusinessOracle[];
   preflight?: IntegrationPreflight;
+  postSetupCheck?: IntegrationPreflight;
   setup?: IntegrationSetup;
   setupPolicy?: IntegrationSetupPolicy;
   /** Trusted connector reopens resources by their persisted scope; must not replay product actions. */

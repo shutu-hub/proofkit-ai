@@ -1,8 +1,8 @@
 import { access } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { IntegrationSetupPolicySchema, type ProofkitConfig } from "@proofkit/contracts";
-import { resolveWithinWorkspace } from "@proofkit/project";
+import { IntegrationSetupPolicySchema, type ProofkitConfig, type TargetBinding } from "@proofkit/contracts";
+import { inspectTargetBinding, resolveWithinWorkspace } from "@proofkit/project";
 import { z } from "@proofkit/runner";
 import type { ProjectIntegration } from "@proofkit/runner";
 
@@ -15,6 +15,8 @@ export type ProjectIntegrationFactoryContext = {
   workspaceRoot: string;
   config: ProofkitConfig;
   z: typeof z;
+  /** Read-only listener/source association for an endpoint used by this trusted integration. */
+  inspectEndpointBinding: (targetUrl: string, signal?: AbortSignal) => Promise<TargetBinding>;
 };
 
 export async function loadProjectIntegration(
@@ -38,7 +40,8 @@ export async function loadProjectIntegration(
     createIntegration?: (context: ProjectIntegrationFactoryContext) => unknown | Promise<unknown>;
   };
   const candidate = loaded.createIntegration
-    ? await loaded.createIntegration({ root: workspace, projectRoot, workspaceRoot: workspace, config, z })
+    ? await loaded.createIntegration({ root: workspace, projectRoot, workspaceRoot: workspace, config, z,
+      inspectEndpointBinding: (targetUrl, signal) => inspectTargetBinding(projectRoot, targetUrl, signal) })
     : loaded.default ?? loaded.integration;
   return validateIntegration(candidate, path);
 }
@@ -57,6 +60,9 @@ function validateIntegration(value: unknown, path: string): ProjectIntegration {
   }
   if (integration.preflight !== undefined && typeof integration.preflight !== "function") {
     throw new Error(`Integration ${path} preflight must be a function`);
+  }
+  if (integration.postSetupCheck !== undefined && typeof integration.postSetupCheck !== "function") {
+    throw new Error(`Integration ${path} postSetupCheck must be a function`);
   }
   if (integration.setup !== undefined && typeof integration.setup !== "function") {
     throw new Error(`Integration ${path} setup must be a function`);
