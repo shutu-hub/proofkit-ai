@@ -20,6 +20,11 @@ export class ProjectMissionStore extends JsonMissionStore {
     await super.save(mission);
   }
 
+  override async create(mission: TestMission): Promise<void> {
+    this.assertContext(mission);
+    await super.create(mission);
+  }
+
   private assertContext(mission: TestMission): void {
     if (!sameProjectPath(mission.projectRoot, this.context.projectRoot)) throw new Error("Mission belongs to another project");
     if (mission.workspaceRoot ? !sameProjectPath(mission.workspaceRoot, this.context.workspaceRoot) : !this.context.legacy) {

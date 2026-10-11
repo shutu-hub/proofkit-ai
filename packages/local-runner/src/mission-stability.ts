@@ -1,4 +1,4 @@
-import { MissionStabilityAnalysisSchema, type MissionResult, type MissionStabilityAnalysis, type RunSummary, type SourceState, type TestMission } from "@proofkit/contracts";
+import { MissionStabilityAnalysisSchema, type MissionResult, type MissionRunResult, type MissionStabilityAnalysis, type RunSummary, type SourceState, type TestMission } from "@proofkit/contracts";
 import { sameInputFileFacts } from "@proofkit/runner";
 import { missionScopeHash } from "./mission-comparison.js";
 
@@ -33,7 +33,8 @@ export async function analyzeMissionStability(samples: Sample[], loadRun: (runId
     if (result.executionAudit?.status !== "complete" || result.agentTraceAudit?.status !== "complete"
       || result.acceptanceEvidenceIntegrity?.status !== "intact") gaps.push(`${label}: execution, trace or evidence audit is incomplete`);
     if (result.expectedRuns === 0 || result.omittedRunResults || result.observedRuns !== result.expectedRuns || result.runs.length !== result.expectedRuns
-      || result.runs.some((run) => !run.runId || run.issue || !run.evidence.some((ref) => ref.sha256 && ref.evidenceId.startsWith(`${run.runId}:`)))) {
+      || result.runs.some((run) => !run.runId || run.issue && !expectedProductRunFailure(run)
+        || !run.evidence.some((ref) => ref.sha256 && ref.evidenceId.startsWith(`${run.runId}:`)))) {
       gaps.push(`${label}: the complete declared Run matrix lacks owned hashed evidence`);
     }
     if (expectedRuns !== undefined && result.expectedRuns !== expectedRuns) gaps.push(`${label}: declared Run count differs`);
@@ -106,4 +107,11 @@ export async function analyzeMissionStability(samples: Sample[], loadRun: (runId
 
 function completeGitSource(state: SourceState | undefined): state is SourceState & { method: "git"; headSha: string; worktreeSha256: string } {
   return state?.complete === true && state.method === "git" && Boolean(state.headSha && state.worktreeSha256);
+}
+
+/** Mission task errors also carry the expected failure message for an Oracle-proven product defect. */
+export function expectedProductRunFailure(run: MissionRunResult): boolean {
+  return run.issue === "Tool returned verdict failed" && run.verdict === "failed"
+    && (run.businessFacts ?? 0) > 0 && (run.oracles?.total ?? 0) > (run.oracles?.passed ?? 0)
+    && run.evidence.some((ref) => ref.kind === "business" && Boolean(ref.sha256));
 }

@@ -194,6 +194,11 @@ For variability investigation, gather three to five separately authorized
 direct-replay Missions and call analyze_mission_stability with their IDs in
 execution order. A variable-outcome result is evidence of changed outcomes,
 not a flaky-test root-cause diagnosis. Do not reuse one Run as several samples.
+When repeated execution is requested, create_mission_repeat from an evidenced
+terminal Mission, then advance_mission_repeat one slot at a time and await its
+result. Use get_mission_repeat_status after reconnecting. Approve each
+interactive slot separately; a previous approval never authorizes the series.
+Treat an inconclusive series or changed source as a stopped investigation.
 Read the comparison again when reporting: candidateSourceFreshness changed or
 unavailable withdraws a saved repair or reproduced-defect claim to inconclusive.
 historicalStatus describes the saved result, not the current checkout.

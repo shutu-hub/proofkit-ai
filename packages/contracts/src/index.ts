@@ -1370,6 +1370,8 @@ export const TestMissionSchema = z.object({
   missionId: z.string().min(1),
   /** The direct source Mission when this Mission was created by replay. */
   replayOfMissionId: z.string().min(1).optional(),
+  /** A deterministic slot in a persisted repeat series; slot zero is its pre-existing baseline. */
+  repeatSeries: z.object({ seriesId: z.string().regex(/^repeat-[a-f0-9]{12}$/), ordinal: z.number().int().min(1).max(4) }).optional(),
   intent: z.string().min(1),
   projectRoot: z.string().min(1),
   workspaceRoot: z.string().min(1).optional(),
@@ -1404,6 +1406,17 @@ export const TestMissionSchema = z.object({
   updatedAt: z.string(),
 });
 export type TestMission = z.infer<typeof TestMissionSchema>;
+
+/** Immutable request. Progress is reconstructed from deterministic Mission slots after a process restart. */
+export const MissionRepeatSeriesSchema = z.object({
+  seriesId: z.string().regex(/^repeat-[a-f0-9]{12}$/),
+  baselineMissionId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  projectRoot: z.string().min(1),
+  workspaceRoot: z.string().min(1),
+  targetSamples: z.number().int().min(3).max(5),
+  createdAt: z.string().datetime(),
+});
+export type MissionRepeatSeries = z.infer<typeof MissionRepeatSeriesSchema>;
 
 export const MissionComparisonRunSchema = z.object({
   charterId: CatalogIdSchema.optional(),
@@ -1536,6 +1549,18 @@ export const MissionStabilityAnalysisSchema = z.object({
   checkedAt: z.string().datetime(),
 });
 export type MissionStabilityAnalysis = z.infer<typeof MissionStabilityAnalysisSchema>;
+
+export const MissionRepeatSeriesStatusSchema = z.object({
+  series: MissionRepeatSeriesSchema,
+  state: z.enum(["ready", "running", "awaiting-approval", "inconclusive", "complete"]),
+  missionIds: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/)).min(1).max(5),
+  currentMissionId: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  nextOrdinal: z.number().int().min(1).max(4).optional(),
+  requiresApproval: z.boolean().optional(),
+  reason: z.string().optional(),
+  analysis: MissionStabilityAnalysisSchema.optional(),
+});
+export type MissionRepeatSeriesStatus = z.infer<typeof MissionRepeatSeriesStatusSchema>;
 
 /** Current readability of the bounded Mission presentation, separate from its saved acceptance verdict. */
 export const MissionEvidenceIntegritySchema = z.object({

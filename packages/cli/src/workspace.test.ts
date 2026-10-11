@@ -11,6 +11,18 @@ afterEach(async () => {
 });
 
 describe("CLI workspace onboarding", () => {
+  it("accepts external workspace options on every nested repeat command", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-repeat-cli-source-"));
+    const workspace = await mkdtemp(join(tmpdir(), "proofkit-repeat-cli-workspace-"));
+    roots.push(root, workspace);
+    await writeFile(join(root, "package.json"), '{"name":"repeat-cli"}');
+    await expect(createProgram().parseAsync(["node", "proofkit", "mission", "repeat", "create", "mission-baseline",
+      "--samples", "6", "--root", root, "--workspace", workspace])).rejects.toThrow("3 to 5 total samples");
+    await expect(createProgram().parseAsync(["node", "proofkit", "mission", "repeat", "status", "invalid",
+      "--root", root, "--workspace", workspace])).rejects.toThrow("Invalid repeat series id");
+    expect(await readdir(root)).toEqual(["package.json"]);
+  });
+
   it("creates a Mission from a scope-pinned external candidate without changing source", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-cli-pinned-source-"));
     const workspace = await mkdtemp(join(tmpdir(), "proofkit-cli-pinned-workspace-"));

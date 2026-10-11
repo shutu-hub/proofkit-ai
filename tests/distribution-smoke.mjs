@@ -222,6 +222,9 @@ process.exit(3);
     assert.ok(installedTools.some((tool) => tool.name === "run_test"));
     assert.ok(installedTools.some((tool) => tool.name === "await_test_result"));
     assert.ok(installedTools.some((tool) => tool.name === "analyze_mission_stability"));
+    assert.ok(installedTools.some((tool) => tool.name === "create_mission_repeat"));
+    assert.ok(installedTools.some((tool) => tool.name === "get_mission_repeat_status"));
+    assert.ok(installedTools.some((tool) => tool.name === "advance_mission_repeat"));
   } finally { await binClient.close(); }
   const transport = new StdioClientTransport({ command: emittedServer.command, args: emittedServer.args,
     env: { ...mcpEnv, ...emittedServer.env } });

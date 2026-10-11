@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -19,6 +19,93 @@ afterEach(async () => {
 });
 
 describe("explicit release suites", () => {
+  it("drives approval-free repeat slots and reconstructs the series after a new runner starts", async () => {
+    const service = await createSuiteService();
+    execFileSync("git", ["init", "-q"], { cwd: service.root });
+    execFileSync("git", ["add", "."], { cwd: service.root });
+    execFileSync("git", ["-c", "user.name=ProofKit", "-c", "user.email=proofkit@example.invalid", "commit", "-qm", "fixture"], { cwd: service.root });
+    const runs = stubRuns(service, { matchingTarget: true });
+    const baseline = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical", policy: { requireApproval: false } });
+    await service.startMission(baseline.missionId);
+    expect((await service.waitMission(baseline.missionId)).verdict).toBe("passed");
+    const created = await service.createMissionRepeatSeries(baseline.missionId, 3);
+    expect(created).toMatchObject({ state: "ready", missionIds: [baseline.missionId], nextOrdinal: 1, requiresApproval: false });
+    const finished = await service.driveMissionRepeatSeries(created.series.seriesId);
+    expect(finished).toMatchObject({ state: "complete", analysis: { status: "uniform-pass", passes: 3, failures: 0 } });
+    expect(finished.missionIds).toHaveLength(3);
+    expect(runs.started).toHaveLength(24);
+    const reopened = await LocalRunnerService.create({ root: service.root, workspaceRoot: service.workspaceRoot });
+    expect(await reopened.missionRepeatSeriesStatus(created.series.seriesId)).toMatchObject({
+      state: "complete", missionIds: finished.missionIds, analysis: { status: "uniform-pass" },
+    });
+    expect((await service.driveMissionRepeatSeries(created.series.seriesId)).missionIds).toEqual(finished.missionIds);
+    expect(runs.started).toHaveLength(24);
+  }, 45_000);
+
+  it("requires a fresh approval for each interactive repeat slot and resumes the saved pending slot", async () => {
+    const service = await createSuiteService();
+    execFileSync("git", ["init", "-q"], { cwd: service.root });
+    execFileSync("git", ["add", "."], { cwd: service.root });
+    execFileSync("git", ["-c", "user.name=ProofKit", "-c", "user.email=proofkit@example.invalid", "commit", "-qm", "fixture"], { cwd: service.root });
+    const runs = stubRuns(service, { matchingTarget: true });
+    const baseline = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical", policy: { requireApproval: true } });
+    await service.startMission(baseline.missionId, { approve: true });
+    await service.waitMission(baseline.missionId);
+    const created = await service.createMissionRepeatSeries(baseline.missionId, 3);
+    await Promise.all([service.advanceMissionRepeatSeries(created.series.seriesId), service.advanceMissionRepeatSeries(created.series.seriesId)]);
+    const pending = await service.missionRepeatSeriesStatus(created.series.seriesId);
+    expect(pending).toMatchObject({ state: "awaiting-approval", nextOrdinal: 1, requiresApproval: true });
+    expect((await readdir(join(service.workspaceRoot, ".proofkit", "missions")))
+      .filter((name) => name.startsWith(`mission-${created.series.seriesId}-`))).toHaveLength(1);
+    expect(runs.started).toHaveLength(8);
+    const reopened = await LocalRunnerService.create({ root: service.root, workspaceRoot: service.workspaceRoot });
+    expect(await reopened.missionRepeatSeriesStatus(created.series.seriesId)).toMatchObject({
+      state: "awaiting-approval", currentMissionId: pending.currentMissionId,
+    });
+    expect((await service.driveMissionRepeatSeries(created.series.seriesId, true)).state).toBe("awaiting-approval");
+    expect(runs.started).toHaveLength(16);
+    expect((await service.driveMissionRepeatSeries(created.series.seriesId)).state).toBe("awaiting-approval");
+    expect(runs.started).toHaveLength(16);
+    expect((await service.driveMissionRepeatSeries(created.series.seriesId, true)).analysis?.status).toBe("uniform-pass");
+    expect(runs.started).toHaveLength(24);
+  }, 45_000);
+
+  it("stops a repeat series when the tested source changes before another sample", async () => {
+    const service = await createSuiteService();
+    execFileSync("git", ["init", "-q"], { cwd: service.root });
+    execFileSync("git", ["add", "."], { cwd: service.root });
+    execFileSync("git", ["-c", "user.name=ProofKit", "-c", "user.email=proofkit@example.invalid", "commit", "-qm", "fixture"], { cwd: service.root });
+    const runs = stubRuns(service, { matchingTarget: true });
+    const baseline = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical", policy: { requireApproval: false } });
+    await service.startMission(baseline.missionId);
+    await service.waitMission(baseline.missionId);
+    const created = await service.createMissionRepeatSeries(baseline.missionId, 3);
+    await writeFile(join(service.root, "apps", "web", "src", "router.ts"), "export const changed = true;\n");
+    expect(await service.advanceMissionRepeatSeries(created.series.seriesId)).toMatchObject({ state: "inconclusive", missionIds: [baseline.missionId] });
+    expect(runs.started).toHaveLength(8);
+  });
+
+  it("continues past an evidenced product failure and reports changed outcomes without a flaky diagnosis", async () => {
+    const service = await createSuiteService();
+    execFileSync("git", ["init", "-q"], { cwd: service.root });
+    execFileSync("git", ["add", "."], { cwd: service.root });
+    execFileSync("git", ["-c", "user.name=ProofKit", "-c", "user.email=proofkit@example.invalid", "commit", "-qm", "fixture"], { cwd: service.root });
+    const options: { matchingTarget: boolean; failedPrimary?: string } = { matchingTarget: true };
+    stubRuns(service, options);
+    const baseline = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical", policy: { requireApproval: false } });
+    await service.startMission(baseline.missionId);
+    await service.waitMission(baseline.missionId);
+    const created = await service.createMissionRepeatSeries(baseline.missionId, 3);
+    options.failedPrimary = "resume/web";
+    const failedSlot = await service.advanceMissionRepeatSeries(created.series.seriesId);
+    expect((await service.waitMission(failedSlot.currentMissionId!)).verdict).toBe("failed");
+    const afterFailure = await service.missionRepeatSeriesStatus(created.series.seriesId);
+    expect(afterFailure).toMatchObject({ state: "ready", missionIds: [baseline.missionId, failedSlot.currentMissionId] });
+    options.failedPrimary = undefined;
+    const completed = await service.driveMissionRepeatSeries(created.series.seriesId);
+    expect(completed).toMatchObject({ state: "complete", analysis: { status: "variable-outcome", passes: 2, failures: 1 } });
+  }, 45_000);
+
   it("re-audits three direct replay Missions as distinct evidenced samples", async () => {
     const service = await createSuiteService();
     execFileSync("git", ["init", "-q"], { cwd: service.root });

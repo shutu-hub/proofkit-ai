@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -322,6 +322,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
 }
 
 export interface MissionStore {
+  create(mission: TestMission): Promise<void>;
   save(mission: TestMission): Promise<void>;
   load(missionId: string): Promise<TestMission>;
   acquireExecution(missionId: string, onCancel?: (reason: string) => void): Promise<MissionExecutionLease | undefined>;
@@ -348,6 +349,21 @@ export class JsonMissionStore implements MissionStore {
 
   cancelExecution(missionId: string, reason: string): Promise<boolean> {
     return this.ownership.cancel(safeMissionId(missionId), reason);
+  }
+
+  async create(mission: TestMission): Promise<void> {
+    await mkdir(this.rootDir, { recursive: true });
+    const missionId = safeMissionId(mission.missionId);
+    const target = join(this.rootDir, `${missionId}.json`);
+    const temporary = join(this.rootDir, `.${missionId}.${randomUUID()}.tmp`);
+    try {
+      const file = await open(temporary, "wx");
+      try {
+        await file.writeFile(`${JSON.stringify(mission, null, 2)}\n`, "utf8");
+        await file.sync();
+      } finally { await file.close(); }
+      await link(temporary, target); // Atomic create without overwriting a previously persisted replay slot.
+    } finally { await rm(temporary, { force: true }).catch(() => undefined); }
   }
 
   async save(mission: TestMission): Promise<void> {
@@ -413,6 +429,7 @@ export class InMemoryMissionToolRegistry implements MissionToolRegistry {
 export type MissionCreateInput = Omit<MissionPlanInput, "policy"> & {
   policy?: Partial<MissionPolicy>;
   replayOfMissionId?: string;
+  repeatSeries?: TestMission["repeatSeries"];
 };
 
 export type MissionRunOptions = {
@@ -439,6 +456,7 @@ export class MissionAgent {
   }
 
   async create(input: MissionCreateInput): Promise<TestMission> {
+    if (input.repeatSeries && !input.replayOfMissionId) throw new Error("A repeat-series slot must name its replay source Mission");
     let policy = MissionPolicySchema.parse(input.policy ?? {});
     if (input.charter && input.suite) throw new Error("A mission cannot contain both a Charter and a suite");
     if (input.charter && input.charter.level !== policy.level) {
@@ -451,8 +469,9 @@ export class MissionAgent {
     }
     const now = new Date().toISOString();
     const mission = TestMissionSchema.parse({
-      missionId: `mission-${randomUUID().slice(0, 12)}`,
+      missionId: input.repeatSeries ? `mission-${input.repeatSeries.seriesId}-${input.repeatSeries.ordinal}` : `mission-${randomUUID().slice(0, 12)}`,
       replayOfMissionId: input.replayOfMissionId,
+      repeatSeries: input.repeatSeries,
       intent: input.intent,
       projectRoot: input.projectRoot,
       workspaceRoot: input.workspaceRoot,
@@ -471,7 +490,7 @@ export class MissionAgent {
       createdAt: now,
       updatedAt: now,
     });
-    await this.store.save(mission);
+    await this.store.create(mission);
     return mission;
   }
 

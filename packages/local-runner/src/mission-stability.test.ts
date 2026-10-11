@@ -52,6 +52,17 @@ describe("Mission stability evidence", () => {
     expect(result.samples[1]?.evidence[0]?.kind).toBe("business");
   });
 
+  it("accepts an Oracle-proven product failure without accepting an unrelated execution issue", async () => {
+    const samples = chain(["passed", "failed", "passed"]);
+    const failed = samples[1]!.result.runs[0]!;
+    failed.issue = "Tool returned verdict failed";
+    failed.businessFacts = 1;
+    failed.oracles = { passed: 0, total: 1 };
+    expect((await analyzeMissionStability(samples, loadRun)).status).toBe("variable-outcome");
+    failed.issue = "Browser disconnected";
+    expect((await analyzeMissionStability(samples, loadRun)).status).toBe("inconclusive");
+  });
+
   it("withholds classification when a replay, source or target does not match", async () => {
     const samples = chain(["passed", "failed", "passed"]);
     samples[1]!.mission.replayOfMissionId = "another-mission";

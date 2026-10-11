@@ -186,6 +186,27 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "create_mission_repeat",
+    "Save a resumable 3–5 sample series from an evidenced terminal Mission. This does not start a Run. Progress lives in the external ProofKit workspace.",
+    { baselineMissionId: z.string().min(1), targetSamples: z.number().int().min(3).max(5) },
+    async ({ baselineMissionId, targetSamples }) => result(await runner.createMissionRepeatSeries(baselineMissionId, targetSamples)),
+  );
+
+  server.tool(
+    "get_mission_repeat_status",
+    "Re-audit a persisted repeat series and its completed Missions. May refresh report snapshots; does not start a Run.",
+    { seriesId: z.string().min(1) },
+    async ({ seriesId }) => result(await runner.missionRepeatSeriesStatus(seriesId)),
+  );
+
+  server.tool(
+    "advance_mission_repeat",
+    "Create or resume exactly one replay slot. approve=true authorizes at most this one interactive execution; another replay needs fresh approval. Poll its Mission and call again to continue.",
+    { seriesId: z.string().min(1), approve: z.boolean().default(false) },
+    async ({ seriesId, approve }) => result(await runner.advanceMissionRepeatSeries(seriesId, approve)),
+  );
+
+  server.tool(
     "plan_test",
     "Turn a natural-language intent into a validated, reviewable ProofKit Test Charter. Planning does not execute the project.",
     {

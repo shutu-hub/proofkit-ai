@@ -7,6 +7,19 @@ import { TestSuiteSchema } from "@proofkit/contracts";
 import { DeterministicMissionPlanner, InMemoryMissionToolRegistry, JsonMissionStore, MissionAgent } from "./index.js";
 
 describe("JsonMissionStore", () => {
+  it("creates deterministic repeat slots exclusively without replacing an existing Mission", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-repeat-slot-"));
+    const store = new JsonMissionStore(root);
+    const agent = new MissionAgent({ store, tools: new InMemoryMissionToolRegistry() });
+    const request = { intent: "repeat business proof", projectRoot: root, surface: "web" as const,
+      replayOfMissionId: "mission-baseline", repeatSeries: { seriesId: "repeat-123456789abc", ordinal: 1 } };
+    const first = await agent.create(request);
+    expect(first.missionId).toBe("mission-repeat-123456789abc-1");
+    await expect(agent.create({ ...request, intent: "overwrite" })).rejects.toMatchObject({ code: "EEXIST" });
+    expect((await store.load(first.missionId)).intent).toBe(request.intent);
+    expect(await readdir(root)).toEqual([`${first.missionId}.json`]);
+  });
+
   it("keeps every read complete while a mission is repeatedly replaced", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-atomic-mission-"));
     const store = new JsonMissionStore(root);

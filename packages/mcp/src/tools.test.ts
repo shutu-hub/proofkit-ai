@@ -34,6 +34,9 @@ describe("ProofKit MCP tools", () => {
       "replay_mission",
       "compare_missions",
       "analyze_mission_stability",
+      "create_mission_repeat",
+      "get_mission_repeat_status",
+      "advance_mission_repeat",
       "plan_test",
       "start_run",
       "get_run_status",
@@ -52,7 +55,7 @@ describe("ProofKit MCP tools", () => {
     for (const name of ["discover_project", "inspect_test_scope", "list_test_charters", "list_test_suites", "get_mission_status"]) {
       expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).toBe(true);
     }
-    for (const name of ["inspect_test_environment", "inspect_surface", "create_test_mission", "run_test", "get_mission_evidence", "analyze_mission_stability"]) {
+    for (const name of ["inspect_test_environment", "inspect_surface", "create_test_mission", "run_test", "get_mission_evidence", "analyze_mission_stability", "create_mission_repeat", "get_mission_repeat_status", "advance_mission_repeat"]) {
       expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).not.toBe(true);
     }
 
@@ -101,6 +104,28 @@ describe("ProofKit MCP tools", () => {
       expect(runner.analyzeMissionStability).toHaveBeenCalledWith(missionIds);
       expect((await client.callTool({ name: "analyze_mission_stability", arguments: { missionIds: missionIds.slice(0, 2) } })).isError).toBe(true);
       expect(runner.analyzeMissionStability).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("routes repeat creation, status and one-slot approval without silently authorizing a whole series", async () => {
+    const runner = {
+      createMissionRepeatSeries: vi.fn(async () => ({ series: { seriesId: "repeat-123456789abc" }, state: "ready" })),
+      missionRepeatSeriesStatus: vi.fn(async () => ({ series: { seriesId: "repeat-123456789abc" }, state: "awaiting-approval" })),
+      advanceMissionRepeatSeries: vi.fn(async () => ({ series: { seriesId: "repeat-123456789abc" }, state: "running" })),
+    } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      expect(JSON.parse(textContent(await client.callTool({ name: "create_mission_repeat",
+        arguments: { baselineMissionId: "mission-a", targetSamples: 3 } }))).state).toBe("ready");
+      expect(runner.createMissionRepeatSeries).toHaveBeenCalledWith("mission-a", 3);
+      expect((await client.callTool({ name: "create_mission_repeat",
+        arguments: { baselineMissionId: "mission-a", targetSamples: 6 } })).isError).toBe(true);
+      expect(JSON.parse(textContent(await client.callTool({ name: "get_mission_repeat_status",
+        arguments: { seriesId: "repeat-123456789abc" } }))).state).toBe("awaiting-approval");
+      await client.callTool({ name: "advance_mission_repeat", arguments: { seriesId: "repeat-123456789abc" } });
+      expect(runner.advanceMissionRepeatSeries).toHaveBeenLastCalledWith("repeat-123456789abc", false);
+      await client.callTool({ name: "advance_mission_repeat", arguments: { seriesId: "repeat-123456789abc", approve: true } });
+      expect(runner.advanceMissionRepeatSeries).toHaveBeenLastCalledWith("repeat-123456789abc", true);
     } finally { await client.close(); await server.close(); }
   });
 

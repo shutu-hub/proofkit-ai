@@ -468,6 +468,43 @@ export function createProgram(): Command {
       process.exitCode = analysis.status === "uniform-pass" ? 0 : analysis.status === "inconclusive" ? 2 : 1;
     });
 
+  const repeat = mission.command("repeat").description("Persist and resume an evidenced 3–5 sample Mission series");
+  repeat.command("create <baselineMissionId>")
+    .requiredOption("--samples <count>", "total sample count, including the baseline", (value) => Number(value))
+    .option("--root <path>", "project root", ".")
+    .action(async (baselineMissionId: string, options: RootOptions & { samples: number }) => {
+      const runner = new LocalRunnerService({ root: resolve(options.root), workspaceRoot: options.workspace });
+      console.log(JSON.stringify(await runner.createMissionRepeatSeries(baselineMissionId, options.samples), null, 2));
+    });
+
+  repeat.command("status <seriesId>")
+    .option("--root <path>", "project root", ".")
+    .action(async (seriesId: string, options: RootOptions) => {
+      const runner = new LocalRunnerService({ root: resolve(options.root), workspaceRoot: options.workspace });
+      console.log(JSON.stringify(await runner.missionRepeatSeriesStatus(seriesId), null, 2));
+    });
+
+  repeat.command("advance <seriesId>")
+    .option("--root <path>", "project root", ".")
+    .option("--approve", "authorize this one replay execution")
+    .option("--allow-capability-writes", "allow approved test-environment write capabilities")
+    .action(async (seriesId: string, options: RootOptions & { approve?: boolean; allowCapabilityWrites?: boolean }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace, allowCapabilityWrites: options.allowCapabilityWrites });
+      console.log(JSON.stringify(await runner.advanceMissionRepeatSeries(seriesId, options.approve), null, 2));
+    });
+
+  repeat.command("run <seriesId>")
+    .description("Drive approval-free slots until complete; --approve authorizes only the next interactive replay")
+    .option("--root <path>", "project root", ".")
+    .option("--approve", "authorize only the next replay execution")
+    .option("--allow-capability-writes", "allow approved test-environment write capabilities")
+    .action(async (seriesId: string, options: RootOptions & { approve?: boolean; allowCapabilityWrites?: boolean }) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace, allowCapabilityWrites: options.allowCapabilityWrites });
+      const state = await runner.driveMissionRepeatSeries(seriesId, options.approve);
+      console.log(JSON.stringify(state, null, 2));
+      process.exitCode = state.state !== "complete" ? 2 : state.analysis?.status === "uniform-pass" ? 0 : 1;
+    });
+
   program.command("report <runId>")
     .description("Regenerate a static report for a run")
     .option("--root <path>", "project root", ".")
@@ -535,8 +572,8 @@ export function createProgram(): Command {
     });
 
   // Every leaf command resolves the same source/workspace pair.
-  for (const command of [...program.commands, ...mission.commands, ...resources.commands, ...agent.commands, ...template.commands]) {
-    if (command !== mission && command !== resources && command !== agent && command !== template) command.option("--workspace <path>", "test workspace root; defaults to an external workspace or legacy .proofkit (agent setup always external)");
+  for (const command of [...program.commands, ...mission.commands, ...repeat.commands, ...resources.commands, ...agent.commands, ...template.commands]) {
+    if (command !== mission && command !== repeat && command !== resources && command !== agent && command !== template) command.option("--workspace <path>", "test workspace root; defaults to an external workspace or legacy .proofkit (agent setup always external)");
   }
   return program;
 }

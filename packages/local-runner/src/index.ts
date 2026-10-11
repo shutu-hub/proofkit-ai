@@ -16,6 +16,7 @@ import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
 import { auditComparisonCurrentSource, compareMissionRecords } from "./mission-comparison.js";
 import { analyzeMissionStability as analyzeMissionStabilityRecords } from "./mission-stability.js";
+import { MissionRepeatSeriesService } from "./mission-repeat-series.js";
 import { hasCompleteCleanupEvidence } from "./cleanup-evidence.js";
 import { ProjectMissionStore } from "./mission-store.js";
 import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from "./suite-verifier.js";
@@ -24,7 +25,7 @@ import { admitReviewedWorkflowScope, auditWorkflowReview } from "./workflow-revi
 import { inspectTestScope } from "./test-scope.js";
 import { readWorkspaceCharterFile } from "./workspace-charter-file.js";
 import { compareCurrentSource, projectMissionResult } from "./mission-result.js";
-import type { MissionResult, MissionStabilityAnalysis } from "@proofkit/contracts";
+import type { MissionResult, MissionRepeatSeriesStatus, MissionStabilityAnalysis } from "@proofkit/contracts";
 import { ResourceRecoveryService } from "./resource-recovery.js";
 import { captureRunEvidence } from "./run-evidence.js";
 import { auditMissionProofClassification } from "./mission-proof-classification.js";
@@ -905,7 +906,23 @@ export class LocalRunnerService {
     return analyzeMissionStabilityRecords(samples, (runId) => this.loadRunSummary(runId));
   }
 
-  async replayMission(missionId: string, options: { approve?: boolean } = {}): Promise<MissionStatus> {
+  async createMissionRepeatSeries(baselineMissionId: string, targetSamples: number): Promise<MissionRepeatSeriesStatus> {
+    return new MissionRepeatSeriesService(this).create(validateMissionId(baselineMissionId), targetSamples);
+  }
+
+  async missionRepeatSeriesStatus(seriesId: string): Promise<MissionRepeatSeriesStatus> {
+    return new MissionRepeatSeriesService(this).status(seriesId);
+  }
+
+  async advanceMissionRepeatSeries(seriesId: string, approve = false): Promise<MissionRepeatSeriesStatus> {
+    return new MissionRepeatSeriesService(this).advance(seriesId, approve);
+  }
+
+  async driveMissionRepeatSeries(seriesId: string, approveNext = false): Promise<MissionRepeatSeriesStatus> {
+    return new MissionRepeatSeriesService(this).drive(seriesId, approveNext);
+  }
+
+  async replayMission(missionId: string, options: { approve?: boolean; repeatSeries?: TestMission["repeatSeries"] } = {}): Promise<MissionStatus> {
     const previous = await this.missionAgent.load(validateMissionId(missionId));
     if (!["completed", "failed", "blocked", "cancelled"].includes(previous.status)) {
       throw new Error("Only a terminal Mission can be replayed");
@@ -914,8 +931,11 @@ export class LocalRunnerService {
     const replayCharters = previous.charter ? [previous.charter] : previous.suite?.charters.map((item) => item.charter) ?? [];
     const scenarioRequiresApproval = replayCharters.some((charter) => charter.sideEffectPolicy !== "deny"
       || charter.negativeCases?.some((negativeCase) => negativeCase.sideEffectPolicy !== "deny"));
-    const replay = await this.missionAgent.create({
+    let replay: TestMission;
+    try {
+      replay = await this.missionAgent.create({
       replayOfMissionId: previous.missionId,
+      repeatSeries: options.repeatSeries,
       intent: previous.intent,
       projectRoot: this.root,
       workspaceRoot: this.workspaceRoot,
@@ -931,7 +951,18 @@ export class LocalRunnerService {
       // writes or UI interactions against the same test environment.
       policy: { ...previous.policy, requireApproval: previous.policy.requireApproval
         || previous.policy.sideEffectPolicy !== "deny" || scenarioRequiresApproval },
-    });
+      });
+    } catch (error) {
+      if (!options.repeatSeries || (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      replay = await this.missionAgent.load(`mission-${options.repeatSeries.seriesId}-${options.repeatSeries.ordinal}`);
+      if (replay.replayOfMissionId !== previous.missionId
+        || replay.repeatSeries?.seriesId !== options.repeatSeries.seriesId
+        || replay.repeatSeries.ordinal !== options.repeatSeries.ordinal
+        || !sameProjectPath(replay.projectRoot, this.root)
+        || !sameProjectPath(replay.workspaceRoot ?? replay.projectRoot, this.workspaceRoot)) {
+        throw new Error("Repeat-series Mission slot is occupied by another scope");
+      }
+    }
     if (replay.policy.requireApproval && options.approve !== true) return { mission: replay, running: false };
     return this.startMission(replay.missionId, { approve: options.approve === true });
   }
