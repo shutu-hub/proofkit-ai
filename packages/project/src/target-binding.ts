@@ -12,6 +12,13 @@ const GENERIC_RUNTIMES = new Set(["chrome", "chrome.exe", "chromium", "chromium.
 
 type ListenerProcess = { processId: number; executablePath?: string; commandLine?: string; codePaths?: string[] };
 export type ProcessRootObservation = { processId: number; projectRoot?: string };
+type LinuxInspectionStage = "socket-table" | "socket-parse" | "process-list" | "process-metadata" | "fd-list" | "fd-links" | "code-paths";
+
+class LinuxListenerInspectionError extends Error {
+  constructor(readonly stage: LinuxInspectionStage, readonly systemCode?: string) {
+    super("Linux listener inspection could not be completed");
+  }
+}
 
 /**
  * Inspect a loopback listener without executing any application-supplied text.
@@ -52,9 +59,12 @@ export async function inspectTargetBinding(projectRoot: string, targetUrl?: stri
     }
     return classifyTargetBinding(expectedProjectRoot, target.origin, observed, observedAt,
       process.platform === "linux" ? "linux-proc-listener" : "windows-listener-process");
-  } catch {
+  } catch (error) {
     signal?.throwIfAborted();
-    return unavailable("Local listener process inspection failed or exceeded its deadline.", target.origin);
+    const reason = error instanceof LinuxListenerInspectionError
+      ? `Linux listener inspection stopped at ${error.stage}${error.systemCode ? ` (${error.systemCode})` : ""}; source ownership is unverified.`
+      : "Local listener process inspection failed or exceeded its deadline.";
+    return unavailable(reason, target.origin);
   }
 }
 
@@ -132,51 +142,65 @@ function targetListenerAddresses(hostname: string): string[] {
 
 /** Match listening socket inodes before inspecting processes. No command line is persisted. */
 async function linuxListeners(port: number, hostname: string, signal?: AbortSignal): Promise<ListenerProcess[]> {
-  const tables = await Promise.all(["/proc/net/tcp", "/proc/net/tcp6"].map(async (path) => {
-    try { return await readLinuxSocketTable(path, signal); }
-    catch (error) { if (vanished(error)) return undefined; throw error; }
-  }));
-  if (tables.every((table) => table === undefined)) throw new Error("Linux socket tables are unavailable");
-  const ownUid = process.getuid?.();
-  const inodes = parseLinuxListeningInodes(tables.filter((table): table is string => table !== undefined), port, ownUid, hostname);
-  if (inodes.size === 0) return [];
+  let stage: LinuxInspectionStage = "socket-table";
+  try {
+    const tables = await Promise.all(["/proc/net/tcp", "/proc/net/tcp6"].map(async (path) => {
+      try { return await readLinuxSocketTable(path, signal); }
+      catch (error) { if (vanished(error)) return undefined; throw error; }
+    }));
+    if (tables.every((table) => table === undefined)) throw new Error("Linux socket tables are unavailable");
+    const ownUid = process.getuid?.();
+    stage = "socket-parse";
+    const inodes = parseLinuxListeningInodes(tables.filter((table): table is string => table !== undefined), port, ownUid, hostname);
+    if (inodes.size === 0) return [];
 
-  const deadline = Date.now() + 8_000;
-  const entries = (await readdir("/proc", { withFileTypes: true })).filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name));
-  if (entries.length > 4_096) throw new Error("Linux process inspection exceeds its bound");
-  const listeners: ListenerProcess[] = [];
-  let inspectedFds = 0;
-  for (const entry of entries) {
-    signal?.throwIfAborted();
-    if (Date.now() > deadline) throw new Error("Linux process inspection exceeded its deadline");
-    const pid = Number(entry.name);
-    const procDir = `/proc/${entry.name}`;
-    try {
-      if (ownUid !== undefined && ownUid !== 0 && (await stat(procDir)).uid !== ownUid) continue;
-    } catch (error) {
-      if (vanished(error)) continue;
-      throw error;
-    }
-    let fds: string[];
-    try { fds = await readdir(`${procDir}/fd`); }
-    catch (error) { if (vanished(error)) continue; throw error; }
-    if (fds.length > 4_096 || (inspectedFds += fds.length) > 131_072) {
-      throw new Error("Linux file descriptor inspection exceeds its bound");
-    }
-    let ownsSocket = false;
-    for (let index = 0; index < fds.length && !ownsSocket; index += 32) {
+    const deadline = Date.now() + 8_000;
+    stage = "process-list";
+    const entries = (await readdir("/proc", { withFileTypes: true })).filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name));
+    if (entries.length > 4_096) throw new Error("Linux process inspection exceeds its bound");
+    const listeners: ListenerProcess[] = [];
+    let inspectedFds = 0;
+    for (const entry of entries) {
       signal?.throwIfAborted();
       if (Date.now() > deadline) throw new Error("Linux process inspection exceeded its deadline");
-      const links = await Promise.allSettled(fds.slice(index, index + 32).map((fd) => readlink(`${procDir}/fd/${fd}`)));
-      for (const link of links) {
-        if (link.status === "rejected") { if (!vanished(link.reason)) throw link.reason; continue; }
-        const match = /^socket:\[(\d+)\]$/.exec(link.value);
-        if (match && inodes.has(match[1]!)) ownsSocket = true;
+      const pid = Number(entry.name);
+      const procDir = `/proc/${entry.name}`;
+      stage = "process-metadata";
+      try {
+        if (ownUid !== undefined && ownUid !== 0 && (await stat(procDir)).uid !== ownUid) continue;
+      } catch (error) {
+        if (vanished(error)) continue;
+        throw error;
+      }
+      let fds: string[];
+      stage = "fd-list";
+      try { fds = await readdir(`${procDir}/fd`); }
+      catch (error) { if (vanished(error)) continue; throw error; }
+      if (fds.length > 4_096 || (inspectedFds += fds.length) > 131_072) {
+        throw new Error("Linux file descriptor inspection exceeds its bound");
+      }
+      let ownsSocket = false;
+      for (let index = 0; index < fds.length && !ownsSocket; index += 32) {
+        stage = "fd-links";
+        signal?.throwIfAborted();
+        if (Date.now() > deadline) throw new Error("Linux process inspection exceeded its deadline");
+        const links = await Promise.allSettled(fds.slice(index, index + 32).map((fd) => readlink(`${procDir}/fd/${fd}`)));
+        for (const link of links) {
+          if (link.status === "rejected") { if (!vanished(link.reason)) throw link.reason; continue; }
+          const match = /^socket:\[(\d+)\]$/.exec(link.value);
+          if (match && inodes.has(match[1]!)) ownsSocket = true;
+        }
+      }
+      if (ownsSocket) {
+        stage = "code-paths";
+        listeners.push({ processId: pid, codePaths: await linuxRuntimeCodePaths(procDir) });
       }
     }
-    if (ownsSocket) listeners.push({ processId: pid, codePaths: await linuxRuntimeCodePaths(procDir) });
+    return listeners;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    throw new LinuxListenerInspectionError(stage, typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code) ? code : undefined);
   }
-  return listeners;
 }
 
 async function readLinuxSocketTable(path: string, signal?: AbortSignal): Promise<string> {
