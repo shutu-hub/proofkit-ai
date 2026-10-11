@@ -149,6 +149,7 @@ export type ExecutionOptions = {
   workspaceRoot?: string;
   evidenceDir?: string;
   runId?: string;
+  replayOfRunId?: string;
   oracles?: BusinessOracle[];
   capabilities?: CapabilityDefinition<any, any>[];
   environment?: "test" | "staging" | "local";
@@ -188,6 +189,7 @@ export class ExecutionRunner {
   private readonly allowSetupWrites: boolean;
   private readonly allowFileUploads: boolean;
   private readonly expectedInputFiles?: Record<string, InputFileFact[]>;
+  private readonly replayOfRunId?: string;
   private readonly setups: IntegrationSetupEntry[];
   private readonly targetBinding?: ExecutionOptions["targetBinding"];
   private readonly targetBindingPolicy: NonNullable<ExecutionOptions["targetBindingPolicy"]>;
@@ -219,6 +221,7 @@ export class ExecutionRunner {
     this.allowSetupWrites = options.allowSetupWrites ?? this.allowCapabilityWrites;
     this.allowFileUploads = options.allowFileUploads ?? false;
     this.expectedInputFiles = options.expectedInputFiles;
+    this.replayOfRunId = options.replayOfRunId;
     const setups = options.setup ? Array.isArray(options.setup) ? options.setup : [{ setup: options.setup, policy: options.setupPolicy }] : [];
     this.setups = setups.map((entry) => {
       const value = typeof entry === "function" ? { setup: entry } : entry;
@@ -278,6 +281,7 @@ export class ExecutionRunner {
     const startedAt = new Date().toISOString();
     const summary: RunSummary = {
       runId,
+      execution: { adapter: this.adapter.name, ...(this.replayOfRunId ? { replayOfRunId: this.replayOfRunId } : {}) },
       projectRoot: this.projectRoot,
       workspaceRoot: this.workspaceRoot,
       startedAt,

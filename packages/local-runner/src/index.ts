@@ -25,7 +25,7 @@ import type { MissionResult } from "@proofkit/contracts";
 import { ResourceRecoveryService } from "./resource-recovery.js";
 import { captureRunEvidence } from "./run-evidence.js";
 import { auditMissionProofClassification } from "./mission-proof-classification.js";
-import { auditMissionExecution } from "./mission-execution-audit.js";
+import { auditMissionExecution, auditMissionRunFacts } from "./mission-execution-audit.js";
 import { acquireCdpTarget, acquireElectronPortFileScope, acquireExecutionScope, sharedTargetIdentity } from "./execution-scope.js";
 import { sourceBindingTarget } from "./source-binding-target.js";
 import { assertMissionSurfaceCoverage, selectMissionSurface } from "./mission-surface.js";
@@ -676,8 +676,15 @@ export class LocalRunnerService {
     const running = await this.missionAgent.isRunning(mission.missionId);
     const suiteScope = summarizeSuiteScope(mission, this.evidenceDir);
     const workflowExecution = summarizeWorkflowExecution(mission, suiteScope);
-    const proofClassification = await auditMissionProofClassification(mission, (runId) => this.loadRunSummary(runId));
-    const executionAudit = auditMissionExecution(mission, this.evidenceDir);
+    const runFacts = new Map<string, Promise<RunSummary>>();
+    const loadAuditRun = (runId: string): Promise<RunSummary> => {
+      let pending = runFacts.get(runId);
+      if (!pending) { pending = this.loadRunSummary(runId); runFacts.set(runId, pending); }
+      return pending;
+    };
+    const proofClassification = await auditMissionProofClassification(mission, loadAuditRun);
+    const executionAudit = await auditMissionRunFacts(mission,
+      auditMissionExecution(mission, this.evidenceDir), loadAuditRun);
     const referencedRunIds = new Set(mission.observations.flatMap((item) => {
       const id = item.kind === "surface.run" ? item.data.runId
         : item.kind === "surface.inspected" ? item.data.inspectionId : undefined;
@@ -1382,6 +1389,7 @@ export class LocalRunnerService {
       allowSetupWrites: this.allowCapabilityWrites && this.config.policies.sideEffects === "allow",
       allowFileUploads: this.config.policies.sideEffects === "allow",
       expectedInputFiles,
+      replayOfRunId: input.replayOfRunId,
       preflight: this.integration?.preflight,
       signal,
       timeoutMs: this.config.run.timeoutMs,

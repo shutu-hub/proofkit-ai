@@ -67,11 +67,13 @@ describe("ExecutionRunner", () => {
       const saved = await readFile(join(root, "fill-env-first", "run.json"), "utf8");
       const events = await readFile(join(root, "fill-env-first", "events.jsonl"), "utf8");
       expect(saved + events).not.toContain("first-runtime-secret");
+      expect(JSON.parse(saved).execution).toEqual({ adapter: "fake" });
       expect(JSON.parse(saved).charter.actions[0].value).toEqual({ env: envName });
 
       process.env[envName] = "second-runtime-secret";
-      const replay = await new ExecutionRunner(adapter(), { evidenceDir: root }).run(JSON.parse(saved).charter, "fill-env-replay");
+      const replay = await new ExecutionRunner(adapter(), { evidenceDir: root, replayOfRunId: "fill-env-first" }).run(JSON.parse(saved).charter, "fill-env-replay");
       expect(replay.steps[0]?.status).toBe("passed");
+      expect(replay.execution).toEqual({ adapter: "fake", replayOfRunId: "fill-env-first" });
       expect(seen).toEqual(["first-runtime-secret", "second-runtime-secret"]);
       expect(await readFile(join(root, "fill-env-replay", "run.json"), "utf8")).not.toContain("second-runtime-secret");
     } finally {

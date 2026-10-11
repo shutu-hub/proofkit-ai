@@ -378,9 +378,28 @@ try {
   assert.equal(borrowedEvidence.acceptanceEvidenceIntegrity.status, "intact");
   assert.equal(borrowedEvidence.testVerdict, "inconclusive");
   assert.ok(borrowedEvidence.summary.executionAudit.issues.some((issue) => issue.includes("does not belong to its Run")));
+  const swappedMission = JSON.parse(savedMissionBytes);
+  for (const [runKind, tool] of [["primary", "surface.run-charter"], ["replay", "surface.replay-charter"]]) {
+    const web = swappedMission.observations.find((item) => item.kind === "surface.run"
+      && item.charterId === "resume" && item.data.surface === "web" && item.data.runKind === runKind);
+    const desktop = swappedMission.observations.find((item) => item.kind === "surface.run"
+      && item.charterId === "resume" && item.data.surface === "electron" && item.data.runKind === runKind);
+    assert.ok(web && desktop);
+    web.data.surface = "electron";
+    desktop.data.surface = "web";
+    const webTask = swappedMission.plan.graph.tasks.find((task) => task.tool === tool && task.charterId === "resume" && task.input.adapter === "web");
+    const desktopTask = swappedMission.plan.graph.tasks.find((task) => task.tool === tool && task.charterId === "resume" && task.input.adapter === "electron");
+    assert.ok(webTask?.output?.runId && desktopTask?.output?.runId);
+    [webTask.output.runId, desktopTask.output.runId] = [desktopTask.output.runId, webTask.output.runId];
+  }
+  await writeFile(savedMissionPath, JSON.stringify(swappedMission));
+  const wrongAdapterEvidence = payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } }));
+  assert.equal(wrongAdapterEvidence.acceptanceEvidenceIntegrity.status, "intact");
+  assert.equal(wrongAdapterEvidence.testVerdict, "inconclusive");
+  assert.ok(wrongAdapterEvidence.summary.executionAudit.issues.some((issue) => issue.includes("saved Run adapter")));
   await writeFile(savedMissionPath, savedMissionBytes);
   assert.equal(payload(await client.callTool({ name: "get_mission_evidence", arguments: { missionId: good.started.missionId } })).testVerdict, "passed");
-  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, singleReleaseMission: singleStarted.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "single-charter-release-continues-after-product-failure", "saved-run-slot-audit-rejects-wrong-replay-and-duplicate", "saved-run-slot-audit-rejects-borrowed-evidence", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
+  console.log(JSON.stringify({ suite: "release-critical", goodMission: good.started.missionId, divergentMission: divergent.started.missionId, singleReleaseMission: singleStarted.missionId, seededDefectMission: bad.started.missionId, repairedFixtureReplayMission: replayStarted.mission.missionId, projectScopeMission: wholeSuite.missionId, directProjectMission: directProject.missionId, quickProjectMission: quickProject.missionId, report: bad.evidence.report, review: join(caseRoot, "report-review"), scopedMissions, verified: ["mcp-one-sentence-suite", "web-electron-primary-replay", "single-charter-release-continues-after-product-failure", "saved-run-slot-audit-rejects-wrong-replay-and-duplicate", "saved-run-slot-audit-rejects-borrowed-evidence", "saved-run-facts-reject-wrong-adapter", "observed-replay-verdict-divergence", "per-charter-oracle", "assertion-time-observation-evidence", "web-and-api-route-coverage-gaps", "independent-failure", "evidence-backed-suite-comparison", "partial-map-core-web-electron", "whole-project-declared-check-measurement", "direct-inventory-project-mission", "quick-inventory-web-electron-no-business-pass", "whole-project-coverage-gate", "real-evidence-files", "source-unchanged", "mission-report-desktop-mobile", "report-evidence-links", "cli-mission-report"] }, null, 2));
 } finally {
   await quickClient?.close();
   await quickMcpServer?.close();

@@ -437,6 +437,11 @@ export function hasIncompleteIntegrationCleanup(cleanup: unknown): boolean {
 
 export const RunSummarySchema = z.object({
   runId: z.string(),
+  /** Saved by the Runner; optional only so pre-provenance Runs remain readable. */
+  execution: z.object({
+    adapter: z.string().min(1).max(64),
+    replayOfRunId: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  }).strict().optional(),
   projectRoot: z.string().min(1).optional(),
   workspaceRoot: z.string().min(1).optional(),
   startedAt: z.string(),

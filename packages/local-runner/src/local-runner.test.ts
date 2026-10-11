@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ProofkitConfigSchema, type NegativeCase, type RunSummary, type TestCharter, type TestMission } from "@proofkit/contracts";
 import { ExecutionRunner, type SurfaceAdapter } from "@proofkit/runner";
 import { LocalRunnerService } from "./index.js";
+import { auditMissionExecution, auditMissionRunFacts } from "./mission-execution-audit.js";
 import { installMockRunEvidence } from "./mock-run-evidence.test-helper.js";
 
 const roots: string[] = [];
@@ -425,10 +426,11 @@ describe("LocalRunnerService", () => {
     let sequence = 0;
     const runs: Array<{ adapter: string; runKind: string }> = [];
     const summaries = new Map<string, RunSummary>();
-    const createSummary = (adapter: string): RunSummary => {
+    const createSummary = (adapter: string, replayOfRunId?: string): RunSummary => {
       sequence += 1;
       const summary: RunSummary = {
         runId: `release-run-${sequence}`,
+        execution: { adapter, ...(replayOfRunId ? { replayOfRunId } : {}) },
         startedAt: new Date().toISOString(),
         endedAt: new Date().toISOString(),
         status: "completed",
@@ -457,7 +459,7 @@ describe("LocalRunnerService", () => {
     installMockRunEvidence(service);
     service.replay = async (runId, input = {}) => {
       const adapter = input.adapter ?? "web";
-      const summary = createSummary(adapter);
+      const summary = createSummary(adapter, runId);
       runs.push({ adapter, runKind: "replay" });
       return { runId: summary.runId, status: "completed", verdict: summary.verdict, summary };
     };
@@ -477,6 +479,24 @@ describe("LocalRunnerService", () => {
     expect(completed.evidence.length).toBeGreaterThanOrEqual(3);
     const accepted = await service.missionEvidence(created.missionId);
     expect(accepted.summary.executionAudit).toMatchObject({ status: "complete", expectedSlots: 4, matchedSlots: 4 });
+    const structural = auditMissionExecution(completed, service.evidenceDir);
+    const electronRunId = completed.observations.find((item) => item.kind === "surface.run"
+      && item.data.surface === "electron" && item.data.runKind === "primary")!.data.runId as string;
+    const electronSummary = summaries.get(electronRunId)!;
+    electronSummary.execution!.adapter = "web";
+    const wrongAdapter = await auditMissionRunFacts(completed, structural, async (runId) => summaries.get(runId)!);
+    expect(wrongAdapter.issues).toEqual(expect.arrayContaining([expect.stringContaining("saved Run adapter")]));
+    electronSummary.execution!.adapter = "electron";
+    const originalCharter = electronSummary.charter;
+    electronSummary.charter = { ...originalCharter, intent: "another scenario" };
+    const wrongCharter = await auditMissionRunFacts(completed, structural, async (runId) => summaries.get(runId)!);
+    expect(wrongCharter.issues).toEqual(expect.arrayContaining([expect.stringContaining("saved Run Charter")]));
+    electronSummary.charter = originalCharter;
+    const originalExecution = electronSummary.execution;
+    delete electronSummary.execution;
+    const legacyRun = await auditMissionRunFacts(completed, structural, async (runId) => summaries.get(runId)!);
+    expect(legacyRun.issues).toEqual(expect.arrayContaining([expect.stringContaining("saved Run adapter is missing")]));
+    electronSummary.execution = originalExecution;
 
     const missionPath = join(root, ".proofkit", "missions", `${created.missionId}.json`);
     const saved = await readFile(missionPath, "utf8");
@@ -606,6 +626,7 @@ describe("LocalRunnerService", () => {
       const now = new Date().toISOString();
       const summary: RunSummary = {
         runId,
+        execution: { adapter: input.adapter ?? "web", ...(input.replayOfRunId ? { replayOfRunId: input.replayOfRunId } : {}) },
         startedAt: now,
         endedAt: now,
         status: "completed",

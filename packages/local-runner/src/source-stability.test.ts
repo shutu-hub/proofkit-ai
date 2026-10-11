@@ -31,7 +31,8 @@ describe("Mission source stability", () => {
     const now = new Date().toISOString();
     const runId = "source-drift-run";
     const snapshot = `${runId}/artifacts/assertion-snapshot.json`;
-    const summary: RunSummary = { runId, startedAt: now, endedAt: now, status: "completed", verdict: "passed",
+    const summary: RunSummary = { runId, projectRoot: root, workspaceRoot, execution: { adapter: "web" },
+      startedAt: now, endedAt: now, status: "completed", verdict: "passed",
       charter, steps: [], assertions: [{ assertion: charter.assertions[0]!, passed: true, message: "Ready is visible", evidence: [snapshot] }],
       oracles: [], artifacts: [snapshot], findings: [] };
     const service = new LocalRunnerService({ root, workspaceRoot });
@@ -51,6 +52,7 @@ describe("Mission source stability", () => {
     const result = await service.missionEvidence(mission.missionId);
     expect(result).toMatchObject({ verdict: "passed", sourceStability: "changed", testVerdict: "inconclusive",
       summary: { verdict: "passed", testVerdict: "inconclusive", scope: { sourceStability: "changed" } } });
+    expect(result.summary.executionAudit?.issues).toEqual([]);
     expect(result.testVerdictReason).toContain("source changed during this Mission");
   });
 });

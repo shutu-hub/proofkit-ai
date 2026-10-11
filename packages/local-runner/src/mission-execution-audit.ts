@@ -1,5 +1,6 @@
 import { relative } from "node:path";
-import { MissionExecutionAuditSchema, suiteChecks, type MissionExecutionAudit, type Observation, type TestMission } from "@proofkit/contracts";
+import { isDeepStrictEqual } from "node:util";
+import { MissionExecutionAuditSchema, TestCharterSchema, suiteChecks, type MissionExecutionAudit, type Observation, type RunSummary, type TestCharter, type TestMission } from "@proofkit/contracts";
 
 type Surface = "web" | "electron" | "mobile" | "api";
 type Slot = { charterId?: string; surface: Surface; kind: "primary" | "replay" | "negative"; negativeCaseId?: string; expectedVerdict?: string };
@@ -125,6 +126,70 @@ export function auditMissionExecution(mission: TestMission, evidenceDir: string,
     status: issues.length || omittedIssues ? "incomplete" : "complete",
     expectedSlots: slots.length, matchedSlots, unexpectedObservations, issues, omittedIssues,
   });
+}
+
+/** Reopen the saved Run facts; a Mission observation cannot substitute another adapter or Charter. */
+export async function auditMissionRunFacts(
+  mission: TestMission,
+  previous: MissionExecutionAudit,
+  loadRun: (runId: string) => Promise<RunSummary>,
+): Promise<MissionExecutionAudit> {
+  const issues = [...previous.issues];
+  let omittedIssues = previous.omittedIssues;
+  const issue = (message: string) => {
+    if (issues.length < 20) issues.push(message);
+    else omittedIssues++;
+  };
+  const observations = mission.observations.filter((item) => item.kind === "surface.run");
+  const MAX_RUNS = 256;
+  if (observations.length > MAX_RUNS) issue(`${observations.length - MAX_RUNS} Run observation(s) exceed the saved-fact audit limit.`);
+  for (const observation of observations.slice(0, MAX_RUNS)) {
+    const runId = observation.data.runId;
+    if (typeof runId !== "string" || !RUN_ID.test(runId)) continue;
+    const surface = ["web", "electron", "mobile", "api"].includes(String(observation.data.surface)) ? observation.data.surface : "unknown";
+    const kind = ["primary", "replay", "negative"].includes(String(observation.data.runKind)) ? observation.data.runKind : "unknown";
+    const label = `${surface}/${kind}`;
+    let run: RunSummary;
+    try { run = await loadRun(runId); }
+    catch { issue(`${label}: saved Run summary is unavailable or belongs to another project/workspace.`); continue; }
+    if (run.runId !== runId || run.status !== "completed") issue(`${label}: saved Run identity or completion state does not match.`);
+    if (!run.execution || run.execution.adapter !== observation.data.surface) issue(`${label}: saved Run adapter is missing or differs from the observed surface.`);
+    if (run.execution?.replayOfRunId !== observation.data.sourceRunId) issue(`${label}: saved Run replay source differs from the Mission observation.`);
+    if (run.verdict !== observation.data.verdict) issue(`${label}: saved Run verdict differs from the Mission observation.`);
+    const expected = expectedRunCharter(mission, observation);
+    if (!expected || !isDeepStrictEqual(charterExecutionShape(run.charter), charterExecutionShape(expected))) {
+      issue(`${label}: saved Run Charter differs from the frozen Mission scenario.`);
+    }
+    if (run.steps.length !== observation.data.steps || run.assertions.length !== observation.data.assertions
+      || run.assertions.filter((item) => item.passed).length !== observation.data.passedAssertions
+      || run.oracles.length !== observation.data.oracles
+      || run.oracles.filter((item) => item.verificationKind !== "http-contract" && item.passed === true).length !== observation.data.passedOracles) {
+      issue(`${label}: saved Run action/assertion/Oracle counts differ from the Mission observation.`);
+    }
+    if (!isDeepStrictEqual(run.integrationCleanup, observation.data.integrationCleanup)) {
+      issue(`${label}: saved Run cleanup differs from the Mission observation.`);
+    }
+  }
+  return MissionExecutionAuditSchema.parse({ ...previous, status: issues.length || omittedIssues ? "incomplete" : "complete", issues, omittedIssues });
+}
+
+function expectedRunCharter(mission: TestMission, observation: Observation): TestCharter | undefined {
+  const base = mission.suite
+    ? mission.suite.charters.find((item) => item.charterId === observation.charterId)?.charter
+    : mission.charter;
+  if (!base) return;
+  if (observation.data.runKind !== "negative") return base;
+  const negative = base.negativeCases?.find((item) => item.caseId === observation.data.negativeCaseId);
+  if (!negative) return;
+  return TestCharterSchema.parse({ ...base, intent: `${mission.intent}: ${negative.title}`,
+    actions: negative.actions, assertions: negative.assertions, oracles: negative.oracles,
+    sideEffectPolicy: negative.sideEffectPolicy,
+    metadata: { ...base.metadata, negativeCaseId: negative.caseId } });
+}
+
+function charterExecutionShape(charter: TestCharter): unknown {
+  const { intent, level, mode, preconditions, actions, assertions, oracles, negativeCases, sideEffectPolicy, metadata } = charter;
+  return { intent, level, mode, preconditions, actions, assertions, oracles, negativeCases, sideEffectPolicy, metadata };
 }
 
 function expectedSingleSurfaces(mission: TestMission): Surface[] {
