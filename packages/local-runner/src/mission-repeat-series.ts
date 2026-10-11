@@ -5,7 +5,7 @@ import { LocalExecutionOwnership } from "@proofkit/evidence";
 import { MissionRepeatSeriesSchema, MissionRepeatSeriesStatusSchema, type MissionRepeatSeries, type MissionRepeatSeriesStatus, type SourceState, type TestMission } from "@proofkit/contracts";
 import { resolveWithinWorkspace, sameProjectPath } from "@proofkit/project";
 import { missionScopeHash } from "./mission-comparison.js";
-import { expectedProductRunFailure } from "./mission-stability.js";
+import { expectedProductRunFailure, hasStableOwnedBinding } from "./mission-stability.js";
 import type { LocalRunnerService } from "./index.js";
 
 const TERMINAL = new Set<TestMission["status"]>(["completed", "failed", "blocked", "cancelled"]);
@@ -199,12 +199,11 @@ function eligibleEvidence(value: Evidence): boolean {
     && summary.runs.length === summary.expectedRuns
     && summary.runs.every((run) => run.runId && (!run.issue || expectedProductRunFailure(run))
       && run.evidence.some((ref) => ref.sha256 && ref.evidenceId.startsWith(`${run.runId}:`))
-      && run.targetBinding?.status === "matching-process-path" && Boolean(run.targetBinding.targetOrigin)
-      && run.targetContinuity !== "changed" && run.targetContinuity !== "unverified"
-      && run.applicationContinuity !== "changed" && run.applicationContinuity !== "unverified"
+      && hasStableOwnedBinding(run.targetBinding, run.targetBindingAfterRun, run.targetContinuity)
+      && (run.surface !== "electron" || hasStableOwnedBinding(run.applicationBinding, run.applicationBindingAfterRun, run.applicationContinuity))
+      && (run.surface === "electron" || run.applicationContinuity !== "changed" && run.applicationContinuity !== "unverified")
       && run.integrationPostRunCheck?.passed !== false
-      && (!run.integrationCleanup || ["verified", "not-required"].includes(run.integrationCleanup.status))
-      && (run.surface !== "electron" || run.applicationBinding?.status === "matching-process-path"))
+      && (!run.integrationCleanup || ["verified", "not-required"].includes(run.integrationCleanup.status)))
     && proof.status === "explicit" && businessProof
     && completeGit(value.sourceState) && sameGitSource(value.sourceState, value.finalSourceState);
 }

@@ -85,6 +85,21 @@ describe("explicit release suites", () => {
     expect(runs.started).toHaveLength(8);
   });
 
+  it.each(["missing-continuity", "missing-final-binding"])("refuses to start a repeat series with %s", async (missing) => {
+    const service = await createSuiteService();
+    execFileSync("git", ["init", "-q"], { cwd: service.root });
+    execFileSync("git", ["add", "."], { cwd: service.root });
+    execFileSync("git", ["-c", "user.name=ProofKit", "-c", "user.email=proofkit@example.invalid", "commit", "-qm", "fixture"], { cwd: service.root });
+    stubRuns(service, { matchingTarget: true,
+      missingTargetContinuity: missing === "missing-continuity", missingTargetAfterRun: missing === "missing-final-binding" });
+    const baseline = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical", policy: { requireApproval: false } });
+    await service.startMission(baseline.missionId);
+    await service.waitMission(baseline.missionId);
+    expect((await service.missionEvidence(baseline.missionId)).testVerdict).toBe("passed");
+    await expect(service.createMissionRepeatSeries(baseline.missionId, 3))
+      .rejects.toThrow("lacks current, complete Git and business evidence");
+  });
+
   it("continues past an evidenced product failure and reports changed outcomes without a flaky diagnosis", async () => {
     const service = await createSuiteService();
     execFileSync("git", ["init", "-q"], { cwd: service.root });
@@ -644,7 +659,7 @@ async function createSuiteService(options: { loginSurfaces?: LocalAdapterName[];
   return LocalRunnerService.create({ root, workspaceRoot });
 }
 
-function stubRuns(service: LocalRunnerService, options: { matchingTarget?: boolean; failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; wrongVisitedOrigin?: string; missingTargetBinding?: string; fileElectron?: boolean; wrongFileDocument?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-response" | "redacted" } = {}) {
+function stubRuns(service: LocalRunnerService, options: { matchingTarget?: boolean; missingTargetContinuity?: boolean; missingTargetAfterRun?: boolean; failedPrimary?: string; missingBusinessFact?: string; missingVisitedPath?: string; wrongVisitedOrigin?: string; missingTargetBinding?: string; fileElectron?: boolean; wrongFileDocument?: string; dynamicResume?: boolean; network?: "valid" | "wrong-method" | "wrong-origin" | "bad-status" | "missing-replay-response" | "redacted" } = {}) {
   installMockRunEvidence(service);
   const summaries = new Map<string, RunSummary>();
   const started: Array<{ charterId: string; surface: LocalAdapterName; negativeCaseId?: string }> = [];
@@ -688,12 +703,26 @@ function stubRuns(service: LocalRunnerService, options: { matchingTarget?: boole
       ...(options.missingTargetBinding === `${charterId}/${surface}/${kind}` ? {} : { targetBinding: {
         status: options.matchingTarget ? "matching-process-path" as const : "unverified" as const,
         method: options.matchingTarget ? "windows-listener-process" as const : "unavailable" as const, expectedProjectRoot: service.root,
-        targetOrigin: "http://127.0.0.1:8765", reason: "Fixture target origin", observedAt: now,
+        targetOrigin: "http://127.0.0.1:8765", ...(options.matchingTarget ? { processId: 41, observedProjectRoot: service.root } : {}),
+        reason: "Fixture target origin", observedAt: now,
       } }),
+      ...(options.matchingTarget && !options.missingTargetAfterRun ? { targetBindingAfterRun: {
+        status: "matching-process-path" as const, method: "windows-listener-process" as const, expectedProjectRoot: service.root,
+        observedProjectRoot: service.root, targetOrigin: "http://127.0.0.1:8765", processId: 41,
+        reason: "Fixture final target origin", observedAt: now,
+      } } : {}),
+      ...(options.matchingTarget && !options.missingTargetContinuity ? { targetContinuity: "stable" as const } : {}),
       ...(options.matchingTarget && surface === "electron" ? { applicationBinding: {
         status: "matching-process-path" as const, method: "windows-listener-process" as const,
-        expectedProjectRoot: service.root, targetOrigin: "http://127.0.0.1:9222", reason: "Fixture Electron process", observedAt: now,
+        expectedProjectRoot: service.root, observedProjectRoot: service.root,
+        targetOrigin: "http://127.0.0.1:9222", processId: 42, reason: "Fixture Electron process", observedAt: now,
       } } : {}),
+      ...(options.matchingTarget && surface === "electron" ? { applicationBindingAfterRun: {
+        status: "matching-process-path" as const, method: "windows-listener-process" as const,
+        expectedProjectRoot: service.root, observedProjectRoot: service.root,
+        targetOrigin: "http://127.0.0.1:9222", processId: 42, reason: "Fixture final Electron process", observedAt: now,
+      } } : {}),
+      ...(options.matchingTarget && surface === "electron" ? { applicationContinuity: "stable" as const } : {}),
     };
     summaries.set(runId, summary);
     return summary;

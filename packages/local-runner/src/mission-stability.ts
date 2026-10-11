@@ -1,4 +1,5 @@
-import { MissionStabilityAnalysisSchema, type MissionResult, type MissionRunResult, type MissionStabilityAnalysis, type RunSummary, type SourceState, type TestMission } from "@proofkit/contracts";
+import { MissionStabilityAnalysisSchema, type MissionResult, type MissionRunResult, type MissionStabilityAnalysis, type RunSummary, type SourceState, type TargetBinding, type TargetContinuity, type TestMission } from "@proofkit/contracts";
+import { sameProjectPath } from "@proofkit/project";
 import { sameInputFileFacts } from "@proofkit/runner";
 import { missionScopeHash } from "./mission-comparison.js";
 
@@ -21,6 +22,7 @@ export async function analyzeMissionStability(samples: Sample[], loadRun: (runId
   const fileInputs = new Map<string, NonNullable<RunSummary["steps"][number]["inputFiles"]>>();
   const seenRunIds = new Set<string>();
   let expectedRuns: number | undefined;
+  let expectedSlots: string[] | undefined;
 
   for (const [index, { mission, result, sourceState, finalSourceState }] of samples.entries()) {
     const label = mission.missionId;
@@ -39,6 +41,10 @@ export async function analyzeMissionStability(samples: Sample[], loadRun: (runId
     }
     if (expectedRuns !== undefined && result.expectedRuns !== expectedRuns) gaps.push(`${label}: declared Run count differs`);
     expectedRuns = result.expectedRuns;
+    const slots = result.runs.map((run) => JSON.stringify([run.charterId ?? null, run.surface ?? null, run.runKind, run.negativeCaseId ?? null])).sort();
+    if (new Set(slots).size !== slots.length) gaps.push(`${label}: duplicate Run slot in the sample`);
+    if (expectedSlots && JSON.stringify(slots) !== JSON.stringify(expectedSlots)) gaps.push(`${label}: observed Run matrix differs`);
+    expectedSlots ??= slots;
     const proof = result.proofClassification;
     if (result.testVerdict === "passed" && (proof?.status !== "explicit" || !proof.requiredBusinessRuns
       || proof.requiredRunsWithPassingBusiness !== proof.requiredBusinessRuns)) gaps.push(`${label}: passing business proof is incomplete`);
@@ -55,17 +61,18 @@ export async function analyzeMissionStability(samples: Sample[], loadRun: (runId
       if (seenRunIds.has(run.runId)) gaps.push(`${label}: Run ${run.runId} was reused across samples`);
       seenRunIds.add(run.runId);
       const slot = JSON.stringify([run.charterId ?? null, run.surface ?? null, run.runKind, run.negativeCaseId ?? null]);
-      if (run.targetContinuity === "changed" || run.targetContinuity === "unverified"
-        || run.applicationContinuity === "changed" || run.applicationContinuity === "unverified"
+      if (!hasStableOwnedBinding(run.targetBinding, run.targetBindingAfterRun, run.targetContinuity)
+        || run.surface === "electron" && !hasStableOwnedBinding(run.applicationBinding, run.applicationBindingAfterRun, run.applicationContinuity)
+        || run.surface !== "electron" && (run.applicationContinuity === "changed" || run.applicationContinuity === "unverified")
         || run.integrationPostRunCheck?.passed === false
         || run.integrationCleanup && !["verified", "not-required"].includes(run.integrationCleanup.status)) {
         gaps.push(`${label}: ${slot} has an environment or cleanup continuity gap`);
       }
       const origin = run.targetBinding?.targetOrigin;
-      if (!origin || run.targetBinding?.status !== "matching-process-path") gaps.push(`${label}: ${slot} target ownership is unverified`);
+      if (!origin || !run.targetBinding?.processId || run.targetBinding.status !== "matching-process-path") gaps.push(`${label}: ${slot} target ownership is unverified`);
       else if (targetOrigins.has(slot) && targetOrigins.get(slot) !== origin) gaps.push(`${label}: ${slot} target origin changed`);
       else targetOrigins.set(slot, origin);
-      if (run.surface === "electron" && run.applicationBinding?.status !== "matching-process-path") {
+      if (run.surface === "electron" && (run.applicationBinding?.status !== "matching-process-path" || !run.applicationBinding.processId)) {
         gaps.push(`${label}: ${slot} Electron application ownership is unverified`);
       }
       const charter = mission.suite?.charters.find((item) => item.charterId === run.charterId)?.charter ?? mission.charter;
@@ -114,4 +121,16 @@ export function expectedProductRunFailure(run: MissionRunResult): boolean {
   return run.issue === "Tool returned verdict failed" && run.verdict === "failed"
     && (run.businessFacts ?? 0) > 0 && (run.oracles?.total ?? 0) > (run.oracles?.passed ?? 0)
     && run.evidence.some((ref) => ref.kind === "business" && Boolean(ref.sha256));
+}
+
+/** A saved "stable" label alone cannot replace the two matching process observations. */
+export function hasStableOwnedBinding(before: TargetBinding | undefined, after: TargetBinding | undefined,
+  continuity: TargetContinuity | undefined): boolean {
+  return continuity === "stable" && before?.status === "matching-process-path" && after?.status === "matching-process-path"
+    && Boolean(before.processId && after.processId && before.targetOrigin && after.targetOrigin
+      && before.observedProjectRoot && after.observedProjectRoot)
+    && before.processId === after.processId && before.targetOrigin === after.targetOrigin
+    && sameProjectPath(before.expectedProjectRoot, after.expectedProjectRoot)
+    && sameProjectPath(before.observedProjectRoot!, after.observedProjectRoot!)
+    && sameProjectPath(before.expectedProjectRoot, before.observedProjectRoot!);
 }

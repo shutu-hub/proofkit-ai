@@ -11,6 +11,9 @@ function chain(verdicts: Array<"passed" | "failed">, withFile = false) {
   return verdicts.map((verdict, index) => {
     const missionId = `mission-${index}`;
     const runId = `run-${index}`;
+    const targetBinding = { status: "matching-process-path" as const, method: "windows-listener-process" as const,
+      expectedProjectRoot: "/source", targetOrigin: "http://127.0.0.1:5274", processId: 41,
+      observedProjectRoot: "/source", reason: "fixture", observedAt: "2026-10-11T00:00:00.000Z" };
     const evidence = { evidenceId: `${runId}:business.json`, kind: "business" as const, path: `${runId}/business.json`,
       sha256: "d".repeat(64), capturedAt: "2026-10-11T00:00:00.000Z" };
     const mission = { missionId, ...(index ? { replayOfMissionId: `mission-${index - 1}` } : {}),
@@ -28,9 +31,8 @@ function chain(verdicts: Array<"passed" | "failed">, withFile = false) {
         confirmedProductFindings: verdict === "failed" ? 1 : 0, findingsLinkedToFailingBusiness: verdict === "failed" ? 1 : 0 },
       confirmedProductFindings: verdict === "failed" ? 1 : 0,
       findings: verdict === "failed" ? [{ category: "product", status: "confirmed", evidence: [evidence] }] : [],
-      runs: [{ runId, surface: "web", runKind: "primary", verdict, targetBinding: {
-        status: "matching-process-path", method: "windows-listener-process", expectedProjectRoot: "/source",
-        targetOrigin: "http://127.0.0.1:5274", observedProjectRoot: "/source", reason: "fixture", observedAt: "2026-10-11T00:00:00.000Z" },
+      runs: [{ runId, surface: "web", runKind: "primary", verdict, targetBinding,
+        targetBindingAfterRun: { ...targetBinding },
         targetContinuity: "stable", integrationCleanup: { status: "not-required", declaredResources: 0, verifiedResources: 0 }, evidence: [evidence] }],
     } as unknown as MissionResult;
     return { mission, result, sourceState: source, finalSourceState: source };
@@ -88,5 +90,36 @@ describe("Mission stability evidence", () => {
     const samples = chain(["passed", "passed", "passed"]);
     samples[2]!.result.runs[0]!.runId = samples[0]!.result.runs[0]!.runId;
     expect((await analyzeMissionStability(samples, loadRun)).gaps).toContain("mission-2: Run run-0 was reused across samples");
+  });
+
+  it("requires a completed listener check and the same observed Run slots", async () => {
+    const samples = chain(["passed", "passed", "passed"]);
+    samples[1]!.result.runs[0]!.targetContinuity = undefined;
+    samples[2]!.result.runs[0]!.charterId = "other-charter";
+    const result = await analyzeMissionStability(samples, loadRun);
+    expect(result.status).toBe("inconclusive");
+    expect(result.gaps).toEqual(expect.arrayContaining([
+      expect.stringContaining("environment or cleanup continuity gap"),
+      expect.stringContaining("observed Run matrix differs"),
+    ]));
+    samples[1]!.result.runs[0]!.targetContinuity = "stable";
+    samples[1]!.result.runs[0]!.targetBindingAfterRun = undefined;
+    expect((await analyzeMissionStability(samples, loadRun)).status).toBe("inconclusive");
+  });
+
+  it("requires Electron application continuity as well as page-server continuity", async () => {
+    const samples = chain(["passed", "passed", "passed"]);
+    for (const sample of samples) {
+      sample.mission.surface = "electron";
+      const run = sample.result.runs[0]!;
+      run.surface = "electron";
+      run.applicationBinding = { ...run.targetBinding!, targetOrigin: "http://127.0.0.1:9222", processId: 42 };
+      run.applicationBindingAfterRun = { ...run.applicationBinding };
+      run.applicationContinuity = "stable";
+    }
+    expect((await analyzeMissionStability(samples, loadRun)).status).toBe("uniform-pass");
+    samples[1]!.result.runs[0]!.applicationContinuity = undefined;
+    expect((await analyzeMissionStability(samples, loadRun)).gaps)
+      .toEqual(expect.arrayContaining([expect.stringContaining("environment or cleanup continuity gap")]));
   });
 });
