@@ -107,6 +107,24 @@ describe("Mission report", () => {
       testVerdictReason: expect.stringContaining("execution Runs") });
   });
 
+  it("does not present a confirmed product failure when observed Run facts are unaudited", async () => {
+    const workspace = await root();
+    const input = result(workspace);
+    input.verdict = "failed";
+    input.confirmedProductFindings = 1;
+    input.proofClassification = explicitProof(false);
+    delete input.executionAudit;
+    const missing = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(missing.result).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("mismatched observed Runs") });
+    input.executionAudit = { status: "incomplete", scope: "observed-failure", expectedSlots: 1,
+      matchedSlots: 1, unexecutedSlots: 0, unexpectedObservations: 0,
+      issues: ["Saved Run Charter differs from the frozen Mission scenario."], omittedIssues: 0 };
+    const mismatched = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(mismatched.result.testVerdict).toBe("inconclusive");
+    expect(await readFile(mismatched.path, "utf8")).toContain("Execution slot gap: Saved Run Charter differs");
+  });
+
   it("downgrades a saved pass when the tested Git source changed during execution", async () => {
     const workspace = await root();
     const path = join(workspace, ".proofkit", "runs", "run-1", "artifacts", "fact.json");

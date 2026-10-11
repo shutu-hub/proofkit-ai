@@ -109,7 +109,8 @@ describe("MCP response capture policy and Mission evidence", () => {
     }
     const audited = await service.missionEvidence(mission.missionId);
     expect(audited.summary.executionAudit?.status).toBe("incomplete");
-    expect(audited.summary.executionAudit?.issues.some((issue) => issue.includes("negative outcome"))).toBe(true);
+    expect(audited.summary.executionAudit?.issues.some((issue) => issue.includes(expected === "failed"
+      ? "continuity gap" : "negative outcome"))).toBe(true);
   });
 
   it("accepts an evidenced expected rejection and captures fresh IDs on replay", async () => {

@@ -34,7 +34,7 @@ describe("LocalRunnerService", () => {
       oracles: ["unproven-reader", "binding-reader"].map((name) => ({ name,
         check: async () => ({ name, passed: null, message: "not used by stubbed Run", evidence: [] }) })) });
     const summary: RunSummary = {
-      runId, startedAt: "2026-10-08T00:00:00.000Z", endedAt: "2026-10-08T00:00:04.000Z",
+      runId, execution: { adapter: "web" }, startedAt: "2026-10-08T00:00:00.000Z", endedAt: "2026-10-08T00:00:04.000Z",
       status: "completed", verdict: "failed", charter, steps: [],
       assertions: [{ assertion: charter.assertions[0]!, passed: false, message: "Submitted was not visible",
         evidence: [snapshot], recordedAt: "2026-10-08T00:00:01.000Z" }],
@@ -67,12 +67,26 @@ describe("LocalRunnerService", () => {
     expect(completed.repairSuggestions[0]?.changes[0]).toContain("confirmed.ts");
     expect(completed.repairSuggestions[0]?.changes[0]).not.toContain("unverified.ts");
     const intact = await service.missionEvidence(completed.missionId);
+    expect(intact).toMatchObject({ verdict: "failed", testVerdict: "failed",
+      summary: { executionAudit: { status: "complete", scope: "observed-failure", matchedSlots: 1 } } });
     expect(intact.sourceStability).toBe("unverified");
     expect(intact.diagnosticSupport).toMatchObject({
       diagnosis: { status: "supported" }, repairSuggestions: [{ status: "supported" }],
     });
     const missionPath = join(root, ".proofkit", "missions", `${created.missionId}.json`);
     const savedMission = await readFile(missionPath, "utf8");
+    const mismatchedRun = JSON.parse(savedMission) as TestMission;
+    const observedRun = mismatchedRun.observations.find((item) => item.kind === "surface.run")!;
+    observedRun.data.steps = Number(observedRun.data.steps) + 1;
+    await writeFile(missionPath, JSON.stringify(mismatchedRun));
+    const unsupportedFailure = await service.missionEvidence(completed.missionId);
+    expect(unsupportedFailure).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
+      summary: { agentTraceAudit: { status: "complete" }, executionAudit: { status: "incomplete" } } });
+    expect(unsupportedFailure.acceptanceEvidenceIntegrity.status).toBe(intact.acceptanceEvidenceIntegrity.status);
+    expect(unsupportedFailure.summary.executionAudit?.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining("action/assertion/Oracle counts"),
+    ]));
+    await writeFile(missionPath, savedMission);
     const detachedFailure = JSON.parse(savedMission) as TestMission;
     detachedFailure.agentSteps.find((step) => step.tool === "surface.run-charter")!.observationIds = [];
     await writeFile(missionPath, JSON.stringify(detachedFailure));

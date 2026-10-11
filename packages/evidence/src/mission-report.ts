@@ -141,6 +141,10 @@ export function auditMissionVerdict(result: MissionResult, integrity: MissionEvi
   if (saved === "passed" && result.executionAudit?.status !== "complete") {
     return { testVerdict: "inconclusive", testVerdictReason: "Saved Mission has missing, duplicated or mismatched execution Runs; rerun the declared scope before claiming acceptance." };
   }
+  if (saved === "failed" && result.confirmedProductFindings > 0
+    && result.executionAudit?.status !== "complete") {
+    return { testVerdict: "inconclusive", testVerdictReason: "Saved product failure has missing, duplicated or mismatched observed Runs; recheck the failing scenario before claiming a product defect." };
+  }
   if (result.scope.sourceStability === "changed") {
     return { testVerdict: "inconclusive", testVerdictReason: "The tested Git source changed during this Mission; rerun the same scope against a stable checkout before claiming current acceptance or a product defect." };
   }
@@ -228,7 +232,7 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
     result.evidenceIntegrity ? `Current presented evidence integrity: ${result.evidenceIntegrity.status}; ${result.evidenceIntegrity.references.intact}/${result.evidenceIntegrity.references.total} reference(s) verified at ${result.evidenceIntegrity.checkedAt}. This does not change the saved acceptance verdict.` : undefined,
     result.acceptanceEvidenceIntegrity ? `Current Mission evidence integrity: ${result.acceptanceEvidenceIntegrity.status}; ${result.acceptanceEvidenceIntegrity.references.intact}/${result.acceptanceEvidenceIntegrity.references.total} saved reference(s) verified, ${result.acceptanceEvidenceIntegrity.references.omitted} beyond the audit limit. This does not prove whole-project coverage or application state after the Run.` : undefined,
     result.testVerdictReason,
-    executionAudit ? `Execution slots: ${executionAudit.matchedSlots}/${executionAudit.expectedSlots} uniquely matched; ${executionAudit.unexpectedObservations} unexpected Run observation(s).` : undefined,
+    executionAudit ? `Execution slots (${executionAudit.scope}): ${executionAudit.matchedSlots}/${executionAudit.expectedSlots} uniquely matched; ${executionAudit.unexecutedSlots} unexecuted, ${executionAudit.unexpectedObservations} unexpected Run observation(s).` : undefined,
     agentTraceAudit ? `Agent trace: ${agentTraceAudit.status}; ${agentTraceAudit.checkedSteps} step(s), ${agentTraceAudit.checkedCalls} call(s), ${agentTraceAudit.checkedObservations} observation(s) checked.` : undefined,
     ...(agentTraceAudit?.issues ?? []).map((issue) => `Agent trace gap: ${issue}`),
     agentTraceAudit?.omittedIssues ? `${agentTraceAudit.omittedIssues} additional Agent trace gaps are omitted from this report.` : undefined,

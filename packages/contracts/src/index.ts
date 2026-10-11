@@ -1592,8 +1592,11 @@ export type MissionProofClassification = z.infer<typeof MissionProofClassificati
 /** Recomputed from the saved task graph and Run observations, without trusting the saved verdict. */
 export const MissionExecutionAuditSchema = z.object({
   status: z.enum(["complete", "incomplete"]),
+  /** A failure can leave later declared slots unexecuted; only observed Runs are certified. */
+  scope: z.enum(["acceptance", "observed-failure"]).default("acceptance"),
   expectedSlots: z.number().int().nonnegative(),
   matchedSlots: z.number().int().nonnegative(),
+  unexecutedSlots: z.number().int().nonnegative().default(0),
   unexpectedObservations: z.number().int().nonnegative(),
   issues: z.array(z.string().min(1)).max(20),
   omittedIssues: z.number().int().nonnegative(),

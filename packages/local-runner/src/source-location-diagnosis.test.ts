@@ -25,7 +25,7 @@ it("keeps the business defect confirmed while admitting only checked source hint
   };
   const now = new Date().toISOString();
   const summary: RunSummary = {
-    runId: "source-hint-run", startedAt: now, endedAt: now, status: "completed", verdict: "failed", charter,
+    runId: "source-hint-run", execution: { adapter: "web" }, startedAt: now, endedAt: now, status: "completed", verdict: "failed", charter,
     steps: [], assertions: [{ assertion: charter.assertions[0]!, passed: true, message: "Resume visible", evidence: [] }],
     oracles: [{ name: "resume-terminal", passed: false, message: "stale binding", observedAt: now, verificationKind: "business",
       evidence: ["source-hint-run/artifacts/oracle-1-source.json", "source-hint-run/artifacts/oracle-1.json"],

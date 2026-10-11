@@ -12,7 +12,10 @@ const TOOL: Record<Slot["kind"], string> = {
 };
 
 /** Audit every declared execution slot, including entries omitted from the compact report. */
-export function auditMissionExecution(mission: TestMission, evidenceDir: string, requirePass = true): MissionExecutionAudit {
+export function auditMissionExecution(mission: TestMission, evidenceDir: string,
+  mode: "acceptance" | "verification" | "observed-failure" = "acceptance"): MissionExecutionAudit {
+  const requirePass = mode === "acceptance";
+  const allowUnexecuted = mode === "observed-failure";
   const issues: string[] = [];
   let omittedIssues = 0;
   const issue = (message: string) => {
@@ -63,6 +66,7 @@ export function auditMissionExecution(mission: TestMission, evidenceDir: string,
   const primaryRuns = new Map<string, string>();
   const replayRuns: Array<{ slot: Slot; observation: Observation }> = [];
   let matchedSlots = 0;
+  let unexecutedSlots = 0;
   for (const slot of slots) {
     const label = slotLabel(slot);
     const tasks = mission.plan.graph.tasks.filter((task) => task.tool === TOOL[slot.kind]
@@ -79,6 +83,11 @@ export function auditMissionExecution(mission: TestMission, evidenceDir: string,
       && (item.data.runKind ?? "primary") === slot.kind
       && item.charterId === slot.charterId
       && (slot.kind !== "negative" || item.data.negativeCaseId === slot.negativeCaseId));
+    if (allowUnexecuted && matching.length === 0 && task && task.attempts === 0
+      && ["pending", "ready", "skipped", "blocked"].includes(task.status)) {
+      unexecutedSlots++;
+      continue;
+    }
     if (matching.length !== 1) {
       issue(`${label}: expected one Run observation, found ${matching.length}.`);
       continue;
@@ -108,9 +117,11 @@ export function auditMissionExecution(mission: TestMission, evidenceDir: string,
     if (slot.kind === "primary") primaryRuns.set(pairKey(slot), runId);
     if (slot.kind === "replay") replayRuns.push({ slot, observation });
     if (slot.kind === "negative") {
-      if (observation.data.expectedVerdict !== slot.expectedVerdict || observation.data.outcomeMatched !== true
-        || observation.data.verdict !== slot.expectedVerdict) issue(`${label}: negative outcome does not match its declared expectation.`);
-      if (slot.expectedVerdict !== "passed" && slot.expectedVerdict !== "failed") {
+      if (observation.data.expectedVerdict !== slot.expectedVerdict) issue(`${label}: negative expected verdict differs from its declared case.`);
+      if (!allowUnexecuted && (observation.data.outcomeMatched !== true || observation.data.verdict !== slot.expectedVerdict)) {
+        issue(`${label}: negative outcome does not match its declared expectation.`);
+      }
+      if (!allowUnexecuted && slot.expectedVerdict !== "passed" && slot.expectedVerdict !== "failed") {
         issue(`${label}: an environment or evidence state cannot certify a negative outcome.`);
       }
       if (observation.data.targetContinuity === "changed" || observation.data.targetContinuity === "unverified"
@@ -135,7 +146,8 @@ export function auditMissionExecution(mission: TestMission, evidenceDir: string,
   if (extraTasks > 0) issue(`${extraTasks} surface task(s) are outside the declared execution slots.`);
   return MissionExecutionAuditSchema.parse({
     status: issues.length || omittedIssues ? "incomplete" : "complete",
-    expectedSlots: slots.length, matchedSlots, unexpectedObservations, issues, omittedIssues,
+    scope: allowUnexecuted ? "observed-failure" : "acceptance",
+    expectedSlots: slots.length, matchedSlots, unexecutedSlots, unexpectedObservations, issues, omittedIssues,
   });
 }
 

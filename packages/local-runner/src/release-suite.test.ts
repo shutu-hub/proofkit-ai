@@ -9,6 +9,7 @@ import { captureSourceState } from "@proofkit/project";
 import { LocalRunnerService, type LocalAdapterName } from "./index.js";
 import { summarizeSuiteScope, verifySuiteMission } from "./suite-verifier.js";
 import { installMockRunEvidence } from "./mock-run-evidence.test-helper.js";
+import { auditMissionExecution } from "./mission-execution-audit.js";
 
 const roots: string[] = [];
 vi.setConfig({ testTimeout: 20_000 });
@@ -80,9 +81,25 @@ describe("explicit release suites", () => {
     const mission = await service.createMission({ intent: "上线完整回归", surface: "web", suiteId: "release-critical" });
     await service.startMission(mission.missionId, { approve: true });
     const completed = await service.waitMission(mission.missionId);
-    const scope = (await service.missionEvidence(mission.missionId)).suiteScope;
+    const evidence = await service.missionEvidence(mission.missionId);
+    const scope = evidence.suiteScope;
     expect(completed.status).toBe("failed");
     expect(completed.verdict).toBe("failed");
+    expect(evidence).toMatchObject({ testVerdict: "inconclusive",
+      summary: { executionAudit: { status: "complete", scope: "observed-failure", matchedSlots: 12, unexecutedSlots: 0 } } });
+    expect(evidence.testVerdictReason).toContain("unavailable or unverifiable evidence");
+    const interrupted = structuredClone(completed);
+    const unexecuted = interrupted.observations.find((item) => item.data.runKind === "negative")!;
+    interrupted.observations = interrupted.observations.filter((item) => item !== unexecuted);
+    const deferredTask = interrupted.plan.graph.tasks.find((task) => task.tool === "surface.run-negative-charter"
+      && task.charterId === unexecuted.charterId && task.input.adapter === unexecuted.data.surface
+      && (task.input.negativeCase as { caseId?: string })?.caseId === unexecuted.data.negativeCaseId)!;
+    deferredTask.status = "pending";
+    deferredTask.attempts = 0;
+    delete deferredTask.output;
+    expect(auditMissionExecution(interrupted, service.evidenceDir, "observed-failure")).toMatchObject({
+      status: "complete", scope: "observed-failure", matchedSlots: 11, unexecutedSlots: 1,
+    });
     expect(harness.started).toHaveLength(8);
     expect(harness.replayed).toHaveLength(4);
     expect(scope?.results.find((item) => item.charterId === "resume" && item.surface === "web")?.verdict).toBe("failed");
@@ -508,7 +525,8 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
   const started: Array<{ charterId: string; surface: LocalAdapterName; negativeCaseId?: string }> = [];
   const replayed: Array<{ sourceRunId: string; charterId: string; surface: LocalAdapterName }> = [];
   let sequence = 0;
-  const summaryFor = (charter: TestCharter, surface: LocalAdapterName, kind: "primary" | "replay" | "negative"): RunSummary => {
+  const summaryFor = (charter: TestCharter, surface: LocalAdapterName, kind: "primary" | "replay" | "negative",
+    replayOfRunId?: string): RunSummary => {
     const charterId = String(charter.metadata.catalogId);
     const runId = `suite-${++sequence}`;
     const failed = options.failedPrimary === `${charterId}/${surface}` && kind !== "negative";
@@ -525,6 +543,7 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     const sourceArtifact = `${runId}/oracle-source.json`;
     const summary: RunSummary = {
       runId, projectRoot: service.root, workspaceRoot: service.workspaceRoot,
+      execution: { adapter: surface, ...(replayOfRunId ? { replayOfRunId } : {}) },
       startedAt: now, endedAt: now, status: "completed", verdict, charter,
       steps: kind === "negative" ? [] : [{
         stepId: "step-001", action: { kind: "observe" }, status: "passed", artifacts: [],
@@ -570,7 +589,7 @@ function stubRuns(service: LocalRunnerService, options: { failedPrimary?: string
     if (!source) throw new Error(`Unknown replay source ${sourceRunId}`);
     const surface = input?.adapter ?? "web";
     replayed.push({ sourceRunId, charterId: String(source.charter.metadata.catalogId), surface });
-    const summary = summaryFor(source.charter, surface, "replay");
+    const summary = summaryFor(source.charter, surface, "replay", sourceRunId);
     await writeNetworkEvent(summary, surface, "replay");
     return { runId: summary.runId, status: "completed", verdict: summary.verdict, summary };
   };
