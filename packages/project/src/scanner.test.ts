@@ -115,11 +115,14 @@ describe("scanProject", () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-route-cap-"));
     await writeFile(join(root, "package.json"), JSON.stringify({ name: "fixture" }));
     await writeFile(join(root, "router.ts"), Array.from({ length: 205 }, (_, index) => `export const route${index} = { path: '/r${index}' };`).join("\n"));
-    const map = await scanProject(root);
+    const map = await scanProject(root, { routeHintLimit: 200 });
     expect(map.inventory.filesScanned).toBe(2);
     expect(map.inventory.routeHints).toHaveLength(200);
     expect(map.inventory.truncated).toBe(true);
     expect(map.inventory.truncationReasons).toEqual(["route-hint-cap"]);
+    const complete = await scanProject(root);
+    expect(complete.inventory.routeHints).toHaveLength(205);
+    expect(complete.inventory.truncated).toBe(false);
   });
 
   it("marks the map partial when a source file is too large to inspect", async () => {

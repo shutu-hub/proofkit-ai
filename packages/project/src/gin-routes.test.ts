@@ -24,6 +24,58 @@ if deps.Files != nil {
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("expands one file-local Gin helper for both AIHR conversation prefixes", () => {
+    const result = extractGinRoutes(`package router
+import "github.com/gin-gonic/gin"
+func NewEngine() *gin.Engine {
+  engine := gin.New()
+  api := engine.Group("/api/v1/boss-conversations")
+  registerConversationRoutes(api, boss)
+  registerConversationRoutes(engine.Group("/api/v1/resume-channel-conversations"), channel)
+  return engine
+}
+func registerConversationRoutes(api *gin.RouterGroup, h Handler) {
+  api.GET("/work-items", h.List)
+  api.PATCH("/:conversation_id/workflows/:workflow_id", h.Update)
+}`, "router.go")!;
+    expect(result.routes.map(({ method, path }) => ({ method, path }))).toEqual([
+      { method: "GET", path: "/api/v1/boss-conversations/work-items" },
+      { method: "GET", path: "/api/v1/resume-channel-conversations/work-items" },
+      { method: "PATCH", path: "/api/v1/boss-conversations/:conversation_id/workflows/:workflow_id" },
+      { method: "PATCH", path: "/api/v1/resume-channel-conversations/:conversation_id/workflows/:workflow_id" },
+    ]);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("does not guess a helper prefix when any in-file caller is unresolved", () => {
+    const result = extractGinRoutes(`package router
+import "github.com/gin-gonic/gin"
+func NewEngine() *gin.Engine {
+  engine := gin.New()
+  registerRoutes(engine.Group("/known"))
+  registerRoutes(unknownGroup())
+  return engine
+}
+func registerRoutes(api *gin.RouterGroup) { api.GET("/items", handler) }`, "router.go")!;
+    expect(result.routes).toEqual([]);
+    expect(result.diagnostics.map((item) => item.reason)).toEqual(["unknown-router-prefix"]);
+  });
+
+  it("keeps an escaped helper reference unresolved", () => {
+    const result = extractGinRoutes(`package router
+import "github.com/gin-gonic/gin"
+func NewEngine() *gin.Engine {
+  engine := gin.New()
+  registerRoutes(engine.Group("/known"))
+  callback := registerRoutes
+  _ = callback
+  return engine
+}
+func registerRoutes(api *gin.RouterGroup) { api.GET("/items", handler) }`, "router.go")!;
+    expect(result.routes).toEqual([]);
+    expect(result.diagnostics.map((item) => item.reason)).toEqual(["unknown-router-prefix"]);
+  });
+
   it("keeps sibling blocks separate and supports aliases, chains and trailing slashes", () => {
     const result = scan(`engine := gin.Default()
 api := engine.Group("/api/v1")

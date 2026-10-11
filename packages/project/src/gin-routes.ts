@@ -18,6 +18,11 @@ export function extractGinRoutes(content: string, source: string): { routes: Rou
   const scopes: Array<Map<string, Binding>> = [new Map()];
   const routes: Route[] = [];
   const diagnostics: Diagnostic[] = [];
+  type HelperTemplate = { path: string; method: RouteHttpMethod; line: number };
+  type Helper = { name: string; nameIndex: number; parameter: string; end: number; templates: HelperTemplate[]; mutated: boolean };
+  const helpers: Helper[] = [];
+  const calls = new Map<string, Binding[]>();
+  let activeHelper: Helper | undefined;
   const diagnose = (token: Token, reason: Diagnostic["reason"]) => diagnostics.push({ extractor: "gin", source, line: token.line, reason });
   const lookup = (name: string): Binding => {
     for (let index = scopes.length - 1; index >= 0; index--) if (scopes[index]!.has(name)) return scopes[index]!.get(name);
@@ -75,10 +80,14 @@ export function extractGinRoutes(content: string, source: string): { routes: Rou
   const declare = (start: number) => {
     let end = start;
     while (end < tokens.length && tokens[end]?.kind !== "newline" && !symbol(end, "=") && !symbol(end, ";") && !symbol(end, ")") && !symbol(end, "}")) end++;
-    for (const [name, binding] of parameterBindings(tokens.slice(start, end), imports)) scopes[scopes.length - 1]!.set(name, binding);
+    for (const [name, binding] of parameterBindings(tokens.slice(start, end), imports)) {
+      if (activeHelper?.parameter === name) activeHelper.mutated = true;
+      scopes[scopes.length - 1]!.set(name, binding);
+    }
   };
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index]!;
+    if (activeHelper && index > activeHelper.end) activeHelper = undefined;
     if (token.kind === "id" && token.value === "func") {
       // Mark typed router parameters unknown: a helper's callers may supply different prefixes.
       functionParameters = new Map();
@@ -101,6 +110,12 @@ export function extractGinRoutes(content: string, source: string): { routes: Rou
         for (const [name, binding] of names) functionParameters.set(name, binding);
         start = end;
       }
+      const firstParameter = functionParameters.entries().next().value as [string, Binding] | undefined;
+      activeHelper = tokens[index + 1]?.kind === "id" && symbol(index + 2, "(")
+        && firstParameter?.[1] === null && cursor < tokens.length
+        ? { name: tokens[index + 1]!.value, nameIndex: index + 1, parameter: firstParameter[0], end: closeBlock(cursor), templates: [], mutated: false }
+        : undefined;
+      if (activeHelper) helpers.push(activeHelper);
       pendingFunctionBody = cursor;
       index = cursor - 1;
       continue;
@@ -114,6 +129,13 @@ export function extractGinRoutes(content: string, source: string): { routes: Rou
     }
     if (token.kind === "symbol" && token.value === "}") { if (scopes.length > 1) scopes.pop(); continue; }
     if (token.kind !== "id" || symbol(index - 1, ".")) continue;
+    if (symbol(index + 1, "(") && !scopes.some((scope) => scope.has(token.value))) {
+      const first = expression(next(index + 2));
+      const boundary = first && tokens[first.end];
+      const observed = calls.get(token.value) ?? [];
+      observed.push(first && boundary?.kind === "symbol" && [",", ")"].includes(boundary.value) ? first.prefix : null);
+      calls.set(token.value, observed);
+    }
     if (token.value === "var") {
       if (tokens[index + 1]?.kind === "id") declare(index + 1);
       else if (symbol(index + 1, "(")) {
@@ -137,6 +159,7 @@ export function extractGinRoutes(content: string, source: string): { routes: Rou
         cursor++;
       }
       if (symbol(cursor, "=") || symbol(cursor, ":=")) {
+        if (activeHelper && names.includes(activeHelper.parameter)) activeHelper.mutated = true;
         const hasRouterValue = expression(next(cursor + 1)) !== undefined;
         for (const name of names) {
           if (symbol(cursor, ":=") && !controlHeader) scopes[scopes.length - 1]!.set(name, !hasRouterValue && lookup(name) === undefined ? undefined : null);
@@ -155,12 +178,14 @@ export function extractGinRoutes(content: string, source: string): { routes: Rou
       while (symbol(assignmentEnd, ".") && tokens[assignmentEnd + 1]?.kind === "id") assignmentEnd += 2;
     }
     if (fieldEnd > index + 1 && symbol(assignmentEnd, "=") && lookup(token.value) !== undefined) {
+      if (activeHelper?.parameter === token.value) activeHelper.mutated = true;
       for (const scope of scopes) for (const [name, binding] of scope) if (binding !== undefined) scope.set(name, null);
       index = assignmentEnd;
       continue;
     }
     const operator = tokens[index + 1]?.kind === "symbol" ? tokens[index + 1]?.value : undefined;
     if (operator === ":=" || operator === "=") {
+      if (activeHelper?.parameter === token.value) activeHelper.mutated = true;
       const value = expression(next(index + 2));
       const boundary = value && tokens[value.end];
       const complete = value && (!boundary || boundary.kind === "newline" || (boundary.kind === "symbol" && [";", "}"].includes(boundary.value)));
@@ -181,7 +206,11 @@ export function extractGinRoutes(content: string, source: string): { routes: Rou
     if (!METHODS.has(method.value) && method.value !== "Any" && method.value !== "Handle") continue;
     if (!METHODS.has(method.value)) { diagnose(method, "unsupported-router-operation"); index = closeCall(receiver.end + 2); continue; }
     const path = literalArgument(receiver.end + 2);
-    if (receiver.prefix === null) diagnose(method, "unknown-router-prefix");
+    if (receiver.prefix === null) {
+      if (activeHelper && token.value === activeHelper.parameter && receiver.end === index + 1 && path !== undefined) {
+        activeHelper.templates.push({ path, method: method.value as RouteHttpMethod, line: method.line });
+      } else diagnose(method, "unknown-router-prefix");
+    }
     else if (path === undefined) diagnose(method, "dynamic-path");
     else {
       const composed = composePath(receiver.prefix!, path);
@@ -190,6 +219,22 @@ export function extractGinRoutes(content: string, source: string): { routes: Rou
     }
     // Handler bodies are runtime behavior, not startup route declarations.
     index = closeCall(receiver.end + 2);
+  }
+  for (const helper of helpers) {
+    const sites = calls.get(helper.name) ?? [];
+    const known = sites.filter((prefix): prefix is string => typeof prefix === "string");
+    const references = tokens.reduce((count, token, index) => count + Number(token.kind === "id" && token.value === helper.name && index !== helper.nameIndex), 0);
+    for (const template of helper.templates) {
+      if (helper.mutated || known.length === 0 || known.length !== sites.length || references !== sites.length) {
+        diagnostics.push({ extractor: "gin", source, line: template.line, reason: "unknown-router-prefix" });
+        continue;
+      }
+      for (const prefix of known) {
+        const path = composePath(prefix, template.path);
+        if (path === null) diagnostics.push({ extractor: "gin", source, line: template.line, reason: "dynamic-path" });
+        else routes.push({ kind: "api", path: path || "/", source, line: template.line, method: template.method, discovery: "gin" });
+      }
+    }
   }
   return { routes, diagnostics };
 }

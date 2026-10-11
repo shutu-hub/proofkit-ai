@@ -64,6 +64,8 @@ export type ProjectScanOptions = {
   focus?: string;
   /** Reviewed declarations belonging to a focused catalog alias. Used only with focus. */
   routeTargets?: RouteCoverageTarget[];
+  /** Bounded route inventory. Smaller limits are useful when inspecting focused slices. */
+  routeHintLimit?: number;
 };
 
 export async function scanProject(projectRoot = process.cwd(), options: ProjectScanOptions = {}): Promise<ProjectMap> {
@@ -222,7 +224,7 @@ const SOURCE_EXTENSIONS = new Set([".cjs", ".css", ".go", ".java", ".js", ".jsx"
 const CONFIG_EXTENSIONS = new Set([".ini", ".json", ".toml", ".yaml", ".yml"]);
 const IGNORED_DIRECTORIES = new Set([".agents", ".cache", ".codex", ".git", ".pnpm", ".proofkit", ".turbo", ".venv", "build", "coverage", "dist", "node_modules", "out", "target", "vendor"]);
 const MAX_INVENTORY_FILES = 4_000;
-const MAX_ROUTE_HINTS = 200;
+const MAX_ROUTE_HINTS = 2_000;
 const MAX_SOURCE_BYTES = 1_000_000;
 const execFileAsync = promisify(execFile);
 
@@ -242,6 +244,8 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
 }> {
   const focus = options.focus?.trim().normalize("NFKC").toLowerCase();
   if (focus !== undefined && (!focus || focus.length > 128)) throw new Error("Inventory focus must contain 1–128 normalized characters");
+  const routeHintLimit = options.routeHintLimit ?? MAX_ROUTE_HINTS;
+  if (!Number.isInteger(routeHintLimit) || routeHintLimit < 1 || routeHintLimit > MAX_ROUTE_HINTS) throw new Error(`Inventory route hint limit must be 1–${MAX_ROUTE_HINTS}`);
   const matches = (value: string) => Boolean(focus && value.normalize("NFKC").toLowerCase().includes(focus));
   const targets = focus ? options.routeTargets ?? [] : [];
   const sourceMatches = (path: string) => matches(path) || targets.some((target) => target.source === path);
@@ -251,7 +255,7 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
   const entries = new BoundedInventory<InventoryEntryPoint>(200,
     (left, right) => Number(sourceMatches(right.path)) - Number(sourceMatches(left.path)) || inventoryPriority(right.path) - inventoryPriority(left.path) || left.path.localeCompare(right.path) || left.kind.localeCompare(right.kind),
     (entry) => `${entry.kind}:${entry.path}`);
-  const routes = new BoundedInventory<InventoryRouteHint>(MAX_ROUTE_HINTS,
+  const routes = new BoundedInventory<InventoryRouteHint>(routeHintLimit,
     (left, right) => routeRank(right) - routeRank(left) || inventoryPriority(right.source) - inventoryPriority(left.source) || left.source.localeCompare(right.source) || left.line - right.line,
     (route) => `${route.kind}:${route.path}:${route.method ?? ""}:${route.source}:${route.line}`);
   type Diagnostic = NonNullable<ProjectMap["inventory"]["routeDiagnostics"]>["items"][number];

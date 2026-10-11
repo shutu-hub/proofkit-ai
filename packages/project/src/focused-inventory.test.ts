@@ -25,11 +25,11 @@ describe("focused project inventory", () => {
     const path = join(root, "router.ts");
     const source = `${Array.from({ length: 1_101 }, (_, index) => `const r${index} = { path: '/other/${index}' };`).join("\n")}\nconst target = { path: '/resume-target' };`;
     await writeFile(path, source);
-    const ordinary = await scanProject(root);
+    const ordinary = await scanProject(root, { routeHintLimit: 200 });
     expect(ordinary.inventory.routeHints).toHaveLength(200);
     expect(ordinary.inventory.routeHints.some((route) => route.path === "/resume-target")).toBe(false);
     expect(ordinary.inventory.retentionFocus).toBeUndefined();
-    const focused = await scanProject(root, { focus: " ＲＥＳＵＭＥ " });
+    const focused = await scanProject(root, { focus: " ＲＥＳＵＭＥ ", routeHintLimit: 200 });
     expect(focused.inventory).toMatchObject({ retentionFocus: "resume", filesScanned: 1, truncated: true });
     expect(focused.inventory.routeHints).toHaveLength(200);
     expect(focused.inventory.routeHints[0]).toMatchObject({ path: "/resume-target", source: "router.ts", line: 1_102 });
@@ -48,7 +48,7 @@ describe("focused project inventory", () => {
     }));
     await mkdir(join(root, "services", "zz-resume"), { recursive: true });
     await writeFile(join(root, "services", "zz-resume", "main.go"), 'api.GET("/api/v1/files", handler)');
-    const focused = await scanProject(root, { focus: "ZZ-RESUME" });
+    const focused = await scanProject(root, { focus: "ZZ-RESUME", routeHintLimit: 200 });
     expect(focused.inventory.entryPoints).toHaveLength(200);
     expect(focused.inventory.routeHints).toHaveLength(200);
     expect(focused.inventory.truncated).toBe(true);
@@ -62,11 +62,11 @@ describe("focused project inventory", () => {
     await mkdir(join(root, "services", "upload"), { recursive: true });
     await writeFile(join(root, "services", "upload", "main.go"), `${Array.from({ length: 1_101 }, () => 'api.GET("/api/v1/files", wrongMethod);').join("\n")}\napi.POST("/api/v1/files", correct);`);
     const target = { kind: "api" as const, path: "/api/v1/files", method: "POST" as const, origin: "http://localhost:8080", source: "services/upload/main.go" };
-    const focused = await scanProject(root, { focus: "简历获取", routeTargets: [target] });
+    const focused = await scanProject(root, { focus: "简历获取", routeTargets: [target], routeHintLimit: 200 });
     expect(focused.inventory.routeHints[0]).toMatchObject({ kind: "api", method: "POST", path: target.path, source: target.source, line: 1_102 });
     expect(focused.inventory.routeHints).toHaveLength(200);
     expect(focused.inventory.truncated).toBe(true);
-    const unfocused = await scanProject(root, { routeTargets: [target] });
+    const unfocused = await scanProject(root, { routeTargets: [target], routeHintLimit: 200 });
     expect(unfocused.inventory.retentionFocus).toBeUndefined();
     expect(unfocused.inventory.routeHints.some((route) => route.method === "POST" && route.source === target.source)).toBe(false);
   });

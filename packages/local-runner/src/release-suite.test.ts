@@ -128,7 +128,7 @@ describe("explicit release suites", () => {
 
   it("keeps declared suite acceptance independent of partial discovery and preserves project gates on replay", async () => {
     const service = await createSuiteService();
-    const routeSource = Array.from({ length: 230 }, (_, index) => `const route${index} = { path: '/extra-${index}' };`).join("\n");
+    const routeSource = Array.from({ length: 2_030 }, (_, index) => `const route${index} = { path: '/extra-${index}' };`).join("\n");
     const routePath = join(service.root, "apps", "web", "src", "extra-router.ts");
     await writeFile(routePath, routeSource);
     stubRuns(service);

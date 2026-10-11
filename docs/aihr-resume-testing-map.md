@@ -249,6 +249,24 @@ routes 和 upstreams 数量，不含提交 SHA 或镜像 digest，不能用它�
 同一源码对应的隔离 Web/Electron 目标、真实测试身份、脱敏简历、独立业务 Oracle
 及清理安排；当前工作树有其他任务的未提交修改，`sourceStability` 仍为 `unverified`。
 
+### 2026-10-11 测试范围与接入复核
+
+只读 `scope` 记录当前 Git HEAD 为 `dc781c3763933d3062d4b3bd33491e38c2a82a44`，
+工作树指纹完整但包含其他任务的修改。配置的 `127.0.0.1:5274` 页面未启动；
+`environment-20261011025153-3654027c` 返回 `blocked`、`testVerdict: not-asserted`。
+当前 5173/5174 与 8080–8082 的监听进程均属于另一份
+`D:/tmp/aihr-livekit-interview-voice` 检出，不能替代当前检出的业务环境。
+
+外部测试工作区的 AIHR 连接器已同步到仓库参考版，`doctor` 通过，静态范围现可看到
+9 个受控 capability 和 6 个业务 Oracle。已登记的仍只有一个 Web `quick` 页面用例；
+`core` 目录用例和工作流清单缺失，因此没有执行简历业务写入或产品通过判断。
+ProofKit 的 Gin 扫描器补上同文件辅助函数调用展开后，对此检出扫描 2110 个文件，
+保留 244 条原始路由线索、61 个入口；`scope` 去重后呈现 239 个路由候选，
+路由诊断为 0，且未触及扫描上限。范围快照保存在外部工作区
+`.proofkit/aihr-local-workspace/.proofkit/readiness/2026-10-11-aihr-scope.json`
+（SHA-256 `14129568ea4463a7bb3e51c47f2945c00a39429a086a5c24158c697ae14cb942`）。
+这提升了静态候选的完整度；244 条线索既不是业务流程总数，也不是已测覆盖率。
+
 ## 隔离业务验收的接入配置
 
 在隔离 test/local 环境设置：

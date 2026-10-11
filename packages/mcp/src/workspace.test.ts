@@ -94,7 +94,7 @@ describe("MCP external workspace", () => {
       vi.spyOn(WebAdapter.prototype, "close").mockResolvedValue();
       vi.spyOn(WebAdapter.prototype, "assert").mockImplementation(async (assertion) => ({ assertion, passed: true, message: "ready", evidence: [] }));
       await writeFile(join(root, "package.json"), '{"name":"submitted-source","devDependencies":{"vite":"1"}}');
-      const router = Array.from({ length: 230 }, (_, index) => `const route${index} = { path: '/feature-${index}' };`).join("\n");
+      const router = Array.from({ length: 2_030 }, (_, index) => `const route${index} = { path: '/feature-${index}' };`).join("\n");
       await writeFile(join(root, "router.ts"), router);
       await mkdir(join(workspaceRoot, ".proofkit"));
       await writeFile(join(workspaceRoot, ".proofkit", "config.yaml"), JSON.stringify({ project: { root } }));
