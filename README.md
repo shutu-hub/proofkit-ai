@@ -283,6 +283,8 @@ directory and one explicit MCP config; provider authentication is required.
 first checks the Claude event parser against real ProofKit MCP calls and saved
 evidence without using a model. Its synthetic Claude transcript and passing
 result do not establish Claude Code model behavior.
+Add `mobile-quick-pass` to exercise the same host-facing path through an isolated
+W3C WebDriver fixture. It does not use an emulator or device.
 
 Set `PROOFKIT_ELECTRON_PATH` and run `pnpm benchmark:host:electron` for the
 two optional native-MCP Electron/CDP cases.

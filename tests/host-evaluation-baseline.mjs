@@ -21,7 +21,7 @@ const selected = requested ? requested.split(",").map((id) => {
 const root = await mkdtemp(join(tmpdir(), "proofkit-host-baseline-"));
 const cases = [];
 console.log(JSON.stringify({ baselineRoot: root, cases: selected.map((item) => item.id),
-  protocol, scope: "scripted native MCP and real Chrome/Electron where selected; no language model is evaluated" }));
+  protocol, scope: "scripted native MCP; real Chrome/Electron or fake W3C mobile driver by case; no language model is evaluated" }));
 for (const expected of selected) {
   const fixture = await createHostFixture(join(root, expected.id), expected);
   try {

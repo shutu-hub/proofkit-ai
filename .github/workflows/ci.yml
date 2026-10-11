@@ -24,7 +24,7 @@ jobs:
       - name: Verify scripted Claude protocol and evidence chain
         env:
           PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome
-        run: node tests/host-evaluation-baseline.mjs --protocol claude-code --cases quick-pass,core-defect,project-gap
+        run: node tests/host-evaluation-baseline.mjs --protocol claude-code --cases quick-pass,core-defect,project-gap,mobile-quick-pass
       - run: pnpm test:distribution
       - name: Verify Linux listener binding
         run: sudo env PROOFKIT_REQUIRE_LINUX_PROC=1 "$(command -v node)" tests/linux-target-binding-smoke.mjs

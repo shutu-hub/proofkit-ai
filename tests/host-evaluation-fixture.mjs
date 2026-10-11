@@ -25,6 +25,7 @@ export const hostCases = [
   { id: "electron-core-defect", prompt: "测试 Electron 桌面端的简历获取功能", surface: "electron", level: "core", coverage: "declared", verdict: "failed", state: "complete", wrongRelation: true, optional: true },
   { id: "inline-electron-pass", prompt: "测试 Electron 桌面端简历获取功能，并用项目的只读状态接口核对本次文件 ID 和处理终态", surface: "electron", level: "core", coverage: "declared", verdict: "passed", state: "complete", noCatalog: true, noReader: true, optional: true, omitSurfaceInScriptedBaseline: true },
   { id: "inline-electron-defect", prompt: "测试 Electron 桌面端简历获取功能，并用项目的只读状态接口核对本次文件 ID 和处理终态", surface: "electron", level: "core", coverage: "declared", verdict: "failed", state: "complete", noCatalog: true, noReader: true, wrongIdentity: true, optional: true },
+  { id: "mobile-quick-pass", prompt: "快速测试移动端简历获取页面", surface: "mobile", level: "quick", coverage: "declared", verdict: "passed", state: "complete", optional: true },
 ];
 
 /** Synthetic business facts exercise host behavior without real accounts, data or billable work. */
@@ -56,8 +57,45 @@ export const resumeStatusRoute = '/api/v1/resume-status';
   await Promise.all(Object.entries(sourceFiles).map(([path, content]) => writeFile(join(source, path), content)));
   const records = new Map([["101", { fileId: "101", jobId: "7", state: "complete" }]]);
   let nextId = 101;
+  const mobileSessions = new Set();
+  let nextMobileSession = 0;
   const http = createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
+    if (expected.surface === "mobile" && url.pathname.startsWith("/wd/")) {
+      const send = (value, status = 200) => {
+        response.writeHead(status, { "content-type": "application/json" });
+        response.end(JSON.stringify({ value }));
+      };
+      if (url.pathname === "/wd/status" && request.method === "GET") return send({ ready: true });
+      if (url.pathname === "/wd/session" && request.method === "POST") {
+        request.resume();
+        const sessionId = `host-mobile-${++nextMobileSession}`;
+        mobileSessions.add(sessionId);
+        return send({ sessionId, capabilities: { platformName: "Android" } });
+      }
+      const match = url.pathname.match(/^\/wd\/session\/([^/]+)(?:\/(.*))?$/);
+      if (!match || !mobileSessions.has(match[1])) return send({ error: "invalid session id" }, 404);
+      if (!match[2] && request.method === "DELETE") { mobileSessions.delete(match[1]); return send(null); }
+      if (match[2] === "source") return send('<hierarchy><node text="Resume ready" displayed="true"/></hierarchy>');
+      if (match[2] === "url") return send("app://proofkit/resumes");
+      if (match[2] === "title") return send("Resume intake");
+      if (match[2] === "screenshot") return send("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6px8AAAAASUVORK5CYII=");
+      if (match[2] === "elements" && request.method === "POST") {
+        void (async () => {
+          let body = "";
+          for await (const chunk of request) {
+            body += chunk;
+            if (body.length > 4096) throw new Error("Mobile locator exceeded fixture limit");
+          }
+          const locator = JSON.parse(body);
+          return send(locator.using === "xpath" && locator.value.includes('"Resume ready"')
+            ? [{ "element-6066-11e4-a52e-4f735466cecf": "ready-label" }] : []);
+        })().catch(() => send({ error: "invalid argument" }, 400));
+        return;
+      }
+      if (match[2] === "element/ready-label/displayed") return send(true);
+      return send({ error: "unknown command" }, 404);
+    }
     if (request.method === "GET" && url.pathname === "/resume-page.js") {
       response.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
       response.end(sourceFiles["resume-page.js"]);
@@ -112,7 +150,11 @@ export const resumeStatusRoute = '/api/v1/resume-status';
       await waitForDevtools(devtoolsActivePort, () => spawnError ??
         (electron.exitCode === null ? undefined : new Error("Electron exited before CDP was ready")));
     }
-    const plan = (level) => TestCharterSchema.parse(level === "quick"
+    const plan = (level) => TestCharterSchema.parse(surface === "mobile"
+      ? { intent: "快速检查移动端简历获取页面", level: "quick", sideEffectPolicy: "deny",
+        actions: [{ kind: "waitForText", text: "Resume ready", timeoutMs: 1000 }, { kind: "observe" }],
+        assertions: [{ kind: "text-visible", text: "Resume ready" }] }
+      : level === "quick"
       ? { intent: "快速检查简历获取页面", level, sideEffectPolicy: "deny",
         actions: [{ kind: "goto", url: `${origin}/resumes` }, { kind: "observe" }],
         assertions: [{ kind: "text-visible", text: "Resume ready" }] }
@@ -128,16 +170,21 @@ export const resumeStatusRoute = '/api/v1/resume-status';
         ...(expected.noReader ? { httpOracles: [{ name: "current-resume-status", url: `${origin}/api/v1/resume-status`,
           query: { fileId: { source: "response", stepId: "step-002", field: "fileId", matchPointer: "/data/fileId" } },
           statusPointer: "/data/state", successValues: ["complete"], failureValues: ["failed"], intervalMs: 100, deadlineMs: 1000 }] } : {}) });
-    const charters = expected.noCatalog ? [] : ["core", "quick"].map((level) => ({ id: `resume-${level}`, path: `.proofkit/charters/resume-${level}.yml`,
-      aliases: ["简历获取", "简历"], level, surfaces: [surface], routeTargets: [{ kind: "web", path: "/resumes", source: "resume-page.js" }] }));
+    const catalogLevels = surface === "mobile" ? ["quick"] : ["core", "quick"];
+    const charters = expected.noCatalog ? [] : catalogLevels.map((level) => ({ id: `resume-${level}`, path: `.proofkit/charters/resume-${level}.yml`,
+      aliases: ["简历获取", "简历"], level, surfaces: [surface],
+      ...(surface === "mobile" ? {} : { routeTargets: [{ kind: "web", path: "/resumes", source: "resume-page.js" }] }) }));
     const config = ProofkitConfigSchema.parse({ project: { root: source }, surfaces: { web: { baseUrl: origin,
       ...(process.env.PROOFKIT_BROWSER_PATH ? { executablePath: process.env.PROOFKIT_BROWSER_PATH }
         : process.platform === "win32" ? { executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe" } : {}) },
+      ...(surface === "mobile" ? { mobile: { serverUrl: `${origin}/wd`, platformName: "Android",
+        automationName: "UiAutomator2", deviceName: "proofkit-host-fixture",
+        readyWhen: { text: "Resume ready", timeoutMs: 1000 } } } : {}),
       ...(devtoolsActivePort ? { electron: { devtoolsActivePort } } : {}) },
       integration: { path: ".proofkit/integration.mjs" }, policies: { environment: "test", sideEffects: "allow" }, charters, run: { timeoutMs: 15_000 } });
     await writeFile(join(workspace, ".proofkit", "config.yaml"), JSON.stringify(config));
     if (!expected.noCatalog) {
-      for (const level of ["core", "quick"]) await writeFile(join(workspace, ".proofkit", "charters", `resume-${level}.yml`), JSON.stringify(plan(level)));
+      for (const level of catalogLevels) await writeFile(join(workspace, ".proofkit", "charters", `resume-${level}.yml`), JSON.stringify(plan(level)));
     } else if (expected.candidatePath) {
       await writeFile(join(workspace, expected.candidatePath), JSON.stringify(plan("core")));
     }
@@ -166,10 +213,10 @@ export const resumeStatusRoute = '/api/v1/resume-status';
     const setup = await setupAgent({ root: source, workspaceRoot: workspace, harness: agentHarness, installSkill: true,
       skillsDir: join(harness, agentHarness === "codex" ? ".agents" : ".claude", "skills") });
     const charterNames = expected.candidatePath ? ["resume-core.yml"]
-      : expected.noCatalog ? [] : ["resume-core.yml", "resume-quick.yml"];
+      : expected.noCatalog ? [] : catalogLevels.map((level) => `resume-${level}.yml`);
     const contractPaths = ["config.yaml", "integration.mjs", ...charterNames.map((name) => `charters/${name}`)];
     const contractHashes = await Promise.all(contractPaths.map(async (path) => hash(await readFile(join(workspace, ".proofkit", path)))));
-    return { root, source, workspace, harness, setup, corePlan: plan("core"),
+    return { root, source, workspace, harness, setup, corePlan: surface === "mobile" ? undefined : plan("core"),
       async sourceUnchanged() {
         const paths = await readdir(source);
         return paths.length === Object.keys(sourceFiles).length && (await Promise.all(Object.entries(sourceFiles).map(async ([path, content]) => hash(await readFile(join(source, path))) === hash(content)))).every(Boolean);
@@ -182,7 +229,12 @@ export const resumeStatusRoute = '/api/v1/resume-status';
             hash(await readFile(join(workspace, ".proofkit", path))) === contractHashes[index]))).every(Boolean);
         } catch { return false; }
       },
-      async close() { await stopElectron(electron); http.closeAllConnections(); await new Promise((resolve) => http.close(resolve)); },
+      async close() {
+        await stopElectron(electron);
+        http.closeAllConnections();
+        await new Promise((resolve) => http.close(resolve));
+        if (mobileSessions.size > 0) throw new Error("Host fixture left a WebDriver session open");
+      },
     };
   } catch (error) { await stopElectron(electron); http.closeAllConnections(); await new Promise((resolve) => http.close(resolve)); throw error; }
 }
