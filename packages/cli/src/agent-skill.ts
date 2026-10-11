@@ -133,6 +133,11 @@ read acceptanceEvidenceIntegrity for the full Mission reference audit and
 claim current support only when every cited finding and repair fact verifies.
 "no-evidence" cannot support a product claim. The saved verdict is historical,
 and "intact" covers only the presented references, not all project workflows.
+Check summary.scope.sourceStability and sourceFreshness before treating a saved
+pass or defect as current. A changed Git source during or after execution, or
+an unavailable recheck after a complete final fingerprint, makes testVerdict
+inconclusive. An unverified fingerprint does not attest the current checkout;
+the result still describes the tested point in time.
 Check get_mission_evidence.proofClassification as well. If it is "unverified",
 saved Oracle results lack explicit business/HTTP-contract classification or a
 referenced Run could not be read; describe the verdict as historical and rerun

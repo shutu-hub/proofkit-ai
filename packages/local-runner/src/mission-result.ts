@@ -1,4 +1,4 @@
-import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, ReplayConsistencySchema, SourceStateSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionExecutionAudit, type MissionProofClassification, type MissionResult, type MissionRunResult, type MissionSurface, type Observation, type ReplayConsistency, type TaskNode, type TestMission, type WorkflowExecutionCoverage, type WorkflowReviewAudit } from "@proofkit/contracts";
+import { IntegrationCleanupSchema, MissionResultSchema, MissionSurfaceSchema, ReplayConsistencySchema, SourceStateSchema, TargetBindingSchema, VerdictSchema, type EvidenceRef, type MissionComparison, type MissionExecutionAudit, type MissionProofClassification, type MissionResult, type MissionRunResult, type MissionSurface, type Observation, type ReplayConsistency, type SourceState, type TaskNode, type TestMission, type WorkflowExecutionCoverage, type WorkflowReviewAudit } from "@proofkit/contracts";
 import type { SuiteScopeSummary } from "./suite-verifier.js";
 
 type RunKind = MissionRunResult["runKind"];
@@ -20,6 +20,8 @@ export function projectMissionResult(mission: TestMission, options: {
   comparisonUnavailable?: string;
   proofClassification?: MissionProofClassification;
   executionAudit?: MissionExecutionAudit;
+  sourceFreshness?: "matching" | "changed" | "unavailable" | "unverified";
+  currentSourceState?: SourceState;
 }): MissionResult {
   const observations = mission.observations.filter((item) => item.kind === "surface.run");
   const indexed = new Map<string, Observation[]>();
@@ -78,6 +80,8 @@ export function projectMissionResult(mission: TestMission, options: {
       surfaces: mission.plan.executionProfile.surfaceMatrix,
       charterCount: mission.suite?.charters.length ?? (mission.charter ? 1 : 0),
       sourceStability: missionSourceStability(mission),
+      sourceFreshness: options.sourceFreshness,
+      currentSourceState: options.currentSourceState,
       suiteId: mission.suite?.suiteId,
       uncoveredCharterIds: options.suiteScope?.uncoveredCharterIds ?? [],
       workflowInventory: mission.workflowInventoryInspection,
@@ -170,6 +174,12 @@ function missionSourceStability(mission: TestMission): "stable" | "changed" | "u
     || source.data.method !== "git" || final.data.method !== "git"
     || !source.data.headSha || !final.data.headSha || !source.data.worktreeSha256 || !final.data.worktreeSha256) return "unverified";
   return source.data.headSha === final.data.headSha && source.data.worktreeSha256 === final.data.worktreeSha256 ? "stable" : "changed";
+}
+
+export function compareCurrentSource(final: SourceState | undefined, current: SourceState | undefined): "matching" | "changed" | "unavailable" | "unverified" {
+  if (!final?.complete || final.method !== "git" || !final.headSha || !final.worktreeSha256) return "unverified";
+  if (!current?.complete || current.method !== "git" || !current.headSha || !current.worktreeSha256) return "unavailable";
+  return final.headSha === current.headSha && final.worktreeSha256 === current.worktreeSha256 ? "matching" : "changed";
 }
 
 function projectRun(mission: TestMission, task: TaskNode | undefined, observation: Observation | undefined,

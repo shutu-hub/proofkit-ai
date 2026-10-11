@@ -36,7 +36,12 @@ try {
   assert.equal(localActionSteps[1].with.mode, "check");
   if (browserPath) assert.ok(existsSync(browserPath), `Browser not found: ${browserPath}`);
   await Promise.all([mkdir(source), mkdir(join(workspace, ".proofkit"), { recursive: true })]);
-  await writeFile(join(source, "package.json"), JSON.stringify({ name: "ci-gate-fixture", dependencies: { vite: "*" } }));
+  const sourcePackage = join(source, "package.json");
+  const sourceBytes = JSON.stringify({ name: "ci-gate-fixture", dependencies: { vite: "*" } });
+  await writeFile(sourcePackage, sourceBytes);
+  await runFile("git", ["init", "-q"], { cwd: source });
+  await runFile("git", ["add", "."], { cwd: source });
+  await runFile("git", ["-c", "user.name=ProofKit", "-c", "user.email=proofkit@example.invalid", "commit", "-qm", "fixture"], { cwd: source });
   await new Promise((done) => server.listen(0, "127.0.0.1", done));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
@@ -119,7 +124,7 @@ try {
   }
   assert.equal(JSON.parse(firstUse.stdout).testVerdict, "passed");
   assert.ok(existsSync(join(freshWorkspace, ".proofkit", "config.yaml")));
-  assert.deepEqual(await readdir(source), ["package.json"]);
+  assert.deepEqual((await readdir(source)).sort(), [".git", "package.json"]);
   const inlineWorkspace = join(scratch, "inline-workspace");
   const inlineRun = await actionCommand({
     PROOFKIT_ACTION_WORKSPACE_ROOT: inlineWorkspace,
@@ -164,6 +169,23 @@ try {
   const failedCheck = await command("mission", "check", negative.missionId, ...location);
   assert.equal(failedCheck.code, 1);
   assert.equal(JSON.parse(failedCheck.stdout).testVerdict, "failed");
+
+  await writeFile(sourcePackage, sourceBytes.replace("ci-gate-fixture", "ci-gate-changed"));
+  const staleSource = await command("mission", "check", created.missionId, ...location);
+  assert.equal(staleSource.code, 2, staleSource.stderr || staleSource.stdout);
+  const staleSourceResult = JSON.parse(staleSource.stdout);
+  assert.equal(staleSourceResult.verdict, "passed");
+  assert.equal(staleSourceResult.testVerdict, "inconclusive");
+  assert.equal(staleSourceResult.summary.scope.sourceFreshness, "changed");
+  assert.match(staleSourceResult.testVerdictReason, /changed since this Mission ended/);
+  const actionStaleSource = await actionCommand({ PROOFKIT_ACTION_MISSION_ID: created.missionId,
+    PROOFKIT_ACTION_MODE: "check" }, actionOutput, actionSummary);
+  assert.equal(actionStaleSource.code, 2);
+  assert.equal(JSON.parse(actionStaleSource.stdout).testVerdict, "inconclusive");
+  await writeFile(sourcePackage, sourceBytes);
+  const restoredSource = await command("mission", "check", created.missionId, ...location);
+  assert.equal(restoredSource.code, 0, restoredSource.stderr || restoredSource.stdout);
+  assert.equal(JSON.parse(restoredSource.stdout).summary.scope.sourceFreshness, "matching");
 
   const artifact = initial.evidence.find((item) => item.sha256 && item.path && existsSync(item.path));
   assert.ok(artifact, "Passing Mission did not retain a hashed evidence file");

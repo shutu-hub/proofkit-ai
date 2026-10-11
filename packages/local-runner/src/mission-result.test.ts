@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DeterministicMissionPlanner } from "@proofkit/agent";
 import { FindingSchema, MissionPolicySchema, ObservationSchema, TestCharterSchema, TestMissionSchema, type Observation, type TestMission } from "@proofkit/contracts";
-import { projectMissionResult } from "./mission-result.js";
+import { compareCurrentSource, projectMissionResult } from "./mission-result.js";
 
 const now = "2026-10-10T00:00:00.000Z";
 const options = { workspaceRoot: "/tests", running: false };
@@ -24,6 +24,16 @@ function observed(data: Record<string, unknown> = {}, charterId?: string): Obser
 }
 
 describe("Mission result projection", () => {
+  it("distinguishes a changed checkout from a failed current-source recheck", () => {
+    const final = { method: "git" as const, complete: true, headSha: "a".repeat(40), worktreeSha256: "b".repeat(64),
+      trackedDiffBytes: 0, untrackedFiles: 0, capturedAt: now };
+    expect(compareCurrentSource(final, final)).toBe("matching");
+    expect(compareCurrentSource(final, { ...final, worktreeSha256: "c".repeat(64) })).toBe("changed");
+    expect(compareCurrentSource(final, { method: "unavailable", complete: false, trackedDiffBytes: 0,
+      untrackedFiles: 0, capturedAt: now })).toBe("unavailable");
+    expect(compareCurrentSource(undefined, final)).toBe("unverified");
+  });
+
   it("reports whether complete Git source fingerprints stayed stable during execution", async () => {
     const mission = await fixture();
     const source = (kind: string, digest: string) => ObservationSchema.parse({

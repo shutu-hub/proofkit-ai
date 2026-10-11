@@ -112,6 +112,23 @@ describe("Mission report", () => {
       testVerdictReason: expect.stringContaining("source changed during this Mission") });
   });
 
+  it("keeps a historical failure but withdraws a current defect claim after the checkout changes", async () => {
+    const workspace = await root();
+    const input = result(workspace);
+    input.verdict = "failed";
+    input.scope.sourceStability = "stable";
+    input.scope.sourceFreshness = "changed";
+    const changed = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(changed.result).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("changed since this Mission ended") });
+    expect(await readFile(changed.path, "utf8")).toContain("Saved failure · source changed since execution");
+
+    input.scope.sourceFreshness = "unavailable";
+    const unavailable = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(unavailable.result).toMatchObject({ verdict: "failed", testVerdict: "inconclusive",
+      testVerdictReason: expect.stringContaining("cannot be rechecked now") });
+  });
+
   it("writes escaped static snapshots without changing saved acceptance or original state", async () => {
     const workspace = await root();
     const missionPath = await file(join(workspace, ".proofkit", "missions", "mission-report.json"), "original Mission");

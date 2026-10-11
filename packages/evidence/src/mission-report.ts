@@ -141,6 +141,12 @@ export function auditMissionVerdict(result: MissionResult, integrity: MissionEvi
   if (result.scope.sourceStability === "changed") {
     return { testVerdict: "inconclusive", testVerdictReason: "The tested Git source changed during this Mission; rerun the same scope against a stable checkout before claiming current acceptance or a product defect." };
   }
+  if (result.scope.sourceFreshness === "changed") {
+    return { testVerdict: "inconclusive", testVerdictReason: "The project Git source changed since this Mission ended; rerun the same scope before claiming current acceptance or a product defect." };
+  }
+  if (result.scope.sourceFreshness === "unavailable") {
+    return { testVerdict: "inconclusive", testVerdictReason: "The tested Git source was verifiable when this Mission ended but cannot be rechecked now; restore source access or rerun before claiming current acceptance or a product defect." };
+  }
   const proof = result.proofClassification;
   if (saved === "passed" && result.level !== "quick"
     && (proof?.status !== "explicit" || !proof.requiredBusinessRuns
@@ -207,6 +213,10 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
     && result.testVerdict === "inconclusive" && !businessPassUnverified && !businessFailureUnverified;
   const currentOutcomeLabel = (result.verdict === "passed" || result.verdict === "failed") && result.scope.sourceStability === "changed"
     ? `Saved ${result.verdict === "passed" ? "pass" : "failure"} · source changed during execution`
+    : (result.verdict === "passed" || result.verdict === "failed") && result.scope.sourceFreshness === "changed"
+      ? `Saved ${result.verdict === "passed" ? "pass" : "failure"} · source changed since execution`
+    : (result.verdict === "passed" || result.verdict === "failed") && result.scope.sourceFreshness === "unavailable"
+      ? `Saved ${result.verdict === "passed" ? "pass" : "failure"} · current source unavailable`
     : businessPassUnverified ? "Saved pass · current business proof unverified"
     : businessFailureUnverified ? "Saved failure · current business proof unverified"
       : evidenceUnverified ? `Saved ${result.verdict === "passed" ? "pass" : "failure"} · current evidence unverified` : outcomeLabel(outcome);
@@ -218,6 +228,7 @@ function renderMissionReport(result: MissionResult, links: Map<string, EvidenceL
     ...(executionAudit?.issues ?? []).map((issue) => `Execution slot gap: ${issue}`),
     executionAudit?.omittedIssues ? `${executionAudit.omittedIssues} additional execution slot gaps are omitted from this report.` : undefined,
     result.scope.sourceStability ? `Git source stability during this Mission: ${result.scope.sourceStability}. This fingerprint excludes generated output and does not attest served bytes.` : undefined,
+    result.scope.sourceFreshness ? `Git source at report check: ${result.scope.sourceFreshness}${result.scope.currentSourceState ? ` (captured ${result.scope.currentSourceState.capturedAt})` : ""}. A match does not attest served bytes or backend state.` : undefined,
     proofUnverified ? `Current business proof classification is unverified: ${result.proofClassification!.legacyOracles} saved Oracle result(s) lack a verification kind, ${result.proofClassification!.unavailableRuns} Run(s) could not be read, and ${result.proofClassification!.omittedRuns} Run(s) exceeded the audit bound. Rerun affected scenarios before treating the saved business verdict or finding as current proof.` : undefined,
     result.proofClassification?.requiredBusinessRuns !== undefined ? `Required Run business proof: ${result.proofClassification.requiredRunsWithPassingBusiness ?? 0}/${result.proofClassification.requiredBusinessRuns} primary/replay Run(s) have a classified passing business Oracle.` : undefined,
     result.confirmedProductFindings ? `Confirmed product finding proof: ${result.proofClassification?.findingsLinkedToFailingBusiness ?? 0}/${result.confirmedProductFindings} finding(s) link to a classified failing business Oracle in the same Run.` : undefined,

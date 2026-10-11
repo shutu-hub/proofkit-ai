@@ -1576,6 +1576,9 @@ export const MissionResultSchema = z.object({
     charterCount: z.number().int().nonnegative(),
     /** Compare complete Git fingerprints captured before and after this Mission. */
     sourceStability: z.enum(["stable", "changed", "unverified"]).optional(),
+    /** Compare the final tested Git fingerprint with a fresh read when this result was opened. */
+    sourceFreshness: z.enum(["matching", "changed", "unavailable", "unverified"]).optional(),
+    currentSourceState: SourceStateSchema.optional(),
     suiteId: CatalogIdSchema.optional(),
     uncoveredCharterIds: z.array(CatalogIdSchema),
     workflowInventory: WorkflowInventoryInspectionSchema.optional(),

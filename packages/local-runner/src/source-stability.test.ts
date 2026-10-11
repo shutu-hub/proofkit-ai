@@ -55,4 +55,49 @@ describe("Mission source stability", () => {
     expect(result.summary.executionAudit?.issues).toEqual([]);
     expect(result.testVerdictReason).toContain("source changed during this Mission");
   });
+
+  it("downgrades a saved pass after the tested source changes without rewriting the Mission", async () => {
+    const base = await mkdtemp(join(tmpdir(), "proofkit-source-freshness-"));
+    roots.push(base);
+    const root = join(base, "source");
+    const workspaceRoot = join(base, "workspace");
+    await mkdir(root);
+    await writeFile(join(root, "package.json"), '{"name":"source-freshness-fixture"}');
+    await writeFile(join(root, "app.ts"), "export const ready = true;\n");
+    await execFileAsync("git", ["init", "-q"], { cwd: root });
+    await execFileAsync("git", ["add", "."], { cwd: root });
+    await execFileAsync("git", ["-c", "user.name=ProofKit", "-c", "user.email=proofkit@example.invalid", "commit", "-qm", "fixture"], { cwd: root });
+
+    const charter: TestCharter = { intent: "Check ready", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "observe" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "deny", metadata: {} };
+    const now = new Date().toISOString();
+    const runId = "source-freshness-run";
+    const snapshot = `${runId}/artifacts/assertion-snapshot.json`;
+    const summary: RunSummary = { runId, projectRoot: root, workspaceRoot, execution: { adapter: "web" },
+      startedAt: now, endedAt: now, status: "completed", verdict: "passed",
+      charter, steps: [], assertions: [{ assertion: charter.assertions[0]!, passed: true, message: "Ready is visible", evidence: [snapshot] }],
+      oracles: [], artifacts: [snapshot], findings: [] };
+    const service = new LocalRunnerService({ root, workspaceRoot });
+    service.start = async () => ({ runId, status: "completed", verdict: "passed", summary });
+    service.wait = async () => summary;
+    installMockRunEvidence(service);
+    const mission = await service.createMission({ intent: charter.intent, charter, surface: "web" });
+    await service.startMission(mission.missionId, { approve: true });
+    await service.waitMission(mission.missionId);
+
+    const initial = await service.missionEvidence(mission.missionId);
+    expect(initial).toMatchObject({ verdict: "passed", testVerdict: "passed", sourceStability: "stable",
+      sourceFreshness: "matching", summary: { scope: { sourceFreshness: "matching" } } });
+    const revision = (await service.missionStatus(mission.missionId)).mission.revision;
+
+    await writeFile(join(root, "app.ts"), "export const ready = false;\n");
+    const stale = await service.missionEvidence(mission.missionId);
+    expect(stale).toMatchObject({ verdict: "passed", testVerdict: "inconclusive", sourceStability: "stable",
+      sourceFreshness: "changed", summary: { verdict: "passed", testVerdict: "inconclusive",
+        scope: { sourceFreshness: "changed", currentSourceState: { method: "git", complete: true } } } });
+    expect(stale.testVerdictReason).toContain("changed since this Mission ended");
+    expect(stale.finalSourceState?.worktreeSha256).not.toBe(stale.currentSourceState?.worktreeSha256);
+    expect((await service.missionStatus(mission.missionId)).mission.revision).toBe(revision);
+  });
 });

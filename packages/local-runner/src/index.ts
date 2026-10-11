@@ -21,7 +21,7 @@ import { summarizeSuiteScope, verifySuiteMission, type SuiteScopeSummary } from 
 import { summarizeWorkflowExecution } from "./workflow-coverage.js";
 import { admitReviewedWorkflowScope, auditWorkflowReview } from "./workflow-review-audit.js";
 import { inspectTestScope } from "./test-scope.js";
-import { projectMissionResult } from "./mission-result.js";
+import { compareCurrentSource, projectMissionResult } from "./mission-result.js";
 import type { MissionResult } from "@proofkit/contracts";
 import { ResourceRecoveryService } from "./resource-recovery.js";
 import { captureRunEvidence } from "./run-evidence.js";
@@ -713,8 +713,10 @@ export class LocalRunnerService {
     repairSuggestions: TestMission["repairSuggestions"];
     targetBindings: Array<{ runId: string; surface: string; binding: TargetBinding }>;
     sourceStability: "stable" | "changed" | "unverified";
+    sourceFreshness: "matching" | "changed" | "unavailable" | "unverified";
     sourceState?: SourceState;
     finalSourceState?: SourceState;
+    currentSourceState?: SourceState;
     comparison?: MissionComparison;
     comparisonUnavailable?: string;
     evidenceIntegrity: MissionEvidenceIntegrity;
@@ -766,7 +768,11 @@ export class LocalRunnerService {
       ...mission.repairSuggestions.flatMap((suggestion) => suggestion.evidence),
     ];
     const acceptanceEvidenceIntegrity = await this.missionReports.inspectMissionEvidence(missionReferences, referencedRunIds);
-    let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, workflowReviewAudit, comparison, comparisonUnavailable, proofClassification, executionAudit }), acceptanceEvidenceIntegrity };
+    const currentSourceState = (mission.verdict === "passed" || mission.verdict === "failed")
+      && finalSourceState.success && finalSourceState.data.complete && finalSourceState.data.method === "git"
+      ? await captureSourceState(this.root) : undefined;
+    const sourceFreshness = compareCurrentSource(finalSourceState.success ? finalSourceState.data : undefined, currentSourceState);
+    let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, workflowReviewAudit, comparison, comparisonUnavailable, proofClassification, executionAudit, sourceFreshness, currentSourceState }), acceptanceEvidenceIntegrity };
     let report: string | undefined;
     let reportUnavailable: string | undefined;
     let evidenceIntegrity: MissionEvidenceIntegrity;
@@ -824,8 +830,10 @@ export class LocalRunnerService {
         return binding.success ? [{ runId: observation.data.runId, surface: observation.data.surface, binding: binding.data }] : [];
       }),
       sourceStability: summary.scope.sourceStability ?? "unverified",
+      sourceFreshness,
       ...(sourceState.success ? { sourceState: sourceState.data } : {}),
       ...(finalSourceState.success ? { finalSourceState: finalSourceState.data } : {}),
+      ...(currentSourceState ? { currentSourceState } : {}),
       ...(comparison ? { comparison } : {}),
       ...(comparisonUnavailable ? { comparisonUnavailable } : {}),
       evidenceIntegrity,
