@@ -192,6 +192,16 @@ workspace `policies.sideEffects: allow`), and an adapter declaring file support.
 These policy checks precede connection; fixture reads occur at the file step,
 so preceding actions may already have run.
 
+Trusted connector factories receive `readTestFixtures(references, signal)`,
+bound to the external test workspace and backed by this same bounded reader.
+Its buffers are transient; the helper does not persist them. The AIHR connector
+checks the actual upload and `setInputFiles` references during readiness,
+preflight and post-setup checks. Preflight precedes setup and business
+capabilities. It rejects
+empty resume inputs and emits only scalar counts, status and a file-facts digest.
+Uploads read the bytes again at execution. Readiness is a point-in-time check,
+not a pinned input, format validation or proof of successful resume processing.
+
 Web and Electron share Playwright execution. A file selector must match one
 attached `HTMLInputElement` of type `file`; hidden inputs are supported without
 opening a native dialog. The adapter receives transient bytes, a basename and

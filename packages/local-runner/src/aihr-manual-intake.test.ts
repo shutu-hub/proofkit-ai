@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -233,6 +233,8 @@ describe("AIHR manual candidate intake independent oracle", () => {
   });
 
   it("requires scoped actors for surface submissions without inventing a client item key", async () => {
+    await mkdir(join(service.workspaceRoot, ".proofkit", "fixtures"));
+    await writeFile(join(service.workspaceRoot, ".proofkit", "fixtures", "resume.pdf"), "%PDF synthetic manual input");
     const input = context(); const preflight = service.integration!.preflight!;
     const check = () => preflight({ runId: input.runId, charter: input.charter, environment: "test", signal: new AbortController().signal });
     expect((await check()).passed).toBe(true);

@@ -654,7 +654,7 @@ describe("AIHR project integration", () => {
     const sourceFixture = join(root, "source-resume.pdf");
     await writeFile(sourceFixture, fixtureBytes);
     await expect(upload.execute({ fixturePath: sourceFixture, sourceChannel: "boss", clientItemKey: "proofkit:fixture:outside-workspace" }, context))
-      .rejects.toThrow("fixturePath must stay within the test workspace");
+      .rejects.toThrow("Invalid fixture reference");
 
     const observed = await wait.execute({ runId: "900", fileId: "901", jobId: "505", maxWaitMs: 1_000, pollIntervalMs: 250 }, context);
     expect(observed).toMatchObject({

@@ -21,7 +21,27 @@ The project integration is loaded from `<workspaceRoot>/.proofkit/integration.mj
 
 The ProofKit repository and installable tarball include a reference AIHR integration at `.proofkit/integration.mjs`, with sibling `.proofkit/aihr-manual-intake.mjs` and `.proofkit/aihr-desktop-acquisition.mjs`. Run `proofkit template install aihr --root <AIHR-source> --workspace <external-test-workspace>` to export all three modules and the example Charters. The entry module imports both siblings even when their Oracles are not selected. No ProofKit file is needed in the AIHR repository. The connector calls only gateway endpoints and keeps the domain-specific allowlist in the workspace-owned module. The current capabilities are:
 
-The reference connector reads gateway JSON through an 8 MiB byte limit, including chunked responses. It rejects an oversized or malformed response without storing its body or business error message in Run evidence. A gateway reader failure is therefore an execution/reader gap, not proof that the resume workflow produced a wrong business result. The connector version is `0.2.2`; copy the updated entry module and its sibling modules when using an existing external workspace.
+The reference connector reads gateway JSON through an 8 MiB byte limit, including chunked responses. It rejects an oversized or malformed response without storing its body or business error message in Run evidence. A gateway reader failure is therefore an execution/reader gap, not proof that the resume workflow produced a wrong business result. The connector version is `0.2.5`; copy the updated entry module and its sibling modules when using an existing external workspace. This version requires a runtime that injects `readTestFixtures`.
+
+Resume uploads now use only portable `.proofkit/fixtures/<file>` references in
+the external test workspace, matching UI file selection. Existing absolute
+paths and files elsewhere in the workspace must be migrated to that directory.
+Readiness, preflight and post-setup checks inspect each action's actual literal
+or resolved environment reference; an unrelated `AIHR_PROOFKIT_FIXTURE_PATH`
+does not satisfy the check. A literal reference needs no global path variable.
+The shared reader permits 1–10 files and at most 20 MiB total per action,
+rejects redirected or escaping paths and checks file identity while reading.
+The connector additionally rejects empty resume files. Missing references,
+empty inputs and unavailable files return `fixture-path-missing`,
+`fixture-empty` and `fixture-unavailable` respectively, with fixed guidance
+that excludes file contents and operating-system errors.
+
+Evidence includes `fixtureActionCount`, `fixtureCheckedCount`,
+`fixtureReadiness` and, when a file was checked, `fixtureFactsSha256`.
+`readable` describes those bytes at inspection time; it does not validate PDF
+format or certify parsing, candidate identity or business acceptance. Upload
+execution reads again before HTTP. A later change is therefore rechecked,
+but readiness does not pin the earlier file identity across phases.
 
 | Capability | Side effect | Evidence returned |
 | --- | --- | --- |

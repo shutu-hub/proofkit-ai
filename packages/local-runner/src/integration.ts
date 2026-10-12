@@ -3,8 +3,8 @@ import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { IntegrationSetupPolicySchema, type ProofkitConfig, type TargetBinding } from "@proofkit/contracts";
 import { inspectTargetBinding, resolveWithinWorkspace } from "@proofkit/project";
-import { z } from "@proofkit/runner";
-import type { ProjectIntegration } from "@proofkit/runner";
+import { resolveInputFiles, z } from "@proofkit/runner";
+import type { ProjectIntegration, ResolvedInputFile } from "@proofkit/runner";
 
 const DEFAULT_INTEGRATION_PATH = ".proofkit/integration.mjs";
 
@@ -17,6 +17,8 @@ export type ProjectIntegrationFactoryContext = {
   z: typeof z;
   /** Read-only listener/source association for an endpoint used by this trusted integration. */
   inspectEndpointBinding: (targetUrl: string, signal?: AbortSignal) => Promise<TargetBinding>;
+  /** Transient, bounded fixture bytes using the same workspace rules as surface file selection. */
+  readTestFixtures: (references: readonly string[], signal?: AbortSignal) => Promise<ResolvedInputFile[]>;
 };
 
 export async function loadProjectIntegration(
@@ -41,7 +43,8 @@ export async function loadProjectIntegration(
   };
   const candidate = loaded.createIntegration
     ? await loaded.createIntegration({ root: workspace, projectRoot, workspaceRoot: workspace, config, z,
-      inspectEndpointBinding: (targetUrl, signal) => inspectTargetBinding(projectRoot, targetUrl, signal) })
+      inspectEndpointBinding: (targetUrl, signal) => inspectTargetBinding(projectRoot, targetUrl, signal),
+      readTestFixtures: (references, signal) => resolveInputFiles(workspace, references, signal ?? new AbortController().signal) })
     : loaded.default ?? loaded.integration;
   return validateIntegration(candidate, path);
 }

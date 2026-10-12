@@ -7,7 +7,7 @@ export { IntegrationLifecycle } from "./integration-lifecycle.js";
 export type { IntegrationRecoveryContext } from "./integration-lifecycle.js";
 export type { IntegrationSetup, IntegrationSetupEntry, IntegrationSetupHandle, IntegrationSetupContext, IntegrationCleanupContext } from "./integration-lifecycle.js";
 export type { SurfaceActionContext, ResolvedInputFile, InputFileFact } from "./input-files.js";
-export { sameInputFileFacts } from "./input-files.js";
+export { resolveInputFiles, sameInputFileFacts } from "./input-files.js";
 
 // Project integrations receive this schema runtime through the loader. This
 // avoids forcing every project that adds `.proofkit/integration.mjs` to add a

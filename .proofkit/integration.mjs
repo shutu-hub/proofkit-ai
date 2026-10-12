@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { readFile, realpath, stat } from "node:fs/promises";
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { createManualCandidateIntakeOracle } from "./aihr-manual-intake.mjs";
 import { createDesktopResumeAcquisitionOracle } from "./aihr-desktop-acquisition.mjs";
 let z;
@@ -15,10 +13,11 @@ const MAX_GATEWAY_RESPONSE_BYTES = 8 * 1024 * 1024;
  * service endpoints. This keeps the integration useful for a user checkout
  * and makes every observation reproduce the same path as the desktop app.
  */
-export function createIntegration({ z: injectedZ, workspaceRoot, config, inspectEndpointBinding }) {
+export function createIntegration({ z: injectedZ, config, inspectEndpointBinding, readTestFixtures }) {
   // Keep the module dependency-free for external test workspaces. The runner injects the
   // schema runtime when loading this factory.
   z = injectedZ;
+  if (typeof readTestFixtures !== "function") throw new Error("AIHR connector requires a ProofKit runtime with readTestFixtures support");
   const state = new Map();
   const billingRead = readBillingUsageCapability(state);
   const desktopAcquisition = createDesktopResumeAcquisitionOracle({ z, resolveEnv, positiveString, getOrNull, aihrFetch,
@@ -26,7 +25,7 @@ export function createIntegration({ z: injectedZ, workspaceRoot, config, inspect
   const targetBindingPolicy = config?.policies?.targetBinding ?? "block-different";
   const gatewayCheck = async (input, phase) => {
     const { result, gatewayBinding, gatewayBaseUrl } = await aihrPreflight(input, desktopAcquisition, inspectEndpointBinding,
-      targetBindingPolicy, phase);
+      targetBindingPolicy, phase, readTestFixtures);
     if (phase === "after setup" && state.has(input.runId)) {
       Object.assign(state.get(input.runId), { gatewayBinding: gatewayBinding ?? null, gatewayBaseUrl });
     }
@@ -35,10 +34,10 @@ export function createIntegration({ z: injectedZ, workspaceRoot, config, inspect
 
   return {
     name: "aihr-resume-workflows",
-    version: "0.2.4",
+    version: "0.2.5",
     capabilities: [
       createResumeRunCapability(state),
-      createResumeFileUploadCapability(state, workspaceRoot),
+      createResumeFileUploadCapability(state, readTestFixtures),
       waitResumeCollectionPipelineCapability(state),
       createOnlineResumeIntakeCapability(state),
       waitOnlineResumePipelineCapability(state),
@@ -61,7 +60,7 @@ export function createIntegration({ z: injectedZ, workspaceRoot, config, inspect
   };
 }
 
-async function aihrPreflight({ charter, environment, signal }, desktopAcquisition, inspectEndpointBinding, targetBindingPolicy, phase) {
+async function aihrPreflight({ charter, environment, signal }, desktopAcquisition, inspectEndpointBinding, targetBindingPolicy, phase, readTestFixtures) {
   const { actionNames, oracleNames, manualIntake, interactiveSurfaceActions, usesAihrBusinessContract } = aihrBusinessUsage(charter);
   if (!usesAihrBusinessContract && charter.level === "quick" && charter.sideEffectPolicy === "deny") {
     return { gatewayBinding: undefined, gatewayBaseUrl: undefined, result: {
@@ -145,8 +144,35 @@ async function aihrPreflight({ charter, environment, signal }, desktopAcquisitio
     uploadKeyChecks.push(valid);
     if (scopeValid && !valid) fail("upload-key-invalid", `aihr.uploadResumeFile action ${index + 1} clientItemKey must be namespaced by AIHR_PROOFKIT_TEST_SCOPE with a nonempty suffix`);
   }
-  if (actionNames.includes("aihr.uploadResumeFile") && !env("AIHR_PROOFKIT_FIXTURE_PATH")) {
-    fail("fixture-path-missing", "AIHR_PROOFKIT_FIXTURE_PATH is required for resume uploads");
+  // Inspect the actual selected inputs, not an unrelated global path variable.
+  // This happens before setup or a collection Run write. Bytes never enter the result.
+  let fixtureActionCount = 0;
+  let fixtureCheckedCount = 0;
+  const fixtureChecks = [];
+  for (const [index, action] of charter.actions.entries()) {
+    const upload = action.kind === "capability" && action.name === "aihr.uploadResumeFile";
+    if (!upload && action.kind !== "setInputFiles") continue;
+    fixtureActionCount += 1;
+    let references;
+    try {
+      references = upload ? [resolveEnv(action.input?.fixturePath)] : action.files;
+      if (!Array.isArray(references) || references.some((value) => typeof value !== "string" || !value.trim())) throw new Error("missing reference");
+    } catch {
+      fail("fixture-path-missing", `Action ${index + 1}: configure the selected fixture reference; use .proofkit/fixtures/<file> inside the external test workspace`);
+      continue;
+    }
+    try {
+      const files = await readTestFixtures(references, signal);
+      if (files.some((file) => file.sizeBytes === 0)) {
+        fail("fixture-empty", `Action ${index + 1}: prepare a nonempty synthetic resume fixture in the external test workspace`);
+        continue;
+      }
+      fixtureCheckedCount += files.length;
+      fixtureChecks.push({ actionIndex: index, files: files.map(({ buffer: _bytes, ...fact }) => fact) });
+    } catch {
+      signal?.throwIfAborted();
+      fail("fixture-unavailable", `Action ${index + 1}: fixture must be readable, stable and inside .proofkit/fixtures; select at most 20 MiB per action and inspect the external test workspace`);
+    }
   }
   return { gatewayBinding, gatewayBaseUrl: baseUrl, result: {
     passed: errors.length === 0,
@@ -168,6 +194,11 @@ async function aihrPreflight({ charter, environment, signal }, desktopAcquisitio
       credentialConfigured,
       actorConfigured,
       clientItemKeyNamespaced: Boolean(scopeValid && uploadKeyChecks.length > 0 && uploadKeyChecks.every(Boolean)),
+      fixtureActionCount,
+      fixtureCheckedCount,
+      fixtureReadiness: fixtureActionCount === 0 ? "not-required"
+        : fixtureChecks.length === fixtureActionCount ? "readable" : "blocked",
+      ...(fixtureChecks.length ? { fixtureFactsSha256: createHash("sha256").update(JSON.stringify(fixtureChecks)).digest("hex") } : {}),
       gatewayBindingStatus: gatewayBinding?.status ?? "not-inspected",
       ...(gatewayBinding ? {
         gatewayBindingMethod: gatewayBinding.method,
@@ -291,7 +322,7 @@ function createResumeRunCapability(state) {
   };
 }
 
-function createResumeFileUploadCapability(state, workspaceRoot) {
+function createResumeFileUploadCapability(state, readTestFixtures) {
   return {
     name: "aihr.uploadResumeFile",
     description: "Upload a PDF resume through the same gateway multipart contract used by the AIHR desktop flow.",
@@ -333,7 +364,7 @@ function createResumeFileUploadCapability(state, workspaceRoot) {
       if (!scopedClientItemKey(input.clientItemKey, scope)) {
         throw new Error("aihr.uploadResumeFile clientItemKey must be namespaced by AIHR_PROOFKIT_TEST_SCOPE with a nonempty suffix");
       }
-      const fixture = await readFixture(workspaceRoot, input.fixturePath);
+      const fixture = await readFixture(readTestFixtures, input.fixturePath, signal);
       const form = new FormData();
       form.append("file", new Blob([fixture.bytes], { type: fixture.contentType }), input.originalFilename ?? fixture.filename);
       const collectionRunId = input.runId ?? state.get(runId)?.collectionRunId;
@@ -764,22 +795,10 @@ async function getOrNull(path, signal) {
   try { return await aihrFetch(path, { signal }); } catch (error) { if (isNotFound(error)) return null; throw error; }
 }
 
-async function readFixture(workspaceRoot, fixturePath) {
-  const requested = String(fixturePath);
-  const path = isAbsolute(requested) ? resolve(requested) : resolve(workspaceRoot, requested);
-  const rel = relative(resolve(workspaceRoot), path);
-  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error("AIHR fixturePath must stay within the test workspace");
-  const realRoot = await realpath(workspaceRoot);
-  const realPath = await realpath(path);
-  const realRel = relative(realRoot, realPath);
-  if (realRel === ".." || realRel.startsWith(`..${sep}`) || isAbsolute(realRel)) throw new Error("AIHR fixturePath must stay within the test workspace");
-  const info = await stat(realPath);
-  if (!info.isFile()) throw new Error("AIHR fixturePath must point to a file");
-  const bytes = await readFile(realPath);
-  if (bytes.length === 0) throw new Error("AIHR resume fixture is empty");
-  const filename = basename(path);
-  const contentType = filename.toLowerCase().endsWith(".pdf") ? "application/pdf" : "application/octet-stream";
-  return { bytes, filename, contentType, sha256: createHash("sha256").update(bytes).digest("hex") };
+async function readFixture(readTestFixtures, fixturePath, signal) {
+  const [file] = await readTestFixtures([fixturePath], signal);
+  if (!file.sizeBytes) throw new Error("AIHR resume fixture is empty");
+  return { bytes: file.buffer, filename: file.name, contentType: file.mimeType, sha256: file.sha256 };
 }
 
 function waitOnlineResumePipelineCapability(state) {

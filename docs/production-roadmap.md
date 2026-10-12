@@ -24,6 +24,18 @@ ProofKit is not a replacement for Playwright, Maestro, Appium or a browser agent
 
 **Goal:** make a failed or interrupted run safe to repeat and easy to integrate into a real repository.
 
+**Selected fixture readiness (2026-10-12):** the AIHR connector now checks each
+declared upload and UI file selection through the kernel's bounded fixture
+reader before setup or business resource creation. It rechecks upload bytes
+before HTTP and emits scalar counts, readiness and a digest without file
+contents. The Local Runner's 529 tests were covered by the package regression
+run and targeted reruns after fixture corrections; the 14 shared-reader tests,
+template installation test, build/typecheck and isolated distribution smoke
+also passed. The new 14-case regression covers missing, empty, oversized,
+redirected and out-of-directory inputs, cancellation and changed upload bytes.
+This proves local boundary behavior with synthetic fixtures; live AIHR resume
+processing and business acceptance remain open.
+
 - Load a project-owned `.proofkit/integration.mjs` module.
 - Merge typed capabilities, business oracles and setup/cleanup into the same Runner lifecycle.
 - Enforce a total run deadline and external cancellation.
