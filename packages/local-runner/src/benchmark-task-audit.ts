@@ -114,14 +114,16 @@ export async function auditPersistedBenchmarkTask(options: {
       if (benchmarkHash(runBytes) !== end.runSha256) issue(`${runId}:saved-run-changed`);
       const run = RunSummarySchema.parse(parseJson(runBytes));
       if (run.runId !== runId || run.status !== "completed" || run.execution?.adapter !== "web"
-        || run.projectRoot !== options.projectRoot || run.workspaceRoot !== options.workspaceRoot
+        || !run.projectRoot || !run.workspaceRoot
+        || !sameCanonicalPath(run.projectRoot, projectRoot) || !sameCanonicalPath(run.workspaceRoot, workspaceRoot)
         || run.verdict !== end.verdict || benchmarkHash(Buffer.from(JSON.stringify(run.charter))) !== end.charterSha256) {
         issue(`${runId}:saved-run-context-mismatch`);
       }
       if (start.binding === undefined) {
         if (start.runKind !== "standalone") issue(`${runId}:standalone-kind-mismatch`);
       } else {
-        await auditMissionBinding(start.binding, start.runKind, run, runId, options, evidenceDir, missions, issue);
+        await auditMissionBinding(start.binding, start.runKind, run, runId,
+          { projectRoot, workspaceRoot }, evidenceDir, missions, issue);
       }
     } catch { issue(`${runId}:run-artifact-unavailable`); }
   }
@@ -136,6 +138,11 @@ export async function auditPersistedBenchmarkTask(options: {
     }
   }
   return result(runIds);
+}
+
+function sameCanonicalPath(left: string, right: string): boolean {
+  const normalize = (path: string): string => process.platform === "win32" ? path.toLowerCase() : path;
+  return normalize(canonicalFuturePath(left)) === normalize(right);
 }
 
 async function auditMissionBinding(binding: unknown, runKind: unknown, run: RunSummary, runId: string,

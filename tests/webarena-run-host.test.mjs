@@ -26,7 +26,7 @@ async function fixture() {
   await writeFile(operatorPath, JSON.stringify({ root: project, workspaceRoot: workspace,
     captureDirectory: capture, taskId: 157, publicInputPath: join(batch, "agent-input", "tasks.json"),
     publicInputSha256: hash(tasks), browser: { startUrl: "http://127.0.0.1:7780/admin" } }));
-  await writeFile(cli, 'if (process.argv.includes("mcp")) process.stdout.write("[]"); else process.stdout.write(JSON.stringify({type:"turn.completed"})+"\\n");\n');
+  await writeFile(cli, 'if (process.argv.includes("--no-daemon")) process.exit(2); else if (process.argv.includes("mcp")) process.stdout.write("[]"); else process.stdout.write(JSON.stringify({type:"turn.completed"})+"\\n");\n');
   return { root, batch, project, workspace, capture, operatorPath, output, cli };
 }
 
@@ -36,12 +36,26 @@ test("a completed host process without a captured task cannot become a benchmark
     const result = await runWebArenaHost({ sessionPath: f.operatorPath, batchPath: f.batch,
       output: f.output, host: "codex", cliPath: f.cli, timeoutMs: 10_000 });
     assert.equal(result.status, "incomplete");
+    assert.equal(result.execution.code, 0);
     assert.equal(result.officialScore, "not-run");
     assert.equal(result.audit?.status, "incomplete");
     assert.deepEqual(await readdir(f.project), []);
     await assert.rejects(readdir(f.capture), { code: "ENOENT" });
     await assert.rejects(readdir(join(f.output, "submissions")), { code: "ENOENT" });
     assert.equal(JSON.parse(await readFile(join(f.output, "host-run.json"), "utf8")).status, "incomplete");
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("a CLI that exits before emitting events is an infrastructure blocker", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(f.cli, 'if (process.argv.includes("mcp")) process.stdout.write("[]"); else process.exit(2);\n');
+    const result = await runWebArenaHost({ sessionPath: f.operatorPath, batchPath: f.batch,
+      output: f.output, host: "codex", cliPath: f.cli, timeoutMs: 10_000 });
+    assert.equal(result.status, "infrastructure-blocked");
+    assert.equal(result.execution.blocker, "host-cli-startup");
+    assert.equal(result.execution.milestones.firstToolCallAtMs, null);
+    assert.equal(result.officialScore, "not-run");
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 

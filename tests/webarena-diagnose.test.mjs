@@ -24,11 +24,14 @@ test("merges every planned task with the host attempt and keeps root causes unco
   assert.deepEqual(report.classificationCounts, { "host-timeout": 1, passed: 2, "task-outcome-failed": 1 });
   assert.deepEqual(report.capabilityGroups, {
     mutate: { planned: 1, officialEvaluated: 1, officialSuccess: 0, hostTimeout: 0, outcomeFailed: 1,
-      answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 0, traceVerified: 1 },
+      answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 0,
+      missionVerified: 0, surfaceOnly: 0, traceVerified: 1 },
     navigate: { planned: 1, officialEvaluated: 1, officialSuccess: 1, hostTimeout: 0, outcomeFailed: 0,
-      answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 3, traceVerified: 1 },
+      answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 3,
+      missionVerified: 0, surfaceOnly: 0, traceVerified: 1 },
     retrieve: { planned: 2, officialEvaluated: 1, officialSuccess: 1, hostTimeout: 1, outcomeFailed: 0,
-      answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 5, traceVerified: 2 },
+      answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 5,
+      missionVerified: 0, surfaceOnly: 0, traceVerified: 2 },
   });
   assert.equal(report.cases[3].taskGroup, "mutate");
   assert.equal(report.cases[0].classification.stage, "agent-loop");

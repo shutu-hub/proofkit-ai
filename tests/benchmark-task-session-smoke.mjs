@@ -126,6 +126,11 @@ try {
   assert.equal(result.taskTrajectory, "persistent-task-context");
   const originalOfflineAudit = await auditSaved();
   assert.equal(originalOfflineAudit.status, "consistent", JSON.stringify(originalOfflineAudit));
+  const forwardSlash = (path) => path.replaceAll("\\", "/");
+  const mixedSeparatorAudit = await auditPersistedBenchmarkTask({ directory: forwardSlash(captures),
+    projectRoot: forwardSlash(source), workspaceRoot: forwardSlash(workspace),
+    taskId: 44, publicInputSha256: hash(publicBytes) });
+  assert.equal(mixedSeparatorAudit.status, "consistent", JSON.stringify(mixedSeparatorAudit));
   const hostEventsPath = join(output, "scripted-host-events.jsonl");
   await writeFile(hostEventsPath, [...hostEvents, { type: "turn.completed" }].map((event) => JSON.stringify(event)).join("\n") + "\n");
   const hostAudit = () => auditWebArenaHostTrace({ operatorPath, eventsPath: hostEventsPath,

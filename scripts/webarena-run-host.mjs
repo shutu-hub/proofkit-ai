@@ -146,7 +146,7 @@ async function codexArgs(prefix, sessionPath, agentDir, workspaceRoot, prompt) {
     `mcp_servers.${SERVER}.args=${toml([MCP_SCRIPT, "--session", sessionPath])}`,
     `mcp_servers.${SERVER}.required=true`, `mcp_servers.${SERVER}.tool_timeout_sec=60`,
     `mcp_servers.${SERVER}.default_tools_approval_mode="approve"`];
-  return [...prefix, "--no-daemon", "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "workspace-write",
+  return [...prefix, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "workspace-write",
     "--cd", agentDir, "--add-dir", workspaceRoot,
     "--output-last-message", join(agentDir, "last-message.txt"), "-c", 'approval_policy="never"',
     ...overrides.flatMap((value) => ["-c", value]), prompt];

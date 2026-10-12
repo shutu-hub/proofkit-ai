@@ -44,7 +44,7 @@
     "benchmark:webarena:run-host": "node scripts/webarena-run-host.mjs",
     "benchmark:webarena:batch": "node scripts/webarena-batch-run.mjs",
     "benchmark:webarena:diagnose": "node scripts/webarena-diagnose.mjs",
-    "test:webarena": "node --test tests/webarena-benchmark.test.mjs tests/webarena-environment.test.mjs tests/webarena-official.test.mjs tests/webarena-run-host.test.mjs tests/webarena-batch-run.test.mjs tests/webarena-diagnose.test.mjs",
+    "test:webarena": "node --test tests/webarena-benchmark.test.mjs tests/webarena-environment.test.mjs tests/webarena-official.test.mjs tests/webarena-run-host.test.mjs tests/webarena-host-audit.test.mjs tests/webarena-batch-run.test.mjs tests/webarena-diagnose.test.mjs",
     "test:smoke:benchmark-har": "pnpm build && node tests/benchmark-har-smoke.mjs",
     "test:smoke:benchmark-mission": "pnpm build && node tests/benchmark-mission-smoke.mjs",
     "test:smoke:benchmark-task": "pnpm build && node tests/benchmark-task-session-smoke.mjs",

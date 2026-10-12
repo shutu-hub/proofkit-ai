@@ -157,5 +157,7 @@ export async function runHost(executable, args, cwd, timeoutMs, eventsPath) {
   });
   const transcript = await readFile(eventsPath, "utf8");
   return { ...execution, milestones, transcript, blocker: classifyHostBlocker(transcript) ??
-    (execution.stopReason === "provider-balance" || execution.stopReason === "provider-access" ? execution.stopReason : null) };
+    (execution.stopReason === "provider-balance" || execution.stopReason === "provider-access" ? execution.stopReason : null) ??
+    (!execution.timedOut && !execution.stopReason && Number.isInteger(execution.code)
+      && execution.code !== 0 && !transcript.trim() ? "host-cli-startup" : null) };
 }

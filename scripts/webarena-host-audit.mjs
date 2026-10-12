@@ -9,6 +9,16 @@ const MAX_EVENTS = 16 * 1024 * 1024;
 const MAX_RECORD = 1024 * 1024;
 const EXECUTION_TOOLS = new Set(["run_test", "start_mission"]);
 
+/** Standalone surface runs remain valid task attempts only when the host trace names each saved Run. */
+export function standaloneRunTraceIssues(runIds, successfulCalls) {
+  const observed = new Set(successfulCalls.flatMap((call) => {
+    if (call.tool === "inspect_surface" && typeof call.result?.inspectionId === "string") return [call.result.inspectionId];
+    if (call.tool === "interact_surface" && typeof call.result?.interactionId === "string") return [call.result.interactionId];
+    return [];
+  }));
+  return runIds.filter((runId) => !observed.has(runId)).map((runId) => `${runId}:host-standalone-run-not-observed`);
+}
+
 /** Associate a completed host CLI trace with saved task evidence; this is not agent authentication. */
 export async function auditWebArenaHostTrace({ operatorPath, eventsPath, host, serverName }) {
   if (![operatorPath, eventsPath].every((path) => typeof path === "string" && isAbsolute(path))
@@ -38,13 +48,17 @@ export async function auditWebArenaHostTrace({ operatorPath, eventsPath, host, s
       || !isDeepStrictEqual(submitted.result?.runIds, task.runIds)) issue("host-submission-result-mismatch");
   }
   const missionIds = new Set();
+  const standaloneRunIds = [];
   for (const runId of taskAudit.runIds) {
     let started;
     try { started = json(await bounded(join(operator.captureDirectory, `${runId}.started.json`), MAX_RECORD)); }
     catch { issue("host-run-binding-unavailable"); continue; }
     if (typeof started.binding?.missionId === "string") missionIds.add(started.binding.missionId);
+    else if (started.binding === undefined) standaloneRunIds.push(runId);
+    else issue(`${runId}:host-run-binding-invalid`);
   }
-  if (missionIds.size === 0) issue("host-mission-binding-missing");
+  if (missionIds.size === 0 && standaloneRunIds.length === 0) issue("host-surface-execution-not-observed");
+  for (const problem of standaloneRunTraceIssues(standaloneRunIds, successful)) issue(problem);
   for (const missionId of missionIds) {
     const executed = successful.some((call) => EXECUTION_TOOLS.has(call.tool)
       && (call.result?.missionId === missionId || call.result?.mission?.missionId === missionId));
@@ -57,6 +71,7 @@ export async function auditWebArenaHostTrace({ operatorPath, eventsPath, host, s
   return { status: issues.length ? "incomplete" : "associated", taskId: taskAudit.taskId,
     runIds: taskAudit.runIds, missionIds: [...missionIds], issues,
     taskEvidence: taskAudit.status, hostExecution: issues.length ? "not-verified" : "trace-associated",
+    testStandard: missionIds.size ? "mission-verified" : "surface-only",
     host, serverName, completedToolCalls: successful.length,
     hostEventsSha256: createHash("sha256").update(events).digest("hex"),
     officialScore: "not-run", proofkitEffectiveness: "not-measured" };

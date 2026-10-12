@@ -80,6 +80,7 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
         timedOut: host.execution?.timedOut ?? false, blocker: host.execution?.blocker ?? null,
         toolCalls: host.toolStats?.completed ?? null, failedToolCalls: host.toolStats?.failed ?? null,
         inputRejections: host.toolStats?.inputRejections ?? null,
+        testStandard: host.audit?.testStandard ?? null,
         toolStatsIntegrity: host.toolStatsIntegrity ?? "unavailable" } : null,
       classification,
     };
@@ -98,6 +99,8 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
         answerCheckFailed: items.filter((item) => ["failure", "partial_match"].includes(item.official.checks?.answer)).length,
         networkCheckFailed: items.filter((item) => (item.official.checks?.network.failed ?? 0) > 0).length,
         missingNetworkEvent: items.filter((item) => item.official.checks?.missingNetworkEvent).length,
+        missionVerified: items.filter((item) => item.host?.testStandard === "mission-verified").length,
+        surfaceOnly: items.filter((item) => item.host?.testStandard === "surface-only").length,
         inputRejections: items.reduce((sum, item) => sum + (item.host?.inputRejections ?? 0), 0),
         traceVerified: items.filter((item) => item.host?.toolStatsIntegrity === "verified").length }];
     }));
@@ -170,9 +173,9 @@ export function renderDiagnosis(report) {
     `<tr><td>${escape(group)}</td><td>${value.officialEvaluated ? `${value.officialSuccess}/${value.planned}` : "未评分"}</td>`
     + `<td>${value.officialEvaluated}/${value.planned}</td>`
     + `<td>${value.hostTimeout}</td><td>${value.outcomeFailed}</td><td>${value.answerCheckFailed}</td><td>${value.networkCheckFailed}</td>`
-    + `<td>${value.inputRejections}</td><td>${value.traceVerified}/${value.planned}</td></tr>`).join("\n");
+    + `<td>${value.inputRejections}</td><td>${value.missionVerified}/${value.surfaceOnly}</td><td>${value.traceVerified}/${value.planned}</td></tr>`).join("\n");
   const rows = report.cases.map((item) => `<tr><td>${item.taskId}</td><td>${escape(item.official.status)}</td>`
-    + `<td>${escape(item.host?.status ?? "missing")}</td><td>${escape(item.classification.code)}</td>`
+    + `<td>${escape(item.host?.status ?? "missing")}</td><td>${escape(item.host?.testStandard ?? "—")}</td><td>${escape(item.classification.code)}</td>`
     + `<td>${escape(item.official.checks?.answer ?? "—")}</td><td>${item.official.checks ? `${item.official.checks.network.passed}/${item.official.checks.network.failed}/${item.official.checks.network.errors}` : "—"}</td>`
     + `<td>${item.host?.failedToolCalls ?? "—"}/${item.host?.toolCalls ?? "—"}</td>`
     + `<td>${escape(item.classification.nextCheck)}</td></tr>`).join("\n");
@@ -185,9 +188,9 @@ export function renderDiagnosis(report) {
     + `<p class="muted">官方子评判可用 ${report.officialDetailCoverage.available}/${report.officialDetailCoverage.evaluated}；仅保留状态，不复制答案和请求内容。</p>`
     + `<p class="muted">${report.friction.inputRejections} 次工具入参拒绝；失败类别表示观察到的阶段，根因须复核证据并重复运行。</p>`
     + `<h2>任务能力组</h2><p class="muted">按预先固定的任务意图分组；低分是调查线索，不等于已确认的框架根因。</p>`
-    + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>已评判/计划</th><th>宿主超时</th><th>结果失败</th><th>回答判分失败</th><th>网络判分失败</th><th>入参拒绝</th><th>已核验轨迹</th></tr></thead>`
+    + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>已评判/计划</th><th>宿主超时</th><th>结果失败</th><th>回答判分失败</th><th>网络判分失败</th><th>入参拒绝</th><th>Mission/仅表面</th><th>已核验轨迹</th></tr></thead>`
     + `<tbody>${groups}</tbody></table><h2>逐题诊断</h2>`
-    + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>观察类别</th><th>回答判分</th><th>网络通过/失败/错误</th><th>工具失败/总数</th><th>下一步核查</th></tr></thead>`
+    + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>测试标准</th><th>观察类别</th><th>回答判分</th><th>网络通过/失败/错误</th><th>工具失败/总数</th><th>下一步核查</th></tr></thead>`
     + `<tbody>${rows}</tbody></table></html>`;
 }
 
