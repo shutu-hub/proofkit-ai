@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { benchmarkProfile, publicTask, renderScorecard, scorecard, selectTasks, sha256, upstreamCommit } from "./webarena-benchmark-lib.mjs";
+import { auditProfileTasks, benchmarkProfile, publicTask, renderScorecard, scorecard, selectTasks, sha256, upstreamCommit } from "./webarena-benchmark-lib.mjs";
 import { probePilotEnvironment } from "./webarena-environment.mjs";
 
 const execute = promisify(execFile);
@@ -77,6 +77,7 @@ try {
     if (environment.status !== "reachable") process.exitCode = 1;
   } else if (command === "prepare") {
     const tasks = selectTasks(dataset, profile.taskIds);
+    const taskDesignAudit = auditProfileTasks(dataset, options.get("--profile") ?? "pilot-12");
     const actor = join(output, "agent-input");
     await mkdir(actor);
     await save(join(actor, "tasks.json"), tasks.map(publicTask));
@@ -97,6 +98,7 @@ try {
     }
     catch (error) { docker = { status: "blocked", reason: error.code === "ENOENT" ? "docker-not-installed" : "docker-daemon-unavailable" }; }
     const report = { schemaVersion: 1, benchmark: profile.benchmark, provenance, runtime: probe.runtime,
+      taskDesignAudit,
       taskIds: profile.taskIds, publicInputSha256: sha256(await readFile(join(actor, "tasks.json"))),
       environment: { docker, liveExecution: "not-started", reset: "not-verified" },
       summary: scorecard("prepared-batch", tasks.length, tasks.map((task) => ({ taskId: task.task_id, status: "not-run" }))),

@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "aihr-resume-core-candidates-v0.1",
+  "status": "source-derived-candidates-not-scored",
+  "source": {
+    "repository": "AIHR-Microservices",
+    "head": "dc781c3763933d3062d4b3bd33491e38c2a82a44",
+    "scopeSnapshotSha256": "cb0fba0292bb1f21b8c6e39d521d50543a95add1831892158c45d1fefdcc0efd",
+    "worktreeAtScopeSnapshot": "920496683a496e0add10ceb76a3010b18f84dbf59c28b58a361a926a2226b7c1"
+  },
+  "promotionRequirements": [
+    "isolated-rebuildable-aihr-deployment",
+    "synthetic-tenant-job-and-resume-fixtures",
+    "reviewed-expected-business-outcome",
+    "independent-gateway-or-ledger-oracle",
+    "bounded-cleanup-and-side-effect-policy",
+    "three-repeat-stability-check"
+  ],
+  "cases": [
+    {
+      "id": "W01", "surface": "web", "scenario": "简历页可见，配置缺失时给出明确提示",
+      "sourceAnchors": ["apps/micro-resume-collection/src/components/BossResumeCollection.vue"],
+      "oracle": "页面状态与当前测试配置一致；无新增 collection run", "fixture": "isolated-test-account",
+      "readiness": "charter-needs-review"
+    },
+    {
+      "id": "E01", "surface": "electron", "scenario": "立即运行创建本次 collection run",
+      "sourceAnchors": ["apps/micro-resume-collection/src/components/BossResumeCollection.vue", "apps/desktop-shell/electron/preload.cts", "apps/desktop-shell/src/resume-channel-backend-bridge.ts"],
+      "oracle": "CDP 页面请求或隔离运行前后差集关联唯一新 run ID；网关独立读取同一 ID", "fixture": "isolated-desktop-account",
+      "readiness": "requires-isolated-electron-and-run-correlation"
+    },
+    {
+      "id": "E02", "surface": "electron", "scenario": "登录失效或风险确认时不误报启动成功",
+      "sourceAnchors": ["apps/micro-resume-collection/src/components/BossResumeCollection.vue"],
+      "oracle": "UI 拒绝分支、IPC 结果和新增 run 集合一致", "fixture": "controlled-login-or-confirmation-state",
+      "readiness": "requires-controlled-state"
+    },
+    {
+      "id": "R01", "surface": "web", "scenario": "合成 PDF 上传后形成候选人、岗位关系和评估终态",
+      "sourceAnchors": ["services/resume-collection-service/internal/http/router/router.go", "services/resume-collection-service/internal/service/resume_post_processor.go"],
+      "oracle": "本次 run、file、candidate、job、assessment、workflow 身份和终态由独立读数一致确认", "fixture": "synthetic-pdf-and-target-job",
+      "readiness": "requires-isolated-worker-and-oracle"
+    },
+    {
+      "id": "R02", "surface": "web", "scenario": "相同 client_item_key 重试不重复生成业务结果",
+      "sourceAnchors": ["apps/desktop-shell/src/resume-channel-backend-bridge.ts", "services/resume-collection-service/internal/http/router/router.go"],
+      "oracle": "同一作用域的文件、候选人、评估和计费身份满足审阅后的幂等契约", "fixture": "synthetic-pdf-and-stable-client-item-key",
+      "readiness": "requires-idempotency-contract-review"
+    },
+    {
+      "id": "R03", "surface": "web", "scenario": "非法文件被拒绝且不产生候选人或计费",
+      "sourceAnchors": ["services/resume-collection-service/internal/http/router/router.go"],
+      "oracle": "网关拒绝响应与独立后端无新增事实一致", "fixture": "invalid-synthetic-file",
+      "readiness": "requires-negative-fixture"
+    },
+    {
+      "id": "R04", "surface": "web", "scenario": "worker 瞬时故障后恢复并达到正确终态",
+      "sourceAnchors": ["services/resume-collection-service/internal/service/resume_post_processor.go"],
+      "oracle": "同一 run 的重试轨迹、终态、关系和计费事实一致", "fixture": "isolated-fault-injection",
+      "readiness": "requires-isolated-fault-injection"
+    },
+    {
+      "id": "R05", "surface": "web", "scenario": "worker 终态失败不被显示成成功",
+      "sourceAnchors": ["services/resume-collection-service/internal/service/resume_post_processor.go"],
+      "oracle": "终态失败、页面提示和无成功评估事实一致", "fixture": "isolated-terminal-failure",
+      "readiness": "requires-isolated-fault-injection"
+    },
+    {
+      "id": "O01", "surface": "electron", "scenario": "在线简历阶段到达可核对的业务终态",
+      "sourceAnchors": ["services/resume-collection-service/internal/service/structured_online_resume.go"],
+      "oracle": "在线 intake task、候选人、岗位和评估归属同一流程", "fixture": "synthetic-online-resume",
+      "readiness": "requires-platform-safe-fixture"
+    },
+    {
+      "id": "O02", "surface": "electron", "scenario": "附件接替在线文件时保留正确阶段与历史身份",
+      "sourceAnchors": ["services/resume-collection-service/internal/service/structured_online_resume.go", "services/resume-collection-service/internal/service/resume_post_processor.go"],
+      "oracle": "当前文件、历史文件和阶段读数共同证明合法替换", "fixture": "synthetic-online-resume-with-attachment",
+      "readiness": "requires-history-reader"
+    },
+    {
+      "id": "M01", "surface": "web", "scenario": "手工录入后文件、候选人、简历版本、岗位和岗位候选人一致",
+      "sourceAnchors": ["apps/micro-candidate-management/src/api/candidate-intake.api.ts", "services/resume-collection-service/internal/service/manual_candidate_intake.go"],
+      "oracle": "五个身份与文件摘要由独立 reader 核对，解析/评估另看终态", "fixture": "synthetic-pdf-and-target-job",
+      "readiness": "reference-capability-exists-needs-live-fixture"
+    },
+    {
+      "id": "B01", "surface": "web", "scenario": "评估重试后的计费恰好一次",
+      "sourceAnchors": ["services/assessment-service/internal/service/assessment_worker_service.go"],
+      "oracle": "评估任务终态与独立账务读数按同一作用域一致", "fixture": "isolated-assessment-retry",
+      "readiness": "requires-ledger-oracle-and-fault-injection"
+    }
+  ]
+}

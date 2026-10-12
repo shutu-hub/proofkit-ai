@@ -13,8 +13,8 @@
 | 检查 | 实际结果 | 能证明什么 |
 | --- | --- | --- |
 | 官方评判对照 | 7/7 符合预期 | 官方接口能接受正确读取/导航，拒绝错误答案、错误路径和 HTTP 500；空 HAR 返回 error |
-| 基准回归 | 23/23 通过，包括官方 Python 集成测试、批次重置准入/互斥和诊断工具 | 缺失任务不被丢弃，畸形输入为 error，篡改任务被阻断，历史结果不被覆盖；无提交时成绩显示未测量 |
-| 固定任务批次 | `pilot-12` 十二题；`shopping-admin-4` 四题 | 四题子集独立计分，不能外推为十二题或全量成绩 |
+| 基准回归 | 2026-10-13 使用固定官方 Python 环境 24/24 通过，包括任务设计审计、官方集成测试、批次重置准入/互斥和诊断工具 | 缺失任务不被丢弃，畸形输入为 error，篡改任务被阻断，历史结果不被覆盖；无提交时成绩显示未测量 |
+| 固定任务批次 | `pilot-12` 跨站十二题；`shopping-admin-4` 四题；`shopping-admin-12` 与 `shopping-admin-24` 同站候选集 | 四题历史观测独立计分，其余集合未评分，不能外推为全量成绩 |
 | 官方单站点 | D 盘 WSL Docker 中固定摘要的 `shopping_admin`；每题重建容器 | 数据库探针在重建后恢复为 0；`/admin` 和控制接口可达，真实 Chrome 免登录进入仪表盘 |
 | 四题真实执行 | 4 题均启动宿主；3 题提交并官方评判，2 成功、1 失败；另 1 题超时 | 官方合并报告按固定分母为 2/4；宿主失败须与官方缺失提交一起阅读 |
 | 真实 Chrome HAR 采集 | 4 个脚本控制的本地运行，覆盖成功、断言失败、HTTP 500、取消 | 初始导航、请求正文/头/Cookie、嵌入响应、关闭刷新与哈希校验正常；默认普通证据继续脱敏 |
@@ -70,6 +70,8 @@ webarena-verified env start --site gitlab
 **最小真实站点试跑：** `shopping_admin` 是这四个站点中标称镜像最小的一个（2.9 GB）。固定 pilot 中的任务 0、108（读取）、157（导航）、423（修改）都在该站点。现已提供独立 `shopping-admin-4` 批次，分母固定为四；原 `pilot-12` 批次保持十二题。先跑任务 157 验证整条真实链路，再用四题覆盖不同动作。单独的 Linux 主机可从 4 vCPU、8 GB RAM、50 GB 空闲 SSD 起步，16 GB RAM 更稳妥；这是待实测的规划值。四题结果不能冒充十二题成绩。
 
 后续新增同站点 `shopping-admin-12` 固定集：读取 0、11、77、94、108、119；导航 374、679；修改 453、470、496、501。结构检查确认这些任务均有官方评判配置，四道修改题的预期请求字段与任务意图表面一致；尚未用真实 UI 成功路径校准评判器，也尚未执行这十二题。它与 `pilot-12` 是不同集合，绝不合并计分。
+
+2026-10-13 再冻结 `shopping-admin-24` 候选集，保留上述 12 题并增加 12 个**不同意图模板**：读取 41、62、183、208；导航 704、709；修改 464、486、538、547、694、699。全组为 10 道读取、4 道导航、10 道修改，覆盖报表筛选、商品描述、页面配置、地址、商品变体和新建商品/促销规则。准备阶段现在校验每题的能力组与官方响应评判一致、导航/修改有网络动作评判、24 个模板互不重复、单站点起点符合批次运行器。`D:/bench/pilot-admin24-20261013/` 已由固定数据和官方 Python 环境准备，`batch plan` 已通过；`attempted=0`、`officialEvaluated=0`，**没有新增 Agent 成绩**。任务 704 的自然语言日期表达和复杂修改题仍需真实 UI 正例校准，故该集目前为 `rubricCalibration=pending-live-controls`，不能当作已确认的发布门槛。
 
 **任务前初态不能只凭 `/status` 判定。** 固定上游源码的控制服务仅实现 `POST /init`、`/start`、`/stop`、`/restart` 和 `GET /status`；文档示例中的 `POST /reset` 在该提交里没有路由。上游 `env stop` 会删除容器，`env start` 会新建容器；四个 pilot 站点的默认配置没有外部数据卷。`shopping_admin` 已用数据库标记做过 0 → 1 → 重建后 0 的验证，每题前亦记录新容器 ID、固定镜像摘要和标记读数；这只证明该镜像的重建恢复，不证明其余三个站点。任何恢复失败的题只能标为环境阻断，不能计分。
 
@@ -253,7 +255,7 @@ Codex 宿主需使用已登录、保留模型提供方配置的隔离 `CODEX_HOM
 
 ### 固定单站点批次执行
 
-`benchmark:webarena:batch` 支持 `shopping-admin-4` 与 `shopping-admin-12`。先用 `plan` 只读核验已准备批次、上游提交/数据哈希和本地路径；`run` 只接受一个新的外部输出目录。下例的参数可分别用于 `plan` 或 `run`：
+`benchmark:webarena:batch` 支持 `shopping-admin-4`、`shopping-admin-12` 与 `shopping-admin-24`。先用 `plan` 只读核验已准备批次、上游提交/数据哈希和本地路径；`run` 只接受一个新的外部输出目录。下例的参数可分别用于 `plan` 或 `run`：
 
 ```powershell
 pnpm benchmark:webarena:batch plan --profile shopping-admin-12 --batch D:/bench/pilot-admin12-20261012 --config D:/bench/environment-admin4.json --upstream D:/bench/webarena-verified --python D:/bench/evaluator/Scripts/python.exe --chrome 'C:/Program Files/Google/Chrome/Application/chrome.exe' --root D:/bench/benchmark-target --workspace D:/bench/benchmark-workspace --host claude-code --docker-wsl proofkit-docker

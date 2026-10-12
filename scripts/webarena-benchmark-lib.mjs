@@ -12,6 +12,14 @@ export const benchmarkProfiles = Object.freeze({
   "shopping-admin-12": Object.freeze({ benchmark: "webarena-verified-shopping-admin-12-v1",
     taskIds: [0, 11, 77, 94, 108, 119, 374, 453, 470, 496, 501, 679], sites: ["shopping_admin"],
     taskGroups: Object.freeze({ retrieve: [0, 11, 77, 94, 108, 119], navigate: [374, 679], mutate: [453, 470, 496, 501] }) }),
+  "shopping-admin-24": Object.freeze({ benchmark: "webarena-verified-shopping-admin-24-v1",
+    taskIds: [0, 11, 41, 62, 77, 94, 108, 119, 183, 208, 374, 453, 464, 470, 486, 496, 501, 538, 547, 679, 694, 699, 704, 709],
+    sites: ["shopping_admin"],
+    taskGroups: Object.freeze({
+      retrieve: [0, 11, 41, 62, 77, 94, 108, 119, 183, 208],
+      navigate: [374, 679, 704, 709],
+      mutate: [453, 464, 470, 486, 496, 501, 538, 547, 694, 699],
+    }) }),
 });
 export function benchmarkProfile(name = "pilot-12") {
   const profile = benchmarkProfiles[name];
@@ -42,6 +50,43 @@ export function selectTasks(dataset, ids = pilotTaskIds) {
       || !Array.isArray(task.start_urls) || !Array.isArray(task.sites)) throw new Error(`Invalid or missing task ${id}`);
     return task;
   });
+}
+
+/** Audit the fixed task design before preparing an agent-visible batch. */
+export function auditProfileTasks(dataset, name) {
+  const profile = benchmarkProfile(name);
+  const tasks = selectTasks(dataset, profile.taskIds);
+  const groups = new Map(Object.entries(profile.taskGroups)
+    .flatMap(([group, ids]) => ids.map((id) => [id, group])));
+  if (groups.size !== tasks.length) throw new Error(`Incomplete task groups in ${name}`);
+  const templates = new Set();
+  const evaluatorCounts = { agentResponse: 0, networkEvent: 0 };
+  for (const task of tasks) {
+    const group = groups.get(task.task_id);
+    const agent = task.eval.filter((entry) => entry.evaluator === "AgentResponseEvaluator");
+    if (agent.length !== 1 || agent[0].expected?.task_type !== group) {
+      throw new Error(`Task ${task.task_id} has no matching answer evaluator`);
+    }
+    evaluatorCounts.agentResponse += 1;
+    const network = task.eval.filter((entry) => entry.evaluator === "NetworkEventEvaluator");
+    evaluatorCounts.networkEvent += network.length;
+    if (group !== "retrieve" && !network.length) {
+      throw new Error(`Task ${task.task_id} lacks an action evaluator`);
+    }
+    if (profile.sites.length === 1 && (JSON.stringify(task.sites) !== JSON.stringify(profile.sites)
+      || task.start_urls.length !== 1 || task.start_urls[0] !== "__SHOPPING_ADMIN__")) {
+      throw new Error(`Task ${task.task_id} does not fit the single-site batch runner`);
+    }
+    if (name === "shopping-admin-24") {
+      if (!Number.isSafeInteger(task.intent_template_id) || templates.has(task.intent_template_id)) {
+        throw new Error(`Task ${task.task_id} duplicates an intent template`);
+      }
+      templates.add(task.intent_template_id);
+    }
+  }
+  return { planned: tasks.length, groups: Object.fromEntries(Object.entries(profile.taskGroups)
+    .map(([group, ids]) => [group, ids.length])), distinctIntentTemplates: templates.size || null,
+    evaluatorCounts, rubricCalibration: "pending-live-controls" };
 }
 
 export function scorecard(mode, planned, cases) {

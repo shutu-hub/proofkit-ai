@@ -39,7 +39,7 @@ export function assertPinnedContainer(info) {
 }
 
 export async function planBatch(options) {
-  if (!["shopping-admin-4", "shopping-admin-12"].includes(options.profile) ||
+  if (!["shopping-admin-4", "shopping-admin-12", "shopping-admin-24"].includes(options.profile) ||
     !["codex", "claude-code"].includes(options.host) ||
     ![options.batch, options.config, options.upstream, options.python, options.chrome,
       options.root, options.workspaceRoot].every((value) => typeof value === "string" && isAbsolute(value)) ||
@@ -258,7 +258,7 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     if (!names.has(process.argv[i]) || !process.argv[i + 1] || values.has(process.argv[i])) throw new Error("Invalid batch argument");
     values.set(process.argv[i], process.argv[i + 1]);
   }
-  if (!["plan", "run"].includes(mode)) throw new Error("Usage: node scripts/webarena-batch-run.mjs <plan|run> --profile shopping-admin-12 --batch <prepared> --config <environment> --upstream <pinned> --python <venv-python> --chrome <chrome.exe> --root <target> --workspace <external-workspace> --output <new-dir> [--host codex|claude-code] [--cli <native-executable>] [--docker-wsl proofkit-docker] [--timeout-ms 600000]");
+  if (!["plan", "run"].includes(mode)) throw new Error("Usage: node scripts/webarena-batch-run.mjs <plan|run> --profile shopping-admin-4|shopping-admin-12|shopping-admin-24 --batch <prepared> --config <environment> --upstream <pinned> --python <venv-python> --chrome <chrome.exe> --root <target> --workspace <external-workspace> --output <new-dir> [--host codex|claude-code] [--cli <native-executable>] [--docker-wsl proofkit-docker] [--timeout-ms 600000]");
   const options = { profile: values.get("--profile") ?? "shopping-admin-12", batch: values.get("--batch"),
     config: values.get("--config"), upstream: values.get("--upstream"), python: values.get("--python"),
     chrome: values.get("--chrome"), root: values.get("--root"), workspaceRoot: values.get("--workspace"),
