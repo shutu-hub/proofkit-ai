@@ -79,6 +79,13 @@ describe("ProofKit MCP tools", () => {
       expect(JSON.parse(textContent(response))).toMatchObject({ status: "observed", testVerdict: "not-asserted" });
       expect(runner.interactSurface).toHaveBeenCalledWith({ adapter: "web", url: undefined,
         action: { kind: "click", selector: "#orders" }, signal: expect.any(AbortSignal) });
+      for (const action of [{ kind: "selectOption", selector: "#status", option: { label: "Complete" } },
+        { kind: "setChecked", selector: "#enabled", checked: false }]) {
+        expect((await client.callTool({ name: "interact_surface", arguments: { action } })).isError).toBeUndefined();
+        expect(runner.interactSurface).toHaveBeenLastCalledWith({ adapter: "web", url: undefined, action, signal: expect.any(AbortSignal) });
+      }
+      expect((await client.callTool({ name: "interact_surface", arguments: {
+        action: { kind: "selectOption", selector: "#status", option: { label: "Complete", value: "complete" } } } })).isError).toBe(true);
       expect((await client.callTool({ name: "interact_surface", arguments: {
         action: { kind: "click", selector: "" } } })).isError).toBe(true);
     } finally { await client.close(); await server.close(); }

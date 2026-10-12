@@ -105,7 +105,7 @@ export type SurfaceInspection = {
 };
 
 export type SurfaceInteractionInput = Pick<LocalRunInput, "adapter" | "url" | "cdp" | "devtoolsPortFile" | "headful" | "signal"> & {
-  action: Extract<Action, { kind: "goto" | "click" | "fill" | "press" | "waitForText" }>;
+  action: Extract<Action, { kind: "goto" | "click" | "fill" | "press" | "selectOption" | "setChecked" | "waitForText" }>;
 };
 export type SurfaceInteraction = {
   interactionId: string;
@@ -439,10 +439,10 @@ export class LocalRunnerService {
     if (surface !== "web" && surface !== "electron") throw new Error("Surface interaction supports Web and Electron only");
     if (surface === "electron" && input.url) throw new Error("Electron interaction uses its configured CDP target");
     const parsed = ActionSchema.parse(input.action);
-    if (!["goto", "click", "fill", "press", "waitForText"].includes(parsed.kind)) throw new Error("Unsupported exploratory action");
+    if (!["goto", "click", "fill", "press", "selectOption", "setChecked", "waitForText"].includes(parsed.kind)) throw new Error("Unsupported exploratory action");
     const action = parsed as SurfaceInteractionInput["action"];
     if (surface === "electron" && action.kind === "goto") throw new Error("Electron navigation must use the owned application UI");
-    const interactive = ["click", "fill", "press"].includes(action.kind);
+    const interactive = ["click", "fill", "press", "selectOption", "setChecked"].includes(action.kind);
     if (interactive && this.config.policies.sideEffects !== "allow") {
       throw new Error("Exploratory interaction requires sideEffects=allow in the test workspace");
     }
@@ -772,7 +772,7 @@ export class LocalRunnerService {
     const scenarios = [{ actions: charter.actions, sideEffectPolicy: charter.sideEffectPolicy }, ...(charter.negativeCases ?? [])];
     for (const scenario of scenarios) {
       for (const action of scenario.actions) {
-        if (this.restrictWebOrigins && (action.kind === "click" || action.kind === "fill" || action.kind === "press" || action.kind === "setInputFiles" || action.kind === "captureResponse") && scenario.sideEffectPolicy !== "allow") {
+        if (this.restrictWebOrigins && (action.kind === "click" || action.kind === "fill" || action.kind === "press" || action.kind === "selectOption" || action.kind === "setChecked" || action.kind === "setInputFiles" || action.kind === "captureResponse") && scenario.sideEffectPolicy !== "allow") {
           throw new Error(`${label} interactive action ${action.kind} requires sideEffectPolicy=allow`);
         }
         if (action.kind !== "capability") continue;

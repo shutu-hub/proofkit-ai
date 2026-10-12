@@ -139,6 +139,11 @@ describe("external test workspace", () => {
       .rejects.toThrow("outside the configured origin");
     await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], actions: [{ kind: "click", selector: "#submit" }] } }))
       .rejects.toThrow("interactive action click requires sideEffectPolicy=allow");
+    for (const action of [{ kind: "selectOption", selector: "#status", option: { label: "Complete" } },
+      { kind: "setChecked", selector: "#enabled", checked: true }] as const) {
+      await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], actions: [action] } }))
+        .rejects.toThrow(`interactive action ${action.kind} requires sideEffectPolicy=allow`);
+    }
     await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], actions: [{ kind: "setInputFiles", selector: "#resume", files: [".proofkit/fixtures/resume.pdf"] }] } }))
       .rejects.toThrow("interactive action setInputFiles requires sideEffectPolicy=allow");
     await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], sideEffectPolicy: "allow", actions: [{ kind: "setInputFiles", selector: "#resume", files: [".proofkit/fixtures/resume.pdf"] }] } }))

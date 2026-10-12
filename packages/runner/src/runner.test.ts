@@ -42,6 +42,22 @@ class SlowAdapter extends FakeAdapter {
 }
 
 describe("ExecutionRunner", () => {
+  it("blocks native form mutations before connecting when writes are denied", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-native-policy-"));
+    for (const action of [{ kind: "selectOption", selector: "#status", option: { label: "Complete" } },
+      { kind: "setChecked", selector: "#enabled", checked: true }] as Action[]) {
+      const adapter = new FakeAdapter();
+      const connect = vi.spyOn(adapter, "connect");
+      const act = vi.spyOn(adapter, "act");
+      const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
+        intent: "deny native form writes", level: "quick", mode: "deterministic", preconditions: [], actions: [action],
+        assertions: [], sideEffectPolicy: "deny", metadata: {},
+      });
+      expect(summary.verdict).toBe("blocked");
+      expect(connect).not.toHaveBeenCalled();
+      expect(act).not.toHaveBeenCalled();
+    }
+  });
   it("resolves fill values only at execution and replays with the current environment", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-fill-env-"));
     const envName = "PROOFKIT_TEST_FILL_SECRET";

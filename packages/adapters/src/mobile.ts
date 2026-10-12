@@ -68,6 +68,7 @@ export class MobileAdapter implements SurfaceAdapter {
   }
 
   async act(action: Action, context?: SurfaceActionContext): Promise<ActionReceipt> {
+    if (action.kind === "selectOption" || action.kind === "setChecked") throw new BlockedError("Native browser form actions are not supported by the mobile adapter");
     if (action.kind === "setInputFiles") throw new BlockedError("File selection is not supported by the mobile adapter");
     if (action.kind === "captureResponse") throw new BlockedError("Response capture is not supported by the mobile adapter");
     const signal = context?.signal;

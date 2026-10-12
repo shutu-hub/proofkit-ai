@@ -9,6 +9,13 @@ afterEach(() => {
 });
 
 describe("MobileAdapter", () => {
+  it("blocks unsupported native browser form actions without contacting the driver", async () => {
+    globalThis.fetch = vi.fn() as typeof fetch;
+    const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
+    await expect(adapter.act({ kind: "selectOption", selector: "#status", option: { label: "Complete" } })).rejects.toThrow("not supported");
+    await expect(adapter.act({ kind: "setChecked", selector: "#enabled", checked: true })).rejects.toThrow("not supported");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
   it("explicitly blocks browser file selection without calling the mobile driver", async () => {
     globalThis.fetch = vi.fn() as typeof fetch;
     const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });

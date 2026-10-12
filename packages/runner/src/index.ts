@@ -371,6 +371,9 @@ export class ExecutionRunner {
         }
       }
       assertFillEnvironment(charter.actions);
+      if (charter.actions.some((action) => action.kind === "selectOption" || action.kind === "setChecked") && charter.sideEffectPolicy !== "allow") {
+        throw new BlockedError("Native form actions require sideEffectPolicy=allow");
+      }
       if (charter.actions.some((action) => action.kind === "captureResponse")) {
         if (charter.sideEffectPolicy !== "allow") throw new BlockedError("Response capture triggers require sideEffectPolicy=allow");
         if (!this.adapter.supportsResponseCapture) throw new BlockedError(`Response capture is not supported by the ${this.adapter.name} adapter`);

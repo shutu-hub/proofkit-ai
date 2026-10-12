@@ -88,7 +88,7 @@ export async function inspectWorkspaceCandidates(context: CandidateContext, focu
         if (!context.allowCapabilityWrites && usedCapabilities.some((capability) => capability.sideEffect === "write")) item.issues.push("write-opt-in-required");
         const scenarios = [{ actions: charter.actions, sideEffectPolicy: charter.sideEffectPolicy }, ...(charter.negativeCases ?? [])];
         if (scenarios.some((scenario) => scenario.actions.some((action) => action.kind === "capability" && knownCapabilities.get(action.name)?.sideEffect === "write" && scenario.sideEffectPolicy !== "allow"
-          || (action.kind === "setInputFiles" || action.kind === "captureResponse"
+          || (action.kind === "setInputFiles" || action.kind === "captureResponse" || action.kind === "selectOption" || action.kind === "setChecked"
             || context.restrictWebOrigins && (action.kind === "click" || action.kind === "fill" || action.kind === "press")) && scenario.sideEffectPolicy !== "allow"))) {
           item.issues.push("scenario-side-effect-policy-conflict");
         }

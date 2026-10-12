@@ -2,7 +2,7 @@ import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestCharter, TestMission } from "@proofkit/contracts";
-import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
+import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, SelectOptionActionSchema, SetCheckedActionSchema, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 import { briefMissionEvidence } from "./mission-evidence-brief.js";
 import { RepairHypothesisInputSchema } from "@proofkit/contracts";
@@ -66,6 +66,8 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
         z.object({ kind: z.literal("click"), selector: z.string().min(1).max(512) }),
         z.object({ kind: z.literal("fill"), selector: z.string().min(1).max(512), value: z.string().max(4096) }),
         z.object({ kind: z.literal("press"), selector: z.string().min(1).max(512), key: z.string().min(1).max(64) }),
+        SelectOptionActionSchema,
+        SetCheckedActionSchema,
         z.object({ kind: z.literal("waitForText"), text: z.string().min(1).max(512), timeoutMs: z.number().int().min(100).max(30_000).optional() }),
       ]) },
     async ({ surface, url, action }, extra) => {

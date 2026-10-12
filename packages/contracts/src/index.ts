@@ -141,12 +141,26 @@ export const InlineHttpOracleSchema = ConfiguredHttpOracleSchema.extend({
   "Success and failure values must not overlap");
 export type InlineHttpOracle = z.infer<typeof InlineHttpOracleSchema>;
 
+/** One exact native option; indices and ambiguous value/label combinations are not portable. */
+export const SelectOptionActionSchema = z.object({
+  kind: z.literal("selectOption"), selector: z.string().min(1).max(512),
+  option: z.union([
+    z.object({ value: z.string().max(4096) }).strict(),
+    z.object({ label: z.string().min(1).max(4096) }).strict(),
+  ]),
+}).strict();
+export const SetCheckedActionSchema = z.object({
+  kind: z.literal("setChecked"), selector: z.string().min(1).max(512), checked: z.boolean(),
+}).strict();
+
 export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("goto"), url: z.string().url() }),
   z.object({ kind: z.literal("click"), selector: z.string().min(1) }),
   z.object({ kind: z.literal("fill"), selector: z.string().min(1), value: FillValueSchema }),
   z.object({ kind: z.literal("setInputFiles"), selector: z.string().min(1), files: z.array(FixturePathSchema).min(1).max(10) }).strict(),
   z.object({ kind: z.literal("press"), selector: z.string().min(1), key: z.string().min(1) }),
+  SelectOptionActionSchema,
+  SetCheckedActionSchema,
   z.object({ kind: z.literal("waitForText"), text: z.string().min(1), timeoutMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("screenshot"), name: z.string().min(1).optional() }),
   z.object({ kind: z.literal("capability"), name: z.string().min(1), input: z.record(z.string(), z.unknown()).default({}) }),

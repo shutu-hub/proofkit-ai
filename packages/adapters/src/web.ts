@@ -232,6 +232,7 @@ export class WebAdapter implements SurfaceAdapter {
     const started = Date.now();
     const urlBefore = page.url();
     let response;
+    let nativeForm;
     switch (action.kind) {
       case "goto":
         await page.goto(action.url, { waitUntil: "domcontentloaded" });
@@ -245,6 +246,10 @@ export class WebAdapter implements SurfaceAdapter {
         break;
       case "press":
         await (await uniqueActionLocator(page, action.selector)).press(action.key);
+        break;
+      case "selectOption":
+      case "setChecked":
+        nativeForm = await actNativeForm(page, action, context?.signal);
         break;
       case "captureResponse": {
         response = await captureActionResponse(page, action, async ({ signal, remainingTimeoutMs }) => {
@@ -306,7 +311,7 @@ export class WebAdapter implements SurfaceAdapter {
       urlAfter: projectedAfter.value,
       titleAfter: sanitizeSurfaceText(await page.title().catch(() => ""), 200),
       metadata: { adapter: this.name, urlBeforePathEvidence: projectedBefore.pathEvidence,
-        urlAfterPathEvidence: projectedAfter.pathEvidence, ...(response ? { response } : {}) },
+        urlAfterPathEvidence: projectedAfter.pathEvidence, ...(response ? { response } : {}), ...(nativeForm ? { nativeForm } : {}) },
     };
   }
 
@@ -463,6 +468,46 @@ async function uniqueActionLocator(page: Page, selector: string, state: "visible
   const count = await locator.count();
   if (count !== 1) throw new AmbiguousSurfaceTargetError(count);
   return locator;
+}
+
+/** Native controls only. Never guess an option, force a click, or persist option contents. */
+async function actNativeForm(page: Page, action: Extract<Action, { kind: "selectOption" | "setChecked" }>, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  const control = await uniqueActionLocator(page, action.selector);
+  signal?.throwIfAborted();
+  if (!await control.isEnabled()) throw new InconclusiveError("native-control-disabled", "Native form control is disabled; no action was performed.");
+  if (action.kind === "setChecked") {
+    const type = await control.evaluate((element) => element instanceof HTMLInputElement ? element.type : "");
+    if (type !== "checkbox" && type !== "radio") throw new InconclusiveError("native-control-type", "setChecked requires a native checkbox or radio input.");
+    if (type === "radio" && !action.checked) throw new InconclusiveError("native-radio-uncheck", "Select another radio option to clear this radio input.");
+    signal?.throwIfAborted();
+    await control.setChecked(action.checked, { timeout: 10_000 });
+    signal?.throwIfAborted();
+    const matches = await control.evaluate((element, checked) => element instanceof HTMLInputElement
+      && ["checkbox", "radio"].includes(element.type) && element.checked === checked, action.checked);
+    if (!matches) throw new InconclusiveError("native-state-unverified", "Native checked state did not match the requested state after the action.");
+    return { kind: action.kind, verified: true, checked: action.checked };
+  }
+  const option = await control.evaluate((element, requested) => {
+    if (!(element instanceof HTMLSelectElement) || element.multiple) return { valid: false, count: 0, index: -1, disabled: false };
+    const matches = Array.from(element.options).filter((item) => "value" in requested ? item.value === requested.value : item.label === requested.label);
+    const match = matches[0];
+    return { valid: true, count: matches.length, index: match?.index ?? -1,
+      disabled: Boolean(match?.disabled || (match?.parentElement instanceof HTMLOptGroupElement && match.parentElement.disabled)) };
+  }, action.option);
+  if (!option.valid) throw new InconclusiveError("native-control-type", "selectOption requires a native single-select control.");
+  if (option.count !== 1) throw new InconclusiveError("native-option-match", `Exact option matched ${option.count} entries; no selection was performed.`);
+  if (option.disabled) throw new InconclusiveError("native-option-disabled", "Requested option is disabled; no selection was performed.");
+  signal?.throwIfAborted();
+  await control.selectOption({ index: option.index }, { timeout: 10_000 });
+  signal?.throwIfAborted();
+  const matches = await control.evaluate((element, requested) => {
+    if (!(element instanceof HTMLSelectElement) || element.multiple || element.selectedOptions.length !== 1) return false;
+    const exact = Array.from(element.options).filter((item) => "value" in requested ? item.value === requested.value : item.label === requested.label);
+    return exact.length === 1 && element.selectedOptions[0] === exact[0];
+  }, action.option);
+  if (!matches) throw new InconclusiveError("native-state-unverified", "Native selected state did not match the exact requested option after the action.");
+  return { kind: action.kind, verified: true, selectedCount: 1 };
 }
 
 /** Project only declared patterns from the live URL; hash parameters stay local. */

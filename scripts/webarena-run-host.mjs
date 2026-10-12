@@ -81,7 +81,7 @@ export async function runWebArenaHost({ sessionPath, batchPath, output, host = "
     + `Task ID: ${selected.taskId}\nIntent: ${selected.intent}\n`
     + `The owned browser starts at ${start.href}. Use only this ProofKit MCP for browser actions.\n`
     + `This server exposes tools, not MCP resources or resource templates; do not call resource discovery APIs.\n`
-    + `Inspect the page, then use interact_surface for individual goto/click/fill/press actions; it preserves task browser state and returns a compact observation, not a success verdict. `
+    + `Inspect the page, then use interact_surface for individual goto/click/fill/press/selectOption/setChecked actions; it preserves task browser state and returns a compact observation, not a success verdict. `
     + `After the requested end state is visible, use run_test for a quick positive surface check or a stronger Mission if available. `
     + `For an inline Charter, put action/assertion kinds inside charter and do not also supply top-level url, expect, mode or sideEffectPolicy. `
     + `A click Charter needs sideEffectPolicy=allow. If the requested end state is visible, stop repeating the workflow.\n`

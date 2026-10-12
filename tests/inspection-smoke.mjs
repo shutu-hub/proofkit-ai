@@ -9,7 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { LocalRunnerService } from "../packages/local-runner/dist/index.js";
 import { createProofkitMcp } from "../packages/mcp/dist/server.js";
 
-const scratch = await mkdtemp(join(tmpdir(), "proofkit-inspection-"));
+const scratch = await mkdtemp(join(process.env.PROOFKIT_INSPECTION_RUNS ?? tmpdir(), "proofkit-inspection-"));
 const source = join(scratch, "source");
 const workspaceRoot = join(scratch, "workspace");
 const fillEnvName = "PROOFKIT_INSPECTION_FILL_VALUE";
@@ -24,7 +24,7 @@ const web = createServer((request, response) => {
     response.end(`<!doctype html><title>Delayed inspection fixture</title><p style="display:none">Delayed controls ready</p><div id="app"></div><script>
       ${path === "/diagnostics" ? "setTimeout(()=>{for(let i=0;i<15;i++)console.error('runtime diagnostic '+i+' qa@example.com');},450);" : ""}
       ${path === "/auth-blocked" ? "setTimeout(()=>console.error('AuthRequiredError: test session expired'),450);" : ""}
-      ${path === "/never" ? "" : "setTimeout(()=>{document.querySelector('#app').innerHTML='<h1>Delayed controls ready</h1><button id=ready>Continue</button>';},1200);"}
+      ${path === "/never" ? "" : "setTimeout(()=>{document.querySelector('#app').innerHTML='<h1>Delayed controls ready</h1><button id=ready>Continue</button><a id=forms href=/>Native form fixture</a>';},1200);"}
     </script>`);
     return;
   }
@@ -34,8 +34,62 @@ const web = createServer((request, response) => {
     <button id="fetch" onclick="document.querySelector('#result').textContent='Resume ready'">Fetch resume</button>
     <button onclick="document.querySelector('#result').textContent='Details ready'">Show details</button>
     <button>Duplicate</button><button>Duplicate</button>
-    <div id="result"></div>`);
+    <div id="result"></div>
+    <select id="status" onchange="document.querySelector('#selection').textContent='Selection '+this.value">
+      <option value="">Choose</option><option value="complete">Complete</option><option value="pending">Pending</option>
+      <option value="off" disabled>Disabled</option><optgroup label="Unavailable" disabled><option value="group-off">Group disabled</option></optgroup>
+    </select><div id="selection"></div>
+    <input type="checkbox" id="enabled" onchange="document.querySelector('#changes').textContent='Changes '+(++window.changes)+' checked '+this.checked"><div id="changes">Changes 0 checked false</div>
+    <script>window.changes=0</script>
+    <select id="ambiguous-option"><option>Choose</option><option value="a">Same</option><option value="b">Same</option></select>
+    <select id="disabled-select" disabled><option>Choose</option></select>
+    <select id="multi" multiple><option>Choose</option></select>
+    <select id="reset-select" onchange="this.selectedIndex=0"><option value="">Choose</option><option value="complete">Complete</option></select>
+    <input id="radio" type="radio" name="group"><div id="custom" role="checkbox" aria-checked="false">Custom checkbox</div>`);
 });
+
+async function verifyNativeForms(interact, readRun, persistent = false) {
+  for (const [option, output] of [[{ value: "complete" }, "Selection complete"], [{ label: "Pending" }, "Selection pending"], [{ value: "" }, "Selection"]]) {
+    const result = await interact({ kind: "selectOption", selector: "#status", option });
+    assert.equal(result.status, "observed");
+    assert.equal(result.testVerdict, "not-asserted");
+    assert.ok(result.snapshot.text.includes(output));
+    const run = await readRun(result.interactionId);
+    assert.deepEqual(run.steps[0].receipt.metadata.nativeForm, { kind: "selectOption", verified: true, selectedCount: 1 });
+  }
+  for (const [checked, output] of [[true, "Changes 1 checked true"], [true, "Changes 1 checked true"], [false, persistent ? "Changes 2 checked false" : "Changes 0 checked false"]]) {
+    const result = await interact({ kind: "setChecked", selector: "#enabled", checked });
+    assert.equal(result.status, "observed");
+    assert.ok(result.snapshot.text.includes(output), "Checked state and fixture change count must match the actual context lifetime");
+    const run = await readRun(result.interactionId);
+    assert.deepEqual(run.steps[0].receipt.metadata.nativeForm, { kind: "setChecked", verified: true, checked });
+  }
+  const radio = await interact({ kind: "setChecked", selector: "#radio", checked: true });
+  assert.equal(radio.status, "observed");
+  const negatives = [
+    [{ kind: "selectOption", selector: "#status", option: { value: "missing" } }, "native-option-match"],
+    [{ kind: "selectOption", selector: "#ambiguous-option", option: { label: "Same" } }, "native-option-match"],
+    [{ kind: "selectOption", selector: "#status", option: { value: "off" } }, "native-option-disabled"],
+    [{ kind: "selectOption", selector: "#status", option: { value: "group-off" } }, "native-option-disabled"],
+    [{ kind: "selectOption", selector: "#disabled-select", option: { label: "Choose" } }, "native-control-disabled"],
+    [{ kind: "selectOption", selector: "#multi", option: { label: "Choose" } }, "native-control-type"],
+    [{ kind: "selectOption", selector: "#fetch", option: { label: "Complete" } }, "native-control-type"],
+    [{ kind: "selectOption", selector: "#reset-select", option: { value: "complete" } }, "native-state-unverified"],
+    [{ kind: "setChecked", selector: "#custom", checked: true }, "native-control-type"],
+    [{ kind: "setChecked", selector: "#radio", checked: false }, "native-radio-uncheck"],
+  ];
+  for (const [action, code] of negatives) {
+    const result = await interact(action);
+    assert.equal(result.status, "failed");
+    assert.equal(result.testVerdict, "not-asserted");
+    const run = await readRun(result.interactionId);
+    assert.equal(run.verdict, "inconclusive", "Invalid or unverified interactions are not confirmed product defects");
+    assert.equal(run.steps[0].receipt, undefined);
+    const gap = JSON.parse(await readFile(join(workspaceRoot, ".proofkit/runs", run.steps[0].artifacts.find((path) => path.endsWith("-response-gap.json"))), "utf8"));
+    assert.equal(gap.code, code);
+  }
+}
+
 try {
   await Promise.all([mkdir(source), mkdir(workspaceRoot)]);
   await writeFile(join(source, "package.json"), JSON.stringify({ name: "inspection-source", devDependencies: { vite: "1" } }));
@@ -88,6 +142,27 @@ try {
   assert.equal(saved.steps[0].afterSnapshot.controls.length >= 2, true);
 
   const runner = await LocalRunnerService.create({ root: source, workspaceRoot, restrictWebOrigins: true });
+  const readRun = async (id) => JSON.parse(await readFile(join(workspaceRoot, ".proofkit/runs", id, "run.json"), "utf8"));
+  const invokeWeb = async (action) => {
+    const response = await client.callTool({ name: "interact_surface", arguments: { action } });
+    assert.equal(response.isError, undefined);
+    return JSON.parse(response.content.find((item) => item.type === "text").text);
+  };
+  await verifyNativeForms(invokeWeb, readRun);
+  const idempotent = await runner.start({ adapter: "web", start: false, charter: {
+    intent: "Native form state and idempotency", level: "quick", mode: "deterministic", preconditions: [],
+    actions: [{ kind: "selectOption", selector: "#status", option: { label: "Complete" } },
+      { kind: "setChecked", selector: "#enabled", checked: true }, { kind: "setChecked", selector: "#enabled", checked: true },
+      { kind: "setChecked", selector: "#enabled", checked: false }],
+    assertions: [{ kind: "text-visible", text: "Selection complete" }, { kind: "text-visible", text: "Changes 2 checked false" }], sideEffectPolicy: "allow", metadata: {},
+  } });
+  assert.equal((await runner.wait(idempotent.runId)).verdict, "passed");
+  const deniedRunner = new LocalRunnerService({ root: source, workspaceRoot, config: { ...runner.config,
+    policies: { ...runner.config.policies, sideEffects: "deny" } } });
+  const beforeDenied = await readdir(join(workspaceRoot, ".proofkit/runs"));
+  await assert.rejects(deniedRunner.interactSurface({ action: { kind: "selectOption", selector: "#status", option: { value: "complete" } } }), /sideEffects=allow/);
+  await assert.rejects(deniedRunner.interactSurface({ action: { kind: "setChecked", selector: "#enabled", checked: true } }), /sideEffects=allow/);
+  assert.deepEqual(await readdir(join(workspaceRoot, ".proofkit/runs")), beforeDenied);
   const origin = new URL(baseUrl).origin;
   const readyWhen = { text: "Delayed controls ready", timeoutMs: 5000 };
   const delayedResponse = await client.callTool({ name: "inspect_surface", arguments: { surface: "web", url: `${origin}/delayed`, readyWhen } });
@@ -180,6 +255,9 @@ try {
     assert.equal(desktopInteraction.status, "observed");
     assert.equal(desktopInteraction.testVerdict, "not-asserted");
     assert.ok(desktopInteraction.snapshot.text.includes("Delayed controls ready"));
+    const openForms = await desktopRunner.interactSurface({ adapter: "electron", action: { kind: "click", selector: "#forms" } });
+    assert.equal(openForms.status, "observed");
+    await verifyNativeForms((action) => desktopRunner.interactSurface({ adapter: "electron", action }), readRun, true);
     const desktopAbsent = await desktopRunner.inspectSurface({ adapter: "electron", readyWhen: { text: "Missing condition", timeoutMs: 100 } });
     assert.equal(desktopAbsent.status, "failed");
     assert.equal(desktopAbsent.readiness.status, "unverified");
@@ -226,8 +304,9 @@ try {
   assert.ok(ambiguousSummary.findings.some((finding) => finding.includes("matched 2 elements")));
   assert.deepEqual(await readdir(source), ["package.json"]);
   console.log(JSON.stringify({ inspectionId: inspection.inspectionId, controls: inspection.snapshot.controls.length,
+    ...(process.env.PROOFKIT_INSPECTION_RUNS ? { artifacts: scratch } : {}),
     selector: details.selector, electronReadiness: process.env.PROOFKIT_ELECTRON_PATH ? "verified" : "not-run",
-    verified: ["mcp-inspect-surface", "single-step-web-interaction", "single-step-electron-interaction", "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
+    verified: ["native-select-exact-value-and-label", "native-checkbox-idempotency", "native-form-readback", "native-form-negative-evidence", "native-form-write-policy", "mcp-inspect-surface", "single-step-web-interaction", ...(process.env.PROOFKIT_ELECTRON_PATH ? ["single-step-electron-interaction"] : []), "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
 } finally {
   if (electron && electron.exitCode === null) {
     const exited = new Promise((done) => electron.once("exit", done));
@@ -239,9 +318,11 @@ try {
   await client?.close();
   await mcp?.close();
   await new Promise((done) => web.close(() => done()));
-  const safe = resolve(scratch);
-  if (!safe.startsWith(resolve(tmpdir()) + sep) || !safe.split(sep).at(-1)?.startsWith("proofkit-inspection-")) {
-    throw new Error("Inspection scratch directory escaped the temporary directory");
+  if (!process.env.PROOFKIT_INSPECTION_RUNS) {
+    const safe = resolve(scratch);
+    if (!safe.startsWith(resolve(tmpdir()) + sep) || !safe.split(sep).at(-1)?.startsWith("proofkit-inspection-")) {
+      throw new Error("Inspection scratch directory escaped the temporary directory");
+    }
+    await rm(safe, { recursive: true, force: true });
   }
-  await rm(safe, { recursive: true, force: true });
 }
