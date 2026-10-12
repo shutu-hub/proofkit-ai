@@ -42,6 +42,7 @@ import { auditRepairSources } from "./repair-hypothesis.js";
 import { BenchmarkCaptureSession, type BenchmarkMissionBinding } from "./benchmark-capture.js";
 
 export { BenchmarkCaptureSession } from "./benchmark-capture.js";
+export { auditPersistedBenchmarkTask } from "./benchmark-task-audit.js";
 
 export { loadProjectIntegration } from "./integration.js";
 export { inspectEvidenceRetention, type EvidenceRetentionAudit, type EvidenceRetentionRow } from "./evidence-retention.js";

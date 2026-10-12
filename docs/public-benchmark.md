@@ -179,6 +179,15 @@ pnpm test:smoke:benchmark-mission
 
 `pnpm test:smoke:benchmark-task` 使用真实 Chrome 验证持续登录状态、全部尝试入证、取消后封存、stdio 断开清理、篡改拒绝，并在可用时调用任务 44 的官方评判器。它仍只运行本地脚本 fixture，`webArenaTasksExecuted` 保持 0。
 
+任务 MCP 退出后，可信评测控制器可以单独运行：
+
+```powershell
+# 先在 ProofKit 仓库运行 pnpm build；--session 指向运行时使用的同一 operator.json。
+node scripts/webarena-audit.mjs --session D:/bench/operator.json
+```
+
+离线审计重新校验公开输入摘要、任务与浏览器上下文、捕获目录中**全部** Run 开始/结束文件、保存的 Run 和 Mission 关联、最终答案及完整 HAR 的摘要与结构。删除失败尝试，即使同时改写最终记录中的 `runIds` 和 `browserRunIds`，也会因目录清单不符被拒绝。输出 `consistent` 只表示本地文件链在可信输入锚点下自洽；`hostExecution: not-verified` 表示它仍未核验实际宿主工具调用、代理身份、独立站点初态或同账户改写，官方评分仍须另行运行。取消和没有最终提交的 stdio 弃置任务返回 `incomplete`。原始 HAR 不通过此命令输出。
+
 ## 下一阶段：真实执行的准入条件
 
 1. 按[官方环境说明](https://servicenow.github.io/webarena-verified/environments/)部署四个隔离站点，记录镜像 digest、站点配置和任务前初始化结果。Docker 可以在另一台开发机运行；本机的检查目前只探测本地 Docker，不证明远端环境不可用。当前没有站点部署或重置自动化。

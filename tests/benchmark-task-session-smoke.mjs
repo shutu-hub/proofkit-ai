@@ -11,6 +11,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ProofkitConfigSchema, TestCharterSchema } from "../packages/contracts/dist/index.js";
+import { auditPersistedBenchmarkTask } from "../packages/local-runner/dist/index.js";
 import { createWebArenaMcp } from "../scripts/webarena-mcp.mjs";
 import { publicTask } from "../scripts/webarena-benchmark-lib.mjs";
 
@@ -78,6 +79,8 @@ const call = async (name, args = {}) => {
   return JSON.parse(result.content.find((item) => item.type === "text").text);
 };
 const answer = { task_type: "NAVIGATE", status: "SUCCESS", retrieved_data: null, error_details: null };
+const auditSaved = () => auditPersistedBenchmarkTask({ directory: captures, projectRoot: source, workspaceRoot: workspace,
+  taskId: 44, publicInputSha256: hash(publicBytes) });
 const charter = (actions, text) => TestCharterSchema.parse({ intent: "Exercise persistent fixture state", level: "quick",
   mode: "guided", sideEffectPolicy: "allow", actions, assertions: [{ kind: "text-visible", text }] });
 async function waitMission(created) {
@@ -112,6 +115,8 @@ try {
   const result = await call("submit_benchmark_task", answer);
   assert.equal(result.status, "captured", JSON.stringify(result));
   assert.equal(result.taskTrajectory, "persistent-task-context");
+  const originalOfflineAudit = await auditSaved();
+  assert.equal(originalOfflineAudit.status, "consistent", JSON.stringify(originalOfflineAudit));
   assert.equal(roots, 1, "inspection and subsequent Missions must not reset to the initial URL");
   assert.equal(logins, 1); assert.equal(authenticatedTodos, 1);
   assert.ok(!JSON.stringify(result).includes(captures));
@@ -137,13 +142,30 @@ try {
   assert.equal(repeated.isError, true);
   const responsePath = join(captures, "agent_response.json"), response = await readFile(responsePath);
   await writeFile(responsePath, "{}"); assert.ok((await session.auditTask()).issues.includes("task-submission-changed"));
+  assert.ok((await auditSaved()).issues.includes("task-submission-changed"));
   await writeFile(responsePath, response);
   await writeFile(tracePath, Buffer.concat([trace, Buffer.from(" ")])); assert.equal((await session.auditTask()).status, "incomplete");
+  assert.ok((await auditSaved()).issues.includes("task-network-trace-changed"));
   await writeFile(tracePath, trace);
   const recordPath = join(captures, "task.finished.json"), recordBytes = await readFile(recordPath);
-  await writeFile(recordPath, JSON.stringify({ ...taskRecord, runIds: taskRecord.runIds.filter((id) => !failedRuns.includes(id)) }));
-  assert.ok((await session.auditTask()).issues.includes("task-record-changed")); await writeFile(recordPath, recordBytes);
+  await writeFile(recordPath, JSON.stringify({ ...taskRecord,
+    runIds: taskRecord.runIds.filter((id) => !failedRuns.includes(id)),
+    browserRunIds: taskRecord.browserRunIds.filter((id) => !failedRuns.includes(id)) }));
+  assert.ok((await session.auditTask()).issues.includes("task-record-changed"));
+  assert.ok((await auditSaved()).issues.includes("task-started-run-gap")); await writeFile(recordPath, recordBytes);
+  const failedRunPath = join(workspace, ".proofkit/runs", failedRuns[0], "run.json");
+  const failedRunBytes = await readFile(failedRunPath);
+  await writeFile(failedRunPath, "{}"); assert.equal((await auditSaved()).status, "incomplete");
+  await writeFile(failedRunPath, failedRunBytes);
+  const missionPath = join(workspace, ".proofkit/missions", `${failed.missionId}.json`);
+  const missionBytes = await readFile(missionPath);
+  await writeFile(missionPath, "{}"); assert.equal((await auditSaved()).status, "incomplete");
+  await writeFile(missionPath, missionBytes);
   assert.equal((await session.auditTask()).status, "captured");
+  assert.equal((await auditSaved()).status, "consistent");
+  const { stdout: offlineOutput } = await promisify(execFile)(process.execPath,
+    [join(repo, "scripts/webarena-audit.mjs"), "--session", operatorPath], { timeout: 15_000, windowsHide: true });
+  assert.equal(JSON.parse(offlineOutput).status, "consistent");
 
   // A cancelled navigation may still have in-flight browser work. The task
   // owner must retire that context and reject any later action in this task.
@@ -178,6 +200,10 @@ try {
     assert.ok(!cancellationSubmission.isError, JSON.stringify(cancellationSubmission));
     assert.equal(JSON.parse(cancellationSubmission.content.find((item) => item.type === "text").text).status, "incomplete");
     assert.equal((await json(join(cancelledCaptures, "task/capture.json"))).context, "task-owned");
+    const offlineCancelled = await auditPersistedBenchmarkTask({ directory: cancelledCaptures,
+      projectRoot: source, workspaceRoot: workspace, taskId: 44, publicInputSha256: hash(publicBytes) });
+    assert.equal(offlineCancelled.status, "incomplete");
+    assert.ok(offlineCancelled.issues.includes("task-context-interrupted"));
   } finally { await cancelledClient.close(); await cancelledOwner.server.close(); await cancelledOwner.session.abandonTask(); }
 
   // Exercise the actual stdio entrypoint with a live browser before closing
@@ -198,6 +224,8 @@ try {
   assert.equal(stderr, "");
   assert.equal((await json(join(stdioCaptures, "task/capture.json"))).context, "task-owned");
   await assert.rejects(readFile(join(stdioCaptures, "task.finished.json")));
+  assert.ok((await auditPersistedBenchmarkTask({ directory: stdioCaptures, projectRoot: source,
+    workspaceRoot: workspace, taskId: 44, publicInputSha256: hash(publicBytes) })).issues.includes("task-record-unavailable"));
 
   let official = { status: "not-run", reason: "official-environment-not-configured" };
   if (dataset) {
@@ -210,7 +238,8 @@ try {
     official = JSON.parse(stdout); assert.equal(official.results[0].result.status, "success");
   }
   assert.equal(await readFile(join(source, "package.json"), "utf8"), sourceBytes); assert.deepEqual(await readdir(source), ["package.json"]);
-  const report = { mode: "scripted-persistent-task-fixture", audit: await session.auditTask(), roots, logins, authenticatedTodos,
+  const report = { mode: "scripted-persistent-task-fixture", audit: await session.auditTask(),
+    offlineAudit: await auditSaved(), roots, logins, authenticatedTodos,
     cancelledContextRetired: true, stdioAbandonmentCaptured: true,
     failedRunsRetained: failedRuns, official, webArenaTasksExecuted: 0, proofkitEffectiveness: "not-measured" };
   await writeFile(join(output, "report.json"), JSON.stringify(report, null, 2));
