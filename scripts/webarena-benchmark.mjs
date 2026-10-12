@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pilotTaskIds, publicTask, renderScorecard, scorecard, selectTasks, sha256, upstreamCommit } from "./webarena-benchmark-lib.mjs";
+import { probePilotEnvironment } from "./webarena-environment.mjs";
 
 const execute = promisify(execFile);
 const scriptRoot = dirname(fileURLToPath(import.meta.url));
@@ -15,8 +16,8 @@ for (let index = 3; index < process.argv.length; index += 2) {
     || !value || value.startsWith("--") || options.has(name)) throw new Error(`Invalid argument ${name}`);
   options.set(name, value);
 }
-if (!["prepare", "replay", "grade"].includes(command)) {
-  console.log("Usage: pnpm benchmark:webarena <prepare|replay|grade> --upstream <pinned-checkout> --output <new-external-dir> --python <venv-python>\nGrade also requires --batch <prepared-dir> --submissions <dir> --config <environment-json>.");
+if (!["prepare", "probe", "replay", "grade"].includes(command)) {
+  console.log("Usage: pnpm benchmark:webarena <prepare|probe|replay|grade> --upstream <pinned-checkout> --output <new-external-dir> --python <venv-python>\nProbe requires --config <environment-json>. Grade also requires --batch <prepared-dir> --submissions <dir> --config <environment-json>.");
   process.exit(command ? 1 : 0);
 }
 const required = (name) => { if (!options.has(name)) throw new Error(`Missing ${name}`); return options.get(name); };
@@ -33,6 +34,7 @@ const provenance = { upstreamRepository: "https://github.com/ServiceNow/webarena
   createdAt: new Date().toISOString(),
   controllerSha256: sha256(await readFile(fileURLToPath(import.meta.url))),
   librarySha256: sha256(await readFile(join(scriptRoot, "webarena-benchmark-lib.mjs"))),
+  environmentProbeSha256: sha256(await readFile(join(scriptRoot, "webarena-environment.mjs"))),
   sidecarSha256: sha256(await readFile(join(scriptRoot, "webarena-evaluator.py"))),
   datasetSha256: sha256(datasetBytes), proofkitCommit: (await execute("git", ["rev-parse", "HEAD"], { cwd: join(scriptRoot, "..") })).stdout.trim(),
   proofkitDirty: Boolean((await execute("git", ["status", "--porcelain"], { cwd: join(scriptRoot, "..") })).stdout.trim()) };
@@ -62,7 +64,17 @@ async function sidecar(operation, cases = [], environments = {}) {
 
 try {
   const probe = await sidecar("probe");
-  if (command === "prepare") {
+  if (command === "probe") {
+    const configBytes = await boundedRead(resolve(required("--config")), 1024 * 1024);
+    const environment = await probePilotEnvironment(JSON.parse(configBytes.toString("utf8")));
+    const report = { schemaVersion: 1, benchmark: "webarena-verified-pilot-v1", mode: "environment-probe",
+      provenance, configSha256: sha256(configBytes), taskIds: pilotTaskIds, environment };
+    await save(join(output, "environment-report.json"), report);
+    console.log(JSON.stringify({ report: join(output, "environment-report.json"), status: environment.status,
+      applicationSitesReachable: environment.applicationSitesReachable, controlsHealthy: environment.controlsHealthy,
+      reset: environment.reset, taskExecution: environment.taskExecution }));
+    if (environment.status !== "reachable") process.exitCode = 1;
+  } else if (command === "prepare") {
     const tasks = selectTasks(dataset);
     const actor = join(output, "agent-input");
     await mkdir(actor);

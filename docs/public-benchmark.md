@@ -22,6 +22,7 @@
 | 专用 MCP stdio 入口 | 子进程握手、工具发现与项目发现通过 | 开发入口可由 MCP 客户端启动；未验证宿主 AI 或跨进程来源认证 |
 | 持续任务浏览器 | 本地脚本 fixture 共 5 个 Run，同一 Chrome 上下文完成探索、登录、失败尝试和最终导航；另验证真实取消及 stdio 断开清理 | Cookie、页面及存储状态跨 Mission 延续；最终 HAR 涵盖全部尝试，篡改被审计拒绝；不计入公开任务完成率 |
 | 官方评判持续任务 HAR | 本地 fixture 的任务 44 返回 success | 证明完整任务录制可送入官方评判器；不是官方 GitLab 环境，也不是 AI 自主解题 |
+| 四站点就绪探测 | 固定上游 CLI 与本地 HTTP fixture 集成通过 | 只核验应用入口与控制接口可访问；镜像身份、任务前重置和正式任务执行仍未验证 |
 
 对照中只有任务 108 使用上游已有成功记录；正确导航对照为**合成 HAR**。任务 107 的上游示例响应是 NAVIGATE，而固定数据要求 RETRIEVE，作为过期示例负对照保留。7/7 是评判校准结果，不是 Agent 完成率。
 
@@ -38,6 +39,33 @@
 | 修改 | 389、399、423、431 | GitLab、论坛、商城后台、商品 |
 
 数据 SHA-256：`315af52919d4afb5f5f168be58c796d35ff10d65cb49c9b762bf2b8b1c10b6cc`。运行报告记录上游提交、数据及脚本哈希、ProofKit 提交与工作树状态、Python/依赖版本；官方原始结果另含评判器校验和。
+
+## 独立站点的只读探测
+
+上游四个 pilot 站点的应用端口分别是商城 `7770`、商城后台 `7780`、论坛 `9999`、GitLab `8023`；环境控制端口分别是 `7771`、`7781`、`9998`、`8024`。在有足够资源的独立基准主机启动固定镜像后，可在运行 ProofKit 的机器上用本地端口映射或 SSH 隧道访问。配置中的 URL 必须是无内嵌凭据的回环地址：
+
+```json
+{
+  "environments": {
+    "__SHOPPING__": { "urls": ["http://127.0.0.1:7770"] },
+    "__SHOPPING_ADMIN__": { "urls": ["http://127.0.0.1:7780"] },
+    "__REDDIT__": { "urls": ["http://127.0.0.1:9999"] },
+    "__GITLAB__": { "urls": ["http://127.0.0.1:8023"] }
+  },
+  "controlUrls": {
+    "__SHOPPING__": "http://127.0.0.1:7771",
+    "__SHOPPING_ADMIN__": "http://127.0.0.1:7781",
+    "__REDDIT__": "http://127.0.0.1:9998",
+    "__GITLAB__": "http://127.0.0.1:8024"
+  }
+}
+```
+
+```powershell
+pnpm benchmark:webarena probe --upstream D:/bench/webarena-verified --python D:/bench/evaluator/Scripts/python.exe --config D:/bench/environment.json --output D:/bench/probe-001
+```
+
+`probe` 仅向四个应用入口发送 GET，并按上游 `HttpClient.status()` 契约读取控制接口的 `/status`；禁止跨站重定向，不执行 `init`、`reset`、登录或任务动作。输出是新目录中的 `environment-report.json`，并记录配置 SHA-256。退出 0 只表示四个应用入口和四个控制接口当时可访问；报告继续标记 `reset: not-verified`、`imageIdentity: not-verified`、`taskExecution: not-started`。上游文档提及 `/reset`，但固定提交的 HTTP 客户端未提供相应方法；正式任务重置必须先核对所用镜像的控制协议，再实测状态回到初始值。不能用此探测报告代替可评分环境证明。
 
 ## 本地使用
 
