@@ -10,6 +10,8 @@ It is designed for workflows where a green button is not enough: a resume must b
 
 See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for the host-agent integration, execution layers and current capability boundaries.
 
+Public evaluation starts with [WebArena-Verified](docs/public-benchmark.md): a pinned 12-task pilot, independent official scoring and evaluator controls. Live agent execution and a ProofKit effectiveness score remain unmeasured; replay and imported submissions are reported separately.
+
 ## What it does
 
 - Maps workspace manifests and common Web, Electron, and backend entry points.

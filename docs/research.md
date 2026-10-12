@@ -67,6 +67,14 @@ Repositories: <https://github.com/ServiceNow/BrowserGym>, <https://github.com/go
 
 BrowserGym contributes task environments and evaluation thinking; ARTEMIS contributes Android agent diagnosis. Their value to ProofKit is benchmark design and failure analysis, not a dependency in the first runtime.
 
+## WebArena-Verified evaluation
+
+Repository: <https://github.com/ServiceNow/webarena-verified> (Apache-2.0).
+
+Inspected the dataset, Python evaluation API, response schema, HAR parsing, network evaluator, demo traces and environment-control implementation at `6473f72db5dcefc97b5725b59e734504edc28a21` on 2026-10-12. The 812-task dataset supports a fixed 12-task read/navigation/write pilot. Its independent answer/network checks make it a useful first task-completion benchmark; it does not measure defect detection or Electron behavior.
+
+ProofKit calls the pinned official evaluator in a separate Python environment. Seven calibration controls matched their expected outcomes, including a stale upstream task-107 demo and an empty-trace error. The navigation controls are synthetic. The upstream navigation integration test is marked skipped for instability and its consolidated variations file is empty, so those fixtures are not evidence of a passing upstream navigation suite. Our narrow live API calibration establishes only the selected controls. Docker sites and host-agent execution remain unverified; see [the benchmark protocol](public-benchmark.md).
+
 ## Reuse policy
 
 1. Prefer a versioned upstream dependency when a project already owns a stable protocol or driver.

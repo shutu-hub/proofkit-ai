@@ -21,6 +21,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:host-verifier
+      - run: pnpm test:webarena
       - name: Verify evidenced host repair hypothesis and direct replay
         env:
           PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome
