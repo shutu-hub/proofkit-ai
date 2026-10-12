@@ -10,7 +10,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 
 See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for the host-agent integration, execution layers and current capability boundaries.
 
-Public evaluation starts with [WebArena-Verified](docs/public-benchmark.md): a pinned 12-task pilot, independent official scoring and evaluator controls. Live agent execution and a ProofKit effectiveness score remain unmeasured; replay and imported submissions are reported separately.
+Public evaluation starts with [WebArena-Verified](docs/public-benchmark.md): a pinned 12-task pilot, independent official scoring and evaluator controls. A four-task single-site subset has now run through the host and official evaluator, scoring 2/4; it does not establish a certified ProofKit effectiveness score. The broader [validation program](docs/validation-program.md) separates framework, public-task and AIHR business acceptance.
 
 ## What it does
 

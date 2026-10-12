@@ -7,6 +7,8 @@ export const benchmarkProfiles = Object.freeze({
     sites: ["shopping_admin", "shopping", "reddit", "gitlab"] }),
   "shopping-admin-4": Object.freeze({ benchmark: "webarena-verified-shopping-admin-4-v1",
     taskIds: [0, 108, 157, 423], sites: ["shopping_admin"] }),
+  "shopping-admin-12": Object.freeze({ benchmark: "webarena-verified-shopping-admin-12-v1",
+    taskIds: [0, 11, 77, 94, 108, 119, 374, 453, 470, 496, 501, 679], sites: ["shopping_admin"] }),
 });
 export function benchmarkProfile(name = "pilot-12") {
   const profile = benchmarkProfiles[name];

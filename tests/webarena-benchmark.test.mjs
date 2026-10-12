@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { benchmarkProfile, publicTask, renderScorecard, scorecard, selectTasks } from "../scripts/webarena-benchmark-lib.mjs";
 
-test("the single-site profile has a fixed four-task denominator and preserves the twelve-task pilot", () => {
+test("single-site profiles have fixed denominators and preserve the cross-site pilot", () => {
   assert.deepEqual(benchmarkProfile("shopping-admin-4").taskIds, [0, 108, 157, 423]);
   assert.deepEqual(benchmarkProfile("shopping-admin-4").sites, ["shopping_admin"]);
+  assert.deepEqual(benchmarkProfile("shopping-admin-12").taskIds,
+    [0, 11, 77, 94, 108, 119, 374, 453, 470, 496, 501, 679]);
   assert.equal(benchmarkProfile("pilot-12").taskIds.length, 12);
   assert.throws(() => benchmarkProfile("unknown"), /Unknown WebArena/);
 });

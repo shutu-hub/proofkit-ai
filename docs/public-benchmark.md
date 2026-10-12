@@ -13,7 +13,7 @@
 | 检查 | 实际结果 | 能证明什么 |
 | --- | --- | --- |
 | 官方评判对照 | 7/7 符合预期 | 官方接口能接受正确读取/导航，拒绝错误答案、错误路径和 HTTP 500；空 HAR 返回 error |
-| 基准回归 | 17/17 通过，包括官方 Python 集成测试 | 缺失任务不被丢弃，畸形输入为 error，篡改任务被阻断，历史结果不被覆盖 |
+| 基准回归 | 20/20 通过，包括官方 Python 集成测试和诊断工具 | 缺失任务不被丢弃，畸形输入为 error，篡改任务被阻断，历史结果不被覆盖 |
 | 固定任务批次 | `pilot-12` 十二题；`shopping-admin-4` 四题 | 四题子集独立计分，不能外推为十二题或全量成绩 |
 | 官方单站点 | D 盘 WSL Docker 中固定摘要的 `shopping_admin`；每题重建容器 | 数据库探针在重建后恢复为 0；`/admin` 和控制接口可达，真实 Chrome 免登录进入仪表盘 |
 | 四题真实执行 | 4 题均启动宿主；3 题提交并官方评判，2 成功、1 失败；另 1 题超时 | 官方合并报告按固定分母为 2/4；宿主失败须与官方缺失提交一起阅读 |
@@ -68,6 +68,8 @@ webarena-verified env start --site gitlab
 **设备规划（我们的建议，不是上游保证值）：**单站点顺序跑完整 pilot，使用 Linux x86_64、4 vCPU、16 GB RAM 和至少 120 GB 空闲 SSD；若四站点同时常驻，建议 8 vCPU、32 GB RAM、200 GB 空闲 SSD。前者已经把四镜像约 56 GB 的标称体积、Docker 解包/数据、浏览器、任务证据及重建余量算入；仍须在实际镜像拉取后核对占用。ProofKit 控制器还需 Node.js 22+、Chrome/Chromium，官方判分侧需 Python 3.11+。无需 GPU。只跑一个较轻的站点可降低起步需求，但不能据此宣称 12 题 pilot 已完成。
 
 **最小真实站点试跑：** `shopping_admin` 是这四个站点中标称镜像最小的一个（2.9 GB）。固定 pilot 中的任务 0、108（读取）、157（导航）、423（修改）都在该站点。现已提供独立 `shopping-admin-4` 批次，分母固定为四；原 `pilot-12` 批次保持十二题。先跑任务 157 验证整条真实链路，再用四题覆盖不同动作。单独的 Linux 主机可从 4 vCPU、8 GB RAM、50 GB 空闲 SSD 起步，16 GB RAM 更稳妥；这是待实测的规划值。四题结果不能冒充十二题成绩。
+
+后续新增同站点 `shopping-admin-12` 固定集：读取 0、11、77、94、108、119；导航 374、679；修改 453、470、496、501。结构检查确认这些任务均有官方评判配置，四道修改题的预期请求字段与任务意图表面一致；尚未用真实 UI 成功路径校准评判器，也尚未执行这十二题。它与 `pilot-12` 是不同集合，绝不合并计分。
 
 **任务前初态不能只凭 `/status` 判定。** 固定上游源码的控制服务仅实现 `POST /init`、`/start`、`/stop`、`/restart` 和 `GET /status`；文档示例中的 `POST /reset` 在该提交里没有路由。上游 `env stop` 会删除容器，`env start` 会新建容器；四个 pilot 站点的默认配置没有外部数据卷。`shopping_admin` 已用数据库标记做过 0 → 1 → 重建后 0 的验证，每题前亦记录新容器 ID、固定镜像摘要和标记读数；这只证明该镜像的重建恢复，不证明其余三个站点。任何恢复失败的题只能标为环境阻断，不能计分。
 
@@ -248,6 +250,14 @@ pnpm benchmark:webarena:run-host --session D:/bench/operator-157.json --batch D:
 Codex 宿主需使用已登录、保留模型提供方配置的隔离 `CODEX_HOME`。入口先枚举可见 MCP；若另有已启用的 MCP 则在启动前拒绝，以免模型偏离基准专用工具。它仅将该题 allowlist 公开指令交给宿主，保存完整 JSONL，运行宿主轨迹和持久证据审计；只有关联通过，才将按摘要再次核验的响应/HAR 放进 `submissions/<taskId>/`，供独立的 `grade` 命令读取。失败、超时或没有最终提交的宿主不会生成可评判提交。`host-run.json` 始终标记 `officialScore: not-run`，官方判分须另行执行。当前四题实测中，任务 0 的宿主超时会在官方导入报告里显示为缺失提交，必须连同宿主报告一起统计。
 
 当前本机仅证明三份真实宿主轨迹与文件一致。它不负责站点部署或重置，也不构成系统级答案隔离：同一账户仍可能读取上游标准答案。正式可信评测须让 Agent 宿主运行在只含公开输入的独立账户或容器，评判器和完整上游数据留在另一个信任域；并记录模型用量、失败尝试与重复运行稳定性。
+
+将官方 `grade` 报告和每题 `host-run.json` 合并为观察阶段诊断，可运行：
+
+```powershell
+pnpm benchmark:webarena:diagnose --grade D:/bench/grade-admin4-final-20261012/report.json --host D:/bench/host-run-0-002/host-run.json --host D:/bench/host-run-108-001/host-run.json --host D:/bench/host-run-157-005/host-run.json --host D:/bench/host-run-423-001/host-run.json --output D:/bench/admin4-diagnosis-new
+```
+
+输出 `report.json` 和简洁的 `report.html`，固定分母同时显示已尝试但未提交的超时题、官方结果、工具失败/入参拒绝和待复核项。它只做基于现有报告和哈希一致的宿主 JSONL 的诊断，不把失败阶段冒充已证实根因。后续基准扩容、AIHR 合成用例与修复回归门槛见[标准验收方案](validation-program.md)。
 
 ## 下一阶段：从真实试跑到可信评测
 
