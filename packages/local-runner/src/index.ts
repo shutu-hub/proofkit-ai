@@ -544,8 +544,17 @@ export class LocalRunnerService {
     const levelSelection = input.suiteId && !input.level
       ? TestLevelSelectionSchema.parse({ resolved: "release", source: "inferred", reason: `选定的测试套件 ${input.suiteId} 要求 release 级别`, confidence: 1 })
       : resolveTestLevel(input.intent, input.level ?? input.charter?.level ?? catalogLevel);
-    const hasAdHocOptions = Boolean(input.url || input.expect?.length || input.oracleNames?.length || input.mode || input.sideEffectPolicy);
-    if (input.charter && hasAdHocOptions) throw new Error("A submitted Charter cannot be combined with ad-hoc planning options");
+    if (input.charter && input.mode && input.mode !== input.charter.mode) {
+      throw new Error(`Submitted Charter mode ${input.charter.mode} conflicts with top-level mode ${input.mode}`);
+    }
+    if (input.charter && input.sideEffectPolicy && input.sideEffectPolicy !== input.charter.sideEffectPolicy) {
+      throw new Error(`Submitted Charter sideEffectPolicy ${input.charter.sideEffectPolicy} conflicts with top-level sideEffectPolicy ${input.sideEffectPolicy}`);
+    }
+    const hasAdHocOptions = Boolean(input.url || input.expect?.length || input.oracleNames?.length
+      || (!input.charter && (input.mode || input.sideEffectPolicy)));
+    if (input.charter && (input.url || input.expect?.length || input.oracleNames?.length)) {
+      throw new Error("A submitted Charter cannot be combined with top-level url, expect or oracleNames");
+    }
     if (input.charterId && hasAdHocOptions) throw new Error("charterId cannot be combined with ad-hoc planning options");
     if (input.suiteId && hasAdHocOptions) throw new Error("suiteId cannot be combined with ad-hoc planning options");
     const projectRequested = assessPlanningCoverage(input.intent, undefined, input.coverage).requested === "project";

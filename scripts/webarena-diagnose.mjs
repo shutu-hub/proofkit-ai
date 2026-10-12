@@ -80,6 +80,10 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
         timedOut: host.execution?.timedOut ?? false, blocker: host.execution?.blocker ?? null,
         toolCalls: host.toolStats?.completed ?? null, failedToolCalls: host.toolStats?.failed ?? null,
         inputRejections: host.toolStats?.inputRejections ?? null,
+        resourceDiscoveryFailures: host.toolStats?.resourceDiscoveryFailures ?? null,
+        taskToolFailures: host.toolStats?.taskToolFailures ?? null,
+        preToolStreamReconnects: host.toolStats?.preToolStreamReconnects ?? null,
+        firstToolCallAtMs: host.execution?.milestones?.firstToolCallAtMs ?? null,
         testStandard: host.audit?.testStandard ?? null,
         toolStatsIntegrity: host.toolStatsIntegrity ?? "unavailable" } : null,
       classification,
@@ -102,6 +106,9 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
         missionVerified: items.filter((item) => item.host?.testStandard === "mission-verified").length,
         surfaceOnly: items.filter((item) => item.host?.testStandard === "surface-only").length,
         inputRejections: items.reduce((sum, item) => sum + (item.host?.inputRejections ?? 0), 0),
+        resourceDiscoveryFailures: items.reduce((sum, item) => sum + (item.host?.resourceDiscoveryFailures ?? 0), 0),
+        taskToolFailures: items.reduce((sum, item) => sum + (item.host?.taskToolFailures ?? 0), 0),
+        preToolStreamReconnects: items.reduce((sum, item) => sum + (item.host?.preToolStreamReconnects ?? 0), 0),
         traceVerified: items.filter((item) => item.host?.toolStatsIntegrity === "verified").length }];
     }));
   return { schemaVersion: 1, planned: grade.summary.planned,
@@ -115,7 +122,10 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
     friction: { verifiedHostTraces: cases.filter((item) => item.host?.toolStatsIntegrity === "verified").length,
       unknownHostTraces: cases.filter((item) => item.host && item.host.toolStatsIntegrity !== "verified").length,
       failedToolCalls: cases.reduce((sum, item) => sum + (item.host?.failedToolCalls ?? 0), 0),
-      inputRejections: cases.reduce((sum, item) => sum + (item.host?.inputRejections ?? 0), 0) },
+      inputRejections: cases.reduce((sum, item) => sum + (item.host?.inputRejections ?? 0), 0),
+      resourceDiscoveryFailures: cases.reduce((sum, item) => sum + (item.host?.resourceDiscoveryFailures ?? 0), 0),
+      taskToolFailures: cases.reduce((sum, item) => sum + (item.host?.taskToolFailures ?? 0), 0),
+      preToolStreamReconnects: cases.reduce((sum, item) => sum + (item.host?.preToolStreamReconnects ?? 0), 0) },
     cases,
     interpretation: "Observed stage only. Product, model, tool and evaluator root causes require evidence review and controlled rerun." };
 }
@@ -144,22 +154,30 @@ function classify(grade, host, checks) {
 
 export function summarizeHostEvents(jsonl) {
   let completed = 0, failed = 0, inputRejections = 0;
+  let resourceDiscoveryFailures = 0, taskToolFailures = 0, preToolStreamReconnects = 0;
+  let firstToolCompleted = false;
   const tools = new Map();
   for (const line of jsonl.split(/\r?\n/)) {
     let event;
     try { event = JSON.parse(line); } catch { continue; }
+    if (!firstToolCompleted && event?.type === "error" && typeof event.message === "string"
+      && /stream disconnected|reconnecting/i.test(event.message)) preToolStreamReconnects += 1;
     if (event?.type !== "item.completed" || event.item?.type !== "mcp_tool_call") continue;
+    firstToolCompleted = true;
+    const name = typeof event.item.tool === "string" ? event.item.tool : "unknown";
+    const resourceDiscovery = name === "list_mcp_resources" || name === "list_mcp_resource_templates";
     completed += 1;
     if (event.item.status === "failed") {
       failed += 1;
+      if (resourceDiscovery) resourceDiscoveryFailures += 1;
+      else taskToolFailures += 1;
       const message = (event.item.result?.content ?? []).filter((item) => item?.type === "text")
         .map((item) => item.text).filter((item) => typeof item === "string").join("\n").slice(0, 8192);
       if (/Input validation error|cannot be combined with ad-hoc planning options/i.test(message)) inputRejections += 1;
     }
-    const name = typeof event.item.tool === "string" ? event.item.tool : "unknown";
     tools.set(name, (tools.get(name) ?? 0) + 1);
   }
-  return { completed, failed, inputRejections,
+  return { completed, failed, inputRejections, resourceDiscoveryFailures, taskToolFailures, preToolStreamReconnects,
     tools: Object.fromEntries([...tools].sort(([a], [b]) => a.localeCompare(b))) };
 }
 
@@ -177,7 +195,8 @@ export function renderDiagnosis(report) {
   const rows = report.cases.map((item) => `<tr><td>${item.taskId}</td><td>${escape(item.official.status)}</td>`
     + `<td>${escape(item.host?.status ?? "missing")}</td><td>${escape(item.host?.testStandard ?? "—")}</td><td>${escape(item.classification.code)}</td>`
     + `<td>${escape(item.official.checks?.answer ?? "—")}</td><td>${item.official.checks ? `${item.official.checks.network.passed}/${item.official.checks.network.failed}/${item.official.checks.network.errors}` : "—"}</td>`
-    + `<td>${item.host?.failedToolCalls ?? "—"}/${item.host?.toolCalls ?? "—"}</td>`
+    + `<td>${item.host?.failedToolCalls ?? "—"}/${item.host?.toolCalls ?? "—"}</td><td>${item.host?.resourceDiscoveryFailures ?? "—"}</td>`
+    + `<td>${item.host?.preToolStreamReconnects ?? "—"} / ${item.host?.firstToolCallAtMs ?? "—"} ms</td>`
     + `<td>${escape(item.classification.nextCheck)}</td></tr>`).join("\n");
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>ProofKit 基准诊断</title>`
     + `<style>body{font:15px system-ui;max-width:1100px;margin:40px auto;padding:0 20px;color:#18212b}`
@@ -186,11 +205,11 @@ export function renderDiagnosis(report) {
     + `<h1>基准诊断</h1><p class="score">${report.officialEvaluated ? `${report.officialSuccess}/${report.planned} 官方成功` : "官方成绩未测量"}</p>`
     + `<p class="muted">官方已评判 ${report.officialEvaluated}/${report.planned}；未运行题目仍留在固定分母。</p>`
     + `<p class="muted">官方子评判可用 ${report.officialDetailCoverage.available}/${report.officialDetailCoverage.evaluated}；仅保留状态，不复制答案和请求内容。</p>`
-    + `<p class="muted">${report.friction.inputRejections} 次工具入参拒绝；失败类别表示观察到的阶段，根因须复核证据并重复运行。</p>`
+    + `<p class="muted">${report.friction.inputRejections} 次工具入参拒绝；${report.friction.resourceDiscoveryFailures} 次 MCP resources 探测失败；首次已完成工具调用前有 ${report.friction.preToolStreamReconnects} 次模型流重连。失败类别表示观察到的阶段，根因须复核证据并重复运行。</p>`
     + `<h2>任务能力组</h2><p class="muted">按预先固定的任务意图分组；低分是调查线索，不等于已确认的框架根因。</p>`
     + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>已评判/计划</th><th>宿主超时</th><th>结果失败</th><th>回答判分失败</th><th>网络判分失败</th><th>入参拒绝</th><th>Mission/仅表面</th><th>已核验轨迹</th></tr></thead>`
     + `<tbody>${groups}</tbody></table><h2>逐题诊断</h2>`
-    + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>测试标准</th><th>观察类别</th><th>回答判分</th><th>网络通过/失败/错误</th><th>工具失败/总数</th><th>下一步核查</th></tr></thead>`
+    + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>测试标准</th><th>观察类别</th><th>回答判分</th><th>网络通过/失败/错误</th><th>工具失败/总数</th><th>resources 失败</th><th>首工具前重连/首工具时间</th><th>下一步核查</th></tr></thead>`
     + `<tbody>${rows}</tbody></table></html>`;
 }
 

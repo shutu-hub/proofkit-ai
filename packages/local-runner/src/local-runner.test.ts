@@ -442,6 +442,25 @@ describe("LocalRunnerService", () => {
     expect(mission.levelSelection).toMatchObject({ requested: "quick", resolved: "quick", source: "explicit" });
   });
 
+  it("accepts identical Charter policy hints but rejects conflicting duplicates", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-charter-hints-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ workspaceRoot: root, root });
+    const charter: TestCharter = { intent: "check login", level: "quick", mode: "deterministic",
+      preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }],
+      sideEffectPolicy: "deny", metadata: {} };
+    const input = { intent: charter.intent, surface: "web" as const, charter };
+
+    const mission = await service.createMission({ ...input, mode: "deterministic", sideEffectPolicy: "deny" });
+    expect(mission.plan).toBeDefined();
+    await expect(service.createMission({ ...input, mode: "guided" }))
+      .rejects.toThrow("Submitted Charter mode deterministic conflicts with top-level mode guided");
+    await expect(service.createMission({ ...input, sideEffectPolicy: "allow" }))
+      .rejects.toThrow("Submitted Charter sideEffectPolicy deny conflicts with top-level sideEffectPolicy allow");
+    await expect(service.createMission({ ...input, expect: ["ready"] }))
+      .rejects.toThrow("cannot be combined with top-level url, expect or oracleNames");
+  });
+
   it("rejects a supplied level that contradicts an unambiguous user intensity", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-intensity-conflict-"));
     roots.push(root);

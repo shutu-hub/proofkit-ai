@@ -39,6 +39,17 @@ function eventProviderBlocker(event) {
   return null;
 }
 
+function repeatedStreamDisconnects(jsonl) {
+  let count = 0;
+  for (const line of jsonl.split(/\r?\n/)) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type === "error" && typeof event.message === "string"
+      && /stream disconnected|reconnecting/i.test(event.message)) count++;
+  }
+  return count >= 3;
+}
+
 /** Keep the complete event trace on disk and stop provider retries on a decisive access error. */
 export async function runHost(executable, args, cwd, timeoutMs, eventsPath) {
   const started = Date.now();
@@ -156,8 +167,12 @@ export async function runHost(executable, args, cwd, timeoutMs, eventsPath) {
     });
   });
   const transcript = await readFile(eventsPath, "utf8");
+  const streamUnavailable = milestones.firstToolCallAtMs === null && repeatedStreamDisconnects(transcript)
+    && (execution.timedOut || Number.isInteger(execution.code) && execution.code !== 0)
+    && (!execution.stopReason || execution.stopReason === "host-deadline-exceeded");
   return { ...execution, milestones, transcript, blocker: classifyHostBlocker(transcript) ??
     (execution.stopReason === "provider-balance" || execution.stopReason === "provider-access" ? execution.stopReason : null) ??
+    (streamUnavailable ? "provider-stream-unavailable" : null) ??
     (!execution.timedOut && !execution.stopReason && Number.isInteger(execution.code)
       && execution.code !== 0 && !transcript.trim() ? "host-cli-startup" : null) };
 }

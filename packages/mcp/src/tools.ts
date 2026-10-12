@@ -115,7 +115,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "run_test",
-    "Run a natural-language ProofKit test mission at the requested intensity. When surface is omitted, an unambiguous platform in the intent is used. Supply a structured Charter or a reviewed external-workspace candidate relative path and scope SHA-256 when no catalog entry covers the workflow. A submitted charter must not be combined with top-level url, expect, oracleNames, mode or sideEffectPolicy. A candidate path must not be combined with charter, charterId, suiteId or those ad-hoc fields. For single exploratory clicks/fills use interact_surface first; its result is not a product verdict. Poll status and evidence for the final result.",
+    "Run a natural-language ProofKit test mission at the requested intensity. When surface is omitted, an unambiguous platform in the intent is used. Supply a structured Charter or a reviewed external-workspace candidate relative path and scope SHA-256 when no catalog entry covers the workflow. A submitted Charter owns mode and sideEffectPolicy; identical top-level repeats are accepted, conflicting values are rejected. Do not combine it with top-level url, expect or oracleNames. A candidate path must not be combined with charter, charterId, suiteId or ad-hoc planning fields. For single exploratory clicks/fills use interact_surface first; its result is not a product verdict. Poll status and evidence for the final result.",
     {
       intent: z.string().min(1),
       charter: TestCharterSchema.optional(),

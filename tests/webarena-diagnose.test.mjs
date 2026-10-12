@@ -25,12 +25,15 @@ test("merges every planned task with the host attempt and keeps root causes unco
   assert.deepEqual(report.capabilityGroups, {
     mutate: { planned: 1, officialEvaluated: 1, officialSuccess: 0, hostTimeout: 0, outcomeFailed: 1,
       answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 0,
+      resourceDiscoveryFailures: 0, taskToolFailures: 0, preToolStreamReconnects: 0,
       missionVerified: 0, surfaceOnly: 0, traceVerified: 1 },
     navigate: { planned: 1, officialEvaluated: 1, officialSuccess: 1, hostTimeout: 0, outcomeFailed: 0,
       answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 3,
+      resourceDiscoveryFailures: 0, taskToolFailures: 0, preToolStreamReconnects: 0,
       missionVerified: 0, surfaceOnly: 0, traceVerified: 1 },
     retrieve: { planned: 2, officialEvaluated: 1, officialSuccess: 1, hostTimeout: 1, outcomeFailed: 0,
       answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 5,
+      resourceDiscoveryFailures: 0, taskToolFailures: 0, preToolStreamReconnects: 0,
       missionVerified: 0, surfaceOnly: 0, traceVerified: 2 },
   });
   assert.equal(report.cases[3].taskGroup, "mutate");
@@ -105,12 +108,16 @@ test("does not turn an unaudited host or changed trace into a scored capability 
 
 test("summarizes tool calls without copying arguments, results or error content", () => {
   const events = [
+    { type: "error", message: "stream disconnected - Reconnecting" },
     { type: "item.completed", item: { type: "mcp_tool_call", tool: "run_test", status: "failed", arguments: { secret: "hidden" },
       result: { content: [{ type: "text", text: "Input validation error: private" }] } } },
     { type: "item.completed", item: { type: "mcp_tool_call", tool: "inspect_surface", status: "completed" } },
+    { type: "item.completed", item: { type: "mcp_tool_call", tool: "list_mcp_resources", status: "failed" } },
     { type: "item.started", item: { type: "mcp_tool_call", tool: "ignored", status: "failed" } },
   ].map((event) => JSON.stringify(event)).join("\n");
   const stats = summarizeHostEvents(events);
-  assert.deepEqual(stats, { completed: 2, failed: 1, inputRejections: 1, tools: { inspect_surface: 1, run_test: 1 } });
+  assert.deepEqual(stats, { completed: 3, failed: 2, inputRejections: 1, resourceDiscoveryFailures: 1,
+    taskToolFailures: 1, preToolStreamReconnects: 1,
+    tools: { inspect_surface: 1, list_mcp_resources: 1, run_test: 1 } });
   assert.doesNotMatch(JSON.stringify(stats), /hidden|private/);
 });
