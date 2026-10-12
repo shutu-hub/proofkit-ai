@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { diagnoseBatch, renderDiagnosis, summarizeHostEvents, summarizeOfficialChecks } from "../scripts/webarena-diagnose.mjs";
+const noActions = () => ({ attempted: 0, observed: 0, failed: 0, blocked: 0, cancelled: 0, unknown: 0, rpcFailed: 0 });
 
 test("merges every planned task with the host attempt and keeps root causes unconfirmed", () => {
   const grade = { summary: { planned: 4 }, cases: [
@@ -26,15 +27,15 @@ test("merges every planned task with the host attempt and keeps root causes unco
     mutate: { planned: 1, officialEvaluated: 1, officialSuccess: 0, hostTimeout: 0, outcomeFailed: 1,
       answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 0,
       resourceDiscoveryFailures: 0, taskToolFailures: 0, preToolStreamReconnects: 0,
-      missionVerified: 0, surfaceOnly: 0, traceVerified: 1 },
+      exploratoryActions: noActions(), missionVerified: 0, surfaceOnly: 0, traceVerified: 1 },
     navigate: { planned: 1, officialEvaluated: 1, officialSuccess: 1, hostTimeout: 0, outcomeFailed: 0,
       answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 3,
       resourceDiscoveryFailures: 0, taskToolFailures: 0, preToolStreamReconnects: 0,
-      missionVerified: 0, surfaceOnly: 0, traceVerified: 1 },
+      exploratoryActions: noActions(), missionVerified: 0, surfaceOnly: 0, traceVerified: 1 },
     retrieve: { planned: 2, officialEvaluated: 1, officialSuccess: 1, hostTimeout: 1, outcomeFailed: 0,
       answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 5,
       resourceDiscoveryFailures: 0, taskToolFailures: 0, preToolStreamReconnects: 0,
-      missionVerified: 0, surfaceOnly: 0, traceVerified: 2 },
+      exploratoryActions: noActions(), missionVerified: 0, surfaceOnly: 0, traceVerified: 2 },
   });
   assert.equal(report.cases[3].taskGroup, "mutate");
   assert.equal(report.cases[0].classification.stage, "agent-loop");
@@ -121,8 +122,49 @@ test("summarizes tool calls without copying arguments, results or error content"
   const stats = summarizeHostEvents(events);
   assert.deepEqual(stats, { completed: 3, failed: 2, inputRejections: 1, resourceDiscoveryFailures: 1,
     taskToolFailures: 1, preToolStreamReconnects: 1,
-    tools: { inspect_surface: 1, list_mcp_resources: 1, run_test: 1 } });
+    exploratoryActions: noActions(), tools: { inspect_surface: 1, list_mcp_resources: 1, run_test: 1 } });
   assert.doesNotMatch(JSON.stringify(stats), /hidden|private/);
+});
+
+test("separates completed RPC from failed or unavailable exploratory action results", () => {
+  const call = (result, status = "completed") => ({ type: "item.completed", item: {
+    type: "mcp_tool_call", tool: "interact_surface", status, result, arguments: { secret: "private-selector" },
+  } });
+  const outcome = (status) => ({ interactionId: "interaction", testVerdict: "not-asserted", status,
+    snapshot: { text: "private-page-text" }, findings: ["private-finding"] });
+  const events = [
+    call({ structured_content: outcome("failed") }),
+    call({ structured_content: outcome("observed") }),
+    call({ structured_content: outcome("blocked") }),
+    call({ content: [{ type: "text", text: JSON.stringify(outcome("cancelled")) }] }),
+    call(undefined),
+    call({ structured_content: outcome("passed") }),
+    call({ structured_content: { status: "observed" } }),
+    call({ content: [{ type: "text", text: "invalid JSON" }] }),
+    call({ content: "invalid-content-shape" }),
+    call({ structured_content: outcome("observed") }, "failed"),
+  ].map((event) => JSON.stringify(event)).join("\n");
+  const stats = summarizeHostEvents(events);
+  assert.equal(stats.failed, 1);
+  assert.deepEqual(stats.exploratoryActions, { attempted: 10, observed: 1, failed: 1, blocked: 1,
+    cancelled: 1, unknown: 5, rpcFailed: 1 });
+  const grade = { summary: { planned: 1 }, cases: [{ taskId: 108, status: "success", score: 1 }] };
+  const report = diagnoseBatch(grade, [{ taskId: 108, status: "associated", toolStats: stats, toolStatsIntegrity: "verified" }]);
+  assert.equal(report.officialSuccess, 1);
+  assert.equal(report.cases[0].classification.code, "passed");
+  assert.equal(report.cases[0].classification.rootCause, "unconfirmed");
+  assert.deepEqual(report.friction.exploratoryActions, stats.exploratoryActions);
+  assert.deepEqual(report.capabilityGroups.unclassified.exploratoryActions, stats.exploratoryActions);
+  assert.equal(report.friction.actionTraceCoverage, 1);
+  assert.equal(report.investigationCounts["exploratory-action-failed"], 1);
+  assert.doesNotMatch(JSON.stringify(report) + renderDiagnosis(report), /private-selector|private-page-text|private-finding/);
+  for (const integrity of ["changed", "unavailable"]) {
+    const unverified = diagnoseBatch(grade, [{ taskId: 108, status: "associated", toolStats: stats, toolStatsIntegrity: integrity }]);
+    assert.equal(unverified.cases[0].host.exploratoryActions, null);
+    assert.equal(unverified.friction.actionTraceCoverage, 0);
+    assert.deepEqual(unverified.friction.exploratoryActions, noActions());
+    assert.equal(unverified.investigationCounts["exploratory-action-failed"], undefined);
+  }
 });
 
 test("keeps independent host, tool, action and answer investigation signals", () => {

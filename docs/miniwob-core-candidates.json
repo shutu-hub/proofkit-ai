@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "miniwob20-candidates-v0.1",
+  "status": "source-prepared-not-executable",
+  "source": {
+    "repository": "https://github.com/Farama-Foundation/MiniWoB-plusplus",
+    "commit": "33c3b4ddef8c6eb67c57a29663d844b1eda7e614",
+    "license": "MIT",
+    "archiveSha256": "6896fea67e90a46d48fed1f157a9be89e6d9ef96483906ee47b99f3980f5ba11"
+  },
+  "plannedSeeds": [
+    0,
+    1,
+    2
+  ],
+  "plannedEpisodes": 60,
+  "agentEpisodesExecuted": 0,
+  "scoringStatus": "not-measured",
+  "oracleProposal": {
+    "source": "miniwob/selenium_instance.py:get_metadata and miniwob/html/core/core.js:endEpisode",
+    "fullSuccess": "done=true and raw_reward=1; retain raw and time-scaled reward separately",
+    "partialCredit": "report separately; not full success"
+  },
+  "promotionRequirements": [
+    "Freeze episode budget: upstream default is 10000ms; changes require a separately named adapted protocol",
+    "Controller owns seeds, mode, episode start and reward read; the agent cannot modify rewards or timers",
+    "Use fresh browser contexts; record upstream nondeterminism flags",
+    "Validate real positive and negative UI controls before scoring",
+    "Retain unsupported actions as explicit gaps rather than silently dropping cases",
+    "Freeze model, host, browser, tools, prompt and budget; measure action latency",
+    "Isolate evaluator and source access before claiming trusted agent scores"
+  ],
+  "cases": [
+    {
+      "id": "miniwob/click-button-v1",
+      "capability": "targeting",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/click-button-sequence-v1",
+      "capability": "sequential-interaction",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/click-link-v1",
+      "capability": "targeting",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/click-dialog-v1",
+      "capability": "dialog",
+      "upstreamNonDeterministic": true
+    },
+    {
+      "id": "miniwob/click-dialog-2-v1",
+      "capability": "dialog",
+      "upstreamNonDeterministic": true
+    },
+    {
+      "id": "miniwob/click-collapsible-v1",
+      "capability": "navigation",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/click-tab-v1",
+      "capability": "navigation",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/click-checkboxes-v1",
+      "capability": "selection",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/click-checkboxes-soft-v1",
+      "capability": "selection",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/click-option-v1",
+      "capability": "selection",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/choose-list-v1",
+      "capability": "selection",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/focus-text-v1",
+      "capability": "focus",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/enter-text-v1",
+      "capability": "text-input",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/enter-text-2-v1",
+      "capability": "text-input",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/login-user-v1",
+      "capability": "form",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/search-engine-v1",
+      "capability": "retrieval",
+      "upstreamNonDeterministic": true
+    },
+    {
+      "id": "miniwob/use-autocomplete-v1",
+      "capability": "autocomplete",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/choose-date-v1",
+      "capability": "date-picker",
+      "upstreamNonDeterministic": true
+    },
+    {
+      "id": "miniwob/email-inbox-v1",
+      "capability": "multi-step",
+      "upstreamNonDeterministic": false
+    },
+    {
+      "id": "miniwob/drag-items-v1",
+      "capability": "drag",
+      "upstreamNonDeterministic": false
+    }
+  ],
+  "nativeEpisodeTimeoutMs": 10000,
+  "adaptedProtocolStatus": "not-defined"
+}

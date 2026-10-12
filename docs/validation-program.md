@@ -1,88 +1,97 @@
 # ProofKit 标准验收与失败诊断
 
-状态：2026-10-13 的执行方案。已验证事实与拟建基准分开记录；不得把脚本 fixture、官方任务完成率和真实产品缺陷发现率相加。
+更新：2026-10-13。目标是验证「宿主 AI + ProofKit」能否完成任务、正确判断业务结果并提供证据。框架回归、公开任务成绩、真实业务缺陷发现分别计量。
 
-## 为什么四题不够
+## 当前真实结果
 
-当前 `shopping-admin-4` 是同一站点的四道任务。实际官方成绩为 2/4：0 的宿主 15 分钟超时未提交，108、157 通过，423 提交后失败。四份最终宿主轨迹共完成 83 次 MCP 工具调用，其中 9 次被工具入参契约拒绝；108 和 157 虽通过，也分别有 4、3 次拒绝。这个信号指向工具接口易用性和 Agent 编排成本，但不能单凭它断定任务失败的根因。新的 `benchmark:webarena:diagnose` 把官方报告、宿主超时和工具拒绝合并为紧凑报告，并把根因保留为 `unconfirmed`。
+最新完整批次：`D:/bench/admin12-codex-20261013-003`。固定官方 shopping_admin 镜像，12 题逐题重建，单题宿主限时 600 秒；ProofKit 提交 `447e6e0`，执行期间工作树干净。
 
-诊断器现按预先固定的题目意图拆出能力组；历史四题的只读重算保存在 `D:/bench/admin4-capability-diagnosis-20261013/report.html`：读取 1/2（另 1 题超时，6 次入参拒绝）、导航 1/1（3 次入参拒绝）、修改 0/1（已提交但官方失败，0 次入参拒绝）。这只能指示优先调查读取流程的工具摩擦和修改任务的操作/评判，不足以从每组 1–2 题推断稳定成功率或产品根因。
-
-第二次四题实跑保存在 `D:/bench/admin4-regression-20261013-002/`，官方仍为 2/4。其四份宿主轨迹哈希均核验通过；15 次失败工具调用已拆为 **14 次宿主探测未提供的 MCP resources、1 次 ProofKit `run_test` 入参拒绝**。任务 0 首次已完成工具调用前有 10 次模型流重连，首次工具调用约在 5 分 51 秒，随后在 10 分钟限时内未提交；任务 108、157 官方通过且有 Mission 证据；423 官方失败且只有表面操作证据。新的只读诊断见 `D:/bench/admin4-regression-20261013-002-diagnosis-v2/report.html`。这次批次运行期间修改过本地诊断代码，因此它不能当作严格的同版本性能比较；这些数字用于选择修复方向，不用于宣称稳定性改善。
-
-修正 resources 指引及一致 Charter 参数后，第三次真实四题批次 `D:/bench/admin4-regression-20261013-003/` 得到**官方 3/4**：0、108、157 通过且均有 Mission 证据，423 官方失败且仅有 36 次表面观察/操作 Run，没有 Mission；四题都完成提交并通过宿主轨迹关联。工具失败从上一轮 15 次降到 1 次，resources 探测失败从 14 次降到 0；剩余一次是 157 传完整 Charter 却遗漏顶层 `intent` 的 schema 拒绝，随后恢复。任务 0 本轮 22 次工具调用、零失败、约 3 分 52 秒提交，官方通过。423 的官方子评判同时显示回答失败和所需网络事件缺失，轨迹包含 22 次点击、1 次填入、1 次按键；该题已有评判结构疑点，不能单凭它确认模型、工具或产品根因。此轮提高了观测成绩，但只有一轮，尚不能证明成功率或工具摩擦稳定改善。针对 157 的入参问题已允许结构化 Charter 自带 `intent`，仍需在下一批真实宿主任务中验证效果。
-
-首次扩大到 `shopping-admin-12` 的真实批次 `D:/bench/admin12-codex-20261013-001/` 在任务 470 的站点重建前中断。计划 12 题中，7 题完成宿主关联并获官方通过；119 虽提交，但任务级 HAR 为 35,681,437 字节、1714 个网络事件，超过原来的 32 MiB 上限，证据审计正确拒绝其提交；470 的一次 `docker inspect` 失败阻断重建，后 3 题未运行。**不能将 7 题官方通过写成 7/12 的模型完成率。** 只读重算 `D:/bench/admin12-codex-20261013-001-diagnosis-v2/report.html` 将其分为 7 通过、1 证据采集不可用、1 批次环境阻断、3 未运行。Docker 后续读数恢复，但瞬时失败根因未确认。已将 HAR 上限在采集、任务审计、宿主封存和官方导入各层统一提高到 128 MiB，并只对只读容器检查加入有界重试；需用全新批次验证任务 119 和剩余修改题。更长期应保留原始 HAR，同时为评判器派生可核验的精简网络投影，避免大量静态响应正文推高证据成本。
-
-数据集本身也要验收。任务 157 的官方网络判分只检查客户列表路径，不证明逐个客户详情已读。任务 423 的固定预期同时要求商品保存 URL 和订单报表字段，却没有声明 `http_method`；官方评判结果将其归一为 GET，同时保留请求正文要求。结构审计现标记 `request-body-without-write-method`，该题不进入新增的 24 题质量门槛。它本轮失败是因为 Agent 没有完成修改，仍不能据此断言官方判分误判；真正校准需要受控的真实 UI 成功路径。
-
-新的官方子评判诊断在 `D:/bench/admin4-official-check-diagnosis-20261013-v3/report.html`：423 同时有回答判分失败和网络事件缺失，观察类别为 `network-evidence-missing`；0 仍为宿主超时，108、157 通过。诊断只保存评判状态与缺失事件信号，不复制官方答案、请求正文或页面原文。网络事件缺失提示检查动作轨迹、HAR 采集和判分规则，**不自动确认**是 ProofKit、Agent 或产品缺陷。
-
-## 参照项目怎样验收
-
-| 项目及可核对来源 | 公开可见的验收做法 | ProofKit 应借鉴的部分 |
-| --- | --- | --- |
-| [Playwright](https://github.com/microsoft/playwright/blob/main/.github/workflows/tests_primary.yml) | 主测试矩阵覆盖 Chromium、Firefox、WebKit，并按系统和分片运行；另有 [MCP 工作流](https://github.com/microsoft/playwright/blob/main/.github/workflows/tests_mcp.yml)。 | 协议和适配器需跨浏览器、跨系统、真实进程测试；不能用 Agent 任务分数替代底层可靠性。 |
-| [ego-lite](https://github.com/citrolabs/ego-lite/blob/main/package/ego-browser/package.json) | `npm test` 包含构建、API 文档校验、类型检查及 `src/**/*.test.mjs`；仓库另有 [38 个真实浏览器 E2E case 模块](https://github.com/citrolabs/ego-lite/tree/main/package/ego-browser/scripts/real-browser-e2e/cases)，覆盖点击命中、弹窗、下载、跨 frame、定位与工作区等。公开 CI 的 `test` job 调用 `npm test`，未看到它调用独立的 `npm run e2e`；README 的四任务速度对比是产品基准展示，仓库中未见对应的独立业务判分集。 | 借鉴真实浏览器动作回归矩阵，明确 CI 中哪些测试真正执行；ProofKit 仍需独立产品 Oracle 和 Agent 任务集。 |
-| [Cypress](https://github.com/cypress-io/cypress/blob/develop/guides/continuous-integration.md) | CircleCI 分单测、Chrome/Firefox/Electron/WebKit 驱动集成、跨浏览器系统测试、框架集成及构建后二进制验证。 | 发布验收要验证最终安装产物和真实宿主，不止源码测试。 |
-| [Selenium](https://github.com/SeleniumHQ/selenium/tree/trunk/.github/workflows) | 按 Java、JavaScript、Python、.NET、Ruby、Rust 和 Grid 拆 CI；有定时运行与 flaky 报告。 | 分层记录兼容性、重复运行不稳定性和失败归属。 |
-| [Appium](https://github.com/appium/appium/blob/master/.github/workflows/build.yml) | 构建流程发现各包的 `test:e2e`，另跑单测和 lint；实际设备驱动由对应生态验证。 | Electron 和未来移动适配器要有真实运行验收，协议 fixture 只是前置门槛。 |
-| [Robot Framework](https://github.com/robotframework/robotframework/blob/master/.github/workflows/acceptance_tests_cpython_pr.yml) | `atest/robot` 验收集在 Linux/Windows、多个 Python 版本运行，失败保留产物。 | 用户级命令和报告本身也要被端到端验收。 |
-| [browser-use](https://github.com/browser-use/browser-use/blob/main/.github/workflows/eval-on-pr.yml) | 公开 CI 有浏览器测试；PR 评测触发外部 `InteractionTasks_v8` 平台。该评测数据和结果接口不在该工作流内，不能据此声称可复现的公开门槛。 | Agent 任务能力需要独立评测，但公开基准、版本和原始分母应自己固定。 |
-| [Stagehand](https://github.com/browserbase/stagehand/tree/main/packages/evals) | 独立 eval 包区分 `act`、`extract`、`observe`、`agent` 和数据集；支持 WebVoyager、OnlineMind2Web、WebTailBench、Odysseys、HardBench，按任务重复和模型汇总。其 [CI 回归 job](https://github.com/browserbase/stagehand/blob/main/.github/workflows/ci.yml) 配置 3 次试验，并以该项目 Braintrust 主分数 80% 作为自身门槛；[HardBench](https://github.com/browserbase/stagehand/blob/main/packages/evals/datasets/hardbenchmark/README.md) 有 38 题核心集、102 题扩展集。 | 将 Agent 能力集与协议测试分离，固定任务选择、模型、试验次数、成本及可比较的基线；80% 只属于它自己的任务和评分规则，不能照搬成 WebArena 分数线。 |
-| [Midscene](https://github.com/web-infra-dev/midscene/tree/main/.github/workflows) | 分开运行 AI 单测、Web E2E、Windows/macOS 桌面及 Android/iOS 模拟器流程；[Android CI](https://github.com/web-infra-dev/midscene/blob/main/.github/workflows/android-emulator.yml) 检查构建产物、模拟器 TodoMVC、诊断和 HTML 报告。 | Web/Electron 的真实进程与打包产物都应验收，未来移动端需要模拟器或真机任务；失败要保留可复核的产物。 |
-| [Maestro](https://github.com/mobile-dev-inc/Maestro/blob/main/.github/workflows/test-e2e.yaml) | 发布前从构建产物运行 Web、Android、iOS E2E，并上传运行产物。 | 跨端能力应以可安装产物和真实目标环境的流程验证，不只验证适配器 API。 |
-| [BrowserGym](https://github.com/ServiceNow/BrowserGym) / [MiniWoB++](https://github.com/Farama-Foundation/MiniWoB-plusplus) | BrowserGym统一多个 Web 基准；MiniWoB++ 提供 100 多个短交互环境和环境奖励。 | 用轻量任务频繁测点击、输入、选择器和恢复；它不能证明跨服务业务结果。 |
-| [WebArena-Verified](https://github.com/ServiceNow/webarena-verified) / [OSWorld](https://github.com/xlang-ai/OSWorld) | 前者提供可固定的 Web 任务和官方评判器；后者提供桌面环境任务、配置与评判程序，并有 Verified 更新。 | Web 与桌面任务分别用独立评判；固定镜像/任务/评判版本，审查有疑义的题。OSWorld 环境比当前四题重，待 Electron 基线稳定后引入。 |
-
-这些框架没有一个通用的“自动测试项目标准数据集”或可以照搬的统一通过率。对齐的是验收方法：底层协议矩阵、真实用户任务、独立业务 Oracle、重复运行、失败产物和发布门槛。Stagehand 的 80% 是其 Braintrust 主分数门槛，不应拿来要求不同任务和判分器上的 WebArena 达到 80%。
-
-## 三层基准组合
-
-1. **引擎契约层，提交即跑。** 保留现有 Web、Electron、MCP、证据、回放、负例和失败注入测试；补跨浏览器/操作系统矩阵及真实 Electron 进程。确定性协议回归必须全绿，任何证据绑定绕过都阻断发布。这层测框架正确性，不产生 Agent 任务成功率。
-2. **公开 Agent 任务层，固定分母。** WebArena-Verified 已准备 `shopping-admin-12` 和多样性更高的 `shopping-admin-24`；后者为 10 道读取、4 道导航、10 道修改，各来自不同意图模板，结构审计和批次计划已通过，官方成绩尚未测量。12 题的首次真实执行被证据大小与环境问题截断，也没有可比的完整成绩。24 题新增日期筛选及复杂表单，需校准真实 UI 正例后成为正式计分集。再按四站点分层扩成至少 40 题的版本化集合。MiniWoB++ 另选一个固定的约 20 题轻量集，测页面操作与错误恢复。两者分别报告，不合并分数；WebArena 的其它站点镜像仍须按 D 盘容量逐个部署。每题至少重复 3 次，固定模型、提示、工具版本、动作/时间预算、站点初态和官方评判器，对比同宿主直接使用 Playwright 的基线。题目选择在运行前冻结，禁止事后剔除失败题。
-3. **AIHR 真实业务层，隔离测试租户。** 基于本地源码和现有外部工作区连接器构造合成简历、岗位、候选人和账务数据。记录 UI 动作、同次 Run 的网络响应、异步最终状态、候选人/岗位/文件身份、评估及计费的独立读数。另建已知缺陷种子和修复前后副本，衡量缺陷召回、误报、证据完整率与修复回归。真实平台账号、网关、数据库和 worker 的隔离初态未备齐之前，样例 Charter 只算候选用例，不算通过的业务验收集。
-
-### AIHR 第一批候选用例
-
-来源已核对：`apps/micro-resume-collection/src/components/BossResumeCollection.vue` 的“立即运行”按钮，经前端 bridge 调用 `POST /api/v1/resume-collection/runs`；`services/resume-collection-service/internal/http/router/router.go` 暴露 Run/File 接口，File 上传读取 `client_item_key`；现有 `tests/e2e/resume_collection_flow_test.go` 仅覆盖数据库支持下的创建 Run、上传和读取，不覆盖异步 worker 最终业务状态。ProofKit 已有五份 AIHR 参考 Charter 和独立网关 Oracle，但未在完整隔离部署上验收。
-
-| 组 | 候选情景 | 必需的独立判定 | 当前准备度 |
+| 能力组 | 官方成功 / 固定分母 | 未通过项 | 优先核查 |
 | --- | --- | --- | --- |
-| UI/桌面 | 页面可见性、手动运行确认、点击后创建本次 Run | 当前 renderer 的响应与 Run ID 一致，未借用历史成功 | 有参考 Charter；真实 CDP/测试账号待验 |
-| 普通上传 | 合成 PDF → 抽取/解析 → 候选人 → 岗位绑定 → 评估 | 文件、Run、岗位、候选人和评估的身份与终态一致 | 有连接器与参考 Charter；完整 worker 待验 |
-| 重复与重试 | 相同 `client_item_key` 重传、worker 先重试后完成 | 以实际契约核验幂等对象和一次计费；等待态不提前判成功 | 有幂等 Charter；初态/账务 fixture 待验 |
-| 失败与取消 | 无效文件、评估失败、Run 取消、网关/worker 中断 | 区分产品失败、预期拒绝、用户取消和环境阻断 | 需分别固定注入点与终态预期 |
-| 在线简历 | 会话在线简历初筛、附件接替当前文件 | 用阶段身份和历史事实核对；不把合法文件替换报成缺陷 | 仅在线阶段有参考 Charter；附件全链路待建 |
-| 手工录入/计费 | 手工候选人录入、岗位关系、评估计费 | 独立读数和精确作用域；任何重试须先审查副作用 | 有参考 Oracle；不可直接对生产数据运行 |
+| 读取 | 4/6 | 11：答案判分失败；77：超时未提交 | 页面筛选/分页与答案核验；无效 resources 探测和循环进度 |
+| 导航 | 1/2 | 679：回答通过，但所需网络事件缺失 | 实际筛选值、动作请求、HAR 与评判规则正例 |
+| 修改 | 3/4 | 501：超时未提交 | 选择器歧义、表单操作和恢复成本 |
+| 合计 | **8/12（66.7%）** | 2 题判分失败、2 题超时 | 保留完整分母，不能只报已判分题的 8/10 |
 
-每个正式用例必须有稳定 ID、固定合成输入、源码契约/业务预期、重置步骤、允许的副作用、时间上限、独立 Oracle、证据字段和清理检查。模型可以从源码提出新用例，但进入计分集前必须经人工复核 Oracle 与初态；“模型说成功”不能作为标准答案。
+12 题全部尝试，10 题提交且经官方评判；12 份宿主轨迹哈希核验通过，环境未中断。10 份提交均有关联 Mission 证据，但 Mission 关联不等于官方通过，也不证明完整业务结果。模型身份和 CLI 版本尚未完整封存，同账户可读取上游数据；这是单站、单宿主、单轮观测，不能宣称稳定成功率或认证成绩。
 
-已保存 **[AIHR 候选 v0.1](aihr-core-candidates.json)（12 例，不计分）**：`W01` 简历页可见且配置错误可识别；`E01` Electron“立即运行”产生本次 Run；`E02` 登录失效/风险确认下不误报启动；`R01` PDF 上传到候选人、岗位和评估终态；`R02` 同一 `client_item_key` 重试幂等；`R03` 非法文件在写入前拒绝；`R04` worker 瞬时故障后恢复；`R05` worker 终态失败如实呈现；`O01` 在线简历阶段完成；`O02` 附件接替在线文件时保留正确阶段身份；`M01` 手工候选人录入及五个身份关联；`B01` 评估重试后恰好一次计费。清单记录源码快照、入口、合成 fixture、独立 Oracle 和当前准备缺口。`O02` 需要历史/阶段读数，`E01` 需要真实 CDP 与请求关联，`R04/R05` 需要隔离故障注入；这些条件满足前只保存候选，绝不把源码扫描结果写成已通过的测试。当前已有的 AIHR 参考 Charter、连接器和源码链路图可以作为生成起点，测试数据与执行工作区仍放在 AIHR 仓库之外。
+**已修复并获真实验证：**119 的 HAR 为 39,401,372 字节、1862 个事件，原 32 MiB 限制曾拒绝它；128 MiB 全链限制下，本轮封存、审计与官方导入成功，官方通过。Docker 有界恢复使本轮完成所有题，但先前瞬时故障根因仍未确认。
 
-生成流程复用现有的 `inspect_test_scope` 候选审计与外部 `.proofkit/workflows.yaml`：扫描页面入口、bridge/API、worker 状态和持久关系，给每条链路提出成功、拒绝、重试、取消与重复请求情景；再由领域负责人核对预期，导出版本化用例清单。ProofKit 只在外部测试工作区保存连接器、Charter 和合成 fixture，AIHR 源码仓库不需要加入专属测试代码。候选集与正式计分集分开；正式集需要可重建测试部署和独立读数才能晋级。
+**新诊断发现：**169 次探索动作中 99 次返回 observed、70 次返回 failed；逐项复核这 70 次的 action.status 也均为 failed。RPC 层另有 6 次失败，全部为不支持的 resources 探测，入参拒绝为 0。不能将「RPC completed」读成「动作成功」。failed 动作可能随后恢复，不自动算产品 Bug；observed 也只表示动作完成并取得观察。
 
-2026-10-13 的只读扫描已保存到 `D:/bench/aihr-scope-electron-core-20261013.json`：当前 AIHR Git HEAD 为 `dc781c3`，工作树另有未提交改动；ProofKit 扫描 2110 个文件，识别 61 个入口和 239 个去重路由候选，外部工作区有 6 个注册 Oracle、3 个未登记 core Charter。三份 Charter 均缺少明确 `surfaces` 且需要写入授权，其中两份还缺正向 UI 断言；`planningReadiness=authoring-needed`、`testVerdict=not-asserted`。这些是真实生成的**测试范围候选及缺口**，不是十二例可执行基准，更不是 AIHR 业务成绩。下一步先在隔离环境中修订 Charter、合成 fixture 和 Oracle，再冻结 v1 计分集。
+诊断器按题、能力组独立统计 RPC 和探索动作的 observed/failed/blocked/cancelled/unknown/rpcFailed；仅使用哈希核验的轨迹，缺失结果保持 unknown。只读重算保存在 `D:/bench/admin12-codex-20261013-003-diagnosis-v3/report.html`，原批次不改。**这是诊断增强后的历史重算，未产生新的 Agent 回归成绩。**
 
-## 失败归因与回归闭环
+历史：四题第三轮为 3/4；此前两次 12 题批次被 HAR 限制和环境重建中断，不能与最新完整批次比较性能。原始记录仍保存在各批次目录。
 
-一条任务可同时携带多个信号，但只给出一个**观察阶段**和单独的**已确认根因**。阶段依次区分：站点/模型/MCP 不可用、工具入参拒绝、浏览器定位/动作、Agent 超时、证据或提交缺失、官方评判失败、业务 Oracle 失败、评判器疑义。环境阻断、取消和评判器错误不计作产品缺陷；官方失败也不能自动等于 ProofKit 缺陷。报告同时展示固定分母、成功数、工具错误、耗时、证据完整性和每题下一步核查。根因只有经 trace、HAR、独立业务状态及相同条件重跑后才从 `unconfirmed` 升级。
+## 测试集怎么扩充
 
-修复流程：保存失败的不可变输入及轨迹 → 人工/自动复核并指定所属能力 → 编写最小复现与修复 → 跑该题 3 次及同类题 → 跑完整固定集并与修复前同预算基线比较 → 检查新失败、误报、耗时与成本。若变更了题目、模型或站点初态，另建新基准版本，不能把两次分数直接相减。
+| 层次 | 已准备范围 | 当前执行状态 | 衡量能力 |
+| --- | --- | --- | --- |
+| 框架契约 | Web/Electron、MCP、证据、取消、回放及故障负例 | 有真实进程与协议回归 | 工具可靠性、证据绑定、安装产物正确性 |
+| WebArena-Verified | 同站 24 候选：读取 10、导航 4、修改 10；24 个意图模板 | 其中原 12 题已完整实跑；24 题整批尚未运行、UI 正例校准未完成 | 多步任务完成、超时、恢复和成本 |
+| MiniWoB++ | [20 个候选环境](miniwob-core-candidates.json)，计划 3 个 seed、60 episodes | 固定源码已下载约 7 MB；执行 0，控制器接入未完成 | 点击、输入、选择、日期、拖拽及短链路 |
+| AIHR | [12 个源码派生业务候选](aihr-core-candidates.json) | 有源码扫描、参考 Charter 和连接器；正式业务执行 0 | 业务正确性、幂等、异步终态、计费和缺陷发现 |
 
-当前第一优先级仍是**工具契约和 Agent 循环**：第三次四题中的剩余入参拒绝已定位并修正；108 用了 54 次工具调用、约 9 分钟才完成，复杂修改题 423 用 37 次工具调用仍未形成可证实的修改链路。应减少重复观察与单步交互成本，提供稳定的高级浏览器动作和简短终态摘要；随后在同一代码、模型、预算及初态下重复固定集，再扩展到 12／24 题。第二优先级是以有效 UI 正例校准 423 及新增修改题的官方判分。AIHR 第一批正式用例以普通上传和 Electron “立即运行”两条真实链路为中心，先实现可重置测试租户与独立业务 Oracle。
+24 题包含已见的 12 题，**只新增 12 题，不能计成 36**。新增题先作为保留集，修复设计不得读取标准答案；正例校准由独立评判侧完成，正式冻结时再封存干净的工具版本。随后按 D 盘空间逐站扩至至少 40 道跨站任务，各集合单独计分。
 
-2026-10-13 已加入单步 Web/Electron 探索工具并通过真实进程回归；但随后两次 Codex 任务 423 和一次 Claude Code 任务 374 均在首次 MCP 调用前被宿主认证阻断，保留于 `D:/bench/host-run-423-regression-001`、`-002` 和 `D:/bench/host-run-374-claude-001`。这三次不产生官方提交或新成功率。恢复可用的独立宿主认证后，须从固定镜像逐题重建并完成同宿主四题回归，然后才运行十二题和三次重复；不能把本轮框架 smoke 的通过当成 Agent 改进证据。
+MiniWoB++ 固定提交 `33c3b4ddef8c6eb67c57a29663d844b1eda7e614`，MIT，官方 Python 路径支持 Linux/macOS，项目处于 maintenance mode。原生时限默认 10 秒，不适合当前多轮 Codex 延迟；延长时限必须另命名适配协议，不能冒充原生可比分数。click-dialog、click-dialog-2、search-engine、choose-date 有上游非确定性标记，seed 不足以保证重现。控制器须独占 seed/start/timer/reward；完成且 raw_reward=1 才计全成功，部分奖励另报。源码/奖励隔离及真实正负例校准完成前不发布可信成绩。
 
-## 分阶段验收门槛
+## AIHR 能否生成标准业务用例
 
-以同类项目的公开做法为参照，先达到三个可核对门槛：**Playwright 式底层矩阵**（Web/Electron 的真实进程、跨浏览器/系统和可安装产物）、**Midscene/Maestro 式流程验收**（真实目标、失败产物与报告）、**Stagehand 式重复 Agent 评测**（固定任务、模型和三次试验）。ProofKit 目前仅完成部分底层真实进程检查与官方评判接口集成；固定四题有一次 2/4 的历史观测，24 题只完成准备和结构审计，尚无三轮重复、跨浏览器/系统矩阵或 AIHR 正式业务成绩。不能把其它项目各自的 80% 一类阈值挪到不同数据集上。
+**可以生成候选，再用独立业务事实将其晋级为标准用例。**现有扫描读取了 2110 个文件，识别 61 个入口和 239 个去重路由候选；这些是测试范围，不是已执行覆盖。AIHR HEAD 为 `dc781c3` 且工作树有修改，复现必须封存实际工作树快照。
 
-| 阶段 | 必须交付的可核对结果 |
+已核对的链路：简历页「立即运行」→ preload/bridge → 网关创建 collection Run → File 上传 → 后处理 worker → 候选人/岗位/评估及计费终态。已有 Go E2E 覆盖创建 Run、上传和读取，未覆盖完整异步终态。
+
+第一批候选覆盖：
+
+- W01/E01/E02：配置页面、Electron 立即运行、登录失效/风险确认。
+- R01–R05：PDF 上传终态、client_item_key 幂等、非法文件、瞬时重试、终态失败。
+- O01/O02：在线简历、附件接替时的阶段身份。
+- M01/B01：手工录入的身份关联、评估重试恰好一次计费。
+
+生成过程复用现有 `inspect_test_scope`、外部 `.proofkit/workflows.yaml`、Charter 和连接器：源码发现链路 → 生成成功/拒绝/重复/重试情景 → 领域审阅预期 → 合成 fixture → 独立 Oracle → 初态重置和清理 → 三次真实重复。测试工作区放在 AIHR 仓库之外。
+
+晋级前必须具备隔离、可重建的部署和测试租户；Run/File/Candidate/Job/Assessment 身份从本次动作关联，不能借用历史成功；终态和账务由网关/账务独立读数确认。真实平台采集需隔离账号或受控适配器，并在成绩里标明覆盖边界。
+
+再单独加入已知缺陷及修复前后副本，计算缺陷召回、误报、证据完整率和修复回归。公开任务完成率不能替代这些指标；没有足够独立读数时给出 inconclusive，不凭 UI 文案确认 Bug。
+
+## 主流项目如何验收
+
+以下来源固定到本次核对的上游提交，避免 main 后续变化。它们没有一套通用、可直接套用的验收集或统一通过率。
+
+| 项目 / 固定源码 | 实际公开做法 | 我们对齐的标准 |
+| --- | --- | --- |
+| [Playwright](https://github.com/microsoft/playwright/blob/5d2cd726001a10eafbdfd02086f0414164057b07/.github/workflows/tests_primary.yml) | Chromium/Firefox/WebKit；Linux/macOS/Windows 与测试分片 | 浏览器/系统矩阵、真实进程，确定性契约全绿 |
+| [ego-lite](https://github.com/citrolabs/ego-lite/blob/dca7003349c5f7132189ba00547cbbd7ff8e597e/package/ego-browser/package.json) | npm test 跑构建、API 文档、翻译/类型检查和 src 测试；独立 e2e 命令。真实浏览器 cases 目录有 38 文件模块，含 index/helpers，不能叫 38 业务题。公开 test job 未见独立 e2e 调用 | 动作/弹窗/跨 frame/下载/工作区回归；明确哪些检查真正进 CI。README 四题展示不等于独立可复现验收集 |
+| [Stagehand CI](https://github.com/browserbase/stagehand/blob/f261c38b4dc50c39485f924e8599c1d3c6e37dc7/.github/workflows/ci.yml) / [HardBench](https://github.com/browserbase/stagehand/blob/f261c38b4dc50c39485f924e8599c1d3c6e37dc7/packages/evals/datasets/hardbenchmark/README.md) | 38 核心 + 64 扩展 = 102 题；CI 配置 3 次试验、自身 Braintrust 主分数至少 0.8 | 固定任务/模型/试验次数、独立评判和可比基线；0.8 不能搬到 WebArena |
+| [Midscene](https://github.com/web-infra-dev/midscene/blob/fe30d8a5ada44b84ca98c88e3d8c55e2354acc0e/.github/workflows/android-emulator.yml) | 构建/打包产物检查、Android 模拟器 TodoMVC、HTML/诊断产物、失败步检查 | 真实流程、可安装产物、失败证据与简洁报告 |
+| [Maestro](https://github.com/mobile-dev-inc/Maestro/blob/df40dea5dee0b8639aade6e80b558950e982e8a2/.github/workflows/test-e2e.yaml) | 构建产物运行 Web/Android/iOS 流程；上传视频日志，PR 聚合 job 要求三平台成功；独立 test-ios-xctest-runner job 为 if:false | 平台流程验收与聚合门槛；不能把禁用 job 算作已执行覆盖 |
+| [Robot Framework](https://github.com/robotframework/robotframework/blob/fe64590c5517ea845f015cc5316f6829e241d255/.github/workflows/acceptance_tests_cpython_pr.yml) | Ubuntu/Windows、Python 3.9/3.14、atest/robot 验收集和失败产物 | 用户命令、执行链路、报告本身的端到端验收 |
+
+ProofKit 现有 Linux verify、三系统安装包检查及 Windows Web/Electron release fixture；尚未达到完整跨浏览器/系统执行矩阵、三轮 Agent 重复和真实 AIHR 业务门槛。
+
+## 失败分析与增强闭环
+
+分别记录「观察阶段」「调查信号」「根因及确认状态」。分类包括环境/宿主、MCP 契约、定位/动作、规划/超时、证据/提交、答案/业务结果、评判器疑义；一题可有多信号。报告不复制标准答案、请求正文或页面原文。
+
+每个改进项必须有：失败输入及证据哈希 → 最小复现 → 能力归属 → 修改依据 → 同题及同类回归 → 完整固定集比较 → 新失败检查。只有 trace、HAR、独立状态及受控重跑支持时才确认根因。
+
+下一步按优先级执行：
+
+1. **定位和操作。** 复核 70 次动作失败的 selector/actionability 证据；679 和 501 优先核对选择控件与复杂表单。当前探索协议仅支持 goto/click/fill/press/waitForText；selectOption、check、拖拽等是待验证能力缺口，先做真实最小复现再决定扩展，不直接认定它们导致官方失败。
+2. **循环进度和结果核验。** 77 有 6 次不支持的 resources 探测并超时；限制重复无进展动作，提供明确替代路径。11 核对页面数据、分页/筛选与答案格式，确认遗漏还是评判疑义。
+3. **同条件回归。** 封存模型 ID、CLI、提示/Skill/MCP/浏览器/代码版本、预算及初态；4 个未通过项至少 3 次，再跑完整 12 题 3 轮及未见题。没有模型和预算同等条件，不直接宣称提升。
+4. **分离基线。** 同宿主直接 Playwright 与 ProofKit 使用相同题、初态、预算和试验次数，比较成功、摩擦、耗时、成本及证据充分度。
+
+## 阶段门槛
+
+| 阶段 | 交付与验收 |
 | --- | --- |
-| A：工具可靠性 | Web/Electron 实进程回归与证据审计全绿；同版本四题重跑至少 3 轮，逐轮公开固定分母、工具入参拒绝、超时和耗时。先消除当前已知的入参契约摩擦，再判断任务完成率变化。 |
-| B：公开任务 | `shopping-admin-12` 每题至少 3 轮，官方判分与宿主尝试合并、初态重置有记录；MiniWoB++ 固定轻量集另报分数；跨四站点集合在镜像和评判条件校准后运行。同预算直接 Playwright 宿主基线必须同场比较。 |
-| C：AIHR 业务 | 隔离租户和合成数据可重建；普通上传与 Electron 立即运行各覆盖成功、预期失败、重试/超时；每个通过都关联本次 Run 和独立后端终态。已知缺陷种子的召回、误报、证据完整率逐项公布，修复前后同集回归。 |
-| D：发布级 | 跨系统/浏览器协议矩阵、Electron 真实进程、受控 AIHR 核心流程和公开固定集无未解释的回归；任何新增失败都保留证据与根因状态。移动端待真实设备或模拟器验收后另设门槛。 |
+| A：动作可靠性 | 真实 Web/Electron 最小复现、修复及负例全绿；报告能区分 RPC/动作/业务结果；固定 12 题三轮，保留全部失败和超时 |
+| B：公开任务扩容 | 24 题经独立 UI 正例校准及冻结；MiniWoB20 控制器与奖励隔离完成后按适配协议独立计分；跨站逐步扩至至少 40 题；同预算 Playwright 基线 |
+| C：AIHR 业务 | 先普通上传与 Electron 立即运行，再晋级 12 候选；隔离 fixture 可重建、独立终态及计费 Oracle、三次重复；缺陷种子召回/误报和修复前后回归 |
+| D：发布级 | 浏览器/系统执行矩阵、真实 Electron 与安装产物、业务核心集和公开任务无未解释回归；证据绑定绕过阻断发布；移动端在真机/模拟器验证后单列门槛 |
 
-没有行业统一的绝对通过率可直接照搬。第一次完整重复基线建立后再冻结数值阈值；在此之前不得把四题的 50% 或尚未执行的十二题写成发布目标。
+首个完整重复基线建立后冻结数值阈值。当前 8/12 不应写成发布认证或最终产品能力。
+
+本次工程验证：固定官方 Python 环境下 `pnpm test:webarena` 35/35 通过、零跳过，覆盖 RPC 完成但动作失败、未知/阻断/取消、轨迹篡改及内容不泄露。MiniWoB20 的注册 ID、HTML 存在性、上游非确定性标记和下载包哈希均已核对。这些工程检查不计为 Agent 任务成绩。

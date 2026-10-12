@@ -6,15 +6,31 @@
 
 已接入固定任务批次、Agent 输入投影、官方 Python 评判器、输入哈希校验和简洁 HTML/JSON 报告。官方依赖只安装在独立评测环境，产品 CLI/MCP 仍使用 TypeScript；没有复制或另写判分算法。
 
-当前支持 `prepare` 准备任务、`probe` 探测站点、`replay` 校验官方评判器、`grade` 评判响应与 HAR，以及单题宿主执行入口。基准专用 MCP 将隔离 Web HAR 采集贯通到 Mission/Runner，并审计宿主工具轨迹。**已在官方 `shopping_admin` 镜像上运行四题小批次；系统级答案隔离和 ProofKit 成绩认证仍未实现。**
+当前支持 `prepare`、`probe`、`replay`、`grade`、单题宿主执行和固定批次运行。基准专用 MCP 将隔离 Web HAR 采集贯通到 Mission/Runner，并审计宿主工具轨迹。**最新完整 `shopping-admin-12` 批次官方 8/12；系统级答案隔离和 ProofKit 成绩认证仍未实现。**
 
-2026-10-12 本地验证：
+### 最新真实执行（2026-10-13）
+
+`D:/bench/admin12-codex-20261013-003`：12 题全部尝试且逐题重建；10 题提交、官方 8 成功/2 失败，另 2 题宿主 600 秒超时未提交，固定分母保持 12，环境未中断。执行版本 `447e6e0`，工作树干净；模型身份和 CLI 版本封存仍有缺口，只能作为单站/单宿主/单轮观测。
+
+| 能力组 | 官方成功 | 未通过项 |
+| --- | --- | --- |
+| 读取 | 4/6 | 11 答案判分失败；77 超时 |
+| 导航 | 1/2 | 679 回答通过，但缺官方要求网络事件 |
+| 修改 | 3/4 | 501 超时 |
+
+12 份宿主轨迹哈希核验通过；10 份提交均为 mission-verified，这不等于官方通过或完整业务正确。RPC 失败 6 次（均为不支持的 resources 探测），入参拒绝 0；探索动作 169 次，99 observed、70 failed。动作失败可恢复，不能直接算产品 Bug；observed 不证明业务结果。诊断按题和能力组独立统计动作结果，缺失结果不算成功。
+
+119 的真实 HAR 为 39,401,372 字节/1862 事件，SHA-256 `3bef5950e142c6e0cd12aba03fc82ea079965cb87e0d6d643fe40351e0f92af8`，128 MiB 全链限制修复在本轮通过官方导入并获得 success。先前两次 12 题批次被证据大小/环境重建截断，不能作完整成绩对比。
+
+新诊断：`D:/bench/admin12-codex-20261013-003-diagnosis-v3/report.html`，仅只读重算原始输入，未生成新 Agent 成绩。24 题包含这 12 题、只新增 12 题，尚未真实整批执行或完成 UI 正例校准。扩容、轻量基准及 AIHR 候选见[验收方案](validation-program.md)。
+
+2026-10-12–13 的历史接口/fixture 验证（不计入上述 Agent 成绩）：
 
 | 检查 | 实际结果 | 能证明什么 |
 | --- | --- | --- |
 | 官方评判对照 | 7/7 符合预期 | 官方接口能接受正确读取/导航，拒绝错误答案、错误路径和 HTTP 500；空 HAR 返回 error |
 | 基准回归 | 2026-10-13 使用固定官方 Python 环境 26/26 通过，包括任务设计审计、官方集成测试、批次重置准入/互斥和诊断工具 | 缺失任务不被丢弃，畸形输入为 error，篡改任务被阻断，历史结果不被覆盖；无提交时成绩显示未测量 |
-| 固定任务批次 | `pilot-12` 跨站十二题；`shopping-admin-4` 四题；`shopping-admin-12` 与 `shopping-admin-24` 同站候选集 | 四题历史观测独立计分，其余集合未评分，不能外推为全量成绩 |
+| 固定任务批次 | `pilot-12` 跨站十二题；`shopping-admin-4` 四题；`shopping-admin-12` 与 `shopping-admin-24` 同站集合 | 四题为历史观测；同站十二题最新 8/12；24 题和跨站 pilot 未整批执行，不能外推全量 |
 | 官方单站点 | D 盘 WSL Docker 中固定摘要的 `shopping_admin`；每题重建容器 | 数据库探针在重建后恢复为 0；`/admin` 和控制接口可达，真实 Chrome 免登录进入仪表盘 |
 | 四题真实执行 | 4 题均启动宿主；3 题提交并官方评判，2 成功、1 失败；另 1 题超时 | 官方合并报告按固定分母为 2/4；宿主失败须与官方缺失提交一起阅读 |
 | 真实 Chrome HAR 采集 | 4 个脚本控制的本地运行，覆盖成功、断言失败、HTTP 500、取消 | 初始导航、请求正文/头/Cookie、嵌入响应、关闭刷新与哈希校验正常；默认普通证据继续脱敏 |
@@ -31,7 +47,7 @@
 
 ## 固定范围
 
-上游提交：`6473f72db5dcefc97b5725b59e734504edc28a21`（Apache-2.0）。完整数据共 812 个任务，当前 pilot 为预先固定的 12 个任务，不能外推为全量成绩。
+上游提交：`6473f72db5dcefc97b5725b59e734504edc28a21`（Apache-2.0）。完整数据共 812 个任务。以下为跨站 `pilot-12`，与已执行的同站 `shopping-admin-12` 是不同集合，均不能外推为全量成绩。
 
 | 类别 | 任务 ID | 站点 |
 | --- | --- | --- |
@@ -69,7 +85,7 @@ webarena-verified env start --site gitlab
 
 **最小真实站点试跑：** `shopping_admin` 是这四个站点中标称镜像最小的一个（2.9 GB）。固定 pilot 中的任务 0、108（读取）、157（导航）、423（修改）都在该站点。现已提供独立 `shopping-admin-4` 批次，分母固定为四；原 `pilot-12` 批次保持十二题。先跑任务 157 验证整条真实链路，再用四题覆盖不同动作。单独的 Linux 主机可从 4 vCPU、8 GB RAM、50 GB 空闲 SSD 起步，16 GB RAM 更稳妥；这是待实测的规划值。四题结果不能冒充十二题成绩。
 
-后续新增同站点 `shopping-admin-12` 固定集：读取 0、11、77、94、108、119；导航 374、679；修改 453、470、496、501。结构检查确认这些任务均有官方评判配置，四道修改题的预期请求字段与任务意图表面一致；尚未用真实 UI 成功路径校准评判器，也尚未执行这十二题。它与 `pilot-12` 是不同集合，绝不合并计分。
+同站点 `shopping-admin-12` 固定集：读取 0、11、77、94、108、119；导航 374、679；修改 453、470、496、501。最新完整执行 8/12，失败项的真实 UI 正例校准仍需完成。它与 `pilot-12` 是不同集合，绝不合并计分。
 
 2026-10-13 再冻结 `shopping-admin-24` 候选集，保留上述 12 题并增加 12 个**不同意图模板**：读取 41、62、183、208；导航 704、709；修改 464、486、538、547、694、699。全组为 10 道读取、4 道导航、10 道修改，覆盖报表筛选、商品描述、页面配置、地址、商品变体和新建商品/促销规则。准备阶段现在校验每题的能力组与官方响应评判一致、导航/修改有网络动作评判、24 个模板互不重复、单站点起点符合批次运行器，并标记缺少写入 HTTP 方法却要求请求正文的可疑规则。24 题当前没有这种结构标记；历史四题的 423 有。`D:/bench/pilot-admin24-20261013-v2/` 已由固定数据和官方 Python 环境准备，`batch plan` 已通过；`attempted=0`、`officialEvaluated=0`，**没有新增 Agent 成绩**。任务 704 的自然语言日期表达和复杂修改题仍需真实 UI 正例校准，故该集目前为 `rubricCalibration=pending-live-controls`，不能当作已确认的发布门槛。
 
@@ -259,7 +275,7 @@ Codex 宿主需使用已登录、保留模型提供方配置的隔离 `CODEX_HOM
 
 2026-10-13 的同站点第三次真实四题执行保存在 `D:/bench/admin4-regression-20261013-003/`：四题均提交且宿主关联通过，官方成功 **3/4**（0、108、157 成功；423 失败）。失败工具调用共 1 次，为 157 的 `run_test` 缺顶层 `intent`；没有 MCP resources 探测失败。0 从上一轮超时变为本轮通过，但目前只有一次改进后观测，不能称为稳定提升。423 的答案与网络子评判均失败且无 Mission 证据，判分结构仍待真实 UI 正例校准。报告的 `investigationSignals` 只列调查线索，根因仍为 `unconfirmed`；完整解释见[标准验收方案](validation-program.md)。
 
-首次真实 12 题批次 `D:/bench/admin12-codex-20261013-001/` 因 119 的 35.7 MB 原始 HAR 超出原 32 MiB 限制，以及 470 前的 Docker inspect 失败而截断。7 道已关联任务经官方评判全部通过，119 无可用采集、470 环境准入失败、余 3 题未运行；**这不是完整 12 题成功率**。最新离线分类在 `D:/bench/admin12-codex-20261013-001-diagnosis-v2/report.html`。采集和导入上限已同步扩至 128 MiB，Docker 只读检查有界重试；仍须新批次的真实回归确认。
+首次真实 12 题批次 `D:/bench/admin12-codex-20261013-001/` 因 119 的 35.7 MB 原始 HAR 超出原 32 MiB 限制，以及 470 前的 Docker inspect 失败而截断。7 道已关联任务经官方评判全部通过，119 无可用采集、470 环境准入失败、余 3 题未运行；**这不是完整 12 题成功率**。历史分类在 `D:/bench/admin12-codex-20261013-001-diagnosis-v2/report.html`。128 MiB 全链限制与有界 Docker 恢复随后在最新 003 完整批次获得真实验证，见本文顶部；先前瞬时环境故障根因仍未确认。
 
 ```powershell
 pnpm benchmark:webarena:batch plan --profile shopping-admin-12 --batch D:/bench/pilot-admin12-20261012 --config D:/bench/environment-admin4.json --upstream D:/bench/webarena-verified --python D:/bench/evaluator/Scripts/python.exe --chrome 'C:/Program Files/Google/Chrome/Application/chrome.exe' --root D:/bench/benchmark-target --workspace D:/bench/benchmark-workspace --host claude-code --docker-wsl proofkit-docker
@@ -276,13 +292,13 @@ pnpm benchmark:webarena:batch run --profile shopping-admin-12 --batch D:/bench/p
 pnpm benchmark:webarena:diagnose --grade D:/bench/grade-admin4-final-20261012/report.json --host D:/bench/host-run-0-002/host-run.json --host D:/bench/host-run-108-001/host-run.json --host D:/bench/host-run-157-005/host-run.json --host D:/bench/host-run-423-001/host-run.json --output D:/bench/admin4-diagnosis-new
 ```
 
-输出 `report.json` 和简洁的 `report.html`，固定分母同时显示已尝试但未提交的超时题、官方结果、工具失败/入参拒绝和待复核项。它只做基于现有报告和哈希一致的宿主 JSONL 的诊断，不把失败阶段冒充已证实根因。后续基准扩容、AIHR 合成用例与修复回归门槛见[标准验收方案](validation-program.md)。
+输出 `report.json` 和简洁的 `report.html`，固定分母同时显示已尝试但未提交的超时题、官方结果、RPC 失败/入参拒绝、探索动作结果和待复核项。探索动作仅从哈希一致的宿主 JSONL 汇总，缺失结果为 unknown，未核验轨迹显示未核验；报告记录诊断脚本哈希。它不把失败阶段冒充已证实根因。后续基准扩容、AIHR 合成用例与修复回归门槛见[标准验收方案](validation-program.md)。
 
 ## 下一阶段：从真实试跑到可信评测
 
-1. 为宿主提供更少、更稳定的交互工具与终态摘要。四题试跑里曾出现 MCP 未加载、Charter 参数反复试错、选择器歧义和 15 分钟超时；应把启动检查、动作编排和受限结果读取做成高层协议，而非只增加提示词。
-2. 将宿主尝试记录与官方结果合并到同一批次报告：无提交的超时题仍要显示“已尝试但未评判”，并列出耗时、模型用量、工具失败、证据缺口和官方分数。缩短大段证据回传，避免无关内容占用上下文。
-3. 在独立账户或容器中隔离完整上游数据与评判器；复核每题任务前业务初态和宿主工具边界，再重复多轮四题以测稳定性。之后按[官方环境说明](https://servicenow.github.io/webarena-verified/environments/)顺序部署其余三个固定镜像，扩展十二题 pilot。
+1. 根据最新 12 题的真实失败证据增强定位、选择控件、表单恢复与循环进度；11/77/501/679 分别检查答案、超时和网络缺失，根因未确认前不宣称框架或产品缺陷。
+2. 已有固定分母诊断和 RPC/探索动作分层统计；继续补齐模型身份、CLI、提示与工具版本和用量封存。报告保留耗时、超时、证据缺口和官方分数，缺失结果不算成功。
+3. 在独立账户或容器中隔离完整数据与评判器；复核任务初态和宿主边界，固定 12 题至少三轮，再校准并运行 24 题及轻量交互集。按[官方环境说明](https://servicenow.github.io/webarena-verified/environments/)逐站部署其余固定镜像，建立至少 40 题跨站集。
 4. 在相同站点、模型、预算和重复次数下，对比宿主直接使用 Playwright 与宿主使用 ProofKit。已有 CDP 会话不能默认视为从任务起点完整采集；原始 HAR 留在隔离评测目录。
 
 WebArena 衡量任务完成，不能直接衡量发现 Bug、误报和修复验证。后续还要独立的已知缺陷集与修复前后验证，计算缺陷召回、误报和证据充分率。WebArena 不覆盖 Electron 主进程、IPC 或移动端；这些继续保留各自的真实运行验证。
