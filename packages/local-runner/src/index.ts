@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { analyzeRun, selectEvidencedBusinessFailure, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
-import { ElectronAdapter, MobileAdapter, WebAdapter, resolveElectronCdpUrl } from "@proofkit/adapters";
+import { ElectronAdapter, MobileAdapter, WebAdapter, resolveElectronCdpUrl, type BenchmarkHarOptions } from "@proofkit/adapters";
 import { auditMissionVerdict, createRunId, EvidenceStore, LocalExecutionOwnership, MissionReportStore, sha256, type LocalExecutionLease } from "@proofkit/evidence";
 import type { EnvironmentInspection, EnvironmentInspectionInput, IntegrationReadiness, IntegrationReadinessInput } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
@@ -39,6 +39,9 @@ import { sourceBindingTarget } from "./source-binding-target.js";
 import { assertMissionSurfaceCoverage, selectMissionSurface } from "./mission-surface.js";
 import { RepairHypothesisInputSchema, RepairSuggestionSchema, type RepairHypothesisInput, type RepairSourceAudit } from "@proofkit/contracts";
 import { auditRepairSources } from "./repair-hypothesis.js";
+import { BenchmarkCaptureSession, type BenchmarkMissionBinding } from "./benchmark-capture.js";
+
+export { BenchmarkCaptureSession } from "./benchmark-capture.js";
 
 export { loadProjectIntegration } from "./integration.js";
 export { inspectEvidenceRetention, type EvidenceRetentionAudit, type EvidenceRetentionRow } from "./evidence-retention.js";
@@ -164,6 +167,8 @@ export type LocalRunnerOptions = {
   allowCapabilityWrites?: boolean;
   plannerProvider?: PlannerProvider;
   integration?: ProjectIntegration;
+  /** Trusted benchmark controller only; unavailable through project config or tool inputs. */
+  benchmarkCapture?: BenchmarkCaptureSession;
 };
 
 export class LocalRunnerService {
@@ -181,6 +186,8 @@ export class LocalRunnerService {
   private readonly allowCapabilityWrites: boolean;
   private readonly plannerProvider?: PlannerProvider;
   private readonly missionRecoveryKey?: string;
+  private readonly benchmarkCapture?: BenchmarkCaptureSession;
+  private readonly benchmarkMissionBindings = new WeakMap<LocalRunInput, BenchmarkMissionBinding>();
   private readonly missionAgent: MissionAgent;
   private readonly missionStore: ProjectMissionStore;
   private readonly missionRecords = new Map<string, MissionRecord>();
@@ -192,6 +199,8 @@ export class LocalRunnerService {
     this.workspaceRoot = context.workspaceRoot;
     this.config = loadConfigForContext(context, options.config);
     this.evidenceDir = resolve(this.workspaceRoot, options.evidenceDir ?? ".proofkit/runs");
+    this.benchmarkCapture = options.benchmarkCapture;
+    this.benchmarkCapture?.bind({ root: this.root, workspaceRoot: this.workspaceRoot, evidenceDir: this.evidenceDir });
     this.evidence = new EvidenceStore(this.evidenceDir);
     this.missionReports = new MissionReportStore(this.workspaceRoot, this.evidenceDir);
     this.restrictWebOrigins = options.restrictWebOrigins ?? false;
@@ -206,7 +215,7 @@ export class LocalRunnerService {
     // workspace connector must declare one before its interrupted tasks can
     // be retried in a new process.
     const versionedIntegration = !this.integration || (typeof this.integration.version === "string" && this.integration.version.trim().length > 0);
-    if (versionedIntegration && !options.oracles?.length && !options.capabilities?.length) {
+    if (versionedIntegration && !options.oracles?.length && !options.capabilities?.length && !this.benchmarkCapture) {
       this.missionRecoveryKey = `local-runner-v1:${sha256(JSON.stringify({
         projectRoot: this.root, workspaceRoot: this.workspaceRoot, evidenceDir: this.evidenceDir,
         config: this.config, integration: this.integration ? { name: this.integration.name, version: this.integration.version } : null,
@@ -380,7 +389,7 @@ export class LocalRunnerService {
         actions: [...(readyWhen ? [{ kind: "waitForText", ...readyWhen }] : []), { kind: "observe" }], assertions: [], sideEffectPolicy: "deny",
         metadata: { purpose: "surface-inspection" },
       });
-      const started = await this.start({ ...input, adapter: surface, charter, start: false, signal: controller.signal });
+      const started = await this.startRun({ ...input, adapter: surface, charter, start: false, signal: controller.signal }, this.benchmarkMissionBindings.get(input));
       const summary = await this.wait(started.runId);
       const observation = summary.steps.find((step) => step.action.kind === "observe");
       const observed = observation?.status === "passed" ? observation.afterSnapshot : undefined;
@@ -405,6 +414,11 @@ export class LocalRunnerService {
       clearTimeout(deadline);
       input.signal?.removeEventListener("abort", onAbort);
     }
+  }
+
+  private async inspectSurfaceRun(input: SurfaceInspectionInput, binding?: BenchmarkMissionBinding): Promise<SurfaceInspection> {
+    if (binding) this.benchmarkMissionBindings.set(input, binding);
+    return this.inspectSurface(input);
   }
 
   listCharters(): ProofkitConfig["charters"] {
@@ -1112,6 +1126,9 @@ export class LocalRunnerService {
   private createMissionTools(): MissionTool[] {
     type MissionToolContext = Parameters<NonNullable<MissionTool["execute"]>>[1];
     type SurfaceRunKind = "primary" | "replay" | "negative";
+    const binding = (context: MissionToolContext, runKind: BenchmarkMissionBinding["runKind"]): BenchmarkMissionBinding => ({
+      missionId: context.mission.missionId, missionTaskId: context.task.taskId, tool: context.task.tool, runKind,
+    });
 
     const discover = async (_input: Record<string, never>, context: MissionToolContext): Promise<MissionToolResult> => {
       const [project, sourceState] = await Promise.all([this.discover(), captureSourceState(this.root)]);
@@ -1135,7 +1152,7 @@ export class LocalRunnerService {
       if (context.mission.surface === "api") {
         throw new Error("Surface inspection is unavailable for API-only Missions");
       }
-      const result = await this.inspectSurface({ adapter: context.mission.surface, signal: context.signal });
+      const result = await this.inspectSurfaceRun({ adapter: context.mission.surface, signal: context.signal }, binding(context, "inspection"));
       const observation = ObservationSchema.parse({
         observationId: `surface-inspection-${context.task.taskId}-${Date.now()}`,
         source: "surface",
@@ -1306,7 +1323,7 @@ export class LocalRunnerService {
       const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
       const baselineRunId = await fileReplaySource(charter, context, adapter, charterId);
       const coverageRouteTargets = context.mission.suite?.charters.find((item) => item.charterId === charterId)?.routeTargets ?? [];
-      const started = await this.start({ charter, adapter, signal: context.signal, replayOfRunId: baselineRunId, coverageRouteTargets });
+      const started = await this.startRun({ charter, adapter, signal: context.signal, replayOfRunId: baselineRunId, coverageRouteTargets }, binding(context, "primary"));
       const summary = await this.wait(started.runId);
       return collectSurfaceRun(summary, context, adapter, "primary", baselineRunId, undefined, undefined, charterId);
     };
@@ -1332,7 +1349,7 @@ export class LocalRunnerService {
         };
       }
       const coverageRouteTargets = context.mission.suite?.charters.find((item) => item.charterId === charterId)?.routeTargets ?? [];
-      const started = await this.replay(sourceRunId, { adapter, signal: context.signal, coverageRouteTargets });
+      const started = await this.replayRun(sourceRunId, { adapter, signal: context.signal, coverageRouteTargets }, binding(context, "replay"));
       const summary = await this.wait(started.runId);
       return collectSurfaceRun(summary, context, adapter, "replay", sourceRunId, undefined, undefined, charterId);
     };
@@ -1358,7 +1375,7 @@ export class LocalRunnerService {
       });
       const adapter = input.adapter ?? (context.mission.surface === "electron" ? "electron" : "web");
       const baselineRunId = await fileReplaySource(charter, context, adapter, charterId, negativeCase.caseId);
-      const started = await this.start({ charter, adapter, signal: context.signal, replayOfRunId: baselineRunId });
+      const started = await this.startRun({ charter, adapter, signal: context.signal, replayOfRunId: baselineRunId }, binding(context, "negative"));
       const summary = await this.wait(started.runId);
       return collectSurfaceRun(summary, context, adapter, "negative", baselineRunId, negativeCase.caseId, negativeCase.expectedVerdict ?? "passed", charterId);
     };
@@ -1552,14 +1569,19 @@ export class LocalRunnerService {
   async start(input: LocalRunInput): Promise<LocalRunStatus> {
     await this.ensureWorkspace();
     const sourceLease = input.replayOfRunId ? await this.acquireReplaySource(input.replayOfRunId) : undefined;
-    try { return await this.startWithSourceLease(input, sourceLease); }
+    try { return await this.startWithSourceLease(input, sourceLease, this.benchmarkMissionBindings.get(input)); }
     catch (error) {
       await sourceLease?.release();
       throw error;
     }
   }
 
-  private async startWithSourceLease(input: LocalRunInput, sourceLease?: LocalExecutionLease): Promise<LocalRunStatus> {
+  private async startRun(input: LocalRunInput, binding?: BenchmarkMissionBinding): Promise<LocalRunStatus> {
+    if (binding) this.benchmarkMissionBindings.set(input, binding);
+    return this.start(input);
+  }
+
+  private async startWithSourceLease(input: LocalRunInput, sourceLease?: LocalExecutionLease, binding?: BenchmarkMissionBinding): Promise<LocalRunStatus> {
     if (input.replayOfRunId) {
       const source = await this.loadRunSummary(validateRunId(input.replayOfRunId));
       if (source.status !== "completed" || !source.endedAt) throw new Error("Replay source Run is not complete");
@@ -1577,7 +1599,7 @@ export class LocalRunnerService {
     this.records.set(runId, record);
     // A replay's source stays owned until the child Run has persisted its
     // source reference (or failed). wait() must not resolve before release.
-    const promise = this.execute(runId, input, controller.signal).finally(async () => {
+    const promise = this.execute(runId, input, controller.signal, binding).finally(async () => {
       await sourceLease?.release().catch(() => {});
     });
     record.promise = promise;
@@ -1667,14 +1689,33 @@ export class LocalRunnerService {
     const lease = await this.acquireReplaySource(runId);
     try {
       const previous = await this.loadRunSummary(validateRunId(runId));
-      return await this.startWithSourceLease({ ...input, charter: previous.charter, replayOfRunId: previous.runId }, lease);
+      return await this.startWithSourceLease({ ...input, charter: previous.charter, replayOfRunId: previous.runId }, lease, this.benchmarkMissionBindings.get(input));
     } catch (error) {
       await lease.release();
       throw error;
     }
   }
 
-  private async execute(runId: string, input: LocalRunInput, signal: AbortSignal): Promise<RunSummary> {
+  private async replayRun(runId: string, input: Omit<LocalRunInput, "intent" | "charter" | "charterPath">, binding?: BenchmarkMissionBinding): Promise<LocalRunStatus> {
+    if (binding) this.benchmarkMissionBindings.set(input, binding);
+    return this.replay(runId, input);
+  }
+
+  private async execute(runId: string, input: LocalRunInput, signal: AbortSignal, binding?: BenchmarkMissionBinding): Promise<RunSummary> {
+    if (!this.benchmarkCapture) return this.executeRun(runId, input, signal);
+    const capture = await this.benchmarkCapture.begin(runId, binding);
+    let adapter: SurfaceAdapter | undefined;
+    let summary: RunSummary | undefined;
+    try {
+      summary = await this.executeRun(runId, input, signal, capture, (created) => { adapter = created; });
+      return summary;
+    } finally {
+      await this.benchmarkCapture.finish(runId, adapter instanceof WebAdapter ? adapter.benchmarkHarManifest() : undefined, summary);
+    }
+  }
+
+  private async executeRun(runId: string, input: LocalRunInput, signal: AbortSignal,
+    capture?: BenchmarkHarOptions, created?: (adapter: SurfaceAdapter) => void): Promise<RunSummary> {
     const charter = TestCharterSchema.parse(await this.resolveCharter(input));
     const replaySource = input.replayOfRunId ? await this.loadRunSummary(validateRunId(input.replayOfRunId)) : undefined;
     const expectedInputFiles = replaySource ? Object.fromEntries(replaySource.charter.actions.flatMap((action, index) => {
@@ -1697,7 +1738,11 @@ export class LocalRunnerService {
       const oracleHost = new URL(input.oracleUrl).hostname;
       if (!isLoopback(oracleHost)) throw new Error("Business oracle URL must use loopback");
     }
-    const adapter = this.createAdapter(input);
+    if (capture && ((input.adapter ?? "web") !== "web" || input.cdp || this.config.surfaces.web?.cdpUrl)) {
+      throw new Error("Benchmark capture requires a new isolated Web context");
+    }
+    const adapter = this.createAdapter(input, capture);
+    created?.(adapter);
     const oracleNames = charter.oracles ?? [];
     if (new Set(oracleNames).size !== oracleNames.length) throw new Error("Duplicate oracle name in Charter");
     const registered = new Map(this.oracles.map((oracle) => [oracle.name, oracle]));
@@ -1871,7 +1916,7 @@ export class LocalRunnerService {
     return new OpenAICompatiblePlannerProvider({ baseUrl: planning.baseUrl, model: planning.model, apiKey, timeoutMs: planning.timeoutMs });
   }
 
-  private createAdapter(input: LocalRunInput): SurfaceAdapter {
+  private createAdapter(input: LocalRunInput, benchmarkHar?: BenchmarkHarOptions): SurfaceAdapter {
     if ((input.adapter ?? "web") === "electron") {
       return new ElectronAdapter({
         cdpUrl: input.cdp ?? this.config.surfaces.electron?.cdpUrl,
@@ -1899,6 +1944,7 @@ export class LocalRunnerService {
     }
     if ((input.adapter ?? "web") !== "web") throw new Error(`Unsupported adapter: ${input.adapter}`);
     return new WebAdapter({
+      ...(benchmarkHar ? { benchmarkHar } : {}),
       baseUrl: input.url ?? this.config.surfaces.web?.baseUrl,
       cdpUrl: input.cdp ?? this.config.surfaces.web?.cdpUrl,
       targetUrlPrefix: this.config.surfaces.web?.targetUrlPrefix,

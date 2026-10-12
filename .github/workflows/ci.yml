@@ -26,6 +26,10 @@ jobs:
         env:
           PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome
         run: node tests/benchmark-har-smoke.mjs
+      - name: Verify benchmark MCP Mission association and trace integrity
+        env:
+          PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome
+        run: node tests/benchmark-mission-smoke.mjs
       - name: Verify evidenced host repair hypothesis and direct replay
         env:
           PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome

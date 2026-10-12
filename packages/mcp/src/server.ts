@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { LocalRunnerService } from "@proofkit/local-runner";
+import { LocalRunnerService, type BenchmarkCaptureSession } from "@proofkit/local-runner";
 import { registerTools } from "./tools.js";
 
 export type McpServerOptions = {
@@ -12,6 +12,8 @@ export type McpServerOptions = {
   evidenceDir?: string;
   /** Explicit operator opt-in for trusted, test-environment write capabilities. */
   allowCapabilityWrites?: boolean;
+  /** Trusted embedding API; never read from ordinary MCP tool inputs or environment variables. */
+  benchmarkCapture?: BenchmarkCaptureSession;
 };
 
 export async function createProofkitMcp(options: McpServerOptions = {}): Promise<McpServer> {
@@ -21,6 +23,7 @@ export async function createProofkitMcp(options: McpServerOptions = {}): Promise
     evidenceDir: options.evidenceDir ?? process.env.PROOFKIT_EVIDENCE_DIR,
     restrictWebOrigins: true,
     allowCapabilityWrites: options.allowCapabilityWrites ?? (process.env.PROOFKIT_ALLOW_CAPABILITY_WRITES === "1"),
+    benchmarkCapture: options.benchmarkCapture,
   });
   const server = new McpServer({ name: "proofkit", version: "0.1.0" });
   registerTools(server, runner);
