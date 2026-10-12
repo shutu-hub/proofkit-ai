@@ -75,11 +75,21 @@ export type IntegrationPreflight = (context: {
   signal: AbortSignal;
 }) => Promise<IntegrationPreflightResult>;
 
+/** Explicitly read-only connector check, callable before Mission creation. */
+export type IntegrationReadinessCheck = (context: {
+  charter: TestCharter;
+  environment: "test" | "staging" | "local";
+  projectRoot: string;
+  workspaceRoot: string;
+  signal: AbortSignal;
+}) => Promise<IntegrationPreflightResult & { issues?: Array<{ code: string; guidance: string }> }>;
+
 export type ProjectIntegration = {
   name: string;
   version?: string;
   capabilities?: CapabilityDefinition<any, any>[];
   oracles?: BusinessOracle[];
+  readiness?: IntegrationReadinessCheck;
   preflight?: IntegrationPreflight;
   postSetupCheck?: IntegrationPreflight;
   postRunCheck?: IntegrationPreflight;

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestMission } from "@proofkit/contracts";
-import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
+import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 import { briefMissionEvidence } from "./mission-evidence-brief.js";
 
@@ -25,6 +25,14 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     TestScopeInputSchema.shape,
     READ_ONLY_TOOL,
     async (input) => result(await runner.inspectTestScope(input)),
+  );
+
+  server.tool(
+    "inspect_integration_readiness",
+    "Call only a connector-declared read-only readiness check for a registered Charter. This runs no Run, setup, capability, or business Oracle, and does not prove product correctness. Resolve reported prerequisites before creating or starting a Mission.",
+    IntegrationReadinessInputSchema.shape,
+    READ_ONLY_TOOL,
+    async (input, extra) => result(await runner.inspectIntegrationReadiness(input, extra.signal)),
   );
 
   server.tool(

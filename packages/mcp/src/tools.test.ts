@@ -19,6 +19,7 @@ describe("ProofKit MCP tools", () => {
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       "discover_project",
       "inspect_test_scope",
+      "inspect_integration_readiness",
       "inspect_test_environment",
       "inspect_surface",
       "list_test_charters",
@@ -53,7 +54,7 @@ describe("ProofKit MCP tools", () => {
     expect(runTest?.inputSchema.properties?.surface).not.toHaveProperty("default");
     const scope = listed.tools.find((tool) => tool.name === "inspect_test_scope");
     expect(scope?.inputSchema).toMatchObject({ properties: { level: { default: "core" }, limit: { maximum: 50 } } });
-    for (const name of ["discover_project", "inspect_test_scope", "list_test_charters", "list_test_suites", "get_mission_status", "inspect_mission_recovery"]) {
+    for (const name of ["discover_project", "inspect_test_scope", "inspect_integration_readiness", "list_test_charters", "list_test_suites", "get_mission_status", "inspect_mission_recovery"]) {
       expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).toBe(true);
     }
     for (const name of ["inspect_test_environment", "inspect_surface", "create_test_mission", "run_test", "get_mission_evidence", "analyze_mission_stability", "create_mission_repeat", "get_mission_repeat_status", "advance_mission_repeat"]) {
@@ -62,6 +63,23 @@ describe("ProofKit MCP tools", () => {
 
     await client.close();
     await server.close();
+  });
+
+  it("routes registered-Charter connector readiness as a read-only MCP inspection", async () => {
+    const runner = { inspectIntegrationReadiness: vi.fn(async () => ({
+      schemaVersion: 1, testVerdict: "not-asserted", projectRoot: "C:/source", workspaceRoot: "C:/tests",
+      charterId: "resume-core", level: "core", surfaces: ["web"], environment: "test", status: "blocked",
+      integration: { name: "aihr-resume-workflows", version: "0.2.4" },
+      check: { passed: false, message: "credentials missing", evidence: { credentialConfigured: false } },
+      next: ["Resolve the reported connector prerequisites, then inspect readiness again."], checkedAt: new Date().toISOString(),
+    })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "inspect_integration_readiness", arguments: { charterId: "resume-core" } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ status: "blocked", testVerdict: "not-asserted", charterId: "resume-core" });
+      expect(runner.inspectIntegrationReadiness).toHaveBeenCalledWith({ charterId: "resume-core" }, expect.any(AbortSignal));
+      expect((await client.callTool({ name: "inspect_integration_readiness", arguments: { charterId: "../secret" } })).isError).toBe(true);
+    } finally { await client.close(); await server.close(); }
   });
 
   it("routes resource inspection and recovery through the same runner without a tool-level write opt-in", async () => {

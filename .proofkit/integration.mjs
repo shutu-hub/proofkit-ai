@@ -51,6 +51,7 @@ export function createIntegration({ z: injectedZ, workspaceRoot, config, inspect
       createBillingUsageOracle(state, billingRead),
       createManualCandidateIntakeOracle({ z, resolveEnv, positiveString, getOrNull, pollPipeline }), desktopAcquisition],
     preflight: (input) => gatewayCheck(input, "before setup"),
+    readiness: (input) => gatewayCheck(input, "read-only readiness inspection"),
     postSetupCheck: (input) => gatewayCheck(input, "after setup"),
     postRunCheck: (input) => aihrPostRunCheck(input, state, inspectEndpointBinding, targetBindingPolicy),
     setup: async ({ runId }) => {
@@ -81,20 +82,22 @@ async function aihrPreflight({ charter, environment, signal }, desktopAcquisitio
   ].includes(name));
   const baseUrl = env("AIHR_PROOFKIT_API_BASE_URL") ?? "http://127.0.0.1:8080/api/v1";
   const errors = [];
+  const issues = [];
+  const fail = (code, guidance) => { errors.push(guidance); issues.push({ code, guidance }); };
   if (oracleNames.includes("aihr.desktopResumeAcquisition")) {
     const error = desktopAcquisition.validateCharter(charter);
-    if (error) errors.push(error);
+    if (error) fail("desktop-contract-invalid", error);
   }
   let parsed;
   try {
     parsed = new URL(baseUrl);
-    if (!/^https?:$/.test(parsed.protocol)) errors.push("AIHR API base URL must use HTTP or HTTPS");
+    if (!/^https?:$/.test(parsed.protocol)) fail("gateway-url-invalid", "AIHR API base URL must use HTTP or HTTPS");
   } catch {
-    errors.push("AIHR_PROOFKIT_API_BASE_URL is not a valid URL");
+    fail("gateway-url-invalid", "AIHR_PROOFKIT_API_BASE_URL is not a valid URL");
   }
   const loopback = parsed ? ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname) : false;
   if (!loopback && env("AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT") !== "true") {
-    errors.push("remote AIHR endpoints require AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT=true");
+    fail("remote-endpoint-disallowed", "remote AIHR endpoints require AIHR_PROOFKIT_ALLOW_REMOTE_TEST_ENDPOINT=true");
   }
   // Inspect the gateway actually used by aihrFetch, even when project.health is empty.
   // The runner-owned helper retains only bounded process/source facts and strips URL paths,
@@ -102,30 +105,30 @@ async function aihrPreflight({ charter, environment, signal }, desktopAcquisitio
   const gatewayBinding = loopback && /^https?:$/.test(parsed.protocol)
     ? await inspectEndpointBinding(baseUrl, signal) : undefined;
   if (gatewayBinding?.status === "different-project" && targetBindingPolicy === "block-different") {
-    errors.push(`AIHR gateway listener belongs to another Git checkout ${phase}`);
+    fail("gateway-foreign-checkout", `AIHR gateway listener belongs to another Git checkout ${phase}`);
   }
-  if (!["test", "local"].includes(environment)) errors.push(`AIHR business or interactive tests require test or local environment, received ${environment}`);
+  if (!["test", "local"].includes(environment)) fail("environment-disallowed", `AIHR business or interactive tests require test or local environment, received ${environment}`);
 
   const scope = env("AIHR_PROOFKIT_TEST_SCOPE");
   const scopeValid = validTestScope(scope);
   const clientItemKey = env("AIHR_PROOFKIT_CLIENT_ITEM_KEY");
-  if (!scopeValid) errors.push("AIHR_PROOFKIT_TEST_SCOPE must match proofkit:<scope>");
+  if (!scopeValid) fail("test-scope-invalid", "AIHR_PROOFKIT_TEST_SCOPE must match proofkit:<scope>");
   const credentialConfigured = Boolean(env("AIHR_PROOFKIT_ACCESS_TOKEN"));
-  if (!credentialConfigured) errors.push("AIHR_PROOFKIT_ACCESS_TOKEN is required for business or interactive tests");
+  if (!credentialConfigured) fail("credential-missing", "AIHR_PROOFKIT_ACCESS_TOKEN is required for business or interactive tests");
   const actorNames = ["AIHR_PROOFKIT_ENTERPRISE_ID", "AIHR_PROOFKIT_WORKSPACE_ID", "AIHR_PROOFKIT_USER_ID"];
   const actorConfigured = actorNames.every((name) => Boolean(env(name)));
   for (const name of actorNames) {
-    if (!env(name)) errors.push(`${name} is required for business or interactive tests`);
+    if (!env(name)) fail("actor-missing", `${name} is required for business or interactive tests`);
   }
   if (manualIntake) {
     // This API has no client_item_key. Do not invent an idempotency guarantee.
     let jobId;
     try { jobId = resolveEnv(charter.metadata?.aihrManual?.jobId); } catch { /* Report a configuration gap without environment values. */ }
-    if (!positiveString(jobId)) errors.push("metadata.aihrManual.jobId must identify the isolated target job");
+    if (!positiveString(jobId)) fail("target-job-missing", "metadata.aihrManual.jobId must identify the isolated target job");
   }
   if (writeActions.length > 0) {
-    if (!clientItemKey) errors.push("AIHR_PROOFKIT_CLIENT_ITEM_KEY is required for write capabilities");
-    if (scopeValid && clientItemKey && !scopedClientItemKey(clientItemKey, scope)) errors.push("AIHR_PROOFKIT_CLIENT_ITEM_KEY must be namespaced by AIHR_PROOFKIT_TEST_SCOPE with a nonempty suffix");
+    if (!clientItemKey) fail("idempotency-key-missing", "AIHR_PROOFKIT_CLIENT_ITEM_KEY is required for write capabilities");
+    if (scopeValid && clientItemKey && !scopedClientItemKey(clientItemKey, scope)) fail("idempotency-key-invalid", "AIHR_PROOFKIT_CLIENT_ITEM_KEY must be namespaced by AIHR_PROOFKIT_TEST_SCOPE with a nonempty suffix");
   }
   const uploadKeyChecks = [];
   for (const [index, action] of charter.actions.entries()) {
@@ -135,18 +138,19 @@ async function aihrPreflight({ charter, environment, signal }, desktopAcquisitio
       resolvedKey = resolveEnv(action.input?.clientItemKey);
     } catch (error) {
       uploadKeyChecks.push(false);
-      errors.push(`aihr.uploadResumeFile action ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+      fail("upload-key-unresolved", `aihr.uploadResumeFile action ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
       continue;
     }
     const valid = scopeValid && scopedClientItemKey(resolvedKey, scope);
     uploadKeyChecks.push(valid);
-    if (scopeValid && !valid) errors.push(`aihr.uploadResumeFile action ${index + 1} clientItemKey must be namespaced by AIHR_PROOFKIT_TEST_SCOPE with a nonempty suffix`);
+    if (scopeValid && !valid) fail("upload-key-invalid", `aihr.uploadResumeFile action ${index + 1} clientItemKey must be namespaced by AIHR_PROOFKIT_TEST_SCOPE with a nonempty suffix`);
   }
   if (actionNames.includes("aihr.uploadResumeFile") && !env("AIHR_PROOFKIT_FIXTURE_PATH")) {
-    errors.push("AIHR_PROOFKIT_FIXTURE_PATH is required for resume uploads");
+    fail("fixture-path-missing", "AIHR_PROOFKIT_FIXTURE_PATH is required for resume uploads");
   }
   return { gatewayBinding, gatewayBaseUrl: baseUrl, result: {
     passed: errors.length === 0,
+    issues,
     message: errors.length > 0 ? errors.join("; ")
       : gatewayBinding?.status === "different-project" ? "AIHR scope checks passed; gateway listener belongs to another Git checkout (record policy)."
       : gatewayBinding?.status === "unverified" ? "AIHR scope checks passed; local gateway source ownership remains unverified."

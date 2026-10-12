@@ -42,6 +42,7 @@ flowchart TD
 
 1. 初次接入：绑定源项目和外部测试工作区，配置 Web 地址或 Electron CDP，并声明必要业务检查。
 2. AI 先用 `inspect_test_scope` 看源码候选入口及现有场景，用 `inspect_test_environment` 检查已配置端点和源码关联，再用 `inspect_surface` 看真实页面与定位线索。
+   对已登记的业务 Charter，创建 Mission 前还可调用只读 `inspect_integration_readiness({charterId})`；它只调用连接器显式声明的 `readiness` 钩子，不调用 Run 生命周期 `preflight`、setup、capability 或 Oracle。`ready` 只表示连接器报告的前提满足，结果仍是 `testVerdict: not-asserted`；`blocked` 给出阻断信息，`unavailable` 表示没有该只读钩子或检查未能返回可信结果。CLI 对应 `proofkit readiness <charterId>`。
 3. `run_test` 复用目录用例，或接收 AI 提交的结构化 Charter；缺少必要断言或业务检查时报告缺口。
    单端请求未传 `surface` 时，仅按明确的 Web、Electron/桌面端或移动端词汇选择平台；没有明确平台时沿用 Web。若用户指令点名的平台不在实际 Mission 执行矩阵内，创建任务时拒绝执行，避免把 Web 结果当成桌面端验收。多端 `core` 请求需要覆盖各端的项目流程清单；`release` 使用声明的跨端矩阵。
 4. Mission 调度主运行、所需回放和显式负向场景；Runner 统一管理动作、观测、超时与清理。宿主用 `await_test_result` 对同一 Mission 做有界等待，超时只返回仍在运行，不重新启动或取消测试。未就绪的 Mission 返回 `testVerdict: not-asserted`、缺口与安全的下一步，不把尚未执行误称为产品测试阻断。

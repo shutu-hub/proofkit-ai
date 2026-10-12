@@ -4,10 +4,10 @@ import { dirname, resolve } from "node:path";
 import { analyzeRun, selectEvidencedBusinessFailure, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter, resolveElectronCdpUrl } from "@proofkit/adapters";
 import { auditMissionVerdict, createRunId, EvidenceStore, LocalExecutionOwnership, MissionReportStore, sha256, type LocalExecutionLease } from "@proofkit/evidence";
-import type { EnvironmentInspection, EnvironmentInspectionInput } from "@proofkit/contracts";
+import type { EnvironmentInspection, EnvironmentInspectionInput, IntegrationReadiness } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
-import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionAcceptanceIntegrity, type MissionComparison, type MissionEvidenceIntegrity, type MissionProofClassification, type MissionRecoveryInspection, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
+import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, IntegrationReadinessSchema, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionAcceptanceIntegrity, type MissionComparison, type MissionEvidenceIntegrity, type MissionProofClassification, type MissionRecoveryInspection, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, intentTestLevelHints, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowInventory, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject, verifySourceLocationHints } from "@proofkit/project";
@@ -270,6 +270,74 @@ export class LocalRunnerService {
         if (gaps.length) throw new Error(`Saved suite planning evidence gaps: ${gaps.join(", ")}`);
       },
     }, request);
+  }
+
+  async inspectIntegrationReadiness(input: { charterId: string }, signal?: AbortSignal): Promise<IntegrationReadiness> {
+    const request = IntegrationReadinessInputSchema.parse(input);
+    const entry = this.config.charters.find((charter) => charter.id === request.charterId);
+    if (!entry) throw new Error(`Unknown Charter: ${request.charterId}`);
+    const charter = await loadCharter(resolveWithinWorkspace(this.workspaceRoot, entry.path));
+    if (charter.level !== entry.level) throw new Error(`Test catalog entry ${entry.id} declares ${entry.level}, but its Charter is ${charter.level}`);
+    const base = {
+      schemaVersion: 1 as const,
+      testVerdict: "not-asserted" as const,
+      projectRoot: this.root,
+      workspaceRoot: this.workspaceRoot,
+      charterId: entry.id,
+      level: entry.level,
+      surfaces: entry.surfaces,
+      environment: this.config.policies.environment,
+      checkedAt: new Date().toISOString(),
+    };
+    if (!this.integration?.readiness) return IntegrationReadinessSchema.parse({
+      ...base, status: "unavailable", integration: this.integration ? { name: this.integration.name, version: this.integration.version } : undefined,
+      next: ["Configure a connector that declares a read-only readiness check before running this Charter."],
+    });
+    signal?.throwIfAborted();
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    const deadline = setTimeout(() => controller.abort(new Error("Connector readiness exceeded 15 seconds")), 15_000);
+    let removeAbortListener = () => {};
+    try {
+      const operation = this.integration.readiness({
+        charter, environment: this.config.policies.environment, projectRoot: this.root,
+        workspaceRoot: this.workspaceRoot, signal: controller.signal,
+      });
+      const aborted = new Promise<never>((_resolve, reject) => {
+        const rejectAbort = () => reject(controller.signal.reason ?? new Error("Connector readiness cancelled"));
+        controller.signal.addEventListener("abort", rejectAbort, { once: true });
+        removeAbortListener = () => controller.signal.removeEventListener("abort", rejectAbort);
+        if (controller.signal.aborted) rejectAbort();
+      });
+      const checked = this.sanitizeReadinessCheck(await Promise.race([operation, aborted]));
+      return IntegrationReadinessSchema.parse({
+        ...base, status: checked.passed ? "ready" : "blocked",
+        integration: { name: this.integration.name, version: this.integration.version },
+        check: checked,
+        next: checked.passed ? ["Review the Charter, then create or start a Mission."] : ["Resolve the reported connector prerequisites, then inspect readiness again."],
+      });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      return IntegrationReadinessSchema.parse({
+        ...base, status: "unavailable", integration: { name: this.integration.name, version: this.integration.version },
+        next: ["The connector readiness check did not return a verified result; inspect trusted local connector diagnostics."],
+      });
+    } finally {
+      clearTimeout(deadline);
+      removeAbortListener();
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  private sanitizeReadinessCheck(check: Awaited<ReturnType<NonNullable<ProjectIntegration["readiness"]>>>): NonNullable<IntegrationReadiness["check"]> {
+    const secrets = Object.values(process.env).filter((value): value is string => Boolean(value && value.length >= 8));
+    const scrub = (value: string): string => secrets.reduce((current, secret) => current.includes(secret) ? current.replaceAll(secret, "[REDACTED]") : current, value).slice(0, 1024);
+    const evidence = Object.fromEntries(Object.entries(check.evidence ?? {}).map(([key, value]) => [key,
+      typeof value === "string" ? scrub(value) : value]));
+    return { ...check, message: scrub(check.message), evidence,
+      issues: check.issues?.map((issue) => ({ code: issue.code, guidance: scrub(issue.guidance).slice(0, 240) })) };
   }
 
   async inspectEnvironment(input: EnvironmentInspectionInput = {}, signal?: AbortSignal): Promise<EnvironmentInspection & { artifact: { path: string; sha256: string } }> {

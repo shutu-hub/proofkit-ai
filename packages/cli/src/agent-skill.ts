@@ -45,6 +45,13 @@ Charter matches a core request, keep core and author or register core proof.
 candidate-review-needed means a same-level workspace file has no reported
 structural issue, but it still needs source-flow review and the normal runtime
 checks before run_test; it is not an acceptance claim. Scope limit is at most 50.
+For a registered business Charter, call inspect_integration_readiness with its
+charterId before creating or starting a Mission. It invokes only an explicit
+connector read-only readiness hook; it never invokes the Run lifecycle
+preflight, setup, capabilities or Oracles. A blocked result names prerequisites
+to resolve; unavailable means no read-only hook is registered or it could not
+return a verified result. Neither status is a product verdict. Inspect again
+after resolving the reported prerequisites.
 For inspection-incomplete, read its gap codes before acting. Refine the literal
 focus or raise the bounded limit when matching details were omitted. A
 candidate-endpoint-binding-unavailable gap means an existing focused Charter

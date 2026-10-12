@@ -165,6 +165,16 @@ export function createProgram(): Command {
       console.log(JSON.stringify(scope, null, 2));
     });
 
+  program.command("readiness <charterId>")
+    .description("Check a registered Charter's connector prerequisites without starting a Run")
+    .option("--root <path>", "project root", ".")
+    .action(async (charterId: string, options: RootOptions) => {
+      const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+      const readiness = await runner.inspectIntegrationReadiness({ charterId });
+      console.log(JSON.stringify(readiness, null, 2));
+      process.exitCode = readiness.status === "ready" ? 0 : readiness.status === "blocked" ? 1 : 2;
+    });
+
   program.command("review-workflows")
     .description("Sign a complete workflow declaration with an operator-controlled Ed25519 key")
     .option("--root <path>", "project root", ".")

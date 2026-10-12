@@ -11,6 +11,76 @@ afterEach(async () => {
 });
 
 describe("CLI workspace onboarding", () => {
+  it("reports registered connector readiness without creating a run or changing the source", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-readiness-source-"));
+    const workspace = await mkdtemp(join(tmpdir(), "proofkit-readiness-workspace-"));
+    roots.push(root, workspace);
+    await writeFile(join(root, "package.json"), '{"name":"readiness-source"}');
+    await mkdir(join(workspace, ".proofkit", "charters"), { recursive: true });
+    await writeFile(join(workspace, ".proofkit", "integration.mjs"), `export default {
+      name: "readiness-fixture",
+      async readiness() { return { passed: false, message: "test token is configured: true", evidence: { credentialConfigured: true } }; },
+      async preflight() { throw new Error("must not run preflight"); },
+      async setup() { throw new Error("must not run setup"); },
+    };`);
+    await writeFile(join(workspace, ".proofkit", "charters", "resume.yml"), JSON.stringify({
+      intent: "resume core", level: "core", surfaces: ["web"], actions: [],
+      assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny",
+    }));
+    await writeFile(join(workspace, ".proofkit", "config.yaml"), JSON.stringify({
+      project: { root }, charters: [{ id: "resume-core", path: ".proofkit/charters/resume.yml", aliases: ["resume"], level: "core", surfaces: ["web"] }],
+    }));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitCode = process.exitCode;
+    try {
+      await createProgram().parseAsync(["node", "proofkit", "readiness", "resume-core", "--root", root, "--workspace", workspace]);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+        charterId: "resume-core", status: "blocked", testVerdict: "not-asserted",
+        check: { passed: false, evidence: { credentialConfigured: true } },
+      });
+      expect(process.exitCode).toBe(1);
+      expect(await readdir(root)).toEqual(["package.json"]);
+      expect(await readdir(join(workspace, ".proofkit"))).toEqual(["charters", "config.yaml", "integration.mjs"]);
+    } finally { process.exitCode = exitCode; }
+  });
+
+  it("redacts an environment secret returned by a connector readiness hook", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-readiness-secret-source-"));
+    const workspace = await mkdtemp(join(tmpdir(), "proofkit-readiness-secret-workspace-"));
+    roots.push(root, workspace);
+    await writeFile(join(root, "package.json"), '{"name":"readiness-secret-source"}');
+    await mkdir(join(workspace, ".proofkit", "charters"), { recursive: true });
+    await writeFile(join(workspace, ".proofkit", "integration.mjs"), `export default {
+      name: "readiness-secret-fixture",
+      async readiness() { return { passed: false, message: process.env.PROOFKIT_TEST_SECRET,
+        evidence: { leaked: process.env.PROOFKIT_TEST_SECRET },
+        issues: [{ code: "missing-secret", guidance: process.env.PROOFKIT_TEST_SECRET }] }; },
+    };`);
+    await writeFile(join(workspace, ".proofkit", "charters", "resume.yml"), JSON.stringify({
+      intent: "resume core", level: "core", surfaces: ["web"], actions: [], assertions: [{ kind: "text-visible", text: "ready" }],
+    }));
+    await writeFile(join(workspace, ".proofkit", "config.yaml"), JSON.stringify({
+      project: { root }, charters: [{ id: "resume-core", path: ".proofkit/charters/resume.yml", aliases: ["resume"], level: "core", surfaces: ["web"] }],
+    }));
+    const original = process.env.PROOFKIT_TEST_SECRET;
+    process.env.PROOFKIT_TEST_SECRET = "private-readiness-value-12345";
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitCode = process.exitCode;
+    try {
+      await createProgram().parseAsync(["node", "proofkit", "readiness", "resume-core", "--root", root, "--workspace", workspace]);
+      const output = String(log.mock.calls[0]?.[0]);
+      expect(output).not.toContain(process.env.PROOFKIT_TEST_SECRET);
+      expect(JSON.parse(output)).toMatchObject({ status: "blocked", check: {
+        message: "[REDACTED]", evidence: { leaked: "[REDACTED]" },
+        issues: [{ code: "missing-secret", guidance: "[REDACTED]" }],
+      } });
+    } finally {
+      if (original === undefined) delete process.env.PROOFKIT_TEST_SECRET;
+      else process.env.PROOFKIT_TEST_SECRET = original;
+      process.exitCode = exitCode;
+    }
+  });
+
   it("accepts external workspace options on every nested repeat command", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-repeat-cli-source-"));
     const workspace = await mkdtemp(join(tmpdir(), "proofkit-repeat-cli-workspace-"));

@@ -1020,6 +1020,36 @@ export const TestScopeSchema = z.object({
 });
 export type TestScope = z.infer<typeof TestScopeSchema>;
 
+/** Read-only connector readiness is provenance, not a product verdict. */
+export const IntegrationReadinessInputSchema = z.object({
+  charterId: CatalogIdSchema,
+}).strict();
+export type IntegrationReadinessInput = z.input<typeof IntegrationReadinessInputSchema>;
+export const IntegrationReadinessSchema = z.object({
+  schemaVersion: z.literal(1),
+  testVerdict: z.literal("not-asserted"),
+  projectRoot: z.string(),
+  workspaceRoot: z.string(),
+  charterId: CatalogIdSchema,
+  level: TestLevelSchema,
+  surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1).max(3),
+  environment: z.enum(["test", "staging", "local"]),
+  status: z.enum(["ready", "blocked", "unavailable"]),
+  integration: z.object({ name: z.string().min(1).max(128), version: z.string().min(1).max(128).optional() }).optional(),
+  check: IntegrationCheckResultSchema.extend({
+    issues: z.array(z.object({ code: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), guidance: z.string().min(1).max(240) }).strict()).max(32).optional(),
+  }).refine((check) => check.message.length <= 1024 && Object.keys(check.evidence).length <= 32
+    && Object.entries(check.evidence).every(([key, value]) => key.length <= 128 && (typeof value !== "string" || value.length <= 1024)),
+  "Connector readiness check exceeds output limits").optional(),
+  next: z.array(z.string().min(1).max(240)).max(8),
+  checkedAt: z.string().datetime(),
+}).strict().superRefine((value, context) => {
+  if (value.status === "ready" && value.check?.passed !== true) context.addIssue({ code: z.ZodIssueCode.custom, path: ["check"], message: "Ready status requires a passing connector check" });
+  if (value.status === "blocked" && value.check?.passed !== false) context.addIssue({ code: z.ZodIssueCode.custom, path: ["check"], message: "Blocked status requires a failing connector check" });
+  if (value.status === "unavailable" && value.check !== undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ["check"], message: "Unavailable status cannot include a verified connector check" });
+});
+export type IntegrationReadiness = z.infer<typeof IntegrationReadinessSchema>;
+
 export const ProofkitConfigSchema = z.object({
   project: z.object({
     root: z.string().default("."),

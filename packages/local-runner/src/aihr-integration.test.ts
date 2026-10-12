@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebAdapter } from "@proofkit/adapters";
 import { analyzeRun } from "@proofkit/agent";
-import { TestCharterSchema, type TestCharter } from "@proofkit/contracts";
+import { ProofkitConfigSchema, TestCharterSchema, type TestCharter } from "@proofkit/contracts";
 import { loadCharter } from "@proofkit/planner";
 import * as project from "@proofkit/project";
 import { LocalRunnerService } from "./index.js";
@@ -52,6 +52,50 @@ afterEach(async () => {
 });
 
 describe("AIHR project integration", () => {
+  it("checks AIHR readiness without running preflight, setup, capabilities, or network requests", async () => {
+    for (const key of envKeys) delete process.env[key];
+    const root = await createIntegrationProject();
+    const charterDir = join(root, ".proofkit", "charters");
+    await mkdir(charterDir, { recursive: true });
+    const charter = TestCharterSchema.parse({ ...aihrCharter(), oracles: ["aihr.onlineResumePipeline"] });
+    await writeFile(join(charterDir, "resume-core.yml"), JSON.stringify(charter));
+    const config = ProofkitConfigSchema.parse({ charters: [{ id: "resume-core", path: ".proofkit/charters/resume-core.yml",
+      aliases: ["resume"], level: "core", surfaces: ["web"] }] });
+    const service = await LocalRunnerService.create({ root, config });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const integration = service.integration!;
+    const preflight = vi.spyOn(integration, "preflight");
+    const setup = vi.spyOn(integration, "setup");
+    const executions = (integration.capabilities ?? []).map((capability) => vi.spyOn(capability, "execute"));
+
+    const blocked = await service.inspectIntegrationReadiness({ charterId: "resume-core" });
+    expect(blocked).toMatchObject({ status: "blocked", testVerdict: "not-asserted", check: { passed: false } });
+    expect(blocked.check?.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "test-scope-invalid" }),
+      expect.objectContaining({ code: "credential-missing" }),
+      expect.objectContaining({ code: "actor-missing" }),
+    ]));
+    expect(JSON.stringify(blocked)).not.toContain("isolated-fixture-token");
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    Object.assign(process.env, {
+      AIHR_PROOFKIT_ACCESS_TOKEN: "isolated-fixture-token",
+      AIHR_PROOFKIT_ENTERPRISE_ID: "1",
+      AIHR_PROOFKIT_WORKSPACE_ID: "2",
+      AIHR_PROOFKIT_USER_ID: "3",
+      AIHR_PROOFKIT_TEST_SCOPE: "proofkit:readiness",
+    });
+    const ready = await service.inspectIntegrationReadiness({ charterId: "resume-core" });
+    expect(ready).toMatchObject({ status: "ready", check: { passed: true, evidence: { credentialConfigured: true, actorConfigured: true } } });
+    expect(ready.check?.issues).toEqual([]);
+    expect(JSON.stringify(ready)).not.toContain("isolated-fixture-token");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(preflight).not.toHaveBeenCalled();
+    expect(setup).not.toHaveBeenCalled();
+    for (const execute of executions) expect(execute).not.toHaveBeenCalled();
+    await expect(service.inspectIntegrationReadiness({ charterId: "missing" })).rejects.toThrow("Unknown Charter");
+  });
+
   const pipelines: Array<{
     name: string;
     capability: string;

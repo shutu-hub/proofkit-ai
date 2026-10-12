@@ -61,6 +61,9 @@ function validateIntegration(value: unknown, path: string): ProjectIntegration {
   if (integration.preflight !== undefined && typeof integration.preflight !== "function") {
     throw new Error(`Integration ${path} preflight must be a function`);
   }
+  if (integration.readiness !== undefined && typeof integration.readiness !== "function") {
+    throw new Error(`Integration ${path} readiness must be a function`);
+  }
   if (integration.postSetupCheck !== undefined && typeof integration.postSetupCheck !== "function") {
     throw new Error(`Integration ${path} postSetupCheck must be a function`);
   }

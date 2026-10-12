@@ -31,6 +31,19 @@ agent discovered the Skill, completed a tool call or tested the product.
 Start or refresh the host session, call `inspect_test_scope`, and check the
 project binding before running a scenario.
 
+For a registered business Charter, call `inspect_integration_readiness` with
+its `charterId` before creating or starting a Mission. The connector must expose
+an explicit read-only `readiness` hook; ProofKit does not reuse the Run
+`preflight`, because that lifecycle hook is trusted connector code with no
+read-only guarantee. Readiness creates no Mission or Run, calls no setup,
+capability or Oracle, and returns `testVerdict: not-asserted`. `blocked` lists
+prerequisites reported by the connector; `unavailable` means there is no
+readiness hook or it could not return a verified result. The CLI equivalent is
+`proofkit readiness <charterId> --root <source> --workspace <test-workspace>`.
+The optional `check.issues` list carries stable connector codes and short
+guidance; never treat a reported prerequisite as proof that an endpoint or
+business outcome was actually exercised.
+
 Choose the command for the host you use. The external bundle lives under
 `.proofkit/agents/<harness>/<content-hash>/` and contains a portable
 `proofkit-test/SKILL.md`, `references/charter-authoring.md`, native `mcp.toml`
@@ -293,6 +306,7 @@ Register one local MCP server for the project root. Clients with MCP support, in
 ```text
 discover_project
 inspect_test_scope
+inspect_integration_readiness
 inspect_test_environment
 inspect_surface
 list_test_charters
