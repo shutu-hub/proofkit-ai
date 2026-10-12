@@ -22,6 +22,10 @@ jobs:
       - run: pnpm test
       - run: pnpm test:host-verifier
       - run: pnpm test:webarena
+      - name: Verify live benchmark HAR capture and cancellation
+        env:
+          PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome
+        run: node tests/benchmark-har-smoke.mjs
       - name: Verify evidenced host repair hypothesis and direct replay
         env:
           PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome

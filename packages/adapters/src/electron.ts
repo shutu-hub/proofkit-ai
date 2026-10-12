@@ -4,7 +4,7 @@ import type { SurfaceSnapshot } from "@proofkit/contracts";
 import type { AdapterEvent } from "@proofkit/runner";
 import { WebAdapter, type WebAdapterOptions } from "./web.js";
 
-export type ElectronAdapterOptions = Omit<WebAdapterOptions, "baseUrl" | "headless"> & {
+export type ElectronAdapterOptions = Omit<WebAdapterOptions, "baseUrl" | "headless" | "benchmarkHar"> & {
   devtoolsActivePortPath?: string;
 };
 

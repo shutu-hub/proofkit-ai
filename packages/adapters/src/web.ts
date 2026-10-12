@@ -5,6 +5,7 @@ import type { AdapterEvent, SurfaceAdapter, SurfaceActionContext } from "@proofk
 import { AmbiguousSurfaceTargetError, InconclusiveError, InvalidFileInputControlError } from "@proofkit/runner";
 import { captureActionResponse } from "./response-capture.js";
 import { projectSurfaceUrl, sanitizeSurfaceText } from "./surface-sanitize.js";
+import { BenchmarkHarRecorder, type BenchmarkHarManifest, type BenchmarkHarOptions } from "./benchmark-har.js";
 
 export type WebAdapterOptions = {
   baseUrl?: string;
@@ -22,6 +23,8 @@ export type WebAdapterOptions = {
    * default 30 second timeout.
    */
   screenshotTimeoutMs?: number;
+  /** Raw, unsanitized HAR in a new external benchmark directory. No CDP attach. */
+  benchmarkHar?: BenchmarkHarOptions;
 };
 
 export class WebAdapter implements SurfaceAdapter {
@@ -36,21 +39,57 @@ export class WebAdapter implements SurfaceAdapter {
   private pendingEvents: AdapterEvent[] = [];
   private droppedPendingEvents = 0;
   private detachPageEvents?: () => void;
+  private ownedContext = false;
+  private harRecorder?: BenchmarkHarRecorder;
+  private harManifest?: BenchmarkHarManifest;
+  private connecting = false;
+  private closeRequested = false;
+  private closing?: Promise<void>;
+  private benchmarkCaptureStarted = false;
+  private harCloseFailure?: "context-close-failed" | "browser-close-failed";
 
   constructor(options: WebAdapterOptions = {}) {
     this.options = options;
   }
 
   async connect(): Promise<void> {
+    if (this.options.benchmarkHar && this.options.cdpUrl) {
+      throw new InconclusiveError("benchmark-har-attach-unsupported", "Benchmark HAR requires a new adapter-owned browser context; existing CDP sessions cannot establish capture from task start.");
+    }
+    if (this.connecting || this.browser || this.closing) throw new Error("Web adapter is already connecting or connected");
+    if (this.options.benchmarkHar && this.benchmarkCaptureStarted) throw new Error("Benchmark HAR adapters are single-use; create a new adapter and capture directory");
+    this.connecting = true;
+    this.closeRequested = false;
+    try {
+      await this.connectBrowser();
+    } finally {
+      this.connecting = false;
+      // A resource can arrive after the runner's cancellation cleanup grace.
+      if (this.closeRequested) await this.closeAfterConnect();
+    }
+  }
+
+  private async connectBrowser(): Promise<void> {
     this.pendingEvents = [];
     this.droppedPendingEvents = 0;
     const { chromium } = await import("playwright-core");
+    this.checkConnectOpen();
+    if (this.options.benchmarkHar) {
+      this.benchmarkCaptureStarted = true;
+      const recorder = new BenchmarkHarRecorder(this.options.benchmarkHar);
+      await recorder.prepare();
+      this.harRecorder = recorder;
+      this.harManifest = undefined;
+      this.checkConnectOpen();
+    }
     if (this.options.cdpUrl) {
       this.browser = await chromium.connectOverCDP(this.options.cdpUrl);
+      this.checkConnectOpen();
       const deadline = Date.now() + 5_000;
       while (true) {
         const pages = this.browser.contexts().flatMap((context) => context.pages());
         const selected = await selectAttachedPage(pages, this.options);
+        this.checkConnectOpen();
         if (selected) {
           this.context = selected.context();
           this.activePage = selected;
@@ -67,13 +106,30 @@ export class WebAdapter implements SurfaceAdapter {
         headless: this.options.headless ?? true,
         executablePath: this.options.executablePath,
       });
+      this.checkConnectOpen();
     }
-    this.context = this.browser.contexts()[0] ?? await this.browser.newContext();
+    this.context = await this.browser.newContext(this.harRecorder ? {
+      recordHar: { path: this.harRecorder.path, mode: "full", content: "embed" },
+      serviceWorkers: "block",
+    } : {});
+    this.ownedContext = true;
+    this.checkConnectOpen();
     this.activePage = this.context.pages()[0] ?? await this.context.newPage();
+    this.checkConnectOpen();
     this.attachPageEvents(this.activePage);
     if (this.options.baseUrl && (await this.activePage.url()) === "about:blank") {
       await this.activePage.goto(this.options.baseUrl, { waitUntil: "domcontentloaded" });
     }
+    this.checkConnectOpen();
+  }
+
+  private checkConnectOpen(): void {
+    if (this.closeRequested) throw new Error("Web adapter was closed during connection");
+  }
+
+  private async closeAfterConnect(): Promise<void> {
+    await this.closing?.catch(() => {});
+    await this.close();
   }
 
   async discover(): Promise<SurfaceSnapshot> {
@@ -287,16 +343,51 @@ export class WebAdapter implements SurfaceAdapter {
     };
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.closeRequested = true;
+    if (this.closing) return this.closing;
+    const closing = this.closeBrowser();
+    this.closing = closing;
+    void closing.finally(() => {
+      if (this.closing === closing) this.closing = undefined;
+    }).catch(() => {});
+    return closing;
+  }
+
+  private async closeBrowser(): Promise<void> {
+    const browser = this.browser;
+    const context = this.context;
+    const ownedContext = this.ownedContext;
+    this.browser = undefined;
+    this.context = undefined;
+    this.activePage = undefined;
+    this.ownedContext = false;
     this.detachPageEvents?.();
     this.detachPageEvents = undefined;
     this.eventSink = undefined;
     this.pendingEvents = [];
     this.droppedPendingEvents = 0;
-    await this.browser?.close();
-    this.browser = undefined;
-    this.context = undefined;
-    this.activePage = undefined;
+    let closeError: unknown;
+    let closeFailure: "context-close-failed" | "browser-close-failed" | undefined;
+    try {
+      if (ownedContext) await context?.close();
+    } catch (error) { closeError = error; closeFailure = "context-close-failed"; }
+    try { await browser?.close(); }
+    catch (error) { closeError ??= error; closeFailure ??= "browser-close-failed"; }
+    this.harCloseFailure ??= closeFailure;
+    // Do not seal a manifest while acquisition may still produce resources.
+    if (this.harRecorder && !this.connecting && !this.context && !this.browser) {
+      this.harManifest = await this.harRecorder.finish(this.harCloseFailure);
+      if (this.harManifest.status !== "recorded" && !closeError) {
+        throw new InconclusiveError("benchmark-har-unavailable", "Benchmark HAR could not establish a finalized nonempty trace; inspect the capture manifest.");
+      }
+    }
+    if (closeError) throw closeError;
+  }
+
+  /** Informational Run label and hash; not an attestation of Mission ownership. */
+  benchmarkHarManifest(): BenchmarkHarManifest | undefined {
+    return this.harManifest ? { ...this.harManifest, recording: { ...this.harManifest.recording } } : undefined;
   }
 
   protected page(): Page {

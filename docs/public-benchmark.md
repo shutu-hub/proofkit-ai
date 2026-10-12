@@ -6,7 +6,7 @@
 
 已接入固定任务批次、Agent 输入投影、官方 Python 评判器、输入哈希校验和简洁 HTML/JSON 报告。官方依赖只安装在独立评测环境，产品 CLI/MCP 仍使用 TypeScript；没有复制或另写判分算法。
 
-当前支持三个开发命令：`prepare` 准备任务并检查 Docker；`replay` 校验官方评判器；`grade` 评判外部响应与 HAR。**尚未实现 WebArena 的宿主 AI 自动执行与 ProofKit 成绩认证**，这些命令不代表完成了一次产品测试。
+当前支持三个开发命令：`prepare` 准备任务并检查 Docker；`replay` 校验官方评判器；`grade` 评判外部响应与 HAR。隔离 Web Adapter 另支持显式原始 HAR 导出。**尚未实现 WebArena 的宿主 AI 自动执行与 ProofKit 成绩认证**，这些命令不代表完成了一次产品测试。
 
 2026-10-12 本地验证：
 
@@ -16,8 +16,12 @@
 | 批次及输入回归 | 6 个测试通过，包括可选官方集成测试 | 缺失任务不被丢弃，畸形输入为 error，篡改任务被阻断，历史结果不被覆盖 |
 | 准备首批任务 | 12 个，实际执行 0 个 | 数据接入正常；没有自主测试成功率 |
 | 官方站点 | `docker-not-installed` | 真实站点测试未开始 |
+| 真实 Chrome HAR 采集 | 4 个脚本控制的本地运行，覆盖成功、断言失败、HTTP 500、取消 | 初始导航、请求正文/头/Cookie、嵌入响应、关闭刷新与哈希校验正常；默认普通证据继续脱敏 |
+| 官方评判真实 HAR | 3/3 对照符合预期：正确导航 success，500 和未访问目标页 failure | 任务 44 的评判协议能读取实际网络记录；站点为本地 fixture，不计入 WebArena 成绩 |
 
 对照中只有任务 108 使用上游已有成功记录；正确导航对照为**合成 HAR**。任务 107 的上游示例响应是 NAVIGATE，而固定数据要求 RETRIEVE，作为过期示例负对照保留。7/7 是评判校准结果，不是 Agent 完成率。
+
+真实 HAR 验证中的 HTTP 500 页面仍显示预期文字；普通 Runner 在 `runtimeQuality.mode=record` 下可以通过该文字断言，而官方评判器拒绝此导航。这说明页面文字不能替代业务或基准的独立判定。真实 HAR 对照与上述 7 个回放对照分开保存。
 
 ## 固定范围
 
@@ -75,11 +79,37 @@ pnpm test:webarena
 
 `grade` 将完整提交复制到结果目录并记录哈希，评判器读取该快照；完整但畸形的输入也保留用于复核。只有全部计划任务成功才退出 0，其余退出 1；准备阶段即使环境被阻断，仍退出 0 并保存环境状态，不能把进程退出码当成站点就绪。空批次成功率为 null；开始提交后的成功率按固定 12 个计划任务计算，部分匹配不算成功，error 和 not-run 单列。导入结果始终标为 `proofkitEffectiveness: not-measured`。
 
+## 隔离浏览器网络采集
+
+可信基准控制器可以直接使用 Adapter API；目前没有在普通 CLI、MCP 或项目配置中开放原始 HAR 路径。
+
+```typescript
+const adapter = new WebAdapter({
+  executablePath: browserPath,
+  baseUrl: taskStartUrl,
+  benchmarkHar: { directory: newAbsoluteExternalDirectory, runId },
+});
+const result = await new ExecutionRunner(adapter, { evidenceDir }).run(charter, runId);
+const capture = adapter.benchmarkHarManifest();
+```
+
+采集从新建浏览器上下文开始，先于第一步导航，阻止 Service Worker 绕过录制；关闭上下文后才核验 `network.har`，并写入 `capture.json` 的 SHA-256、字节数和条目数。目录必须新建，Adapter 仅供一次采集使用。取消时晚到的资源仍会被释放，采集不会在连接尚未结束时提前确认。空文件、缺失、畸形、超过 32 MiB 或关闭失败都会留下明确缺口；结构检查只是基本有效性检查，完整判分继续交给官方评判器。
+
+HAR 保留原始 Cookie、Header 和正文，调用者必须将其放在独立评测目录。普通 Run 的事件、响应投影与结果仍沿用脱敏策略。CDP 附加和 Electron 不支持此选项，因为已有上下文无法保证从任务起点开始完整录制。`runId` 当前只是调用者标签，**没有构成 Mission 来源认证**；采集成功也不等于任务成功。消费方必须重新核验文件哈希，不能仅信任标签或 manifest。
+
+```powershell
+# 先设置前文的官方环境变量；不设置时只验证浏览器采集，跳过官方判分。
+$env:PROOFKIT_BROWSER_PATH='C:/Program Files/Google/Chrome/Application/chrome.exe'
+pnpm test:smoke:benchmark-har
+```
+
+该命令使用真实 Chrome 和本地脚本控制的 HTTP fixture，将 HAR、普通 Run 证据、可选官方判分与 `report.json` 保存到新的外部目录。没有让 AI 解题，`webArenaTasksExecuted` 为 0，`proofkitEffectiveness` 为 `not-measured`。
+
 ## 下一阶段：真实执行的准入条件
 
 1. 按[官方环境说明](https://servicenow.github.io/webarena-verified/environments/)部署四个隔离站点，记录镜像 digest、站点配置和任务前初始化结果。Docker 可以在另一台开发机运行；本机的检查目前只探测本地 Docker，不证明远端环境不可用。当前没有站点部署或重置自动化。
 2. 在独立容器/账户中让 Codex、Claude Code 等宿主只读任务输入和已映射的站点 URL，经现有 MCP/CLI 发现页面、生成计划并创建 Mission。禁止事先替 Agent 写完成路径。当前只是文件内容分离，**同一宿主仍可能读取上游标准答案，尚无系统级答案隔离**。
-3. 为隔离基准浏览器实现完整 HAR 采集、Mission/Run 绑定和关闭刷新校验；重用现有执行与证据模型。目前 Web Adapter 的网络信号不是官方可用的完整 HAR，已有 CDP 会话也不能默认视为从任务起点完整采集。原始基准 HAR 留在隔离评测目录。
+3. 将已验证的隔离 Web Adapter HAR 采集贯通到基准专用宿主执行入口，建立 Mission/Run 绑定与缺口处理；重用现有执行与证据模型。关闭刷新、失败/取消保存与官方读取已通过真实 Chrome fixture 验证，基准任务执行入口尚未接入。已有 CDP 会话不能默认视为从任务起点完整采集。原始基准 HAR 留在隔离评测目录。
 4. 独立评判进程在任务结束后读取响应/HAR；认证模式还需核验宿主工具轨迹、实际 Mission、运行来源、初始化状态和输入未变。人工导入或示例回放只能继续用 `grade`，不能升级成 ProofKit 自主成绩。
 5. 先报告固定 12 个任务的完成率、阻断原因、耗时、模型用量与重复运行稳定性，再扩展全量和独立留出任务。在相同站点、模型、预算和重复次数下对比宿主直接使用 Playwright 的基线与宿主使用 ProofKit，避免把模型差异计入框架收益。
 
