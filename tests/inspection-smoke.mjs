@@ -66,6 +66,14 @@ try {
   assert.equal(inspection.snapshot.text.includes("qa@example.com"), false);
   assert.equal(inspection.snapshot.text.includes("13800138000"), false);
   assert.equal(JSON.stringify(inspection).includes("private candidate value"), false);
+  const exploratoryResponse = await client.callTool({ name: "interact_surface", arguments: {
+    surface: "web", action: { kind: "click", selector: "#fetch" } } });
+  assert.equal(exploratoryResponse.isError, undefined);
+  const exploratory = JSON.parse(exploratoryResponse.content.find((item) => item.type === "text")?.text ?? "null");
+  assert.equal(exploratory.status, "observed");
+  assert.equal(exploratory.testVerdict, "not-asserted");
+  assert.ok(exploratory.snapshot.text.includes("Resume ready"));
+  assert.ok(!JSON.stringify(exploratory).includes("qa@example.com"));
   const fetchControl = inspection.snapshot.controls.find((item) => item.name === "Fetch resume");
   const details = inspection.snapshot.controls.find((item) => item.name === "Show details");
   const candidate = inspection.snapshot.controls.find((item) => item.name === "Candidate");
@@ -168,6 +176,10 @@ try {
     assert.equal(desktop.status, "observed");
     assert.equal(desktop.readiness.status, "observed");
     assert.equal(desktop.snapshot.controls.find((item) => item.name === "Continue")?.selector, "#ready");
+    const desktopInteraction = await desktopRunner.interactSurface({ adapter: "electron", action: { kind: "click", selector: "#ready" } });
+    assert.equal(desktopInteraction.status, "observed");
+    assert.equal(desktopInteraction.testVerdict, "not-asserted");
+    assert.ok(desktopInteraction.snapshot.text.includes("Delayed controls ready"));
     const desktopAbsent = await desktopRunner.inspectSurface({ adapter: "electron", readyWhen: { text: "Missing condition", timeoutMs: 100 } });
     assert.equal(desktopAbsent.status, "failed");
     assert.equal(desktopAbsent.readiness.status, "unverified");
@@ -215,7 +227,7 @@ try {
   assert.deepEqual(await readdir(source), ["package.json"]);
   console.log(JSON.stringify({ inspectionId: inspection.inspectionId, controls: inspection.snapshot.controls.length,
     selector: details.selector, electronReadiness: process.env.PROOFKIT_ELECTRON_PATH ? "verified" : "not-run",
-    verified: ["mcp-inspect-surface", "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
+    verified: ["mcp-inspect-surface", "single-step-web-interaction", "single-step-electron-interaction", "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
 } finally {
   if (electron && electron.exitCode === null) {
     const exited = new Promise((done) => electron.once("exit", done));

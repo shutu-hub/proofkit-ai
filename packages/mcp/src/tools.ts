@@ -58,6 +58,24 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "interact_surface",
+    "Perform exactly one exploratory Web/Electron action, then observe the resulting page in the same owned browser context. Use this to navigate before authoring a full test. It saves a Run and evidence but always returns testVerdict=not-asserted; a click or form action needs sideEffects=allow in the test workspace. For product acceptance use run_test with a positive assertion and independent business Oracle when required.",
+    { surface: z.enum(["web", "electron"]).default("web"), url: z.string().url().optional(),
+      action: z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("goto"), url: z.string().url() }),
+        z.object({ kind: z.literal("click"), selector: z.string().min(1).max(512) }),
+        z.object({ kind: z.literal("fill"), selector: z.string().min(1).max(512), value: z.string().max(4096) }),
+        z.object({ kind: z.literal("press"), selector: z.string().min(1).max(512), key: z.string().min(1).max(64) }),
+        z.object({ kind: z.literal("waitForText"), text: z.string().min(1).max(512), timeoutMs: z.number().int().min(100).max(30_000).optional() }),
+      ]) },
+    async ({ surface, url, action }, extra) => {
+      if (surface === "electron" && (url || action.kind === "goto")) throw new Error("Electron interaction uses its configured application UI");
+      const mapped = action.kind === "goto" ? { ...action, url: surfaceUrl(action.url, runner)! } : action;
+      return result(await runner.interactSurface({ adapter: surface, url: surfaceUrl(url, runner), action: mapped, signal: extra.signal }));
+    },
+  );
+
+  server.tool(
     "list_test_charters",
     "List curated, workspace-owned tests that can be selected by natural language or charterId.",
     {},
@@ -97,7 +115,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "run_test",
-    "Run a natural-language ProofKit test mission at the requested intensity. When surface is omitted, an unambiguous platform in the intent is used. Supply a structured Charter or a reviewed external-workspace candidate relative path and scope SHA-256 when no catalog entry covers the workflow. Do not combine that path with charter, charterId, suiteId, url, expect, oracleNames, mode or sideEffectPolicy; the candidate file owns these settings. Poll status and evidence for the final result.",
+    "Run a natural-language ProofKit test mission at the requested intensity. When surface is omitted, an unambiguous platform in the intent is used. Supply a structured Charter or a reviewed external-workspace candidate relative path and scope SHA-256 when no catalog entry covers the workflow. A submitted charter must not be combined with top-level url, expect, oracleNames, mode or sideEffectPolicy. A candidate path must not be combined with charter, charterId, suiteId or those ad-hoc fields. For single exploratory clicks/fills use interact_surface first; its result is not a product verdict. Poll status and evidence for the final result.",
     {
       intent: z.string().min(1),
       charter: TestCharterSchema.optional(),
@@ -160,7 +178,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "await_test_result",
-    "Wait briefly for an existing Mission without starting or replaying it. A terminal result includes an audited brief verdict and cited evidence, so another evidence read is optional unless more detail is needed. A saved running Mission whose owner is temporarily unseen is rechecked until this wait ends; an unstarted Mission returns not-asserted and readiness gaps. Cancelling this wait does not cancel the Mission.",
+    "Wait 500–30000 ms for an existing Mission (omit timeoutMs to use 20000). For longer Missions, call again with the same missionId; never request a larger timeoutMs. This does not start or replay it. A terminal result includes an audited brief verdict and cited evidence, so another evidence read is optional unless more detail is needed. A saved running Mission whose owner is temporarily unseen is rechecked until this wait ends; an unstarted Mission returns not-asserted and readiness gaps. Cancelling this wait does not cancel the Mission.",
     { missionId: z.string().min(1), timeoutMs: z.number().int().min(500).max(30_000).default(20_000) },
     async ({ missionId, timeoutMs }, extra) => result(await awaitTestResult(runner, missionId, timeoutMs, extra.signal)),
   );

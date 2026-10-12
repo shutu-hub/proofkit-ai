@@ -7,7 +7,7 @@ import { auditMissionVerdict, createRunId, EvidenceStore, LocalExecutionOwnershi
 import type { EnvironmentInspection, EnvironmentInspectionInput, IntegrationReadiness, IntegrationReadinessInput } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
-import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, IntegrationReadinessSchema, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionAcceptanceIntegrity, type MissionComparison, type MissionEvidenceIntegrity, type MissionProofClassification, type MissionRecoveryInspection, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
+import { ActionSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, IntegrationReadinessSchema, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type Action, type EvidenceRef, type MissionAcceptanceIntegrity, type MissionComparison, type MissionEvidenceIntegrity, type MissionProofClassification, type MissionRecoveryInspection, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
 import { assessPlanningCoverage, assessPlanningQuality, withPlanningCoverage, getTestLevelProfile, intentTestLevelHints, IntentPlanner, OpenAICompatiblePlannerProvider, requiredCatalogSurfaces, resolveTestLevel, selectCatalogCharter, selectCatalogSuite, supportsCatalogCharter, StructuredPlanner, loadCharter, type PlanOptions, type PlannerProvider } from "@proofkit/planner";
 import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowInventory, loadConfigForContext, resolveProjectContext, resolveWithinWorkspace, sameProjectPath, scanProject, verifySourceLocationHints } from "@proofkit/project";
@@ -102,6 +102,22 @@ export type SurfaceInspection = {
   runtimeFindingsOmitted: number;
   findings: string[];
   evidence: EvidenceRef[];
+};
+
+export type SurfaceInteractionInput = Pick<LocalRunInput, "adapter" | "url" | "cdp" | "devtoolsPortFile" | "headful" | "signal"> & {
+  action: Extract<Action, { kind: "goto" | "click" | "fill" | "press" | "waitForText" }>;
+};
+export type SurfaceInteraction = {
+  interactionId: string;
+  surface: "web" | "electron";
+  status: "observed" | "failed" | "blocked" | "cancelled";
+  testVerdict: "not-asserted";
+  action: { kind: SurfaceInteractionInput["action"]["kind"]; status: string };
+  snapshot?: Pick<SurfaceSnapshot, "capturedAt" | "url" | "title" | "text" | "controls" | "controlsTruncated">;
+  runtimeHealth?: RunSummary["runtimeHealth"];
+  findings: string[];
+  evidence: EvidenceRef[];
+  evidenceOmitted: number;
 };
 
 export type MissionCreateOptions = {
@@ -410,6 +426,52 @@ export class LocalRunnerService {
         runtimeFindingsOmitted: Math.max(0, runtimeFindings.length - 10),
         findings: summary.findings.filter((finding) => finding !== "No executable assertion or business oracle was declared.").slice(0, 10),
         evidence: this.runEvidence(summary),
+      };
+    } finally {
+      clearTimeout(deadline);
+      input.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /** One explicitly requested exploratory action. It saves a Run but never asserts product correctness. */
+  async interactSurface(input: SurfaceInteractionInput): Promise<SurfaceInteraction> {
+    const surface = input.adapter ?? "web";
+    if (surface !== "web" && surface !== "electron") throw new Error("Surface interaction supports Web and Electron only");
+    if (surface === "electron" && input.url) throw new Error("Electron interaction uses its configured CDP target");
+    const parsed = ActionSchema.parse(input.action);
+    if (!["goto", "click", "fill", "press", "waitForText"].includes(parsed.kind)) throw new Error("Unsupported exploratory action");
+    const action = parsed as SurfaceInteractionInput["action"];
+    if (surface === "electron" && action.kind === "goto") throw new Error("Electron navigation must use the owned application UI");
+    const interactive = ["click", "fill", "press"].includes(action.kind);
+    if (interactive && this.config.policies.sideEffects !== "allow") {
+      throw new Error("Exploratory interaction requires sideEffects=allow in the test workspace");
+    }
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(input.signal?.reason);
+    if (input.signal?.aborted) onAbort();
+    else input.signal?.addEventListener("abort", onAbort, { once: true });
+    const deadline = setTimeout(() => controller.abort(new Error("Surface interaction exceeded 30 seconds")), 30_000);
+    try {
+      const charter = TestCharterSchema.parse({ intent: `Explore one ${surface} action`, level: "quick", mode: "deterministic",
+        actions: [action, { kind: "observe" }], assertions: [], sideEffectPolicy: interactive ? "allow" : "deny",
+        metadata: { purpose: "surface-interaction" } });
+      const started = await this.startRun({ ...input, adapter: surface, charter, start: false, signal: controller.signal });
+      const summary = await this.wait(started.runId);
+      const observed = summary.steps.find((step) => step.action.kind === "observe" && step.status === "passed")?.afterSnapshot;
+      const first = summary.steps[0];
+      const status = summary.verdict === "blocked" || summary.verdict === "cancelled" ? summary.verdict
+        : first?.status === "passed" && observed ? "observed" : "failed";
+      const evidence = this.runEvidence(summary);
+      return {
+        interactionId: summary.runId, surface, status, testVerdict: "not-asserted",
+        action: { kind: action.kind, status: first?.status ?? "not-run" },
+        ...(observed ? { snapshot: { capturedAt: observed.capturedAt, url: observed.url, title: observed.title,
+          text: observed.text?.slice(0, 2_000), controls: observed.controls?.slice(0, 20),
+          controlsTruncated: Boolean(observed.controlsTruncated || (observed.controls?.length ?? 0) > 20) } } : {}),
+        runtimeHealth: summary.runtimeHealth,
+        findings: summary.findings.filter((finding) => finding !== "No executable assertion or business oracle was declared.")
+          .slice(0, 5).map((finding) => finding.slice(0, 400)),
+        evidence: evidence.slice(0, 12), evidenceOmitted: Math.max(0, evidence.length - 12),
       };
     } finally {
       clearTimeout(deadline);

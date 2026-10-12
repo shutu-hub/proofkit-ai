@@ -268,6 +268,8 @@ For a new workflow with a read-only terminal-status API, the Charter can also de
 
 For a new UI workflow, `inspect_surface` (or `proofkit inspect`) first records a read-only Web/Electron observation with visible control hints and evidence links. Its `not-asserted` result is not a product verdict; use the observed selectors in a Charter and verify them during the test Run.
 
+For an unfamiliar Web or Electron workflow, MCP `interact_surface` can perform one `goto`, `click`, `fill`, `press`, or `waitForText` action and return a compact, scrubbed page observation. It keeps the owned browser context for the next action, saves a Run with evidence, and always returns `testVerdict: "not-asserted"`. Web navigation is limited to loopback or the configured origin; Electron navigation stays within the application UI. Click, fill, and press require `policies.sideEffects: allow` in the isolated test workspace. Once the desired state is reached, use `run_test` with a positive assertion and an independent business Oracle where the requested intensity requires one. A visible page or successful exploratory action alone is never a product acceptance result.
+
 ```bash
 pnpm --filter @proofkit/mcp build
 PROOFKIT_ROOT=/path/to/your/project PROOFKIT_WORKSPACE_ROOT=/path/to/test-workspace node packages/mcp/dist/server.js

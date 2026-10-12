@@ -22,6 +22,7 @@ describe("ProofKit MCP tools", () => {
       "inspect_integration_readiness",
       "inspect_test_environment",
       "inspect_surface",
+      "interact_surface",
       "list_test_charters",
       "list_test_suites",
       "create_test_mission",
@@ -58,12 +59,29 @@ describe("ProofKit MCP tools", () => {
     for (const name of ["discover_project", "inspect_test_scope", "inspect_integration_readiness", "list_test_charters", "list_test_suites", "get_mission_status", "inspect_mission_recovery"]) {
       expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).toBe(true);
     }
-    for (const name of ["inspect_test_environment", "inspect_surface", "create_test_mission", "run_test", "get_mission_evidence", "analyze_mission_stability", "create_mission_repeat", "get_mission_repeat_status", "advance_mission_repeat"]) {
+    for (const name of ["inspect_test_environment", "inspect_surface", "interact_surface", "create_test_mission", "run_test", "get_mission_evidence", "analyze_mission_stability", "create_mission_repeat", "get_mission_repeat_status", "advance_mission_repeat"]) {
       expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).not.toBe(true);
     }
 
     await client.close();
     await server.close();
+  });
+
+  it("routes one simple exploratory action without accepting a fabricated product verdict", async () => {
+    const runner = { config: { surfaces: { web: { baseUrl: "http://127.0.0.1:7780/admin" } } },
+      interactSurface: vi.fn(async () => ({ interactionId: "run-1", surface: "web", status: "observed",
+        testVerdict: "not-asserted", action: { kind: "click", status: "passed" }, evidence: [], evidenceOmitted: 0,
+        findings: [] })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "interact_surface", arguments: {
+        surface: "web", action: { kind: "click", selector: "#orders" } } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ status: "observed", testVerdict: "not-asserted" });
+      expect(runner.interactSurface).toHaveBeenCalledWith({ adapter: "web", url: undefined,
+        action: { kind: "click", selector: "#orders" }, signal: expect.any(AbortSignal) });
+      expect((await client.callTool({ name: "interact_surface", arguments: {
+        action: { kind: "click", selector: "" } } })).isError).toBe(true);
+    } finally { await client.close(); await server.close(); }
   });
 
   it("routes registered-Charter connector readiness as a read-only MCP inspection", async () => {

@@ -80,11 +80,14 @@ export async function runWebArenaHost({ sessionPath, batchPath, output, host = "
   const prompt = `Use the ProofKit MCP server ${SERVER} to complete one WebArena-Verified public task.\n`
     + `Task ID: ${selected.taskId}\nIntent: ${selected.intent}\n`
     + `The owned browser starts at ${start.href}. Use only this ProofKit MCP for browser actions.\n`
-    + `Inspect the page, perform the requested action with run_test, then await its terminal result and inspect the resulting page. `
+    + `Inspect the page, then use interact_surface for individual goto/click/fill/press actions; it preserves task browser state and returns a compact observation, not a success verdict. `
+    + `After the requested end state is visible, use run_test for a quick positive surface check or a stronger Mission if available. `
+    + `For an inline Charter, put action/assertion kinds inside charter and do not also supply top-level url, expect, mode or sideEffectPolicy. `
     + `A click Charter needs sideEffectPolicy=allow. If the requested end state is visible, stop repeating the workflow.\n`
     + `You MUST call submit_benchmark_task exactly once before your final message, even if the task fails. `
     + `Infer task_type as RETRIEVE, NAVIGATE or MUTATE from the intent. Submit status SUCCESS only when the observed `
     + `result supports it; use an error status otherwise. For NAVIGATE use retrieved_data=null; always include error_details.\n`
+    + `await_test_result timeoutMs must be at most 30000; repeat the call for longer Missions. `
     + `A passing page-text assertion alone does not establish task success. Report uncertainty in your final explanation.\n`
     + `Do not use shell or filesystem tools to perform the task or alter benchmark artifacts.`;
   await writeFile(join(agentDir, "prompt.txt"), prompt + "\n", { flag: "wx" });

@@ -114,7 +114,12 @@ try {
   const secondInspection = await call("inspect_surface", { surface: "web" });
   assert.ok(JSON.stringify(secondInspection).includes("Dashboard ready"));
   const failed = await run(charter([{ kind: "observe" }], "Missing target")); assert.equal(failed.verdict, "failed");
-  const completed = await run(charter([{ kind: "click", selector: "#todos" }], "Todos ready"));
+  const interaction = await call("interact_surface", { surface: "web", action: { kind: "click", selector: "#todos" } });
+  assert.equal(interaction.status, "observed");
+  assert.equal(interaction.testVerdict, "not-asserted");
+  assert.ok(interaction.snapshot.text.includes("Todos ready"));
+  assert.ok(!JSON.stringify(interaction).includes(privateCookie));
+  const completed = await run(charter([{ kind: "observe" }], "Todos ready"));
   assert.equal(completed.verdict, "passed");
   const result = await call("submit_benchmark_task", answer);
   assert.equal(result.status, "captured", JSON.stringify(result));

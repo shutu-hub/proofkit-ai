@@ -353,6 +353,7 @@ inspect_test_scope
 inspect_integration_readiness
 inspect_test_environment
 inspect_surface
+  interact_surface
 list_test_charters
 list_test_suites
 run_test
@@ -397,6 +398,8 @@ For mobile, call `inspect_test_environment({ surface: "mobile" })` before attach
 For a `core` or `release` Run whose pre-action listener check identified one PID, ProofKit checks that listener again before closing the surface, including when an assertion or Oracle throws. The Run saves a returned second observation and reports `targetContinuity`; a changed or unverified listener makes an otherwise passed or failed Run inconclusive. Cancellation and pre-connection blocks retain their verdicts. A probe error records unverified continuity without a second observation. This is a point-in-time process check, not an attestation of page bytes. `quick` avoids the extra check.
 
 Before drafting a new Charter, call `inspect_surface({ surface: "web" })` or `inspect_surface({ surface: "electron" })` against an already running local page. It records a read-only observation Run and returns bounded controls, including hidden file inputs with `inputType: "file"` and `visible: false`, and a selector only when it matched exactly one element at inspection time. The result says `testVerdict: "not-asserted"`; it is reconnaissance, not a pass. Control hints cover the main frame only, are capped at 60, omit input values, and can become stale after navigation. Web/Electron `click`, `fill`, `press` and `setInputFiles` recheck selector uniqueness during the test Run and fail on ambiguity. The Run keeps snapshot, screenshot and event evidence in the external workspace. Use isolated test data because screenshots can contain everything visible on the page.
+
+When a workflow needs several page steps, call `interact_surface({ surface: "web", action: { kind: "click", selector: "#next" } })` for one step at a time. It accepts `goto`, `click`, `fill`, `press`, and `waitForText`; the action and a fresh observation share the owned browser context. The response shows the action status, a bounded scrubbed snapshot, and saved evidence, but always says `testVerdict: "not-asserted"`. Click, fill, and press require `policies.sideEffects: allow` in the isolated workspace. An Electron `goto` is rejected, and a Web URL must use loopback or the configured origin. Use `run_test` for the final assertion and required business Oracle; an exploratory sequence by itself is not an acceptance test. Keep `await_test_result.timeoutMs` within 500–30000 ms and repeat the wait for a longer Mission.
 
 Runs sharing one external test workspace execute exclusively, including read-only inspection and Runs from separate Missions or surfaces. Shared CDP and WebDriver server endpoints are also serialized across workspaces on the same host. Electron port-file attachments lock the file path and, when already present, its CDP endpoint before setup; after setup they lock the final endpoint and pin the adapter to it. If another Run owns the workspace or attachment target, the contender records a `blocked` Run before attaching to the page; report this as test-environment contention and retry only after the active Run and its cleanup finish. Separate workspaces sharing a business account or backend still need explicit data isolation.
 
