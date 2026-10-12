@@ -116,6 +116,27 @@ export function auditMissionAgentTrace(mission: TestMission): MissionAgentTraceA
       const call = step.toolCallIds.length === 1 ? callById.get(step.toolCallIds[0]!) : undefined;
       if (call && call.attempt !== index + 1) issue(`AgentStep ${step.agentStepId} is linked to the wrong task attempt.`);
     }
+    if (task.attempts > 0) {
+      const finalCall = taskCalls.find((call) => call.attempt === task.attempts);
+      const finalStep = finalCall ? callOwner.get(finalCall.toolCallId) : undefined;
+      const consistent = finalCall && finalStep && (
+        task.status === "passed"
+          ? finalCall.status === "succeeded" && finalStep.status === "succeeded"
+          : task.status === "failed"
+            ? finalStep.status === "failed" && ["failed", "succeeded"].includes(finalCall.status)
+            : task.status === "blocked"
+              ? ["blocked", "cancelled"].includes(finalStep.status)
+                && ["blocked", "cancelled", "succeeded"].includes(finalCall.status)
+              : task.status === "running"
+                ? finalStep.status === "running" && finalCall.status === "started"
+                : true
+      );
+      if (!finalCall || !finalStep) {
+        issue(`Task ${task.taskId} has no final AgentStep and ToolCall receipt.`, "unverified");
+      } else if (!consistent) {
+        issue(`Task ${task.taskId} status disagrees with its final AgentStep and ToolCall receipt.`);
+      }
+    }
     if (task.status === "passed") {
       const finalCall = taskCalls.find((call) => call.attempt === task.attempts);
       const finalStep = finalCall ? callOwner.get(finalCall.toolCallId) : undefined;
