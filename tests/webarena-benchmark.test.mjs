@@ -8,6 +8,12 @@ test("single-site profiles have fixed denominators and preserve the cross-site p
   assert.deepEqual(benchmarkProfile("shopping-admin-12").taskIds,
     [0, 11, 77, 94, 108, 119, 374, 453, 470, 496, 501, 679]);
   assert.equal(benchmarkProfile("pilot-12").taskIds.length, 12);
+  for (const name of ["pilot-12", "shopping-admin-4", "shopping-admin-12"]) {
+    const profile = benchmarkProfile(name);
+    const grouped = Object.values(profile.taskGroups).flat();
+    assert.deepEqual([...grouped].sort((a, b) => a - b), [...profile.taskIds].sort((a, b) => a - b));
+    assert.equal(new Set(grouped).size, grouped.length);
+  }
   assert.throws(() => benchmarkProfile("unknown"), /Unknown WebArena/);
 });
 

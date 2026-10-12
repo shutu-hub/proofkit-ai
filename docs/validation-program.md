@@ -6,6 +6,8 @@
 
 当前 `shopping-admin-4` 是同一站点的四道任务。实际官方成绩为 2/4：0 的宿主 15 分钟超时未提交，108、157 通过，423 提交后失败。四份最终宿主轨迹共完成 83 次 MCP 工具调用，其中 9 次被工具入参契约拒绝；108 和 157 虽通过，也分别有 4、3 次拒绝。这个信号指向工具接口易用性和 Agent 编排成本，但不能单凭它断定任务失败的根因。新的 `benchmark:webarena:diagnose` 把官方报告、宿主超时和工具拒绝合并为紧凑报告，并把根因保留为 `unconfirmed`。
 
+诊断器现按预先固定的题目意图拆出能力组；历史四题的只读重算保存在 `D:/bench/admin4-capability-diagnosis-20261013/report.html`：读取 1/2（另 1 题超时，6 次入参拒绝）、导航 1/1（3 次入参拒绝）、修改 0/1（已提交但官方失败，0 次入参拒绝）。这只能指示优先调查读取流程的工具摩擦和修改任务的操作/评判，不足以从每组 1–2 题推断稳定成功率或产品根因。
+
 数据集本身也要验收。任务 157 的官方网络判分只检查客户列表路径，不证明逐个客户详情已读。任务 423 的固定预期同时要求商品保存 URL 和看起来属于订单报表的 POST 字段；上游评判器会比较这些字段。它本轮失败是因为 Agent 没有完成修改，尚不能据此断言官方判分误判。用受控的真实 UI 操作校验该题判分前，不将它当成可靠的商品修改质量门槛。
 
 ## 参照项目怎样验收
@@ -18,6 +20,8 @@
 | [Appium](https://github.com/appium/appium/blob/master/.github/workflows/build.yml) | 构建流程发现各包的 `test:e2e`，另跑单测和 lint；实际设备驱动由对应生态验证。 | Electron 和未来移动适配器要有真实运行验收，协议 fixture 只是前置门槛。 |
 | [Robot Framework](https://github.com/robotframework/robotframework/blob/master/.github/workflows/acceptance_tests_cpython_pr.yml) | `atest/robot` 验收集在 Linux/Windows、多个 Python 版本运行，失败保留产物。 | 用户级命令和报告本身也要被端到端验收。 |
 | [browser-use](https://github.com/browser-use/browser-use/blob/main/.github/workflows/eval-on-pr.yml) | 公开 CI 有浏览器测试；PR 评测触发外部 `InteractionTasks_v8` 平台。该评测数据和结果接口不在该工作流内，不能据此声称可复现的公开门槛。 | Agent 任务能力需要独立评测，但公开基准、版本和原始分母应自己固定。 |
+| [Stagehand](https://github.com/browserbase/stagehand/tree/main/packages/evals) | 独立 eval 包区分 `act`、`extract`、`observe`、`agent` 和数据集；支持 WebVoyager、OnlineMind2Web、WebTailBench、Odysseys、HardBench，按任务重复和模型汇总。其 [CI 回归 job](https://github.com/browserbase/stagehand/blob/main/.github/workflows/ci.yml) 配置 3 次试验，并以该项目 Braintrust 主分数 80% 作为自身门槛；[HardBench](https://github.com/browserbase/stagehand/blob/main/packages/evals/datasets/hardbenchmark/README.md) 有 38 题核心集、102 题扩展集。 | 将 Agent 能力集与协议测试分离，固定任务选择、模型、试验次数、成本及可比较的基线；80% 只属于它自己的任务和评分规则，不能照搬成 WebArena 分数线。 |
+| [Midscene](https://github.com/web-infra-dev/midscene/tree/main/.github/workflows) | 分开运行 AI 单测、Web E2E、Windows/macOS 桌面及 Android/iOS 模拟器流程；Android CI 检查安装包产物、模拟器 TodoMVC、诊断和 HTML 报告。 | Web/Electron 的真实进程与打包产物都应验收，未来移动端需要模拟器或真机任务；失败要保留可复核的产物。 |
 | [BrowserGym](https://github.com/ServiceNow/BrowserGym) / [MiniWoB++](https://github.com/Farama-Foundation/MiniWoB-plusplus) | BrowserGym统一多个 Web 基准；MiniWoB++ 提供 100 多个短交互环境和环境奖励。 | 用轻量任务频繁测点击、输入、选择器和恢复；它不能证明跨服务业务结果。 |
 | [WebArena-Verified](https://github.com/ServiceNow/webarena-verified) / [OSWorld](https://github.com/xlang-ai/OSWorld) | 前者提供可固定的 Web 任务和官方评判器；后者提供桌面环境任务、配置与评判程序，并有 Verified 更新。 | Web 与桌面任务分别用独立评判；固定镜像/任务/评判版本，审查有疑义的题。OSWorld 环境比当前四题重，待 Electron 基线稳定后引入。 |
 
@@ -44,7 +48,11 @@
 
 每个正式用例必须有稳定 ID、固定合成输入、源码契约/业务预期、重置步骤、允许的副作用、时间上限、独立 Oracle、证据字段和清理检查。模型可以从源码提出新用例，但进入计分集前必须经人工复核 Oracle 与初态；“模型说成功”不能作为标准答案。
 
+建议先冻结一份 **AIHR 候选 v0.1（12 例，不计分）**：`W01` 简历页可见且配置错误可识别；`E01` Electron“立即运行”产生本次 Run；`E02` 登录失效/风险确认下不误报启动；`R01` PDF 上传到候选人、岗位和评估终态；`R02` 同一 `client_item_key` 重试幂等；`R03` 非法文件在写入前拒绝；`R04` worker 瞬时故障后恢复；`R05` worker 终态失败如实呈现；`O01` 在线简历阶段完成；`O02` 附件接替在线文件时保留正确阶段身份；`M01` 手工候选人录入及五个身份关联；`B01` 评估重试后恰好一次计费。每例同时保留正例、受控负例或超时边界的适用标签。`O02` 需要历史/阶段读数，`E01` 需要真实 CDP 与请求关联，`R04/R05` 需要隔离故障注入；这些条件满足前只保存候选，绝不把源码扫描结果写成已通过的测试。当前已有的 AIHR 参考 Charter、连接器和源码链路图可以作为生成起点，测试数据与执行工作区仍放在 AIHR 仓库之外。
+
 生成流程复用现有的 `inspect_test_scope` 候选审计与外部 `.proofkit/workflows.yaml`：扫描页面入口、bridge/API、worker 状态和持久关系，给每条链路提出成功、拒绝、重试、取消与重复请求情景；再由领域负责人核对预期，导出版本化用例清单。ProofKit 只在外部测试工作区保存连接器、Charter 和合成 fixture，AIHR 源码仓库不需要加入专属测试代码。候选集与正式计分集分开；正式集需要可重建测试部署和独立读数才能晋级。
+
+2026-10-13 的只读扫描已保存到 `D:/bench/aihr-scope-electron-core-20261013.json`：当前 AIHR Git HEAD 为 `dc781c3`，工作树另有未提交改动；ProofKit 扫描 2110 个文件，识别 61 个入口和 239 个去重路由候选，外部工作区有 6 个注册 Oracle、3 个未登记 core Charter。三份 Charter 均缺少明确 `surfaces` 且需要写入授权，其中两份还缺正向 UI 断言；`planningReadiness=authoring-needed`、`testVerdict=not-asserted`。这些是真实生成的**测试范围候选及缺口**，不是十二例可执行基准，更不是 AIHR 业务成绩。下一步先在隔离环境中修订 Charter、合成 fixture 和 Oracle，再冻结 v1 计分集。
 
 ## 失败归因与回归闭环
 
@@ -53,6 +61,8 @@
 修复流程：保存失败的不可变输入及轨迹 → 人工/自动复核并指定所属能力 → 编写最小复现与修复 → 跑该题 3 次及同类题 → 跑完整固定集并与修复前同预算基线比较 → 检查新失败、误报、耗时与成本。若变更了题目、模型或站点初态，另建新基准版本，不能把两次分数直接相减。
 
 当前第一优先级是**工具契约和 Agent 循环**：四题轨迹中的 9 次工具入参拒绝，具体涉及 `await_test_result.timeoutMs` 上限、Charter 动作/断言 schema，以及 Charter 与临时规划参数互斥。应提供少量稳定的高级浏览器动作、可发现的参数约束、简短终态摘要和失败即明确报错的 MCP 启动检查，然后按完全相同四题重跑；之后才扩展分母。第二优先级是审计 157/423 判分有效性。AIHR 第一批正式用例以普通上传和 Electron “立即运行”两条真实链路为中心，先实现可重置测试租户与独立业务 Oracle。
+
+2026-10-13 已加入单步 Web/Electron 探索工具并通过真实进程回归；但随后两次 Codex 任务 423 和一次 Claude Code 任务 374 均在首次 MCP 调用前被宿主认证阻断，保留于 `D:/bench/host-run-423-regression-001`、`-002` 和 `D:/bench/host-run-374-claude-001`。这三次不产生官方提交或新成功率。恢复可用的独立宿主认证后，须从固定镜像逐题重建并完成同宿主四题回归，然后才运行十二题和三次重复；不能把本轮框架 smoke 的通过当成 Agent 改进证据。
 
 ## 分阶段验收门槛
 

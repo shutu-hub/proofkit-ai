@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { open, mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { benchmarkProfiles } from "./webarena-benchmark-lib.mjs";
 
 const MAX_REPORT_BYTES = 1024 * 1024;
 const MAX_EVENTS_BYTES = 16 * 1024 * 1024;
@@ -21,6 +22,10 @@ export function diagnoseBatch(grade, hosts) {
     hostByTask.set(host.taskId, host);
   }
   const seen = new Set();
+  const profile = Object.entries(benchmarkProfiles).find(([, value]) =>
+    JSON.stringify(value.taskIds) === JSON.stringify(grade.cases.map((item) => item.taskId)));
+  const taskGroup = new Map(profile ? Object.entries(profile[1].taskGroups)
+    .flatMap(([group, ids]) => ids.map((id) => [id, group])) : []);
   const cases = grade.cases.map((item) => {
     if (!Number.isSafeInteger(item?.taskId) || seen.has(item.taskId)) throw new Error("Duplicate or invalid graded task");
     seen.add(item.taskId);
@@ -28,6 +33,7 @@ export function diagnoseBatch(grade, hosts) {
     const classification = classify(item, host);
     return {
       taskId: item.taskId,
+      taskGroup: taskGroup.get(item.taskId) ?? "unclassified",
       official: { status: item.status, score: item.score ?? null },
       host: host ? { status: host.status, durationMs: host.execution?.durationMs ?? null,
         timedOut: host.execution?.timedOut ?? false, blocker: host.execution?.blocker ?? null,
@@ -40,9 +46,21 @@ export function diagnoseBatch(grade, hosts) {
   if ([...hostByTask.keys()].some((taskId) => !seen.has(taskId))) throw new Error("Host report outside graded batch");
   const counts = Object.fromEntries([...new Set(cases.map((item) => item.classification.code))]
     .sort().map((code) => [code, cases.filter((item) => item.classification.code === code).length]));
+  const capabilityGroups = Object.fromEntries([...new Set(cases.map((item) => item.taskGroup))]
+    .sort().map((group) => {
+      const items = cases.filter((item) => item.taskGroup === group);
+      return [group, { planned: items.length,
+        officialSuccess: items.filter((item) => item.official.status === "success" && item.official.score === 1).length,
+        hostTimeout: items.filter((item) => item.classification.code === "host-timeout").length,
+        outcomeFailed: items.filter((item) => item.classification.code === "task-outcome-failed").length,
+        inputRejections: items.reduce((sum, item) => sum + (item.host?.inputRejections ?? 0), 0),
+        traceVerified: items.filter((item) => item.host?.toolStatsIntegrity === "verified").length }];
+    }));
   return { schemaVersion: 1, planned: grade.summary.planned,
     officialSuccess: cases.filter((item) => item.official.status === "success" && item.official.score === 1).length,
+    ...(profile ? { profile: profile[0] } : {}),
     classificationCounts: counts,
+    capabilityGroups,
     friction: { verifiedHostTraces: cases.filter((item) => item.host?.toolStatsIntegrity === "verified").length,
       unknownHostTraces: cases.filter((item) => item.host && item.host.toolStatsIntegrity !== "verified").length,
       failedToolCalls: cases.reduce((sum, item) => sum + (item.host?.failedToolCalls ?? 0), 0),
@@ -94,6 +112,10 @@ function escape(value) {
 }
 
 export function renderDiagnosis(report) {
+  const groups = Object.entries(report.capabilityGroups).map(([group, value]) =>
+    `<tr><td>${escape(group)}</td><td>${value.officialSuccess}/${value.planned}</td>`
+    + `<td>${value.hostTimeout}</td><td>${value.outcomeFailed}</td>`
+    + `<td>${value.inputRejections}</td><td>${value.traceVerified}/${value.planned}</td></tr>`).join("\n");
   const rows = report.cases.map((item) => `<tr><td>${item.taskId}</td><td>${escape(item.official.status)}</td>`
     + `<td>${escape(item.host?.status ?? "missing")}</td><td>${escape(item.classification.code)}</td>`
     + `<td>${item.host?.failedToolCalls ?? "—"}/${item.host?.toolCalls ?? "—"}</td>`
@@ -104,6 +126,9 @@ export function renderDiagnosis(report) {
     + `.score{font-size:2rem;font-weight:700}.muted{color:#586470}</style>`
     + `<h1>基准诊断</h1><p class="score">${report.officialSuccess}/${report.planned} 官方成功</p>`
     + `<p class="muted">${report.friction.inputRejections} 次工具入参拒绝；失败类别表示观察到的阶段，根因须复核证据并重复运行。</p>`
+    + `<h2>任务能力组</h2><p class="muted">按预先固定的任务意图分组；低分是调查线索，不等于已确认的框架根因。</p>`
+    + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>宿主超时</th><th>结果失败</th><th>入参拒绝</th><th>已核验轨迹</th></tr></thead>`
+    + `<tbody>${groups}</tbody></table><h2>逐题诊断</h2>`
     + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>观察类别</th><th>工具失败/总数</th><th>下一步核查</th></tr></thead>`
     + `<tbody>${rows}</tbody></table></html>`;
 }

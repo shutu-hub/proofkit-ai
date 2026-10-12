@@ -18,12 +18,20 @@ test("merges every planned task with the host attempt and keeps root causes unco
   ];
   const report = diagnoseBatch(grade, hosts);
   assert.equal(report.officialSuccess, 2);
+  assert.equal(report.profile, "shopping-admin-4");
   assert.deepEqual(report.classificationCounts, { "host-timeout": 1, passed: 2, "task-outcome-failed": 1 });
+  assert.deepEqual(report.capabilityGroups, {
+    mutate: { planned: 1, officialSuccess: 0, hostTimeout: 0, outcomeFailed: 1, inputRejections: 0, traceVerified: 1 },
+    navigate: { planned: 1, officialSuccess: 1, hostTimeout: 0, outcomeFailed: 0, inputRejections: 3, traceVerified: 1 },
+    retrieve: { planned: 2, officialSuccess: 1, hostTimeout: 1, outcomeFailed: 0, inputRejections: 5, traceVerified: 2 },
+  });
+  assert.equal(report.cases[3].taskGroup, "mutate");
   assert.equal(report.cases[0].classification.stage, "agent-loop");
   assert.equal(report.cases[3].classification.rootCause, "unconfirmed");
   assert.equal(report.cases[1].host.failedToolCalls, 4);
   assert.equal(report.friction.inputRejections, 8);
   assert.match(renderDiagnosis(report), /2\/4 官方成功/);
+  assert.match(renderDiagnosis(report), /任务能力组/);
 });
 
 test("does not turn an unaudited host or changed trace into a scored capability failure", () => {
