@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { pilotTaskIds, publicTask, renderScorecard, scorecard, selectTasks, sha256, upstreamCommit } from "./webarena-benchmark-lib.mjs";
+import { benchmarkProfile, publicTask, renderScorecard, scorecard, selectTasks, sha256, upstreamCommit } from "./webarena-benchmark-lib.mjs";
 import { probePilotEnvironment } from "./webarena-environment.mjs";
 
 const execute = promisify(execFile);
@@ -12,7 +12,7 @@ const command = process.argv[2];
 const options = new Map();
 for (let index = 3; index < process.argv.length; index += 2) {
   const name = process.argv[index], value = process.argv[index + 1];
-  if (!["--upstream", "--output", "--python", "--batch", "--submissions", "--config"].includes(name)
+  if (!["--upstream", "--output", "--python", "--batch", "--submissions", "--config", "--profile", "--docker-wsl"].includes(name)
     || !value || value.startsWith("--") || options.has(name)) throw new Error(`Invalid argument ${name}`);
   options.set(name, value);
 }
@@ -21,6 +21,7 @@ if (!["prepare", "probe", "replay", "grade"].includes(command)) {
   process.exit(command ? 1 : 0);
 }
 const required = (name) => { if (!options.has(name)) throw new Error(`Missing ${name}`); return options.get(name); };
+const profile = benchmarkProfile(options.get("--profile") ?? "pilot-12");
 const upstream = resolve(required("--upstream"));
 const output = resolve(required("--output"));
 const python = required("--python");
@@ -52,7 +53,7 @@ async function sidecar(operation, cases = [], environments = {}) {
   try {
     const result = await execute(python, [join(scriptRoot, "webarena-evaluator.py"), "--upstream", upstream, "--request", path], {
       timeout: 90_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true,
-      env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+      env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
     });
     await writeFile(join(output, `evaluator-${operation}.stderr.log`), result.stderr);
     return JSON.parse(result.stdout);
@@ -66,16 +67,16 @@ try {
   const probe = await sidecar("probe");
   if (command === "probe") {
     const configBytes = await boundedRead(resolve(required("--config")), 1024 * 1024);
-    const environment = await probePilotEnvironment(JSON.parse(configBytes.toString("utf8")));
-    const report = { schemaVersion: 1, benchmark: "webarena-verified-pilot-v1", mode: "environment-probe",
-      provenance, configSha256: sha256(configBytes), taskIds: pilotTaskIds, environment };
+    const environment = await probePilotEnvironment(JSON.parse(configBytes.toString("utf8")), { sites: profile.sites });
+    const report = { schemaVersion: 1, benchmark: profile.benchmark, mode: "environment-probe",
+      provenance, configSha256: sha256(configBytes), taskIds: profile.taskIds, environment };
     await save(join(output, "environment-report.json"), report);
     console.log(JSON.stringify({ report: join(output, "environment-report.json"), status: environment.status,
       applicationSitesReachable: environment.applicationSitesReachable, controlsHealthy: environment.controlsHealthy,
       reset: environment.reset, taskExecution: environment.taskExecution }));
     if (environment.status !== "reachable") process.exitCode = 1;
   } else if (command === "prepare") {
-    const tasks = selectTasks(dataset);
+    const tasks = selectTasks(dataset, profile.taskIds);
     const actor = join(output, "agent-input");
     await mkdir(actor);
     await save(join(actor, "tasks.json"), tasks.map(publicTask));
@@ -86,10 +87,17 @@ try {
         retrieved_data: { type: ["array", "null"], items: {} }, error_details: { type: ["string", "null"] },
       } });
     let docker;
-    try { const r = await execute("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 15_000, windowsHide: true }); docker = { status: "available", version: r.stdout.trim() }; }
+    const distro = options.get("--docker-wsl");
+    if (distro && !/^[A-Za-z0-9_.-]{1,64}$/.test(distro)) throw new Error("Invalid Docker WSL distribution");
+    try {
+      const r = distro
+        ? await execute("wsl.exe", ["-d", distro, "-e", "docker", "info", "--format", "{{.ServerVersion}}"], { timeout: 15_000, windowsHide: true })
+        : await execute("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 15_000, windowsHide: true });
+      docker = { status: "available", version: r.stdout.trim(), ...(distro ? { wslDistribution: distro } : {}) };
+    }
     catch (error) { docker = { status: "blocked", reason: error.code === "ENOENT" ? "docker-not-installed" : "docker-daemon-unavailable" }; }
-    const report = { schemaVersion: 1, benchmark: "webarena-verified-pilot-v1", provenance, runtime: probe.runtime,
-      taskIds: pilotTaskIds, publicInputSha256: sha256(await readFile(join(actor, "tasks.json"))),
+    const report = { schemaVersion: 1, benchmark: profile.benchmark, provenance, runtime: probe.runtime,
+      taskIds: profile.taskIds, publicInputSha256: sha256(await readFile(join(actor, "tasks.json"))),
       environment: { docker, liveExecution: "not-started", reset: "not-verified" },
       summary: scorecard("prepared-batch", tasks.length, tasks.map((task) => ({ taskId: task.task_id, status: "not-run" }))),
       cases: tasks.map((task) => ({ taskId: task.task_id, status: "not-run", score: null })) };
@@ -123,7 +131,7 @@ try {
       await save(harPath, { log: { version: "1.2", creator: { name: "synthetic-evaluator-control", version: "1" },
         entries: [{ startedDateTime: "2026-10-12T00:00:00Z", time: 1,
           request: { url: `http://gitlab.benchmark.invalid${path}`, method: "GET", headers: [{ name: "Accept", value: "text/html" }], queryString: [], cookies: [] },
-          response: { status, headers: [], cookies: [], redirectURL: "", content: { mimeType: "text/html", text: "", size: 0 } },
+          response: { status, headers: [], cookies: [], redirectURL: "", content: { mimeType: "text/html", text: "测试", size: 6 } },
           cache: {}, timings: { send: 0, wait: 1, receive: 0 } }] } });
       controls.push(await input(name, 44, navigationResponse, harPath, expectedStatus, "synthetic-navigation-trace"));
     }
@@ -145,18 +153,18 @@ try {
   } else {
     const batch = resolve(required("--batch"));
     const manifest = JSON.parse((await boundedRead(join(batch, "report.json"), 1024 * 1024)).toString("utf8"));
-    if (manifest.benchmark !== "webarena-verified-pilot-v1" || manifest.provenance?.upstreamCommit !== upstreamCommit
+    if (manifest.benchmark !== profile.benchmark || manifest.provenance?.upstreamCommit !== upstreamCommit
       || manifest.provenance?.datasetSha256 !== provenance.datasetSha256
-      || JSON.stringify(manifest.taskIds) !== JSON.stringify(pilotTaskIds)) throw new Error("Batch provenance or fixed task selection changed");
+      || JSON.stringify(manifest.taskIds) !== JSON.stringify(profile.taskIds)) throw new Error("Batch provenance or fixed task selection changed");
     const publicBytes = await boundedRead(join(batch, "agent-input/tasks.json"), 1024 * 1024);
     if (sha256(publicBytes) !== manifest.publicInputSha256
-      || JSON.stringify(JSON.parse(publicBytes.toString("utf8"))) !== JSON.stringify(selectTasks(dataset).map(publicTask))) throw new Error("Public tasks changed");
+      || JSON.stringify(JSON.parse(publicBytes.toString("utf8"))) !== JSON.stringify(selectTasks(dataset, profile.taskIds).map(publicTask))) throw new Error("Public tasks changed");
     const submissions = resolve(required("--submissions"));
     const config = JSON.parse((await boundedRead(resolve(required("--config")), 1024 * 1024)).toString("utf8"));
     const cases = [], inputs = [];
     const snapshots = join(output, "submissions");
     await mkdir(snapshots);
-    for (const taskId of pilotTaskIds) {
+    for (const taskId of profile.taskIds) {
       const root = join(submissions, String(taskId));
       try { inputs.push(await input(String(taskId), taskId, join(root, "agent_response.json"), join(root, "network.har"),
         undefined, undefined, join(snapshots, String(taskId)))); }
@@ -165,9 +173,9 @@ try {
     const evaluation = await sidecar("evaluate", inputs, config.environments ?? {});
     await save(join(output, "official-results.json"), evaluation);
     for (const { caseId, result } of evaluation.results) cases.push({ taskId: result.task_id, caseId, status: result.status, score: result.score });
-    cases.sort((a, b) => pilotTaskIds.indexOf(a.taskId) - pilotTaskIds.indexOf(b.taskId));
+    cases.sort((a, b) => profile.taskIds.indexOf(a.taskId) - profile.taskIds.indexOf(b.taskId));
     await publish({ schemaVersion: 1, provenance, runtime: evaluation.runtime,
-      summary: scorecard("imported-submissions", pilotTaskIds.length, cases), cases });
+      summary: scorecard("imported-submissions", profile.taskIds.length, cases), cases });
     if (cases.some((item) => item.status !== "success" || item.score !== 1)) process.exitCode = 1;
   }
 } catch (error) {

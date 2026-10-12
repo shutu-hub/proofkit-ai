@@ -51,6 +51,20 @@ test("four loopback sites and controls can be reached without claiming reset or 
   assert.equal(result.proofkitEffectiveness, "not-measured");
 });
 
+test("the single-site profile probes only the pinned shopping admin endpoints", async () => {
+  const one = { environments: { __SHOPPING_ADMIN__: config().environments.__SHOPPING_ADMIN__ },
+    controlUrls: { __SHOPPING_ADMIN__: base } };
+  const result = await probePilotEnvironment(one, { sites: ["shopping_admin"] });
+  assert.equal(result.status, "reachable");
+  assert.equal(result.sites.length, 1);
+  assert.equal(result.reset, "not-verified");
+  const extra = config();
+  await assert.rejects(probePilotEnvironment(extra, { sites: ["shopping_admin"] }), /selected pinned sites/);
+  const storefront = { environments: { __SHOPPING_ADMIN__: { urls: [base] } },
+    controlUrls: { __SHOPPING_ADMIN__: base } };
+  await assert.rejects(probePilotEnvironment(storefront, { sites: ["shopping_admin"] }), /\/admin base path/);
+});
+
 test("missing or unsuccessful control and cross-origin redirects remain incomplete", async () => {
   const missing = config(); delete missing.controlUrls.__GITLAB__;
   assert.equal((await probePilotEnvironment(missing)).status, "incomplete");

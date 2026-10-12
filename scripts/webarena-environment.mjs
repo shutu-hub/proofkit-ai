@@ -8,28 +8,36 @@ const SITES = [
   ["gitlab", "__GITLAB__"],
 ];
 
-export async function probePilotEnvironment(config, { timeoutMs = 5_000 } = {}) {
+export async function probePilotEnvironment(config, { timeoutMs = 5_000, sites: selectedSites = SITES.map(([site]) => site) } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30_000) {
     throw new Error("Invalid benchmark probe deadline");
   }
+  if (!Array.isArray(selectedSites) || selectedSites.length === 0 || new Set(selectedSites).size !== selectedSites.length
+    || selectedSites.some((site) => !SITES.some(([known]) => known === site))) throw new Error("Invalid benchmark probe sites");
+  const sites = SITES.filter(([site]) => selectedSites.includes(site));
   if (!plain(config) || !plain(config.environments) ||
     Object.keys(config).some((key) => !["environments", "controlUrls"].includes(key)) ||
-    !SITES.every(([, token]) => Object.hasOwn(config.environments, token))) {
-    throw new Error("Benchmark probe needs all four pinned pilot sites");
+    !sites.every(([, token]) => Object.hasOwn(config.environments, token)) ||
+    Object.keys(config.environments).some((token) => !sites.some(([, expected]) => expected === token))) {
+    throw new Error(sites.length === 4 ? "Benchmark probe needs all four pinned pilot sites"
+      : "Benchmark probe needs only the selected pinned sites");
   }
   if (config.controlUrls !== undefined && !plain(config.controlUrls)) throw new Error("Invalid environment controls");
-  const endpoints = SITES.map(([site, token]) => {
+  const endpoints = sites.map(([site, token]) => {
     const entry = config.environments[token];
     if (!plain(entry) || Object.keys(entry).some((key) => key !== "urls") ||
       !Array.isArray(entry.urls) || entry.urls.length !== 1) throw new Error(`Invalid ${site} site mapping`);
     const applicationUrl = loopbackUrl(entry.urls[0]);
+    if (site === "shopping_admin" && !["/admin", "/admin/"].includes(new URL(applicationUrl).pathname)) {
+      throw new Error("Pinned shopping_admin mapping requires the /admin base path");
+    }
     const controlUrl = config.controlUrls?.[token] === undefined ? undefined : loopbackUrl(config.controlUrls[token]);
     return { site, token, applicationUrl, controlUrl };
   });
-  if (config.controlUrls && Object.keys(config.controlUrls).some((token) => !SITES.some(([, expected]) => expected === token))) {
+  if (config.controlUrls && Object.keys(config.controlUrls).some((token) => !sites.some(([, expected]) => expected === token))) {
     throw new Error("Unknown environment control mapping");
   }
-  const sites = await Promise.all(endpoints.map(async ({ site, token, applicationUrl, controlUrl }) => {
+  const results = await Promise.all(endpoints.map(async ({ site, token, applicationUrl, controlUrl }) => {
     const [application, control] = await Promise.all([
       probeApplication(applicationUrl, timeoutMs),
       controlUrl ? probeControl(controlUrl, timeoutMs) : Promise.resolve({ status: "not-configured" }),
@@ -38,11 +46,11 @@ export async function probePilotEnvironment(config, { timeoutMs = 5_000 } = {}) 
   }));
   return {
     schemaVersion: 1,
-    status: sites.every((site) => site.application.status === "reachable" && site.control.status === "healthy")
+    status: results.every((site) => site.application.status === "reachable" && site.control.status === "healthy")
       ? "reachable" : "incomplete",
-    applicationSitesReachable: sites.filter((site) => site.application.status === "reachable").length,
-    controlsHealthy: sites.filter((site) => site.control.status === "healthy").length,
-    sites,
+    applicationSitesReachable: results.filter((site) => site.application.status === "reachable").length,
+    controlsHealthy: results.filter((site) => site.control.status === "healthy").length,
+    sites: results,
     reset: "not-verified",
     imageIdentity: "not-verified",
     taskExecution: "not-started",

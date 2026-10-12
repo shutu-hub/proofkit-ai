@@ -2,6 +2,17 @@ import { createHash } from "node:crypto";
 
 export const upstreamCommit = "6473f72db5dcefc97b5725b59e734504edc28a21";
 export const pilotTaskIds = [0, 21, 27, 44, 108, 118, 132, 157, 389, 399, 423, 431];
+export const benchmarkProfiles = Object.freeze({
+  "pilot-12": Object.freeze({ benchmark: "webarena-verified-pilot-v1", taskIds: pilotTaskIds,
+    sites: ["shopping_admin", "shopping", "reddit", "gitlab"] }),
+  "shopping-admin-4": Object.freeze({ benchmark: "webarena-verified-shopping-admin-4-v1",
+    taskIds: [0, 108, 157, 423], sites: ["shopping_admin"] }),
+});
+export function benchmarkProfile(name = "pilot-12") {
+  const profile = benchmarkProfiles[name];
+  if (!profile) throw new Error(`Unknown WebArena benchmark profile: ${name}`);
+  return profile;
+}
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 // Explicit projection: new upstream evaluator fields must not leak into an

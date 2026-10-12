@@ -30,12 +30,17 @@ export async function createWebArenaMcp(configPath) {
   }
   const browser = config.browser === undefined ? undefined : z.object({
     startUrl: z.string().url(), executablePath: z.string().min(1).optional(), headless: z.boolean().optional(),
+    extraHTTPHeaders: z.record(z.string().max(4096)).optional(),
   }).strict().parse(config.browser);
   if (browser) {
     const start = new URL(browser.startUrl);
     if (!["http:", "https:"].includes(start.protocol) || start.username || start.password
       || !["localhost", "127.0.0.1", "[::1]"].includes(start.hostname)) {
       throw new Error("Benchmark MCP start URL requires a loopback test-site mapping");
+    }
+    if (browser.extraHTTPHeaders && Object.entries(browser.extraHTTPHeaders).some(([name, value]) =>
+      !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || /[\r\n]/.test(value))) {
+      throw new Error("Invalid benchmark browser headers");
     }
   }
   const session = new BenchmarkCaptureSession({ directory: config.captureDirectory,

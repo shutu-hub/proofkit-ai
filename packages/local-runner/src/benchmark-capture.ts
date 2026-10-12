@@ -51,7 +51,8 @@ export class BenchmarkCaptureSession {
   private readonly options: { taskId: number; publicInputSha256: string };
 
   constructor(options: { directory: string; taskId: number; publicInputSha256: string;
-    browser?: { startUrl: string; executablePath?: string; headless?: boolean } }) {
+    browser?: { startUrl: string; executablePath?: string; headless?: boolean;
+      extraHTTPHeaders?: Record<string, string> } }) {
     if (!isAbsolute(options.directory) || !Number.isSafeInteger(options.taskId) || options.taskId < 0
       || !/^[a-f0-9]{64}$/.test(options.publicInputSha256)) throw new Error("Invalid benchmark capture session");
     this.directory = resolve(options.directory);

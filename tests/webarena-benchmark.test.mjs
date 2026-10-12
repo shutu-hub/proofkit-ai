@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { publicTask, renderScorecard, scorecard, selectTasks } from "../scripts/webarena-benchmark-lib.mjs";
+import { benchmarkProfile, publicTask, renderScorecard, scorecard, selectTasks } from "../scripts/webarena-benchmark-lib.mjs";
+
+test("the single-site profile has a fixed four-task denominator and preserves the twelve-task pilot", () => {
+  assert.deepEqual(benchmarkProfile("shopping-admin-4").taskIds, [0, 108, 157, 423]);
+  assert.deepEqual(benchmarkProfile("shopping-admin-4").sites, ["shopping_admin"]);
+  assert.equal(benchmarkProfile("pilot-12").taskIds.length, 12);
+  assert.throws(() => benchmarkProfile("unknown"), /Unknown WebArena/);
+});
 
 test("public agent inputs exclude answers, evaluator specs and unknown metadata", () => {
   const task = { task_id: 1, revision: 2, sites: ["gitlab"], intent: "Open todos", start_urls: ["__GITLAB__"],

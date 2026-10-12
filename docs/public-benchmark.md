@@ -6,16 +6,17 @@
 
 已接入固定任务批次、Agent 输入投影、官方 Python 评判器、输入哈希校验和简洁 HTML/JSON 报告。官方依赖只安装在独立评测环境，产品 CLI/MCP 仍使用 TypeScript；没有复制或另写判分算法。
 
-当前支持三个开发命令：`prepare` 准备任务并检查 Docker；`replay` 校验官方评判器；`grade` 评判外部响应与 HAR。另有开发用基准专用 MCP 入口，将隔离 Web HAR 采集贯通到现有 Mission/Runner，并审计运行关联。**尚未实现 WebArena 的宿主 AI 自动执行与 ProofKit 成绩认证**，这些命令不代表完成了一次产品测试。
+当前支持 `prepare` 准备任务、`probe` 探测站点、`replay` 校验官方评判器、`grade` 评判响应与 HAR，以及单题宿主执行入口。基准专用 MCP 将隔离 Web HAR 采集贯通到 Mission/Runner，并审计宿主工具轨迹。**已在官方 `shopping_admin` 镜像上运行四题小批次；系统级答案隔离和 ProofKit 成绩认证仍未实现。**
 
 2026-10-12 本地验证：
 
 | 检查 | 实际结果 | 能证明什么 |
 | --- | --- | --- |
 | 官方评判对照 | 7/7 符合预期 | 官方接口能接受正确读取/导航，拒绝错误答案、错误路径和 HTTP 500；空 HAR 返回 error |
-| 批次及输入回归 | 6 个测试通过，包括可选官方集成测试 | 缺失任务不被丢弃，畸形输入为 error，篡改任务被阻断，历史结果不被覆盖 |
-| 准备首批任务 | 12 个，实际执行 0 个 | 数据接入正常；没有自主测试成功率 |
-| 官方站点 | `docker-not-installed` | 真实站点测试未开始 |
+| 基准回归 | 17/17 通过，包括官方 Python 集成测试 | 缺失任务不被丢弃，畸形输入为 error，篡改任务被阻断，历史结果不被覆盖 |
+| 固定任务批次 | `pilot-12` 十二题；`shopping-admin-4` 四题 | 四题子集独立计分，不能外推为十二题或全量成绩 |
+| 官方单站点 | D 盘 WSL Docker 中固定摘要的 `shopping_admin`；每题重建容器 | 数据库探针在重建后恢复为 0；`/admin` 和控制接口可达，真实 Chrome 免登录进入仪表盘 |
+| 四题真实执行 | 4 题均启动宿主；3 题提交并官方评判，2 成功、1 失败；另 1 题超时 | 官方合并报告按固定分母为 2/4；宿主失败须与官方缺失提交一起阅读 |
 | 真实 Chrome HAR 采集 | 4 个脚本控制的本地运行，覆盖成功、断言失败、HTTP 500、取消 | 初始导航、请求正文/头/Cookie、嵌入响应、关闭刷新与哈希校验正常；默认普通证据继续脱敏 |
 | 官方评判真实 HAR | 3/3 对照符合预期：正确导航 success，500 和未访问目标页 failure | 任务 44 的评判协议能读取实际网络记录；站点为本地 fixture，不计入 WebArena 成绩 |
 | 基准 MCP 与 Mission 关联 | 5 个真实 Chrome 脚本场景通过，含 core primary/negative 和 guided inspection | 内部任务绑定、失败/取消留证、原始 HAR 隔离和篡改拒绝正常；不证明 AI 自主完成任务 |
@@ -55,7 +56,7 @@ webarena-verified env start --site gitlab
 
 官方优化镜像分别为 `am1n3e/webarena-verified-shopping_admin`、`am1n3e/webarena-verified-shopping`、`am1n3e/webarena-verified-reddit`、`am1n3e/webarena-verified-gitlab`；上游文档标注的镜像大小约为 2.9、13.3、8.41、31.6 GB，GitLab 建议至少 4 GB RAM。可以按站点依次启动，但仍须预留镜像解包、站点数据和 HAR 空间。每次拉取后记录 `docker image inspect <镜像> --format '{{json .RepoDigests}}'` 的 digest，并在任务记录中固定实际 digest；仅记录可变 tag 不够。远程容器的应用和控制端口通过 SSH 隧道映射到本地回环地址，再运行下方 `probe`。不要把控制端口或原始 HAR 暴露给任务 Agent。
 
-2026-10-12 从 Docker Hub `latest` 标签的公开 API 读取到以下 Linux/amd64 摘要，供独立主机首次拉取时固定使用。**这是仓库元数据观察，不是本机拉取、镜像内容或站点初态认证。**在测试机上仍须用 `docker image inspect` 核对实际 `RepoDigests`、容器 ID、挂载和健康状态。
+2026-10-12 从 Docker Hub `latest` 标签的公开 API 读取到以下 Linux/amd64 摘要。`shopping_admin` 已在本机拉取并用 `docker inspect` 核对实际镜像 ID、空挂载和容器 ID；其余三个摘要仅是仓库元数据观察，仍须在未来的测试机上核对。
 
 | 站点 | 镜像摘要 `sha256:` |
 | --- | --- |
@@ -66,9 +67,21 @@ webarena-verified env start --site gitlab
 
 **设备规划（我们的建议，不是上游保证值）：**单站点顺序跑完整 pilot，使用 Linux x86_64、4 vCPU、16 GB RAM 和至少 120 GB 空闲 SSD；若四站点同时常驻，建议 8 vCPU、32 GB RAM、200 GB 空闲 SSD。前者已经把四镜像约 56 GB 的标称体积、Docker 解包/数据、浏览器、任务证据及重建余量算入；仍须在实际镜像拉取后核对占用。ProofKit 控制器还需 Node.js 22+、Chrome/Chromium，官方判分侧需 Python 3.11+。无需 GPU。只跑一个较轻的站点可降低起步需求，但不能据此宣称 12 题 pilot 已完成。
 
-**任务前初态不能只凭 `/status` 判定。** 固定上游源码的控制服务仅实现 `POST /init`、`/start`、`/stop`、`/restart` 和 `GET /status`；文档示例中的 `POST /reset` 在该提交里没有路由。上游 `env stop` 会删除容器，`env start` 会新建容器；四个 pilot 站点的默认配置没有外部数据卷。这是可实验的重建路径，尚未在实际镜像上验证数据回到初态。正式执行前应在**独立测试副本**做一次可观察的状态变化，重建容器后由独立读数确认变化消失，并记录容器 ID、镜像 digest、起止时间与健康状态。每道修改类任务都须重建并核验初态；任何恢复失败的题只能标为环境阻断，不能计分。
+**最小真实站点试跑：** `shopping_admin` 是这四个站点中标称镜像最小的一个（2.9 GB）。固定 pilot 中的任务 0、108（读取）、157（导航）、423（修改）都在该站点。现已提供独立 `shopping-admin-4` 批次，分母固定为四；原 `pilot-12` 批次保持十二题。先跑任务 157 验证整条真实链路，再用四题覆盖不同动作。单独的 Linux 主机可从 4 vCPU、8 GB RAM、50 GB 空闲 SSD 起步，16 GB RAM 更稳妥；这是待实测的规划值。四题结果不能冒充十二题成绩。
 
-当前电脑没有 Docker；WSL 根文件系统只有约 16 GiB 空间，物理内存仅约 1.4 GiB 可用，无法在此完成四站点 pilot。正式执行需要独立测试机。此资源观察不影响固定任务和官方评判器的本地协议验证，但**正式 WebArena 任务仍是 0/12**。
+**任务前初态不能只凭 `/status` 判定。** 固定上游源码的控制服务仅实现 `POST /init`、`/start`、`/stop`、`/restart` 和 `GET /status`；文档示例中的 `POST /reset` 在该提交里没有路由。上游 `env stop` 会删除容器，`env start` 会新建容器；四个 pilot 站点的默认配置没有外部数据卷。`shopping_admin` 已用数据库标记做过 0 → 1 → 重建后 0 的验证，每题前亦记录新容器 ID、固定镜像摘要和标记读数；这只证明该镜像的重建恢复，不证明其余三个站点。任何恢复失败的题只能标为环境阻断，不能计分。
+
+2026-10-12 更新：Docker Engine 29.8.2 位于 `D:/bench/wsl-docker` 的独立 Alpine WSL 2 发行版；固定上游源码、Python 评判器、四题批次与全部原始证据位于 `D:/bench`。镜像解包约 4.49 GB，WSL 虚拟磁盘约 5.31 GiB。官方四题合并报告为 **2/4**：108、157 成功，423 失败，0 的宿主运行超时且没有提交；十二题 pilot 未运行。详见本机 `D:/bench/admin4-validation-summary.md` 和 `D:/bench/grade-admin4-final-20261012/report.html`。同账户可读取上游答案，结果不能称为认证成绩。
+
+**任务判分边界：**157 的官方网络条件只要求访问客户列表路径，不能据此证明逐个客户详情都已核查。423 的固定数据同时要求商品保存请求和看起来属于订单报表的 `report_type`、`from`、`to` POST 字段；按上游网络评判器源码，这些字段会参与匹配。当前 423 因宿主未执行修改而失败，尚不能判断该判分条件是否会误拒绝正确的商品修改；正式将其作为质量指标前，需用真实 UI 操作验证评判条件，并保留数据集原文和判分器版本，不可私改答案来提高成绩。
+
+本机四题批次的准备命令：
+
+```powershell
+pnpm benchmark:webarena prepare --profile shopping-admin-4 --docker-wsl proofkit-docker --upstream D:/bench/webarena-verified --python D:/bench/evaluator/Scripts/python.exe --output D:/bench/pilot-admin4-new
+```
+
+`--docker-wsl` 只核验该发行版中的 Docker daemon。`probe --profile shopping-admin-4` 只要求 `shopping_admin` 的后台 `/admin` 与控制 URL；未显式指定 profile 时仍使用十二题 pilot。探测登录页可达不等于认证成功，任务前还须验证真实 Chrome 到达后台仪表盘。
 
 上游四个 pilot 站点的应用端口分别是商城 `7770`、商城后台 `7780`、论坛 `9999`、GitLab `8023`；环境控制端口分别是 `7771`、`7781`、`9998`、`8024`。在有足够资源的独立基准主机启动固定镜像后，可在运行 ProofKit 的机器上用本地端口映射或 SSH 隧道访问。配置中的 URL 必须是无内嵌凭据的回环地址：
 
@@ -76,7 +89,7 @@ webarena-verified env start --site gitlab
 {
   "environments": {
     "__SHOPPING__": { "urls": ["http://127.0.0.1:7770"] },
-    "__SHOPPING_ADMIN__": { "urls": ["http://127.0.0.1:7780"] },
+    "__SHOPPING_ADMIN__": { "urls": ["http://localhost:7780/admin"] },
     "__REDDIT__": { "urls": ["http://127.0.0.1:9999"] },
     "__GITLAB__": { "urls": ["http://127.0.0.1:8023"] }
   },
@@ -120,7 +133,7 @@ Agent 输入在 `pilot-001/agent-input/`，只包含任务指令、起始 URL/�
 {
   "environments": {
     "__SHOPPING__": { "urls": ["http://localhost:7770"] },
-    "__SHOPPING_ADMIN__": { "urls": ["http://localhost:7780"] },
+    "__SHOPPING_ADMIN__": { "urls": ["http://localhost:7780/admin"] },
     "__REDDIT__": { "urls": ["http://localhost:9999"] },
     "__GITLAB__": { "urls": ["http://localhost:8023"] }
   }
@@ -224,12 +237,23 @@ pnpm benchmark:webarena:host-audit --session D:/bench/operator.json --events D:/
 
 此只读命令先完成上述离线审计，再核对同一 MCP server 的已完成工具调用：每个已绑定 Mission 都须有执行调用和终态读取，最终提交调用须仅成功一次，参数须等于保存的 `agent_response.json`，返回的任务 ID 和完整 Run 清单须与捕获记录一致；宿主回合须结束。Claude Code 可将 `--host` 改为 `claude-code`。输出的 `associated` / `hostExecution: trace-associated` 仅代表**所给 JSONL 与保存文件相互吻合**，不验证 JSONL 由可信进程产生、Agent 身份、是否还有其它工具、任务初态或官方得分。事件文件含模型对话和工具结果，必须放在独立评测目录并按原始 HAR 的敏感程度保管。脚本 fixture 已通过 Codex 和 Claude 两种事件格式的关联、篡改提交与缺少终态读取负对照；它仍不是 AI 自主成绩。
 
-## 下一阶段：真实执行的准入条件
+### 单题宿主执行入口
 
-1. 按[官方环境说明](https://servicenow.github.io/webarena-verified/environments/)部署四个隔离站点，记录镜像 digest、站点配置和任务前初始化结果。Docker 可以在另一台开发机运行；本机的检查目前只探测本地 Docker，不证明远端环境不可用。当前没有站点部署或重置自动化。
-2. 在独立容器/账户中让 Codex、Claude Code 等宿主只读任务输入和已映射的站点 URL，经现有 MCP/CLI 发现页面、生成计划并创建 Mission。禁止事先替 Agent 写完成路径。当前只是文件内容分离，**同一宿主仍可能读取上游标准答案，尚无系统级答案隔离**。
-3. 专用 MCP 入口、内部 Mission/Run 绑定、持续上下文、全任务 HAR 与最终提交已通过真实 Chrome fixture 验证。下一步将真实站点初始化、任务重置和宿主 AI 执行接入此生命周期，并复核多次运行的稳定性。已有 CDP 会话不能默认视为从任务起点完整采集。原始基准 HAR 留在隔离评测目录。
-4. 独立评判进程在任务结束后读取响应/HAR；认证模式还需核验宿主工具轨迹、实际 Mission、运行来源、初始化状态和输入未变。人工导入或示例回放只能继续用 `grade`，不能升级成 ProofKit 自主成绩。
-5. 先报告固定 12 个任务的完成率、阻断原因、耗时、模型用量与重复运行稳定性，再扩展全量和独立留出任务。在相同站点、模型、预算和重复次数下对比宿主直接使用 Playwright 的基线与宿主使用 ProofKit，避免把模型差异计入框架收益。
+官方站点、准备批次和任务前初态到位后，可信控制器为**一题**创建新的 operator JSON（含该题映射后的回环起始 URL），然后启动已配置模型认证的 Codex 或 Claude Code CLI。商城后台必须映射到 `/admin`；其官方优化镜像可由可信控制器在 `browser.extraHTTPHeaders` 中传入免登录请求头，原始 HAR 会保留该头：
+
+```powershell
+pnpm benchmark:webarena:run-host --session D:/bench/operator-157.json --batch D:/bench/pilot-admin4-20261012 --output D:/bench/host-run-157-new --host codex
+```
+
+Codex 宿主需使用已登录、保留模型提供方配置的隔离 `CODEX_HOME`。入口先枚举可见 MCP；若另有已启用的 MCP 则在启动前拒绝，以免模型偏离基准专用工具。它仅将该题 allowlist 公开指令交给宿主，保存完整 JSONL，运行宿主轨迹和持久证据审计；只有关联通过，才将按摘要再次核验的响应/HAR 放进 `submissions/<taskId>/`，供独立的 `grade` 命令读取。失败、超时或没有最终提交的宿主不会生成可评判提交。`host-run.json` 始终标记 `officialScore: not-run`，官方判分须另行执行。当前四题实测中，任务 0 的宿主超时会在官方导入报告里显示为缺失提交，必须连同宿主报告一起统计。
+
+当前本机仅证明三份真实宿主轨迹与文件一致。它不负责站点部署或重置，也不构成系统级答案隔离：同一账户仍可能读取上游标准答案。正式可信评测须让 Agent 宿主运行在只含公开输入的独立账户或容器，评判器和完整上游数据留在另一个信任域；并记录模型用量、失败尝试与重复运行稳定性。
+
+## 下一阶段：从真实试跑到可信评测
+
+1. 为宿主提供更少、更稳定的交互工具与终态摘要。四题试跑里曾出现 MCP 未加载、Charter 参数反复试错、选择器歧义和 15 分钟超时；应把启动检查、动作编排和受限结果读取做成高层协议，而非只增加提示词。
+2. 将宿主尝试记录与官方结果合并到同一批次报告：无提交的超时题仍要显示“已尝试但未评判”，并列出耗时、模型用量、工具失败、证据缺口和官方分数。缩短大段证据回传，避免无关内容占用上下文。
+3. 在独立账户或容器中隔离完整上游数据与评判器；复核每题任务前业务初态和宿主工具边界，再重复多轮四题以测稳定性。之后按[官方环境说明](https://servicenow.github.io/webarena-verified/environments/)顺序部署其余三个固定镜像，扩展十二题 pilot。
+4. 在相同站点、模型、预算和重复次数下，对比宿主直接使用 Playwright 与宿主使用 ProofKit。已有 CDP 会话不能默认视为从任务起点完整采集；原始 HAR 留在隔离评测目录。
 
 WebArena 衡量任务完成，不能直接衡量发现 Bug、误报和修复验证。后续还要独立的已知缺陷集与修复前后验证，计算缺陷召回、误报和证据充分率。WebArena 不覆盖 Electron 主进程、IPC 或移动端；这些继续保留各自的真实运行验证。

@@ -20,6 +20,7 @@ export class WebTaskSession {
     startUrl: string;
     executablePath?: string;
     headless?: boolean;
+    extraHTTPHeaders?: Record<string, string>;
     benchmarkHar: BenchmarkHarOptions;
   }) {
     const url = new URL(options.startUrl);
@@ -72,6 +73,7 @@ export class WebTaskSession {
     this.browser = await chromium.launch({ executablePath: this.options.executablePath, headless: this.options.headless ?? true });
     if (this.sealed) throw new Error("Task browser already closed");
     this.context = await this.browser.newContext({ serviceWorkers: "block",
+      ...(this.options.extraHTTPHeaders ? { extraHTTPHeaders: this.options.extraHTTPHeaders } : {}),
       recordHar: { path: this.recorder.path, mode: "full", content: "embed" } });
     if (this.sealed) throw new Error("Task browser already closed");
     this.page = await this.context.newPage();

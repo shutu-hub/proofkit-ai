@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { classifyHostBlocker, runHost } from "./host-evaluation-runtime.mjs";
+import { classifyHostBlocker, runHost } from "../scripts/host-runtime.mjs";
 
 test("provider access outranks an MCP cancellation; ordinary model output is not a blocker", () => {
   const events = [

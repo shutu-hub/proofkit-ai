@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHostFixture, hostCases } from "./host-evaluation-fixture.mjs";
 import { parseClaudeHostAnswer, parseClaudeToolEvents } from "./claude-host-events.mjs";
-import { runHost } from "./host-evaluation-runtime.mjs";
+import { runHost } from "../scripts/host-runtime.mjs";
 import { lastStructuredHostAnswer, parseMcpToolEvents, verifyHostSession } from "./host-evaluation-verifier.mjs";
 
 const requested = argument("--cases");
