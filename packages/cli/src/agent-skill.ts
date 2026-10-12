@@ -46,11 +46,14 @@ candidate-review-needed means a same-level workspace file has no reported
 structural issue, but it still needs source-flow review and the normal runtime
 checks before run_test; it is not an acceptance claim. Scope limit is at most 50.
 For a registered business Charter, call inspect_integration_readiness with its
-charterId before creating or starting a Mission. It invokes only an explicit
+charterId before creating or starting a Mission. For an unregistered candidate,
+use its charterPath and exact charterSha256 from scope inspection instead;
+never combine both selection forms. It invokes only an explicit
 connector read-only readiness hook; it never invokes the Run lifecycle
 preflight, setup, capabilities or Oracles. A blocked result names prerequisites
 to resolve; unavailable means no read-only hook is registered or it could not
-return a verified result. Neither status is a product verdict. Inspect again
+return a verified result. Even ready proves only connector prerequisites; it
+does not clear plan gaps or approve execution. Neither status is a product verdict. Inspect again
 after resolving the reported prerequisites.
 For inspection-incomplete, read its gap codes before acting. Refine the literal
 focus or raise the bounded limit when matching details were omitted. A
@@ -78,7 +81,7 @@ Direct candidate files must declare surfaces such as [web] or [electron].
 For release on Web or Electron, declare both. A missing or mismatched platform
 is a planning gap; inspect the owning UI flow before changing this declaration.
 Inspect the Charter and source flow, and repair missing assertions or Oracles.
-After review, use run_test with the relative charterPath exactly as returned
+After review and connector readiness inspection, use run_test with the relative charterPath exactly as returned
 by workspaceCandidates and the exact charterSha256 from the same scope
 inspection, or register a reusable catalog entry. Do not convert the candidate
 path to an absolute filesystem path. A digest mismatch means the file or a

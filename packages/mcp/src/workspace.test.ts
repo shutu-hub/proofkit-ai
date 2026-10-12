@@ -44,6 +44,11 @@ describe("MCP external workspace", () => {
       await writeFile(join(root, "package.json"), '{"name":"candidate-source"}');
       await mkdir(join(workspaceRoot, ".proofkit", "charters"), { recursive: true });
       await writeFile(join(workspaceRoot, ".proofkit", "config.yaml"), JSON.stringify({ project: { root } }));
+      await writeFile(join(workspaceRoot, ".proofkit", "integration.mjs"), `export default {
+        name: "candidate-readiness-fixture", version: "1",
+        async readiness({ charter }) { return { passed: true, message: "fixture prerequisites met",
+          evidence: { level: charter.level } }; }
+      };`);
       const candidatePath = ".proofkit/charters/quick.yml";
       const file = join(workspaceRoot, ".proofkit", "charters", "quick.yml");
       const charter = { intent: "quick candidate", level: "quick", surfaces: ["web"], actions: [],
@@ -55,6 +60,14 @@ describe("MCP external workspace", () => {
       const candidate = scope.workspaceCandidates.items[0];
       expect(candidate).toMatchObject({ path: candidatePath, sha256: expect.stringMatching(/^[a-f0-9]{64}$/), parseStatus: "valid" });
       const selected = { intent: "快速检查候选流程", level: "quick", charterPath: candidatePath, charterSha256: candidate.sha256 };
+      const readinessSelection = { charterPath: candidatePath, charterSha256: candidate.sha256 };
+      const readiness = payload(await client.callTool({ name: "inspect_integration_readiness", arguments: readinessSelection }));
+      expect(readiness).toMatchObject({ ...readinessSelection, status: "ready", testVerdict: "not-asserted", surfaces: ["web"] });
+      expect(vi.mocked(WebAdapter.prototype.connect)).not.toHaveBeenCalled();
+      expect(await readdir(join(workspaceRoot, ".proofkit"))).toEqual(["charters", "config.yaml", "integration.mjs"]);
+      for (const argumentsValue of [{}, { charterPath: candidatePath }, { ...readinessSelection, charterId: "other" }]) {
+        expect((await client.callTool({ name: "inspect_integration_readiness", arguments: argumentsValue })).isError).toBe(true);
+      }
       const started = payload(await client.callTool({ name: "run_test", arguments: selected }));
       expect(started).toMatchObject({ level: "quick", running: true, readiness: { ready: true } });
       expect((await waitForMission(client, started.missionId)).mission.verdict).toBe("passed");
@@ -63,6 +76,9 @@ describe("MCP external workspace", () => {
       expect(await readFile(join(root, "package.json"), "utf8")).toBe('{"name":"candidate-source"}');
       const connections = vi.mocked(WebAdapter.prototype.connect).mock.calls.length;
       await writeFile(file, JSON.stringify({ ...charter, assertions: [{ kind: "text-visible", text: "changed" }] }));
+      const changedReadiness = await client.callTool({ name: "inspect_integration_readiness", arguments: readinessSelection });
+      expect(changedReadiness.isError).toBe(true);
+      expect(JSON.stringify(changedReadiness.content)).toContain("digest changed");
       const changed = await client.callTool({ name: "run_test", arguments: selected });
       expect(changed.isError).toBe(true);
       expect(JSON.stringify(changed.content)).toContain("digest changed");
@@ -75,6 +91,9 @@ describe("MCP external workspace", () => {
       }));
       const coreScope = payload(await client.callTool({ name: "inspect_test_scope", arguments: { level: "core", focus: "core.yml" } }));
       const coreCandidate = coreScope.workspaceCandidates.items[0];
+      expect(payload(await client.callTool({ name: "inspect_integration_readiness", arguments: {
+        charterPath: corePath, charterSha256: coreCandidate.sha256,
+      } }))).toMatchObject({ status: "ready", testVerdict: "not-asserted", level: "core" });
       const core = payload(await client.callTool({ name: "run_test", arguments: {
         intent: "测试核心候选流程", level: "core", charterPath: corePath, charterSha256: coreCandidate.sha256,
       } }));

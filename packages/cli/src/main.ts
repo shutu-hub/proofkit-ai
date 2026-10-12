@@ -165,12 +165,15 @@ export function createProgram(): Command {
       console.log(JSON.stringify(scope, null, 2));
     });
 
-  program.command("readiness <charterId>")
-    .description("Check a registered Charter's connector prerequisites without starting a Run")
+  program.command("readiness [charterId]")
+    .description("Check a catalog Charter or a digest-pinned candidate's connector prerequisites without starting a Run")
     .option("--root <path>", "project root", ".")
-    .action(async (charterId: string, options: RootOptions) => {
+    .option("--candidate <path>", "unregistered external workspace Charter path from scope inspection")
+    .option("--candidate-sha256 <digest>", "candidate digest from the same scope inspection")
+    .action(async (charterId: string | undefined, options: RootOptions & { candidate?: string; candidateSha256?: string }) => {
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
-      const readiness = await runner.inspectIntegrationReadiness({ charterId });
+      const readiness = await runner.inspectIntegrationReadiness({ charterId,
+        charterPath: options.candidate, charterSha256: options.candidateSha256 });
       console.log(JSON.stringify(readiness, null, 2));
       process.exitCode = readiness.status === "ready" ? 0 : readiness.status === "blocked" ? 1 : 2;
     });

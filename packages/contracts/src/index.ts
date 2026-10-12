@@ -1022,8 +1022,16 @@ export type TestScope = z.infer<typeof TestScopeSchema>;
 
 /** Read-only connector readiness is provenance, not a product verdict. */
 export const IntegrationReadinessInputSchema = z.object({
-  charterId: CatalogIdSchema,
-}).strict();
+  charterId: CatalogIdSchema.optional(),
+  charterPath: z.string().min(1).max(512).optional(),
+  charterSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}).strict().superRefine((value, context) => {
+  const catalog = value.charterId !== undefined;
+  const candidate = value.charterPath !== undefined && value.charterSha256 !== undefined;
+  if (catalog ? value.charterPath !== undefined || value.charterSha256 !== undefined : !candidate) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Select either charterId or a candidate charterPath with charterSha256" });
+  }
+});
 export type IntegrationReadinessInput = z.input<typeof IntegrationReadinessInputSchema>;
 export const IntegrationReadinessCheckSchema = IntegrationCheckResultSchema.extend({
   message: z.string().min(1).max(1024),
@@ -1038,7 +1046,9 @@ export const IntegrationReadinessSchema = z.object({
   testVerdict: z.literal("not-asserted"),
   projectRoot: z.string(),
   workspaceRoot: z.string(),
-  charterId: CatalogIdSchema,
+  charterId: CatalogIdSchema.optional(),
+  charterPath: z.string().min(1).max(512).optional(),
+  charterSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   level: TestLevelSchema,
   surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1).max(3),
   environment: z.enum(["test", "staging", "local"]),
@@ -1048,6 +1058,10 @@ export const IntegrationReadinessSchema = z.object({
   next: z.array(z.string().min(1).max(240)).max(8),
   checkedAt: z.string().datetime(),
 }).strict().superRefine((value, context) => {
+  if (!IntegrationReadinessInputSchema.safeParse({ charterId: value.charterId,
+    charterPath: value.charterPath, charterSha256: value.charterSha256 }).success) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Readiness must identify one catalog Charter or one digest-pinned candidate" });
+  }
   if (value.status === "ready" && value.check?.passed !== true) context.addIssue({ code: z.ZodIssueCode.custom, path: ["check"], message: "Ready status requires a passing connector check" });
   if (value.status === "blocked" && value.check?.passed !== false) context.addIssue({ code: z.ZodIssueCode.custom, path: ["check"], message: "Blocked status requires a failing connector check" });
   if (value.status === "unavailable" && value.check !== undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ["check"], message: "Unavailable status cannot include a verified connector check" });

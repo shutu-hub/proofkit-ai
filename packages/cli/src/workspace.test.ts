@@ -109,6 +109,19 @@ describe("CLI workspace onboarding", () => {
     await run("scope", "--level", "quick");
     const candidate = JSON.parse(String(log.mock.calls[0]?.[0])).workspaceCandidates.items[0];
     log.mockClear();
+    const previousExitCode = process.exitCode;
+    try {
+      await run("readiness", "--candidate", path, "--candidate-sha256", candidate.sha256);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+        charterPath: path, charterSha256: candidate.sha256, level: "quick", surfaces: ["web"],
+        status: "unavailable", testVerdict: "not-asserted",
+      });
+      expect(process.exitCode).toBe(2);
+      expect(await readdir(join(workspace, ".proofkit"))).toEqual(["charters", "config.yaml"]);
+      await expect(run("readiness", "--candidate", path)).rejects.toThrow("charterSha256");
+      await expect(run("readiness", "resume-core", "--candidate", path, "--candidate-sha256", candidate.sha256)).rejects.toThrow("Select either");
+    } finally { process.exitCode = previousExitCode; }
+    log.mockClear();
     await run("mission", "create", "快速检查候选流程", "--level", "quick", "--candidate", path, "--candidate-sha256", candidate.sha256);
     expect(JSON.parse(String(log.mock.calls[0]?.[0])).charter).toMatchObject({ metadata: { proofkitCandidate: { path, sha256: candidate.sha256 } } });
     await expect(run("mission", "create", "快速检查候选流程", "--level", "quick", "--candidate", path)).rejects.toThrow("requires the SHA-256");

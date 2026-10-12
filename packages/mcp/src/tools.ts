@@ -29,10 +29,10 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "inspect_integration_readiness",
-    "Call only a connector-declared read-only readiness check for a registered Charter. This runs no Run, setup, capability, or business Oracle, and does not prove product correctness. Resolve reported prerequisites before creating or starting a Mission.",
-    IntegrationReadinessInputSchema.shape,
+    "Call only a connector-declared read-only readiness check. Select either charterId or an unregistered workspace charterPath with the exact charterSha256 returned by scope inspection; changed files or endpoint bindings are rejected. This runs no Run, setup, capability, or business Oracle, and does not prove product correctness or plan admission. Resolve prerequisites and preserve the requested level, surface and coverage at Mission creation.",
+    IntegrationReadinessInputSchema.innerType().shape,
     READ_ONLY_TOOL,
-    async (input, extra) => result(await runner.inspectIntegrationReadiness(input, extra.signal)),
+    async (input, extra) => result(await runner.inspectIntegrationReadiness(IntegrationReadinessInputSchema.parse(input), extra.signal)),
   );
 
   server.tool(

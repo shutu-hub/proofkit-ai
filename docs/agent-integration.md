@@ -44,6 +44,18 @@ The optional `check.issues` list carries stable connector codes and short
 guidance; never treat a reported prerequisite as proof that an endpoint or
 business outcome was actually exercised.
 
+For a reviewed unregistered candidate, call the same tool with `charterPath`
+and the exact `charterSha256` returned by `inspect_test_scope`. These replace
+`charterId`; do not combine the two selection forms. CLI accepts
+`proofkit readiness --candidate <path> --candidate-sha256 <digest> --root <source> --workspace <test-workspace>`.
+The shared candidate reader rejects changed file bytes or resolved endpoint
+bindings, redirected/oversized files and paths already registered in the catalog.
+Candidates must declare their supported surfaces. The result carries that
+path/digest identity, level and declared surfaces. A `ready` result does not
+clear planning gaps, authorize writes or admit a Mission; retain the requested
+level, surface and acceptance scope when creating it, and use normal execution
+preflight for current prerequisites.
+
 Choose the command for the host you use. The external bundle lives under
 `.proofkit/agents/<harness>/<content-hash>/` and contains a portable
 `proofkit-test/SKILL.md`, `references/charter-authoring.md`, native `mcp.toml`

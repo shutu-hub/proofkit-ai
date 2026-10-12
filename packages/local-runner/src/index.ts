@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { analyzeRun, selectEvidencedBusinessFailure, InMemoryMissionToolRegistry, MissionAgent, MissionAlreadyRunningError, type MissionTool, type MissionToolResult } from "@proofkit/agent";
 import { ElectronAdapter, MobileAdapter, WebAdapter, resolveElectronCdpUrl } from "@proofkit/adapters";
 import { auditMissionVerdict, createRunId, EvidenceStore, LocalExecutionOwnership, MissionReportStore, sha256, type LocalExecutionLease } from "@proofkit/evidence";
-import type { EnvironmentInspection, EnvironmentInspectionInput, IntegrationReadiness } from "@proofkit/contracts";
+import type { EnvironmentInspection, EnvironmentInspectionInput, IntegrationReadiness, IntegrationReadinessInput } from "@proofkit/contracts";
 import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
 import { FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, IntegrationReadinessSchema, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type EvidenceRef, type MissionAcceptanceIntegrity, type MissionComparison, type MissionEvidenceIntegrity, type MissionProofClassification, type MissionRecoveryInspection, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
@@ -273,21 +273,35 @@ export class LocalRunnerService {
     }, request);
   }
 
-  async inspectIntegrationReadiness(input: { charterId: string }, signal?: AbortSignal): Promise<IntegrationReadiness> {
+  async inspectIntegrationReadiness(input: IntegrationReadinessInput, signal?: AbortSignal): Promise<IntegrationReadiness> {
     signal?.throwIfAborted();
     const request = IntegrationReadinessInputSchema.parse(input);
-    const entry = this.config.charters.find((charter) => charter.id === request.charterId);
-    if (!entry) throw new Error(`Unknown Charter: ${request.charterId}`);
-    const charter = await loadCharter(resolveWithinWorkspace(this.workspaceRoot, entry.path));
-    if (charter.level !== entry.level) throw new Error(`Test catalog entry ${entry.id} declares ${entry.level}, but its Charter is ${charter.level}`);
+    let charter: TestCharter;
+    let surfaces: IntegrationReadiness["surfaces"];
+    let selection: Pick<IntegrationReadiness, "charterId" | "charterPath" | "charterSha256">;
+    if (request.charterId !== undefined) {
+      const entry = this.config.charters.find((charter) => charter.id === request.charterId);
+      if (!entry) throw new Error(`Unknown Charter: ${request.charterId}`);
+      charter = await loadCharter(resolveWithinWorkspace(this.workspaceRoot, entry.path));
+      if (charter.level !== entry.level) throw new Error(`Test catalog entry ${entry.id} declares ${entry.level}, but its Charter is ${charter.level}`);
+      surfaces = entry.surfaces;
+      selection = { charterId: entry.id };
+    } else {
+      const loaded = await this.loadCandidateCharter(request.charterPath!, request.charterSha256!);
+      charter = loaded.charter;
+      if (!charter.surfaces) throw new Error("Candidate Charter must declare its supported surfaces before readiness inspection");
+      surfaces = charter.surfaces;
+      selection = { charterPath: request.charterPath, charterSha256: loaded.sha256 };
+    }
+    signal?.throwIfAborted();
     const base = {
       schemaVersion: 1 as const,
       testVerdict: "not-asserted" as const,
       projectRoot: this.root,
       workspaceRoot: this.workspaceRoot,
-      charterId: entry.id,
-      level: entry.level,
-      surfaces: entry.surfaces,
+      ...selection,
+      level: charter.level,
+      surfaces,
       environment: this.config.policies.environment,
       checkedAt: new Date().toISOString(),
     };
@@ -397,6 +411,20 @@ export class LocalRunnerService {
     return this.config.suites;
   }
 
+  private async loadCandidateCharter(path: string, digest: string): Promise<{ charter: TestCharter; sha256: string }> {
+    // Readiness and Mission creation share the same bounded, digest-pinned
+    // admission path. A catalog file must retain its registered identity.
+    const loaded = await readWorkspaceCharterFile(this.workspaceRoot, path, digest);
+    const selectedPath = resolveWithinWorkspace(this.workspaceRoot, path);
+    if (this.config.charters.some((entry) => {
+      try { return sameProjectPath(resolveWithinWorkspace(this.workspaceRoot, entry.path), selectedPath); }
+      catch { return false; }
+    })) {
+      throw new Error("Candidate Charter is already registered; select its charterId instead");
+    }
+    return loaded;
+  }
+
   async createMission(input: MissionCreateOptions): Promise<TestMission> {
     if (input.charterPath !== undefined) {
       if (input.surface === "api") throw new Error("Mission surface is not enabled by the local runner: api");
@@ -405,16 +433,7 @@ export class LocalRunnerService {
       if (input.url || input.expect?.length || input.oracleNames?.length || input.mode || input.sideEffectPolicy) {
         throw new Error("Candidate Charter path cannot be combined with ad-hoc planning options");
       }
-      // Let the shared candidate reader reject redirected files consistently
-      // before resolving the path for catalog identity comparison.
-      const loaded = await readWorkspaceCharterFile(this.workspaceRoot, input.charterPath, input.charterSha256);
-      const selectedPath = resolveWithinWorkspace(this.workspaceRoot, input.charterPath);
-      if (this.config.charters.some((entry) => {
-        try { return sameProjectPath(resolveWithinWorkspace(this.workspaceRoot, entry.path), selectedPath); }
-        catch { return false; }
-      })) {
-        throw new Error("Candidate Charter is already registered; select its charterId instead");
-      }
+      const loaded = await this.loadCandidateCharter(input.charterPath, input.charterSha256);
       const requestedLevel = resolveTestLevel(input.intent, input.level).resolved;
       if (loaded.charter.level !== requestedLevel) {
         throw new Error(`Candidate Charter level ${loaded.charter.level} does not match requested level ${requestedLevel}`);

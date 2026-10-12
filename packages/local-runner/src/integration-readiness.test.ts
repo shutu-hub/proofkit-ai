@@ -1,11 +1,12 @@
 import { getEventListeners } from "node:events";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProofkitConfigSchema } from "@proofkit/contracts";
 import type { ProjectIntegration } from "@proofkit/runner";
 import { LocalRunnerService } from "./index.js";
+import { readWorkspaceCharterFile } from "./workspace-charter-file.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -38,7 +39,94 @@ async function fixture(readiness?: ProjectIntegration["readiness"]) {
 
 const request = { charterId: "resume-core" };
 
+async function candidateFixture(readiness: ProjectIntegration["readiness"], overrides: Record<string, unknown> = {}) {
+  const result = await fixture(readiness);
+  const path = ".proofkit/charters/candidate.yml";
+  const file = join(result.workspaceRoot, path);
+  const charter = { intent: "candidate core", level: "core", surfaces: ["electron"], actions: [],
+    assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny", ...overrides };
+  await writeFile(file, JSON.stringify(charter));
+  return { ...result, path, file, charter };
+}
+
 describe("connector readiness trust boundary", () => {
+  it("checks the scope-pinned candidate and retains its platform and digest without creating execution records", async () => {
+    const readiness = vi.fn(async () => ({ passed: true, message: "prerequisites met", evidence: {} }));
+    const { service, root, workspaceRoot, integration, path, file } = await candidateFixture(readiness);
+    const before = await readFile(file);
+    const candidate = (await service.inspectTestScope({ level: "core", surface: "electron" })).workspaceCandidates!.items[0]!;
+    // Readiness must not erase planning gaps or present connector success as acceptance.
+    expect(candidate.issues).toContain("missing-business-oracle");
+    const result = await service.inspectIntegrationReadiness({ charterPath: path, charterSha256: candidate.sha256! });
+    expect(result).toMatchObject({ status: "ready", testVerdict: "not-asserted", level: "core", surfaces: ["electron"],
+      charterPath: path, charterSha256: candidate.sha256 });
+    expect(result.charterId).toBeUndefined();
+    expect(readiness).toHaveBeenCalledWith(expect.objectContaining({ charter: expect.objectContaining({ intent: "candidate core" }),
+      projectRoot: root, workspaceRoot, signal: expect.any(AbortSignal) }));
+    expect(integration.preflight).not.toHaveBeenCalled();
+    expect(integration.setup).not.toHaveBeenCalled();
+    expect(await readFile(file)).toEqual(before);
+    expect(await readdir(root)).toEqual(["package.json"]);
+    expect(await readdir(join(workspaceRoot, ".proofkit"))).toEqual(["charters"]);
+  });
+
+  it("rejects changed candidate bytes before invoking the readiness hook", async () => {
+    const readiness = vi.fn(async () => ({ passed: true, message: "ready", evidence: {} }));
+    const { service, path, file, workspaceRoot } = await candidateFixture(readiness);
+    const loaded = await readWorkspaceCharterFile(workspaceRoot, path);
+    await writeFile(file, JSON.stringify({ ...loaded.charter, intent: "changed plan" }));
+    await expect(service.inspectIntegrationReadiness({ charterPath: path, charterSha256: loaded.sha256 })).rejects.toThrow("digest changed");
+    expect(readiness).not.toHaveBeenCalled();
+  });
+
+  it("pins endpoint bindings using the same reader as Mission creation", async () => {
+    vi.stubEnv("PROOFKIT_TEST_GATEWAY_URL", "http://127.0.0.1:8123/api/v1");
+    const readiness = vi.fn(async () => ({ passed: false, message: "fixture missing", evidence: {} }));
+    const { service, path } = await candidateFixture(readiness, { surfaces: ["web"], sideEffectPolicy: "allow",
+      actions: [{ kind: "captureResponse", name: "intake", trigger: { kind: "click", selector: "#submit" },
+        response: { url: "$env:PROOFKIT_TEST_GATEWAY_URL/intakes", method: "POST",
+          fields: { fileId: { pointer: "/data/file_id", type: "id" } } } }] });
+    const candidate = (await service.inspectTestScope({ level: "core", surface: "web" })).workspaceCandidates!.items[0]!;
+    const selected = { charterPath: path, charterSha256: candidate.sha256! };
+    expect(await service.inspectIntegrationReadiness(selected)).toMatchObject({ status: "blocked", ...selected });
+    expect(readiness).toHaveBeenCalledWith(expect.objectContaining({ charter: expect.objectContaining({
+      actions: [expect.objectContaining({ response: expect.objectContaining({ url: "http://127.0.0.1:8123/api/v1/intakes" }) })],
+    }) }));
+    readiness.mockClear();
+    vi.stubEnv("PROOFKIT_TEST_GATEWAY_URL", "http://127.0.0.1:8124/api/v1");
+    await expect(service.inspectIntegrationReadiness(selected)).rejects.toThrow("endpoint binding changed");
+    expect(readiness).not.toHaveBeenCalled();
+  });
+
+  it("keeps a registered file under catalog identity even when selected by its candidate digest", async () => {
+    const readiness = vi.fn(async () => ({ passed: true, message: "ready", evidence: {} }));
+    const { service, workspaceRoot } = await fixture(readiness);
+    const path = ".proofkit/charters/resume.yml";
+    const loaded = await readWorkspaceCharterFile(workspaceRoot, path);
+    await expect(service.inspectIntegrationReadiness({ charterPath: path, charterSha256: loaded.sha256 })).rejects.toThrow("already registered");
+    expect(readiness).not.toHaveBeenCalled();
+  });
+
+  it("requires a candidate platform declaration before invoking the connector", async () => {
+    const readiness = vi.fn(async () => ({ passed: true, message: "ready", evidence: {} }));
+    const { service, workspaceRoot, path } = await candidateFixture(readiness, { surfaces: undefined });
+    const loaded = await readWorkspaceCharterFile(workspaceRoot, path);
+    await expect(service.inspectIntegrationReadiness({ charterPath: path, charterSha256: loaded.sha256 })).rejects.toThrow("supported surfaces");
+    expect(readiness).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {}, { charterSha256: "a".repeat(64) }, { charterPath: ".proofkit/charters/candidate.yml" },
+    { ...request, charterPath: ".proofkit/charters/candidate.yml", charterSha256: "a".repeat(64) },
+    { ...request, charterSha256: "a".repeat(64) },
+    { charterPath: ".proofkit/charters/candidate.yml", charterSha256: "not-a-digest" },
+  ])("rejects ambiguous or incomplete selection before connector execution (%j)", async (selection) => {
+    const readiness = vi.fn(async () => ({ passed: true, message: "ready", evidence: {} }));
+    const { service } = await fixture(readiness);
+    await expect(service.inspectIntegrationReadiness(selection)).rejects.toThrow();
+    expect(readiness).not.toHaveBeenCalled();
+  });
+
   it("returns unavailable without substituting a lifecycle hook or creating execution records", async () => {
     const { service, root, workspaceRoot, integration } = await fixture();
     expect(await service.inspectIntegrationReadiness(request)).toMatchObject({ status: "unavailable", testVerdict: "not-asserted" });
