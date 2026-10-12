@@ -27,6 +27,8 @@ import {
   type MissionPlan,
   type MissionExecutionProfile,
   type MissionPolicy,
+  type MissionRecoveryInspection,
+  MissionRecoveryInspectionSchema,
   type PlanningQuality,
   type MissionStatus,
   type Observation,
@@ -527,6 +529,42 @@ export class MissionAgent {
 
   async isRunning(missionId: string): Promise<boolean> {
     return this.store.isExecutionActive(validateMissionId(missionId));
+  }
+
+  /**
+   * Inspect whether a persisted interrupted task can be resumed safely.
+   * This is read-only: it acquires no execution lease and invokes no tool.
+   */
+  async inspectRecovery(missionId: string): Promise<MissionRecoveryInspection> {
+    const safeId = validateMissionId(missionId);
+    const mission = await this.load(safeId);
+    const activeOwner = await this.store.isExecutionActive(safeId);
+    const interrupted = mission.plan.graph.tasks.filter((task) => task.status === "running");
+    const now = Date.now();
+    const deadlineExpired = mission.executionDeadlineAt !== undefined && Date.parse(mission.executionDeadlineAt) <= now;
+    const decisions = interrupted.map((task) => {
+      const tool = this.tools.get(task.tool);
+      if (deadlineExpired) return { taskId: task.taskId, tool: task.tool, attempt: task.attempts, maxAttempts: task.maxAttempts,
+        status: "deadline-expired" as const, reason: "The persisted Mission execution deadline has expired; it will not retry this task." };
+      if (task.attempts >= task.maxAttempts) return { taskId: task.taskId, tool: task.tool, attempt: task.attempts, maxAttempts: task.maxAttempts,
+        status: "attempts-exhausted" as const, reason: `Task already used all ${task.maxAttempts} allowed attempts.` };
+      if (!tool) return { taskId: task.taskId, tool: task.tool, attempt: task.attempts, maxAttempts: task.maxAttempts,
+        status: "review-required" as const, reason: `Mission tool ${task.tool} is no longer registered.` };
+      if (!isSafeToRecover(mission, task, tool)) return { taskId: task.taskId, tool: task.tool, attempt: task.attempts, maxAttempts: task.maxAttempts,
+        status: "review-required" as const, reason: "The interrupted attempt may have produced a side effect or its recovery contract no longer matches." };
+      return { taskId: task.taskId, tool: task.tool, attempt: task.attempts, maxAttempts: task.maxAttempts,
+        status: "retry-safe" as const, reason: `The read-only recovery contract matches; retry is allowed as attempt ${task.attempts + 1}.` };
+    });
+    const safeTasks = decisions.filter((task) => task.status === "retry-safe");
+    const reviewTasks = decisions.filter((task) => task.status !== "retry-safe");
+    const status = activeOwner ? "active" : deadlineExpired && interrupted.length ? "deadline-expired"
+      : reviewTasks.length ? "review-required" : safeTasks.length ? "recoverable" : "not-needed";
+    const nextAction = activeOwner ? "wait" : status === "recoverable" || status === "deadline-expired" ? "start_mission"
+      : status === "review-required" ? "review" : "none";
+    return MissionRecoveryInspectionSchema.parse({
+      missionId: safeId, status, testVerdict: "not-asserted", activeOwner,
+      tasks: decisions.slice(0, 100), omittedTasks: Math.max(0, decisions.length - 100), nextAction,
+    });
   }
 
   async cancel(missionId: string, reason: string): Promise<boolean> {

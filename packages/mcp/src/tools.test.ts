@@ -28,6 +28,7 @@ describe("ProofKit MCP tools", () => {
       "approve_test_plan",
       "start_mission",
       "get_mission_status",
+      "inspect_mission_recovery",
       "await_test_result",
       "get_mission_evidence",
       "cancel_mission",
@@ -52,7 +53,7 @@ describe("ProofKit MCP tools", () => {
     expect(runTest?.inputSchema.properties?.surface).not.toHaveProperty("default");
     const scope = listed.tools.find((tool) => tool.name === "inspect_test_scope");
     expect(scope?.inputSchema).toMatchObject({ properties: { level: { default: "core" }, limit: { maximum: 50 } } });
-    for (const name of ["discover_project", "inspect_test_scope", "list_test_charters", "list_test_suites", "get_mission_status"]) {
+    for (const name of ["discover_project", "inspect_test_scope", "list_test_charters", "list_test_suites", "get_mission_status", "inspect_mission_recovery"]) {
       expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).toBe(true);
     }
     for (const name of ["inspect_test_environment", "inspect_surface", "create_test_mission", "run_test", "get_mission_evidence", "analyze_mission_stability", "create_mission_repeat", "get_mission_repeat_status", "advance_mission_repeat"]) {
@@ -78,6 +79,17 @@ describe("ProofKit MCP tools", () => {
       expect(runner.recoverRunResources).toHaveBeenCalledWith("run-1");
       expect((await client.callTool({ name: "recover_run_resources", arguments: { runId: "../foreign" } })).isError).toBe(true);
       expect(runner.recoverRunResources).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("exposes read-only mission recovery inspection without starting execution", async () => {
+    const runner = { inspectMissionRecovery: vi.fn(async () => ({ missionId: "mission-1", status: "recoverable", testVerdict: "not-asserted", activeOwner: false,
+      tasks: [{ taskId: "reconnaissance", tool: "project.discover", attempt: 1, maxAttempts: 2, status: "retry-safe", reason: "safe" }], omittedTasks: 0, nextAction: "start_mission" })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "inspect_mission_recovery", arguments: { missionId: "mission-1" } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ status: "recoverable", nextAction: "start_mission", testVerdict: "not-asserted" });
+      expect(runner.inspectMissionRecovery).toHaveBeenCalledWith("mission-1");
     } finally { await client.close(); await server.close(); }
   });
 

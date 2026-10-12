@@ -160,6 +160,13 @@ If remainingExecutionMs reaches zero while an owner is still active, it may be
 finishing cancellation and cleanup; keep waiting on that Mission ID until the
 owner settles. Progress is not a product verdict.
 Cancelling the wait does not cancel the Mission.
+If the owner process disappeared while a task was running, call
+inspect_mission_recovery before restarting. It is read-only and returns
+recoverable only when the original read-only tool receipt, recovery key,
+input and side-effect policy still match; use start_mission only for its
+returned start_mission action. review-required means inspect affected resources
+before creating a new reviewed Mission. For deadline-expired, start_mission
+only persists the expired Mission as cancelled; it will not retry the task.
 When run_test or await_test_result reports awaiting-approval with readiness.ready
 false, no product test ran. Report testVerdict as not-asserted and explain the
 missing planning proof. Do not label it blocked or failed, even if a planning

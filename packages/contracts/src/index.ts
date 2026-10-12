@@ -1122,6 +1122,24 @@ export const MissionStatusSchema = z.enum([
 ]);
 export type MissionStatus = z.infer<typeof MissionStatusSchema>;
 
+export const MissionRecoveryInspectionSchema = z.object({
+  missionId: z.string().min(1),
+  status: z.enum(["active", "recoverable", "review-required", "deadline-expired", "not-needed"]),
+  testVerdict: z.literal("not-asserted"),
+  activeOwner: z.boolean(),
+  tasks: z.array(z.object({
+    taskId: z.string(),
+    tool: z.string(),
+    attempt: z.number().int().nonnegative(),
+    maxAttempts: z.number().int().positive(),
+    status: z.enum(["retry-safe", "review-required", "attempts-exhausted", "deadline-expired"]),
+    reason: z.string().min(1).max(512),
+  })).max(100),
+  omittedTasks: z.number().int().nonnegative(),
+  nextAction: z.enum(["wait", "start_mission", "review", "none"]),
+}).strict();
+export type MissionRecoveryInspection = z.infer<typeof MissionRecoveryInspectionSchema>;
+
 export const MissionTaskStatusSchema = z.enum(["pending", "ready", "running", "passed", "failed", "blocked", "skipped"]);
 export type MissionTaskStatus = z.infer<typeof MissionTaskStatusSchema>;
 

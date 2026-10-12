@@ -892,4 +892,25 @@ describe("MissionAgent", () => {
       },
     })).rejects.toThrow("duplicate negative case IDs");
   });
+
+  it("reports read-only recovery decisions before a crashed task is resumed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-recovery-inspection-"));
+    const store = new JsonMissionStore(root);
+    const tools = new InMemoryMissionToolRegistry([
+      { name: "project.discover", description: "discover", sideEffect: "none", recoveryKey: "fixture-v1", environments: ["test"], timeoutMs: 1_000, inputSchema: z.object({}), execute: async () => ({}) },
+    ]);
+    const agent = new MissionAgent({ store, tools });
+    const created = await agent.create({ intent: "inspect recovery", projectRoot: root, surface: "web", policy: { requireApproval: false } });
+    const interrupted = await agent.load(created.missionId);
+    interrupted.status = "running";
+    interrupted.currentTaskId = "reconnaissance";
+    interrupted.plan.graph.tasks = interrupted.plan.graph.tasks.map((task) => task.taskId === "reconnaissance"
+      ? { ...task, status: "running" as const, attempts: 1, maxAttempts: 2 } : task);
+    interrupted.toolCalls = [{ toolCallId: "stale", taskId: "reconnaissance", tool: "project.discover", sideEffect: "none", recoveryKey: "fixture-v1", attempt: 1, input: {}, status: "started", evidence: [], startedAt: new Date().toISOString() }];
+    await store.save(interrupted);
+    const inspection = await agent.inspectRecovery(created.missionId);
+    expect(inspection).toMatchObject({ status: "recoverable", activeOwner: false, nextAction: "start_mission", testVerdict: "not-asserted",
+      tasks: [{ taskId: "reconnaissance", status: "retry-safe", attempt: 1, maxAttempts: 2 }] });
+    expect((await agent.load(created.missionId)).plan.graph.tasks.find((task) => task.taskId === "reconnaissance")?.status).toBe("running");
+  });
 });

@@ -24,7 +24,7 @@ export async function checkAgentConnection(setup: Setup, timeoutMs = 30_000) {
     await within(client.connect(transport), deadline);
     phase = "list-tools";
     const listed = await within(client.listTools(), deadline);
-    const required = ["inspect_test_scope", "run_test", "await_test_result", "get_mission_status", "get_mission_evidence"];
+    const required = ["inspect_test_scope", "run_test", "await_test_result", "get_mission_status", "inspect_mission_recovery", "get_mission_evidence"];
     if (!required.every((name) => listed.tools.some((tool) => tool.name === name))) {
       return blocked(phase, serverName, "required-high-level-tools-missing");
     }

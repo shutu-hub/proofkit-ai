@@ -122,6 +122,8 @@ describe("cross-process Mission ownership", () => {
     child.kill();
     await exited(child);
     expect(await state.agent.isRunning(state.mission.missionId)).toBe(false);
+    expect(await state.agent.inspectRecovery(state.mission.missionId)).toMatchObject({ status: "recoverable", nextAction: "start_mission",
+      tasks: [expect.objectContaining({ taskId: "reconnaissance", status: "retry-safe" })] });
     const final = await state.agent.run(state.mission.missionId);
     expect(final.status).toBe("completed");
     expect(final.plan.graph.tasks.find((task) => task.taskId === "reconnaissance")?.attempts).toBe(2);
@@ -138,6 +140,9 @@ describe("cross-process Mission ownership", () => {
     child.kill();
     await exited(child);
 
+    const inspectionBefore = await state.agent.inspectRecovery(state.mission.missionId);
+    expect(inspectionBefore).toMatchObject({ status: "review-required", nextAction: "review",
+      tasks: [expect.objectContaining({ taskId: "reconnaissance", status: "review-required" })] });
     const final = await state.agent.run(state.mission.missionId);
     expect(final.status).toBe("blocked");
     expect(final.verdict).toBe("blocked");

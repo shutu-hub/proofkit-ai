@@ -142,6 +142,14 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "inspect_mission_recovery",
+    "Read-only recovery check for a persisted Mission. Reports whether an active owner is still running, which interrupted tasks are safe to retry under the unchanged recovery contract, and which tasks require review. It never acquires a lease, starts a tool or changes the Mission; use start_mission to perform an approved safe retry.",
+    { missionId: z.string().min(1) },
+    READ_ONLY_TOOL,
+    async ({ missionId }) => result(await runner.inspectMissionRecovery(missionId)),
+  );
+
+  server.tool(
     "await_test_result",
     "Wait briefly for an existing Mission without starting or replaying it. A terminal result includes an audited brief verdict and cited evidence, so another evidence read is optional unless more detail is needed. A saved running Mission whose owner is temporarily unseen is rechecked until this wait ends; an unstarted Mission returns not-asserted and readiness gaps. Cancelling this wait does not cancel the Mission.",
     { missionId: z.string().min(1), timeoutMs: z.number().int().min(500).max(30_000).default(20_000) },
