@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { assertPinnedContainer, inspectContainer, withSiteLock } from "../scripts/webarena-batch-run.mjs";
+import { assertPinnedContainer, inspectContainer, removePinnedContainer, startPinnedContainer, withSiteLock } from "../scripts/webarena-batch-run.mjs";
 
 const known = { Id: "a".repeat(64), Name: "/webarena_verified_shopping_admin",
   Image: "sha256:d0531dd27ed98d0c459ff9e88118bf2ed8b660b0ed99c38837db46c065a5be13",
@@ -41,6 +41,38 @@ test("read-only container inspection retries transient Docker failures without t
   assert.equal(absent, undefined);
   assert.equal(calls, 1);
   await assert.rejects(inspectContainer({}, async () => ({ stdout: "[]" })), /Ambiguous benchmark container/);
+});
+
+test("reset reconciles Docker writes against the pinned container identity before retrying", async () => {
+  let removals = 0;
+  await removePinnedContainer({}, known.Id, async () => {
+    if (++removals === 1) throw new Error("lost removal response");
+  }, async () => known);
+  assert.equal(removals, 2);
+  removals = 0;
+  await removePinnedContainer({}, known.Id, async () => {
+    removals++;
+    throw new Error("lost removal response");
+  }, async () => undefined);
+  assert.equal(removals, 1);
+  await assert.rejects(removePinnedContainer({}, known.Id, async () => {
+    throw new Error("failed");
+  }, async () => ({ ...known, Id: "b".repeat(64) })), /identity changed/);
+
+  let starts = 0;
+  const recovered = await startPinnedContainer({}, async () => {
+    starts++;
+    throw new Error("lost start response");
+  }, async () => known);
+  assert.equal(recovered.Id, known.Id);
+  assert.equal(starts, 1);
+  starts = 0;
+  const started = await startPinnedContainer({}, async () => { starts++; }, async () =>
+    starts === 1 ? undefined : known);
+  assert.equal(started.Id, known.Id);
+  assert.equal(starts, 2);
+  await assert.rejects(startPinnedContainer({}, async () => {}, async () =>
+    ({ ...known, Image: "sha256:" + "b".repeat(64) })), /unrecognized benchmark container/);
 });
 
 test("one batch owns a Docker site's reset window and releases it afterward", async () => {

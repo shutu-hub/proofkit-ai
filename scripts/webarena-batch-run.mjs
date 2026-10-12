@@ -90,6 +90,16 @@ async function docker(options, args, timeout = 30_000) {
   return execute(command, [...prefix, ...args], { timeout, windowsHide: true, maxBuffer: 1024 * 1024 });
 }
 
+async function dockerRead(options, args, timeout = 30_000) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { return await docker(options, args, timeout); }
+    catch (error) {
+      if (attempt === 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+    }
+  }
+}
+
 export async function inspectContainer(options, inspect = () => docker(options, ["inspect", CONTAINER])) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -102,6 +112,37 @@ export async function inspectContainer(options, inspect = () => docker(options, 
       if (attempt === 2 || error.message === "Ambiguous benchmark container") throw error;
       await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
     }
+  }
+}
+
+export async function removePinnedContainer(options, id,
+  remove = () => docker(options, ["rm", "-f", id]), inspect = () => inspectContainer(options)) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { await remove(); return; }
+    catch (error) {
+      const current = await inspect();
+      if (!current) return; // The command may have completed before its caller saw the response.
+      if (assertPinnedContainer(current) !== id) throw new Error("Benchmark container identity changed during removal");
+      if (attempt === 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+    }
+  }
+}
+
+export async function startPinnedContainer(options,
+  start = () => docker(options, ["run", "-d", "--name", CONTAINER,
+    "-p", "127.0.0.1:7780:80", "-p", "127.0.0.1:7781:8877", IMAGE]),
+  inspect = () => inspectContainer(options)) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let startError;
+    try { await start(); } catch (error) { startError = error; }
+    const current = await inspect();
+    if (current) {
+      assertPinnedContainer(current);
+      return current;
+    }
+    if (attempt === 2) throw startError ?? new Error("Started benchmark container was not found");
+    await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
   }
 }
 
@@ -119,13 +160,11 @@ async function verifyBrowser(chrome) {
 async function resetSite(options, config) {
   const old = await inspectContainer(options);
   if (old) assertPinnedContainer(old);
-  await docker(options, ["image", "inspect", IMAGE, "--format", "{{.Id}}"]).then(({ stdout }) => {
+  await dockerRead(options, ["image", "inspect", IMAGE, "--format", "{{.Id}}"]).then(({ stdout }) => {
     if (stdout.trim() !== IMAGE) throw new Error("Pinned benchmark image is unavailable");
   });
-  if (old) await docker(options, ["rm", "-f", old.Id]);
-  await docker(options, ["run", "-d", "--name", CONTAINER,
-    "-p", "127.0.0.1:7780:80", "-p", "127.0.0.1:7781:8877", IMAGE]);
-  const fresh = await inspectContainer(options);
+  if (old) await removePinnedContainer(options, old.Id);
+  const fresh = await startPinnedContainer(options);
   const newContainer = assertPinnedContainer(fresh);
   if (old && old.Id === newContainer) throw new Error("Benchmark reset reused the old container");
   const deadline = Date.now() + 120_000;
@@ -136,7 +175,7 @@ async function resetSite(options, config) {
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   } while (Date.now() < deadline);
   if (probe.status !== "reachable") throw new Error("Rebuilt benchmark site did not become reachable");
-  const { stdout: marker } = await docker(options, ["exec", newContainer, "php", "-r", RESET_PROBE]);
+  const { stdout: marker } = await dockerRead(options, ["exec", newContainer, "php", "-r", RESET_PROBE]);
   if (marker.trim() !== "0") throw new Error("Benchmark database did not return to the fixed initial marker");
   const browser = await verifyBrowser(options.chrome);
   return { oldContainer: old?.Id ?? null, newContainer, image: IMAGE, mounts: 0,
