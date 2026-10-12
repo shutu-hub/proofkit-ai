@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { TestMission } from "@proofkit/contracts";
+import type { TestCharter, TestMission } from "@proofkit/contracts";
 import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 import { briefMissionEvidence } from "./mission-evidence-brief.js";
@@ -93,9 +93,9 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "create_test_mission",
-    "Create a reviewable AI test mission from natural language, a catalog ID, a structured Charter, or a reviewed external-workspace candidate path and scope SHA-256. Use the candidate's relative path exactly as returned by workspaceCandidates; do not combine it with charter, charterId, suiteId, url, expect, oracleNames, mode or sideEffectPolicy. When surface is omitted, an unambiguous platform in the intent is used. The tested project is not modified.",
+    "Create a reviewable AI test mission from natural language, a catalog ID, a structured Charter, or a reviewed external-workspace candidate path and scope SHA-256. Intent is required unless a structured Charter supplies its own intent. Use the candidate's relative path exactly as returned by workspaceCandidates; do not combine it with charter, charterId, suiteId, url, expect, oracleNames, mode or sideEffectPolicy. When surface is omitted, an unambiguous platform in the intent is used. The tested project is not modified.",
     {
-      intent: z.string().min(1),
+      intent: z.string().min(1).optional(),
       charter: TestCharterSchema.optional(),
       charterPath: z.string().min(1).max(512).optional(),
       charterSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -110,14 +110,14 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
     },
-    async ({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
+    async ({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent: missionIntent(intent, charter), charter, charterPath, charterSha256, charterId, suiteId, coverage, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
   );
 
   server.tool(
     "run_test",
-    "Run a natural-language ProofKit test mission at the requested intensity. When surface is omitted, an unambiguous platform in the intent is used. Supply a structured Charter or a reviewed external-workspace candidate relative path and scope SHA-256 when no catalog entry covers the workflow. A submitted Charter owns mode and sideEffectPolicy; identical top-level repeats are accepted, conflicting values are rejected. Do not combine it with top-level url, expect or oracleNames. A candidate path must not be combined with charter, charterId, suiteId or ad-hoc planning fields. For single exploratory clicks/fills use interact_surface first; its result is not a product verdict. Poll status and evidence for the final result.",
+    "Run a natural-language ProofKit test mission at the requested intensity. Intent is required unless a structured Charter supplies its own intent. When surface is omitted, an unambiguous platform in the intent is used. Supply a structured Charter or a reviewed external-workspace candidate relative path and scope SHA-256 when no catalog entry covers the workflow. A submitted Charter owns mode and sideEffectPolicy; identical top-level repeats are accepted, conflicting values are rejected. Do not combine it with top-level url, expect or oracleNames. A candidate path must not be combined with charter, charterId, suiteId or ad-hoc planning fields. For single exploratory clicks/fills use interact_surface first; its result is not a product verdict. Poll status and evidence for the final result.",
     {
-      intent: z.string().min(1),
+      intent: z.string().min(1).optional(),
       charter: TestCharterSchema.optional(),
       charterPath: z.string().min(1).max(512).optional(),
       charterSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -134,7 +134,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       autoApprove: z.boolean().default(true),
     },
     async ({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
-      const mission = await runner.createMission({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
+      const mission = await runner.createMission({ intent: missionIntent(intent, charter), charter, charterPath, charterSha256, charterId, suiteId, coverage, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
       const readiness = missionReadiness(mission);
       const started = autoApprove && readiness.ready
         ? await runner.startMission(mission.missionId, { approve: true })
@@ -523,6 +523,12 @@ function localOnlyUrl(url: string | undefined): string | undefined {
     throw new Error("MCP business oracles are restricted to loopback URLs");
   }
   return url;
+}
+
+function missionIntent(intent: string | undefined, charter: TestCharter | undefined): string {
+  const selected = intent ?? charter?.intent;
+  if (!selected) throw new Error("intent is required unless a structured Charter supplies its own intent");
+  return selected;
 }
 
 function surfaceUrl(url: string | undefined, runner: LocalRunnerService): string | undefined {

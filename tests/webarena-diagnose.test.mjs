@@ -41,6 +41,7 @@ test("merges every planned task with the host attempt and keeps root causes unco
   assert.equal(report.cases[3].classification.rootCause, "unconfirmed");
   assert.equal(report.cases[1].host.failedToolCalls, 4);
   assert.equal(report.friction.inputRejections, 8);
+  assert.deepEqual(report.investigationCounts, { "host-deadline": 1, "tool-input-contract": 3 });
   assert.match(renderDiagnosis(report), /2\/4 官方成功/);
   assert.match(renderDiagnosis(report), /任务能力组/);
 });
@@ -64,6 +65,8 @@ test("official evaluator details identify missing action evidence without leakin
     { answer: "failure", network: { passed: 0, failed: 1, errors: 0 }, missingNetworkEvent: true });
   assert.equal(report.capabilityGroups.unclassified.answerCheckFailed, 1);
   assert.equal(report.capabilityGroups.unclassified.networkCheckFailed, 1);
+  assert.deepEqual(report.cases[0].investigationSignals,
+    ["action-network-evidence", "answer-oracle-mismatch"]);
   assert.doesNotMatch(JSON.stringify(report) + renderDiagnosis(report), /candidate private|gold answer|private details|token/);
   assert.throws(() => summarizeOfficialChecks({ results: [{ ...official.results[0], caseId: "424" }] }, grade), /conflict/);
   assert.throws(() => summarizeOfficialChecks({ results: [...official.results, official.results[0]] }, grade), /conflict/);
@@ -120,4 +123,16 @@ test("summarizes tool calls without copying arguments, results or error content"
     taskToolFailures: 1, preToolStreamReconnects: 1,
     tools: { inspect_surface: 1, list_mcp_resources: 1, run_test: 1 } });
   assert.doesNotMatch(JSON.stringify(stats), /hidden|private/);
+});
+
+test("keeps independent host, tool, action and answer investigation signals", () => {
+  const report = diagnoseBatch({ summary: { planned: 1 }, cases: [{ taskId: 0, status: "not-run", score: null }] }, [
+    { taskId: 0, status: "incomplete", execution: { timedOut: true },
+      toolStats: { preToolStreamReconnects: 10, resourceDiscoveryFailures: 14, inputRejections: 1 },
+      toolStatsIntegrity: "verified" },
+  ]);
+  assert.deepEqual(report.cases[0].investigationSignals,
+    ["provider-stream-reconnect", "unsupported-resource-discovery", "tool-input-contract", "host-deadline"]);
+  assert.equal(report.investigationCounts["unsupported-resource-discovery"], 1);
+  assert.equal(report.cases[0].classification.rootCause, "unconfirmed");
 });

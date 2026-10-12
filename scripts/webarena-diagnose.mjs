@@ -72,6 +72,14 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
     const host = hostByTask.get(item.taskId);
     const checks = officialChecks.get(item.taskId) ?? null;
     const classification = classify(item, host, checks);
+    const investigationSignals = [];
+    if ((host?.toolStats?.preToolStreamReconnects ?? 0) > 0) investigationSignals.push("provider-stream-reconnect");
+    if ((host?.toolStats?.resourceDiscoveryFailures ?? 0) > 0) investigationSignals.push("unsupported-resource-discovery");
+    if ((host?.toolStats?.inputRejections ?? 0) > 0) investigationSignals.push("tool-input-contract");
+    if (host?.execution?.timedOut) investigationSignals.push("host-deadline");
+    if (checks?.missingNetworkEvent) investigationSignals.push("action-network-evidence");
+    if (["failure", "partial_match"].includes(checks?.answer)) investigationSignals.push("answer-oracle-mismatch");
+    if (host?.audit?.testStandard === "surface-only" && item.status !== "success") investigationSignals.push("surface-only-verification");
     return {
       taskId: item.taskId,
       taskGroup: taskGroup.get(item.taskId) ?? "unclassified",
@@ -86,12 +94,14 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
         firstToolCallAtMs: host.execution?.milestones?.firstToolCallAtMs ?? null,
         testStandard: host.audit?.testStandard ?? null,
         toolStatsIntegrity: host.toolStatsIntegrity ?? "unavailable" } : null,
-      classification,
+      classification, investigationSignals,
     };
   });
   if ([...hostByTask.keys()].some((taskId) => !seen.has(taskId))) throw new Error("Host report outside graded batch");
   const counts = Object.fromEntries([...new Set(cases.map((item) => item.classification.code))]
     .sort().map((code) => [code, cases.filter((item) => item.classification.code === code).length]));
+  const investigationCounts = Object.fromEntries([...new Set(cases.flatMap((item) => item.investigationSignals))]
+    .sort().map((signal) => [signal, cases.filter((item) => item.investigationSignals.includes(signal)).length]));
   const capabilityGroups = Object.fromEntries([...new Set(cases.map((item) => item.taskGroup))]
     .sort().map((group) => {
       const items = cases.filter((item) => item.taskGroup === group);
@@ -117,7 +127,7 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
     officialDetailCoverage: { available: cases.filter((item) => item.official.checks !== null).length,
       evaluated: cases.filter((item) => ["success", "failure", "partial_match"].includes(item.official.status)).length },
     ...(profile ? { profile: profile[0] } : {}),
-    classificationCounts: counts,
+    classificationCounts: counts, investigationCounts,
     capabilityGroups,
     friction: { verifiedHostTraces: cases.filter((item) => item.host?.toolStatsIntegrity === "verified").length,
       unknownHostTraces: cases.filter((item) => item.host && item.host.toolStatsIntegrity !== "verified").length,
@@ -173,7 +183,7 @@ export function summarizeHostEvents(jsonl) {
       else taskToolFailures += 1;
       const message = (event.item.result?.content ?? []).filter((item) => item?.type === "text")
         .map((item) => item.text).filter((item) => typeof item === "string").join("\n").slice(0, 8192);
-      if (/Input validation error|cannot be combined with ad-hoc planning options/i.test(message)) inputRejections += 1;
+      if (/Input validation error|cannot be combined with (?:ad-hoc planning options|top-level)|Submitted Charter .* conflicts with top-level/i.test(message)) inputRejections += 1;
     }
     tools.set(name, (tools.get(name) ?? 0) + 1);
   }
@@ -197,6 +207,7 @@ export function renderDiagnosis(report) {
     + `<td>${escape(item.official.checks?.answer ?? "—")}</td><td>${item.official.checks ? `${item.official.checks.network.passed}/${item.official.checks.network.failed}/${item.official.checks.network.errors}` : "—"}</td>`
     + `<td>${item.host?.failedToolCalls ?? "—"}/${item.host?.toolCalls ?? "—"}</td><td>${item.host?.resourceDiscoveryFailures ?? "—"}</td>`
     + `<td>${item.host?.preToolStreamReconnects ?? "—"} / ${item.host?.firstToolCallAtMs ?? "—"} ms</td>`
+    + `<td>${escape(item.investigationSignals.join(", ") || "—")}</td>`
     + `<td>${escape(item.classification.nextCheck)}</td></tr>`).join("\n");
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>ProofKit 基准诊断</title>`
     + `<style>body{font:15px system-ui;max-width:1100px;margin:40px auto;padding:0 20px;color:#18212b}`
@@ -206,10 +217,12 @@ export function renderDiagnosis(report) {
     + `<p class="muted">官方已评判 ${report.officialEvaluated}/${report.planned}；未运行题目仍留在固定分母。</p>`
     + `<p class="muted">官方子评判可用 ${report.officialDetailCoverage.available}/${report.officialDetailCoverage.evaluated}；仅保留状态，不复制答案和请求内容。</p>`
     + `<p class="muted">${report.friction.inputRejections} 次工具入参拒绝；${report.friction.resourceDiscoveryFailures} 次 MCP resources 探测失败；首次已完成工具调用前有 ${report.friction.preToolStreamReconnects} 次模型流重连。失败类别表示观察到的阶段，根因须复核证据并重复运行。</p>`
+    + `<h2>调查信号</h2><p class="muted">一题可有多个信号；计数是受影响题数，不是已确认根因。</p>`
+    + `<p>${Object.entries(report.investigationCounts).map(([signal, count]) => `${escape(signal)}: ${count}`).join(" · ") || "暂无"}</p>`
     + `<h2>任务能力组</h2><p class="muted">按预先固定的任务意图分组；低分是调查线索，不等于已确认的框架根因。</p>`
     + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>已评判/计划</th><th>宿主超时</th><th>结果失败</th><th>回答判分失败</th><th>网络判分失败</th><th>入参拒绝</th><th>Mission/仅表面</th><th>已核验轨迹</th></tr></thead>`
     + `<tbody>${groups}</tbody></table><h2>逐题诊断</h2>`
-    + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>测试标准</th><th>观察类别</th><th>回答判分</th><th>网络通过/失败/错误</th><th>工具失败/总数</th><th>resources 失败</th><th>首工具前重连/首工具时间</th><th>下一步核查</th></tr></thead>`
+    + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>测试标准</th><th>观察类别</th><th>回答判分</th><th>网络通过/失败/错误</th><th>工具失败/总数</th><th>resources 失败</th><th>首工具前重连/首工具时间</th><th>调查信号</th><th>下一步核查</th></tr></thead>`
     + `<tbody>${rows}</tbody></table></html>`;
 }
 

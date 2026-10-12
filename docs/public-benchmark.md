@@ -257,6 +257,8 @@ Codex 宿主需使用已登录、保留模型提供方配置的隔离 `CODEX_HOM
 
 `benchmark:webarena:batch` 支持 `shopping-admin-4`、`shopping-admin-12` 与 `shopping-admin-24`。先用 `plan` 只读核验已准备批次、上游提交/数据哈希和本地路径；`run` 只接受一个新的外部输出目录。下例的参数可分别用于 `plan` 或 `run`：
 
+2026-10-13 的同站点第三次真实四题执行保存在 `D:/bench/admin4-regression-20261013-003/`：四题均提交且宿主关联通过，官方成功 **3/4**（0、108、157 成功；423 失败）。失败工具调用共 1 次，为 157 的 `run_test` 缺顶层 `intent`；没有 MCP resources 探测失败。0 从上一轮超时变为本轮通过，但目前只有一次改进后观测，不能称为稳定提升。423 的答案与网络子评判均失败且无 Mission 证据，判分结构仍待真实 UI 正例校准。报告的 `investigationSignals` 只列调查线索，根因仍为 `unconfirmed`；完整解释见[标准验收方案](validation-program.md)。
+
 ```powershell
 pnpm benchmark:webarena:batch plan --profile shopping-admin-12 --batch D:/bench/pilot-admin12-20261012 --config D:/bench/environment-admin4.json --upstream D:/bench/webarena-verified --python D:/bench/evaluator/Scripts/python.exe --chrome 'C:/Program Files/Google/Chrome/Application/chrome.exe' --root D:/bench/benchmark-target --workspace D:/bench/benchmark-workspace --host claude-code --docker-wsl proofkit-docker
 pnpm benchmark:webarena:batch run --profile shopping-admin-12 --batch D:/bench/pilot-admin12-20261012 --config D:/bench/environment-admin4.json --upstream D:/bench/webarena-verified --python D:/bench/evaluator/Scripts/python.exe --chrome 'C:/Program Files/Google/Chrome/Application/chrome.exe' --root D:/bench/benchmark-target --workspace D:/bench/benchmark-workspace --host claude-code --docker-wsl proofkit-docker --output D:/bench/admin12-batch-new

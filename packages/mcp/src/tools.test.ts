@@ -288,6 +288,28 @@ describe("ProofKit MCP tools", () => {
     await server.close();
   });
 
+  it("uses a submitted Charter intent when an Agent omits the redundant top-level intent", async () => {
+    const mission = fixtureMission("running");
+    const runner = { config: { surfaces: {} }, createMission: vi.fn(async () => mission),
+      startMission: vi.fn(async () => ({ mission, running: true })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const charter = { intent: "verify public workflow", level: "quick", mode: "deterministic",
+        preconditions: [], actions: [], assertions: [{ kind: "text-visible", text: "ready" }],
+        sideEffectPolicy: "deny", metadata: {} };
+      const started = await client.callTool({ name: "run_test", arguments: { surface: "web", charter } });
+      expect(started.isError).not.toBe(true);
+      expect(runner.createMission).toHaveBeenCalledWith(expect.objectContaining({ intent: charter.intent }));
+      const created = await client.callTool({ name: "create_test_mission", arguments: { surface: "web", charter } });
+      expect(created.isError).not.toBe(true);
+      expect(runner.createMission).toHaveBeenCalledTimes(2);
+      const missing = await client.callTool({ name: "run_test", arguments: { surface: "web" } });
+      expect(missing.isError).toBe(true);
+      expect(textContent(missing)).toContain("intent is required unless a structured Charter");
+      expect(runner.createMission).toHaveBeenCalledTimes(2);
+    } finally { await client.close(); await server.close(); }
+  });
+
   it("does not request a second approval while a newly started Mission already has an owner", async () => {
     const mission = fixtureMission("awaiting-approval");
     const runner = {
