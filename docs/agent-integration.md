@@ -159,6 +159,38 @@ Skill requires reviewing and moving the old Skill before reinstalling.
 The path checks are cooperative local protections, not an adversarial
 filesystem sandbox or crash-durability guarantee.
 
+## Evidence-linked repair hypotheses
+
+After `get_mission_evidence` confirms a failed terminal Mission, the host can
+inspect the relevant source and call `submit_repair_hypothesis`. Supply the
+latest `summary.revision` as `expectedRevision`, a confirmed Finding's ID and
+evidence IDs, a title, rationale, proposed `changes`, confidence, and
+`regressionCheck`. Each `sourceReferences` item contains a repository-relative
+path, the SHA-256 of the exact file bytes, 1-based `startLine`/`endLine` and an
+explanation connecting that source range to the observed failure.
+
+The CLI uses the same validation and Mission store:
+
+```bash
+proofkit mission propose-repair <mission-id> --input hypothesis.json --root <source> --workspace <test-workspace>
+```
+
+Submission checks the current revision, Finding ownership, evidence integrity,
+source containment, digest and line range under exclusive Mission ownership.
+It saves only advisory metadata; `status` stays `proposed` and the submission
+returns `testVerdict: not-asserted`. References describe the **current checkout**,
+not attested historical served bytes, and a matching digest does not prove cause.
+Refresh evidence to get `repairSourceAudits` and a compact report showing the
+proposed change, regression check, failure evidence and stale references.
+
+After an authorized source repair, use `replay_mission` and read its audited
+result. `verified-in-scope` proves only that the original defect was not
+reproduced in the same configured scope. It never marks the hypothesis itself
+verified. A core Mission that stops on its first failure may lack a final Git
+snapshot: source freshness remains `unverified`, while its intact historical
+failure facts remain readable. Changed proposal references alone do not certify
+or withdraw a product outcome.
+
 ## Host effectiveness check
 
 The source checkout includes two distinct evaluations after `pnpm build`:

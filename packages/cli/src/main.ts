@@ -13,6 +13,7 @@ import { setupAgent, type AgentHarness } from "./agent-setup.js";
 import { checkAgentConnection } from "./agent-connection.js";
 import { registerAgentHost } from "./agent-registration.js";
 import { installAihrTemplate } from "./template-install.js";
+import { RepairHypothesisInputSchema } from "@proofkit/contracts";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -412,6 +413,18 @@ export function createProgram(): Command {
     .action(async (missionId: string, options: RootOptions) => {
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       console.log(JSON.stringify(await runner.missionEvidence(missionId), null, 2));
+    });
+
+  mission.command("propose-repair <missionId>")
+    .description("Save a source-referenced advisory host hypothesis; never edits product code or verifies a repair")
+    .requiredOption("--input <path>", "JSON hypothesis input with expectedRevision, findingId, evidenceIds, sourceReferences and regressionCheck")
+    .option("--root <path>", "project root", ".")
+    .action(async (missionId: string, options: RootOptions & { input: string }) => {
+      const value = JSON.parse(await readFile(resolve(options.input), "utf8"));
+      if (value.missionId && value.missionId !== missionId) throw new Error("Input belongs to another Mission");
+      // Saving advisory metadata does not load or execute connector code.
+      const runner = new LocalRunnerService({ root: resolve(options.root), workspaceRoot: options.workspace });
+      console.log(JSON.stringify(await runner.submitRepairHypothesis(RepairHypothesisInputSchema.parse({ ...value, missionId })), null, 2));
     });
 
   mission.command("check <missionId>")

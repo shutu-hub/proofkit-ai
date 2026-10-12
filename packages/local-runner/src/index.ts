@@ -37,6 +37,8 @@ import { negativeOutcomeProofGap } from "./negative-outcome.js";
 import { acquireCdpTarget, acquireElectronPortFileScope, acquireExecutionScope, sharedTargetIdentity } from "./execution-scope.js";
 import { sourceBindingTarget } from "./source-binding-target.js";
 import { assertMissionSurfaceCoverage, selectMissionSurface } from "./mission-surface.js";
+import { RepairHypothesisInputSchema, RepairSuggestionSchema, type RepairHypothesisInput, type RepairSourceAudit } from "@proofkit/contracts";
+import { auditRepairSources } from "./repair-hypothesis.js";
 
 export { loadProjectIntegration } from "./integration.js";
 export { inspectEvidenceRetention, type EvidenceRetentionAudit, type EvidenceRetentionRow } from "./evidence-retention.js";
@@ -180,6 +182,7 @@ export class LocalRunnerService {
   private readonly plannerProvider?: PlannerProvider;
   private readonly missionRecoveryKey?: string;
   private readonly missionAgent: MissionAgent;
+  private readonly missionStore: ProjectMissionStore;
   private readonly missionRecords = new Map<string, MissionRecord>();
   private readonly missionStarts = new Map<string, Promise<MissionStatus>>();
 
@@ -210,8 +213,9 @@ export class LocalRunnerService {
         restrictWebOrigins: this.restrictWebOrigins, allowCapabilityWrites: this.allowCapabilityWrites,
       }))}`;
     }
+    this.missionStore = new ProjectMissionStore(context);
     this.missionAgent = new MissionAgent({
-      store: new ProjectMissionStore(context),
+      store: this.missionStore,
       tools: new InMemoryMissionToolRegistry(this.createMissionTools()),
     });
   }
@@ -826,6 +830,7 @@ export class LocalRunnerService {
     diagnosis?: TestMission["diagnosis"];
     diagnoses: TestMission["diagnoses"];
     repairSuggestions: TestMission["repairSuggestions"];
+    repairSourceAudits: RepairSourceAudit[];
     targetBindings: Array<{ runId: string; surface: string; binding: TargetBinding }>;
     sourceStability: "stable" | "changed" | "unverified";
     sourceFreshness: "matching" | "changed" | "unavailable" | "unverified";
@@ -889,7 +894,8 @@ export class LocalRunnerService {
         comparisonUnavailable = "The replay source Mission could not be loaded or compared in this workspace.";
       }
     }
-    let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, agentTraceAudit, workflowReviewAudit, comparison, comparisonUnavailable, proofClassification, executionAudit, sourceFreshness, currentSourceState }), acceptanceEvidenceIntegrity };
+    const repairSourceAudits = await auditRepairSources(this.root, mission.repairSuggestions);
+    let summary: MissionResult = { ...projectMissionResult(mission, { workspaceRoot: this.workspaceRoot, running, suiteScope, workflowExecution, agentTraceAudit, workflowReviewAudit, comparison, comparisonUnavailable, proofClassification, executionAudit, sourceFreshness, currentSourceState }), acceptanceEvidenceIntegrity, repairSourceAudits };
     let report: string | undefined;
     let reportUnavailable: string | undefined;
     let evidenceIntegrity: MissionEvidenceIntegrity;
@@ -942,6 +948,7 @@ export class LocalRunnerService {
       diagnosis: mission.diagnosis,
       diagnoses: mission.diagnoses.length ? mission.diagnoses : mission.diagnosis ? [mission.diagnosis] : [],
       repairSuggestions: mission.repairSuggestions,
+      repairSourceAudits,
       targetBindings: mission.observations.flatMap((observation) => {
         if (observation.kind !== "surface.run" || typeof observation.data.runId !== "string" || typeof observation.data.surface !== "string") return [];
         const binding = TargetBindingSchema.safeParse(observation.data.targetBinding);
@@ -962,6 +969,58 @@ export class LocalRunnerService {
       ...(report ? { report } : {}),
       ...(reportUnavailable ? { reportUnavailable } : {}),
     };
+  }
+
+  /** Append advisory host reasoning under the same ownership used by execution; never mutate a product verdict. */
+  async submitRepairHypothesis(value: RepairHypothesisInput) {
+    const input = RepairHypothesisInputSchema.parse(value);
+    const lease = await this.missionStore.acquireExecution(input.missionId);
+    if (!lease) throw new Error("Mission is owned by another operation; wait for it to finish before submitting a hypothesis");
+    try {
+      const mission = await this.missionStore.load(input.missionId);
+      if (!["completed", "failed"].includes(mission.status)) throw new Error("A repair hypothesis requires a terminal tested Mission");
+      if (mission.revision !== input.expectedRevision) throw new Error("Mission revision changed; read current evidence before submitting a hypothesis");
+      const finding = mission.findings.find((item) => item.findingId === input.findingId);
+      if (!finding || finding.status !== "confirmed" || !["product", "unknown"].includes(finding.category)) {
+        throw new Error("Hypothesis must reference a confirmed product failure or surface mismatch in this Mission");
+      }
+      const audited = await this.missionEvidence(input.missionId);
+      if (audited.testVerdict !== "failed") throw new Error("Current Mission evidence does not support the saved failure; recheck before proposing a repair");
+      const evidence = input.evidenceIds.map((id) => {
+        const matches = finding.evidence.filter((ref) => ref.evidenceId === id);
+        if (matches.length !== 1) throw new Error("Cited evidence must belong to the referenced Finding");
+        return matches[0]!;
+      });
+      if (new Set(input.evidenceIds).size !== input.evidenceIds.length) throw new Error("Evidence IDs must be unique");
+      const runIds = new Set(mission.observations.flatMap((item) =>
+        item.kind === "surface.run" && typeof item.data.runId === "string" ? [item.data.runId] : []));
+      const integrity = await this.missionReports.inspectMissionEvidence(evidence, runIds);
+      if (integrity.status !== "intact") throw new Error("Cited failure evidence is unavailable or changed");
+      const sourceKeys = input.sourceReferences.map((ref) => `${ref.path}:${ref.startLine}:${ref.endLine}`);
+      if (new Set(sourceKeys).size !== sourceKeys.length) throw new Error("Source ranges must be unique");
+      const { missionId, expectedRevision, ...content } = input;
+      const suggestion = RepairSuggestionSchema.parse({
+        suggestionId: `repair-host-${sha256(JSON.stringify(content)).slice(0, 24)}`,
+        findingId: finding.findingId, charterId: finding.charterId, surface: finding.surface,
+        title: input.title, rationale: input.rationale, changes: input.changes, confidence: input.confidence,
+        evidence, status: "proposed", hypothesis: {
+          origin: "host-agent", causeStatus: "hypothesis", sourceScope: "current-checkout",
+          sourceReferences: input.sourceReferences, regressionCheck: input.regressionCheck, submittedAt: new Date().toISOString(),
+        },
+      });
+      const sourceAudit = (await auditRepairSources(this.root, [suggestion]))[0]!;
+      if (sourceAudit.references.some((ref) => ref.status !== "matching")) {
+        throw new Error("Source references are missing, changed or outside the valid line range; inspect current source again");
+      }
+      const existing = mission.repairSuggestions.find((item) => item.suggestionId === suggestion.suggestionId);
+      if (existing) return { missionId, revision: mission.revision, suggestion: existing, sourceAudit, testVerdict: "not-asserted" as const };
+      if (mission.repairSuggestions.filter((item) => item.hypothesis).length >= 10) throw new Error("This Mission already contains ten host hypotheses; use a new tested Mission");
+      mission.repairSuggestions.unshift(suggestion);
+      mission.revision += 1;
+      mission.updatedAt = suggestion.hypothesis!.submittedAt;
+      await this.missionStore.save(mission);
+      return { missionId, revision: mission.revision, suggestion, sourceAudit, testVerdict: "not-asserted" as const };
+    } finally { await lease.release(); }
   }
 
   async compareMissions(baselineMissionId: string, candidateMissionId: string, currentSourceState?: SourceState): Promise<MissionComparison> {

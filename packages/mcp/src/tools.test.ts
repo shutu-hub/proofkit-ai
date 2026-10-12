@@ -32,6 +32,7 @@ describe("ProofKit MCP tools", () => {
       "inspect_mission_recovery",
       "await_test_result",
       "get_mission_evidence",
+      "submit_repair_hypothesis",
       "cancel_mission",
       "replay_mission",
       "compare_missions",

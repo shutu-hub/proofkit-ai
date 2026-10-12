@@ -27,6 +27,7 @@ export function briefMissionResult(summary: MissionResult) {
   return {
     schemaVersion: summary.schemaVersion,
     missionId: summary.missionId,
+    revision: summary.revision,
     status: summary.status,
     verdict: summary.verdict,
     testVerdict: summary.testVerdict,
@@ -105,9 +106,15 @@ export function briefMissionEvidence(evidence: MissionEvidence) {
       title: text(suggestion.title, 200), rationale: text(suggestion.rationale),
       changes: suggestion.changes.slice(0, 5).map((change) => text(change)),
       omittedChanges: Math.max(0, suggestion.changes.length - 5), confidence: suggestion.confidence,
+      ...(suggestion.hypothesis ? { hypothesis: { ...suggestion.hypothesis,
+        regressionCheck: text(suggestion.hypothesis.regressionCheck),
+        sourceReferences: suggestion.hypothesis.sourceReferences.map((ref) => ({ ...ref, explanation: text(ref.explanation) })),
+      } } : {}),
       ...briefClaimRefs(suggestion.evidence),
     })),
     omittedRepairSuggestions: Math.max(0, (evidence.repairSuggestions?.length ?? 0) - MAX_BRIEF_REPAIRS),
+    repairSourceAudits: (evidence.repairSourceAudits ?? []).filter((audit) =>
+      (evidence.repairSuggestions ?? []).slice(0, MAX_BRIEF_REPAIRS).some((item) => item.suggestionId === audit.suggestionId)),
     evidence: selected.map(briefRef),
     omittedEvidence: Math.max(0, new Set(allRefs.map((ref) => `${ref.path}\0${ref.sha256 ?? ""}`)).size - selected.length),
     evidenceIntegrity: evidence.evidenceIntegrity,

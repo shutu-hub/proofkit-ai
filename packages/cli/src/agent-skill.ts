@@ -205,7 +205,16 @@ inspect the relevant source before proposing a change. diagnosis.sourceLocations
 contains existing files to investigate, not proof that a line caused the bug.
 For a concrete repair hypothesis, connect the independent failed business fact
 to a specific code branch or contract and cite both the evidence artifact and
-the current source location. If that connection cannot be established, say what
+the current source location. Save a concrete hypothesis with submit_repair_hypothesis:
+use the audited summary.revision, the Finding's evidence IDs, repository-relative
+source paths with exact whole-file SHA-256 and 1-based line ranges, an explanation
+of each relevant branch, proposed changes and a specific regressionCheck.
+It validates references and stores the proposal in the existing Mission; it does
+not verify causality or edit code. Read get_mission_evidence again to refresh the
+report and inspect repairSourceAudits. Matching source hashes mean the cited
+current-checkout text is unchanged, not that it was the tested historical source
+or that the suggested fix is correct. A source mismatch makes the proposal stale.
+If that connection cannot be established, say what
 remains unknown instead of presenting the generic saved suggestion as a fix.
 The terminal wait and default get_mission_evidence view are brief. They retain the audited verdict,
 key cited artifacts and omission counts; use detail=full when a cited link or

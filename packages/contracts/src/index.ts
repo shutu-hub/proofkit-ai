@@ -1323,6 +1323,43 @@ export const DiagnosisSchema = z.object({
 });
 export type Diagnosis = z.infer<typeof DiagnosisSchema>;
 
+/** Exact current-checkout references supplied after the host has inspected source. No source text is retained. */
+export const RepairSourceReferenceSchema = z.object({
+  path: z.string().min(1).max(512).refine((path) => !path.includes("\\") && !path.includes(":") && !path.includes("\0")
+    && path.split("/").every((part) => part.length > 0 && part !== "." && part !== ".."), "Use a portable repository-relative path"),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  startLine: z.number().int().positive().max(1_000_000),
+  endLine: z.number().int().positive().max(1_000_000),
+  explanation: z.string().min(1).max(1000),
+}).strict().refine((ref) => ref.endLine >= ref.startLine && ref.endLine - ref.startLine < 200, "Source range must contain 1–200 lines");
+export type RepairSourceReference = z.infer<typeof RepairSourceReferenceSchema>;
+
+export const RepairHypothesisInputSchema = z.object({
+  missionId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  expectedRevision: z.number().int().nonnegative(),
+  findingId: z.string().min(1).max(256),
+  title: z.string().min(1).max(200),
+  rationale: z.string().min(1).max(2000),
+  changes: z.array(z.string().min(1).max(1000)).min(1).max(5),
+  confidence: z.number().min(0).max(1),
+  evidenceIds: z.array(z.string().min(1).max(256)).min(1).max(12),
+  sourceReferences: z.array(RepairSourceReferenceSchema).min(1).max(8),
+  regressionCheck: z.string().min(1).max(2000),
+}).strict();
+export type RepairHypothesisInput = z.infer<typeof RepairHypothesisInputSchema>;
+
+export const RepairSourceAuditSchema = z.object({
+  suggestionId: z.string().min(1),
+  checkedAt: z.string(),
+  sourceScope: z.literal("current-checkout"),
+  causeStatus: z.literal("hypothesis"),
+  references: z.array(z.object({
+    path: z.string(), startLine: z.number().int(), endLine: z.number().int(),
+    status: z.enum(["matching", "changed", "unavailable", "invalid-range"]),
+  })).max(8),
+});
+export type RepairSourceAudit = z.infer<typeof RepairSourceAuditSchema>;
+
 export const RepairSuggestionSchema = z.object({
   suggestionId: z.string().min(1),
   /** The observed Finding that motivated this proposal; absent on historical Missions. */
@@ -1335,6 +1372,14 @@ export const RepairSuggestionSchema = z.object({
   confidence: z.number().min(0).max(1),
   evidence: z.array(EvidenceRefSchema).default([]),
   status: z.enum(["proposed", "accepted", "rejected", "verified"]).default("proposed"),
+  hypothesis: z.object({
+    origin: z.literal("host-agent"),
+    causeStatus: z.literal("hypothesis"),
+    sourceScope: z.literal("current-checkout"),
+    sourceReferences: z.array(RepairSourceReferenceSchema).min(1).max(8),
+    regressionCheck: z.string().min(1).max(2000),
+    submittedAt: z.string(),
+  }).optional(),
 });
 export type RepairSuggestion = z.infer<typeof RepairSuggestionSchema>;
 
@@ -1826,6 +1871,8 @@ export const MissionResultSchema = z.object({
   diagnoses: z.array(DiagnosisSchema).max(10).default([]),
   omittedDiagnoses: z.number().int().nonnegative().default(0),
   repairSuggestions: z.array(RepairSuggestionSchema).max(10),
+  /** Fresh source-reference checks for visible host hypotheses; independent of the product verdict. */
+  repairSourceAudits: z.array(RepairSourceAuditSchema).max(10).optional(),
   omittedRepairSuggestions: z.number().int().nonnegative(),
   comparison: MissionComparisonSchema.optional(),
   comparisonUnavailable: z.string().optional(),

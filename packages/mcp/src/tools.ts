@@ -5,6 +5,7 @@ import type { TestMission } from "@proofkit/contracts";
 import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 import { briefMissionEvidence } from "./mission-evidence-brief.js";
+import { RepairHypothesisInputSchema } from "@proofkit/contracts";
 
 // MCP annotations are host scheduling hints, not authorization. Only operations
 // that read existing source/config/Mission state receive a read-only hint.
@@ -174,6 +175,13 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
         ? { ...evidence, testVerdict: evidence.testVerdict ?? "not-asserted" }
         : briefMissionEvidence(evidence));
     },
+  );
+
+  server.tool(
+    "submit_repair_hypothesis",
+    "Save a concrete advisory repair hypothesis for a confirmed failure in a terminal Mission. First read audited evidence and inspect source. Supply summary.revision, Finding evidence IDs, exact SHA-256 of each UTF-8 source file and 1-based line ranges, a causal explanation, proposed changes and a regression check. Evidence and current-checkout references are checked; causality remains a host hypothesis. Writes only Mission metadata, never edits product code, marks a repair verified or executes a test. Refresh get_mission_evidence after submission; replay the same scope after an authorized repair.",
+    RepairHypothesisInputSchema.shape,
+    async (input) => result(await runner.submitRepairHypothesis(RepairHypothesisInputSchema.parse(input))),
   );
 
   server.tool(

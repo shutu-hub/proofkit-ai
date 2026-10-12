@@ -394,6 +394,20 @@ cannot prove historical terminal state or concurrent business causality.
 
 ## Phase 4: failure diagnosis and repair loop
 
+**Host repair hypothesis validation (2026-10-12):** MCP and CLI now save a
+concrete proposal against a confirmed failed Finding, with exact current-source
+digests, bounded line ranges, explanations and a regression check. The existing
+Mission lease and revision protect concurrent writes; evidence and source
+references are validated before saving. Reports refresh source audits and show
+the proposed change with failure links. Twelve regressions cover persistence,
+stale references, invalid submissions, redirected source, damaged evidence and
+concurrent writers. A real Chrome/HTTP smoke passed failure detection, MCP
+submission, CLI idempotency, zero ProofKit source writes, stale-source detection
+and a passing direct replay after the fixture owner repaired its code. This is
+an isolated product fixture, not live AIHR remediation or causal verification
+of a host's proposal. Core failure can precede final Git capture, so missing
+source freshness remains explicitly unverified.
+
 **Goal:** turn evidence into an actionable engineering result.
 
 - Build a first-failure record that joins UI, network, console, process and Oracle events.
