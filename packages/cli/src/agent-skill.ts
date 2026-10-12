@@ -201,6 +201,15 @@ and level, a compact outcome, the first actionable failure and its evidence,
 plus any missing acceptance obligations. Distinguish failed business facts from
 blocked access/environment, cancelled work and inconclusive evidence. A console
 error alone is not a confirmed product defect. Cite evidence for a diagnosis;
+When the host requests structured output, copy verdict from the terminal
+testVerdict (or answerReference.verdict), report from the exact returned report
+path (or answerReference.reportPath), and evidencePaths from actual returned
+evidence references (or answerReference.evidencePaths). A report field is a
+file path or null, never narrative text. Put source-binding uncertainty, HTTP
+warnings and coverage limits in gaps and summary; do not silently change an
+audited testVerdict because a separate observation looked concerning. If the
+observations appear contradictory, call get_mission_evidence for that same
+Mission and report the unresolved discrepancy explicitly.
 inspect the relevant source before proposing a change. diagnosis.sourceLocations
 contains existing files to investigate, not proof that a line caused the bug.
 For a concrete repair hypothesis, connect the independent failed business fact

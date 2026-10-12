@@ -58,10 +58,12 @@ async function evaluate(fixture, expected, cli, timeoutMs, host) {
   const answerPath = join(fixture.root, "answer.json");
   await writeFile(schemaPath, JSON.stringify({ type: "object", additionalProperties: false,
     properties: {
-      missionId: { type: ["string", "null"] }, verdict: { type: "string", enum: ["passed", "failed", "blocked", "cancelled", "inconclusive", "not-asserted"] },
+      missionId: { type: ["string", "null"] }, verdict: { type: "string", enum: ["passed", "failed", "blocked", "cancelled", "inconclusive", "not-asserted"],
+        description: "Copy the terminal ProofKit testVerdict or answerReference.verdict; record separate uncertainty in gaps." },
       level: { type: "string", enum: ["quick", "core", "release"] }, coverage: { type: "string", enum: ["declared", "project"] },
       surface: { type: "string", enum: ["web", "electron", "mobile"] },
-      report: { type: ["string", "null"] }, evidencePaths: { type: "array", items: { type: "string" } },
+      report: { type: ["string", "null"], description: "Exact absolute HTML report path from terminal result.report or answerReference.reportPath, never explanatory prose." },
+      evidencePaths: { type: "array", items: { type: "string" }, description: "Exact path values from returned evidence references or answerReference.evidencePaths; never invented paths." },
       gaps: { type: "array", items: { type: "string" } }, summary: { type: "string" },
     }, required: ["missionId", "verdict", "level", "coverage", "surface", "report", "evidencePaths", "gaps", "summary"] }));
   const { serverName, command, args, env } = fixture.setup.connection;

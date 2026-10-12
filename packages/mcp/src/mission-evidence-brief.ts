@@ -50,6 +50,7 @@ export function briefMissionResult(summary: MissionResult) {
 }
 
 export function briefMissionEvidence(evidence: MissionEvidence) {
+  const terminal = !evidence.running && ["completed", "failed", "blocked", "cancelled"].includes(evidence.status);
   const cited = [
     ...(evidence.firstFailure?.evidence ?? []),
     ...(evidence.findings ?? []).flatMap((finding) => finding.evidence),
@@ -137,6 +138,15 @@ export function briefMissionEvidence(evidence: MissionEvidence) {
     comparisonUnavailable: evidence.comparisonUnavailable,
     report: evidence.report,
     reportUnavailable: evidence.reportUnavailable,
+    // Only a terminal audit can supply a structured answer reference. The
+    // host still decides scope and explanation; this is no current-checkout
+    // or whole-project acceptance claim.
+    ...(terminal ? { answerReference: {
+      missionId: evidence.missionId,
+      verdict: evidence.testVerdict ?? "not-asserted",
+      reportPath: evidence.reportUnavailable ? null : evidence.report ?? null,
+      evidencePaths: selected.slice(0, MAX_CLAIM_REFS).map((ref) => ref.path),
+    } } : {}),
     fullDetail: { tool: "get_mission_evidence", arguments: { missionId: evidence.missionId, detail: "full" as const } },
   };
 }

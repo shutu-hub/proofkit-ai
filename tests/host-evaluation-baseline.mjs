@@ -106,6 +106,13 @@ async function evaluate(fixture, expected) {
       const savedSummary = JSON.parse(await readFile(join(dirname(evidence.report), "summary.json"), "utf8"));
       if (terminal.verdict !== evidence.summary?.verdict
         || terminal.testVerdict !== evidence.testVerdict
+        || terminal.answerReference?.missionId !== started.missionId
+        || terminal.answerReference?.verdict !== terminal.testVerdict
+        || terminal.answerReference?.reportPath !== terminal.report
+        || (terminal.answerReference?.evidencePaths ?? []).some((path) =>
+          !(terminal.evidence ?? []).some((ref) => ref.path === path))
+        || evidence.answerReference?.verdict !== evidence.testVerdict
+        || evidence.answerReference?.reportPath !== evidence.report
         || evidence.detail !== "brief"
         || fullEvidence.testVerdict !== evidence.testVerdict
         || fullEvidence.summary?.verdict !== evidence.summary?.verdict
@@ -124,9 +131,9 @@ async function evaluate(fixture, expected) {
       }
       const issues = (fullEvidence.summary?.runs ?? []).flatMap((row) => row.issue ? [row.issue] : []);
       if (terminal.firstFailure?.message) issues.push(terminal.firstFailure.message);
-      answer = { missionId: started.missionId, verdict: evidence.testVerdict,
+      answer = { missionId: started.missionId, verdict: terminal.answerReference.verdict,
         level: started.level, coverage: started.planning?.coverage?.requested, surface: expected.surface,
-        report: evidence.report, evidencePaths: (evidence.evidence ?? []).filter((item) => typeof item.path === "string").map((item) => item.path),
+        report: terminal.answerReference.reportPath, evidencePaths: terminal.answerReference.evidencePaths,
         gaps: [...new Set(issues)], summary: `Audited Mission result: ${evidence.testVerdict}` };
     }
   } finally { await client.close(); }

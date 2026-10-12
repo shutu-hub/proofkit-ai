@@ -242,6 +242,7 @@ describe("Agent onboarding", () => {
     const result = JSON.parse(String(log.mock.calls[0]?.[0]));
     const skill = await readFile(join(result.skill.path, "SKILL.md"), "utf8");
     expect(skill).toContain("terminal result's evidenceIntegrity.status");
+    expect(skill).toContain("A report field is a");
     const frontmatter = parse(skill.split("---")[1]!);
     expect(frontmatter.name).toBe("proofkit-test");
     const reference = await readFile(join(result.skill.path, "references", "charter-authoring.md"), "utf8");

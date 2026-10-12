@@ -25,7 +25,10 @@ describe("brief Mission evidence", () => {
     } as unknown as MissionEvidence;
     const brief = briefMissionEvidence(evidence);
     expect(brief).toMatchObject({ detail: "brief", testVerdict: "failed", summary: { verdict: "failed" },
-      report: "workspace/report.html" });
+      report: "workspace/report.html", answerReference: { missionId: "mission-1", verdict: "failed",
+        reportPath: "workspace/report.html" } });
+    expect(brief.answerReference?.evidencePaths).toHaveLength(3);
+    expect(brief.answerReference?.evidencePaths[0]).toBe(business.path);
     expect(brief.evidence[0]).toEqual(business);
     expect(brief.evidence).toHaveLength(12);
     expect(brief.omittedEvidence).toBe(19);
@@ -40,7 +43,11 @@ describe("brief Mission evidence", () => {
     expect(briefMissionEvidence(evidence)).toMatchObject({
       testVerdict: "not-asserted", evidence: [], omittedEvidence: 0,
     });
+    expect(briefMissionEvidence(evidence)).not.toHaveProperty("answerReference");
     expect(briefMissionEvidence({ ...evidence, verdict: "passed" })).toMatchObject({ testVerdict: "not-asserted" });
+    expect(briefMissionEvidence({ ...evidence, status: "blocked" })).toMatchObject({
+      answerReference: { missionId: "mission-2", verdict: "not-asserted", reportPath: null, evidencePaths: [] },
+    });
   });
 
   it("keeps an independent business source ahead of many cited screen artifacts", () => {
