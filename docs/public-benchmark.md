@@ -188,6 +188,14 @@ node scripts/webarena-audit.mjs --session D:/bench/operator.json
 
 离线审计重新校验公开输入摘要、任务与浏览器上下文、捕获目录中**全部** Run 开始/结束文件、保存的 Run 和 Mission 关联、最终答案及完整 HAR 的摘要与结构。删除失败尝试，即使同时改写最终记录中的 `runIds` 和 `browserRunIds`，也会因目录清单不符被拒绝。输出 `consistent` 只表示本地文件链在可信输入锚点下自洽；`hostExecution: not-verified` 表示它仍未核验实际宿主工具调用、代理身份、独立站点初态或同账户改写，官方评分仍须另行运行。取消和没有最终提交的 stdio 弃置任务返回 `incomplete`。原始 HAR 不通过此命令输出。
 
+可信控制器保存 Codex `exec --json` 或 Claude Code `--output-format stream-json` 的完整 stdout 后，还可以关联宿主工具轨迹：
+
+```powershell
+pnpm benchmark:webarena:host-audit --session D:/bench/operator.json --events D:/bench/host-events.jsonl --host codex --server proofkit_benchmark
+```
+
+此只读命令先完成上述离线审计，再核对同一 MCP server 的已完成工具调用：每个已绑定 Mission 都须有执行调用和终态读取，最终提交调用须仅成功一次，参数须等于保存的 `agent_response.json`，返回的任务 ID 和完整 Run 清单须与捕获记录一致；宿主回合须结束。Claude Code 可将 `--host` 改为 `claude-code`。输出的 `associated` / `hostExecution: trace-associated` 仅代表**所给 JSONL 与保存文件相互吻合**，不验证 JSONL 由可信进程产生、Agent 身份、是否还有其它工具、任务初态或官方得分。事件文件含模型对话和工具结果，必须放在独立评测目录并按原始 HAR 的敏感程度保管。脚本 fixture 已通过 Codex 和 Claude 两种事件格式的关联、篡改提交与缺少终态读取负对照；它仍不是 AI 自主成绩。
+
 ## 下一阶段：真实执行的准入条件
 
 1. 按[官方环境说明](https://servicenow.github.io/webarena-verified/environments/)部署四个隔离站点，记录镜像 digest、站点配置和任务前初始化结果。Docker 可以在另一台开发机运行；本机的检查目前只探测本地 Docker，不证明远端环境不可用。当前没有站点部署或重置自动化。

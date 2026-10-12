@@ -13,6 +13,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ProofkitConfigSchema, TestCharterSchema } from "../packages/contracts/dist/index.js";
 import { auditPersistedBenchmarkTask } from "../packages/local-runner/dist/index.js";
 import { createWebArenaMcp } from "../scripts/webarena-mcp.mjs";
+import { auditWebArenaHostTrace } from "../scripts/webarena-host-audit.mjs";
 import { publicTask } from "../scripts/webarena-benchmark-lib.mjs";
 
 // Scripted local fixture: persistent state and complete evidence, no AI benchmark score.
@@ -73,9 +74,12 @@ await writeFile(operatorPath, JSON.stringify({ root: source, workspaceRoot: work
 const { server, session } = await createWebArenaMcp(operatorPath);
 const client = new Client({ name: "scripted-persistent-task-controller", version: "1" });
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+const hostEvents = [];
 const call = async (name, args = {}) => {
   const result = await client.callTool({ name, arguments: args });
   assert.ok(!result.isError, JSON.stringify(result));
+  hostEvents.push({ type: "item.completed", item: { type: "mcp_tool_call", id: `fixture-${hostEvents.length}`,
+    server: "proofkit_benchmark", tool: name, arguments: args, status: "completed", result } });
   return JSON.parse(result.content.find((item) => item.type === "text").text);
 };
 const answer = { task_type: "NAVIGATE", status: "SUCCESS", retrieved_data: null, error_details: null };
@@ -117,6 +121,36 @@ try {
   assert.equal(result.taskTrajectory, "persistent-task-context");
   const originalOfflineAudit = await auditSaved();
   assert.equal(originalOfflineAudit.status, "consistent", JSON.stringify(originalOfflineAudit));
+  const hostEventsPath = join(output, "scripted-host-events.jsonl");
+  await writeFile(hostEventsPath, [...hostEvents, { type: "turn.completed" }].map((event) => JSON.stringify(event)).join("\n") + "\n");
+  const hostAudit = () => auditWebArenaHostTrace({ operatorPath, eventsPath: hostEventsPath,
+    host: "codex", serverName: "proofkit_benchmark" });
+  assert.equal((await hostAudit()).status, "associated");
+  const claudeEventsPath = join(output, "scripted-claude-events.jsonl");
+  const claudeEvents = hostEvents.flatMap((event) => {
+    const blockId = event.item.id;
+    return [
+      { type: "assistant", message: { content: [{ type: "tool_use", id: blockId,
+        name: `mcp__proofkit_benchmark__${event.item.tool}`, input: event.item.arguments }] } },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: blockId,
+        is_error: false, content: event.item.result.content }] } },
+    ];
+  });
+  await writeFile(claudeEventsPath, [...claudeEvents, { type: "result", subtype: "success", is_error: false }]
+    .map((event) => JSON.stringify(event)).join("\n") + "\n");
+  assert.equal((await auditWebArenaHostTrace({ operatorPath, eventsPath: claudeEventsPath,
+    host: "claude-code", serverName: "proofkit_benchmark" })).status, "associated");
+  const alteredHostEventsPath = join(output, "altered-host-events.jsonl");
+  await writeFile(alteredHostEventsPath, [...hostEvents.map((event) => event.item.tool === "submit_benchmark_task"
+    ? { ...event, item: { ...event.item, arguments: { ...answer, status: "UNKNOWN_ERROR" } } } : event),
+    { type: "turn.completed" }].map((event) => JSON.stringify(event)).join("\n") + "\n");
+  assert.ok((await auditWebArenaHostTrace({ operatorPath, eventsPath: alteredHostEventsPath,
+    host: "codex", serverName: "proofkit_benchmark" })).issues.includes("host-submission-answer-mismatch"));
+  const incompleteHostEventsPath = join(output, "incomplete-host-events.jsonl");
+  await writeFile(incompleteHostEventsPath, [...hostEvents.filter((event) => event.item.tool !== "await_test_result"),
+    { type: "turn.completed" }].map((event) => JSON.stringify(event)).join("\n") + "\n");
+  assert.ok((await auditWebArenaHostTrace({ operatorPath, eventsPath: incompleteHostEventsPath,
+    host: "codex", serverName: "proofkit_benchmark" })).issues.includes("host-mission-terminal-read-missing"));
   assert.equal(roots, 1, "inspection and subsequent Missions must not reset to the initial URL");
   assert.equal(logins, 1); assert.equal(authenticatedTodos, 1);
   assert.ok(!JSON.stringify(result).includes(captures));
@@ -239,7 +273,7 @@ try {
   }
   assert.equal(await readFile(join(source, "package.json"), "utf8"), sourceBytes); assert.deepEqual(await readdir(source), ["package.json"]);
   const report = { mode: "scripted-persistent-task-fixture", audit: await session.auditTask(),
-    offlineAudit: await auditSaved(), roots, logins, authenticatedTodos,
+    offlineAudit: await auditSaved(), hostTraceAudit: await hostAudit(), roots, logins, authenticatedTodos,
     cancelledContextRetired: true, stdioAbandonmentCaptured: true,
     failedRunsRetained: failedRuns, official, webArenaTasksExecuted: 0, proofkitEffectiveness: "not-measured" };
   await writeFile(join(output, "report.json"), JSON.stringify(report, null, 2));

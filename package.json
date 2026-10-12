@@ -40,6 +40,7 @@
     "test:git-install:remote": "node tests/git-install-smoke.mjs --remote",
     "benchmark:planner": "pnpm build && node tests/planner-benchmark.mjs",
     "benchmark:webarena": "node scripts/webarena-benchmark.mjs",
+    "benchmark:webarena:host-audit": "node scripts/webarena-host-audit.mjs",
     "test:webarena": "node --test tests/webarena-benchmark.test.mjs tests/webarena-environment.test.mjs tests/webarena-official.test.mjs",
     "test:smoke:benchmark-har": "pnpm build && node tests/benchmark-har-smoke.mjs",
     "test:smoke:benchmark-mission": "pnpm build && node tests/benchmark-mission-smoke.mjs",
