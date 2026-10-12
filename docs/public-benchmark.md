@@ -259,6 +259,8 @@ Codex 宿主需使用已登录、保留模型提供方配置的隔离 `CODEX_HOM
 
 2026-10-13 的同站点第三次真实四题执行保存在 `D:/bench/admin4-regression-20261013-003/`：四题均提交且宿主关联通过，官方成功 **3/4**（0、108、157 成功；423 失败）。失败工具调用共 1 次，为 157 的 `run_test` 缺顶层 `intent`；没有 MCP resources 探测失败。0 从上一轮超时变为本轮通过，但目前只有一次改进后观测，不能称为稳定提升。423 的答案与网络子评判均失败且无 Mission 证据，判分结构仍待真实 UI 正例校准。报告的 `investigationSignals` 只列调查线索，根因仍为 `unconfirmed`；完整解释见[标准验收方案](validation-program.md)。
 
+首次真实 12 题批次 `D:/bench/admin12-codex-20261013-001/` 因 119 的 35.7 MB 原始 HAR 超出原 32 MiB 限制，以及 470 前的 Docker inspect 失败而截断。7 道已关联任务经官方评判全部通过，119 无可用采集、470 环境准入失败、余 3 题未运行；**这不是完整 12 题成功率**。最新离线分类在 `D:/bench/admin12-codex-20261013-001-diagnosis-v2/report.html`。采集和导入上限已同步扩至 128 MiB，Docker 只读检查有界重试；仍须新批次的真实回归确认。
+
 ```powershell
 pnpm benchmark:webarena:batch plan --profile shopping-admin-12 --batch D:/bench/pilot-admin12-20261012 --config D:/bench/environment-admin4.json --upstream D:/bench/webarena-verified --python D:/bench/evaluator/Scripts/python.exe --chrome 'C:/Program Files/Google/Chrome/Application/chrome.exe' --root D:/bench/benchmark-target --workspace D:/bench/benchmark-workspace --host claude-code --docker-wsl proofkit-docker
 pnpm benchmark:webarena:batch run --profile shopping-admin-12 --batch D:/bench/pilot-admin12-20261012 --config D:/bench/environment-admin4.json --upstream D:/bench/webarena-verified --python D:/bench/evaluator/Scripts/python.exe --chrome 'C:/Program Files/Google/Chrome/Application/chrome.exe' --root D:/bench/benchmark-target --workspace D:/bench/benchmark-workspace --host claude-code --docker-wsl proofkit-docker --output D:/bench/admin12-batch-new

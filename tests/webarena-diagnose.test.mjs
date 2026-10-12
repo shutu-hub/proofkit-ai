@@ -136,3 +136,22 @@ test("keeps independent host, tool, action and answer investigation signals", ()
   assert.equal(report.investigationCounts["unsupported-resource-discovery"], 1);
   assert.equal(report.cases[0].classification.rootCause, "unconfirmed");
 });
+
+test("separates a failed capture from a later batch reset blocker", () => {
+  const grade = { summary: { planned: 2 }, cases: [
+    { taskId: 119, status: "not-run", score: null }, { taskId: 470, status: "not-run", score: null },
+  ] };
+  const report = diagnoseBatch(grade, [{ taskId: 119, status: "incomplete",
+    audit: { issues: ["task-capture-unavailable", "task-capture-artifact-unavailable"] },
+    toolStatsIntegrity: "verified" }], new Map(), { planned: 2, attempts: [
+    { taskId: 119, status: "incomplete" }, { taskId: 470, status: "batch-blocked", reason: "private Docker stderr" },
+  ] });
+  assert.deepEqual(report.classificationCounts, { "batch-environment-blocked": 1, "capture-unavailable": 1 });
+  assert.deepEqual(report.cases[0].investigationSignals, ["capture-artifact-unavailable"]);
+  assert.deepEqual(report.cases[1].investigationSignals, ["benchmark-environment-admission"]);
+  assert.equal(report.officialEvaluated, 0);
+  assert.doesNotMatch(JSON.stringify(report), /private Docker stderr/);
+  assert.throws(() => diagnoseBatch(grade, [], new Map(), { planned: 2, attempts: [
+    { taskId: 470, status: "batch-blocked" }, { taskId: 470, status: "batch-blocked" },
+  ] }), /duplicate batch admission/);
+});

@@ -214,7 +214,7 @@ export class BenchmarkCaptureSession {
         const capturePath = this.webTask ? "task" : runId;
         const capture = await readOwned(this.directory, `${capturePath}/capture.json`, 1024 * 1024);
         if (JSON.stringify(JSON.parse(capture.toString())) !== JSON.stringify(manifest)) issues.push("capture-manifest-changed");
-        const har = await readOwned(this.directory, `${capturePath}/network.har`, 32 * 1024 * 1024);
+        const har = await readOwned(this.directory, `${capturePath}/network.har`, 128 * 1024 * 1024);
         if (hash(har) !== manifest?.sha256 || har.length !== manifest?.bytes) issues.push("network-trace-changed");
         if (manifest?.status !== "recorded") issues.push("capture-unavailable");
         const runBytes = await readOwned(this.context!.evidenceDir, `${runId}/run.json`, 16 * 1024 * 1024);

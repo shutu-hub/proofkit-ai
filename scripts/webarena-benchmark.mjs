@@ -187,7 +187,7 @@ try {
 
 async function input(caseId, taskId, response, trace, expectedStatus, origin, snapshot) {
   const responseBytes = await boundedRead(response, 1024 * 1024);
-  const traceBytes = await boundedRead(trace, 32 * 1024 * 1024);
+  const traceBytes = await boundedRead(trace, 128 * 1024 * 1024);
   if (snapshot) {
     // Judge captured bytes, not a submission path that can change after import.
     // Preserve malformed complete pairs as evidence of the input error too.

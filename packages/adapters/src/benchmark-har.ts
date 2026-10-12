@@ -22,7 +22,7 @@ export type BenchmarkHarManifest = {
 };
 
 // Keep exports compatible with the benchmark controller's bounded import.
-const MAX_HAR_BYTES = 32 * 1024 * 1024;
+const MAX_HAR_BYTES = 128 * 1024 * 1024;
 
 export class BenchmarkHarRecorder {
   readonly path: string;

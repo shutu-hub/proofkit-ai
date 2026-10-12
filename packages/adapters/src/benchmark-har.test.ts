@@ -57,8 +57,18 @@ describe("raw benchmark capture boundaries", () => {
     const recorder = new BenchmarkHarRecorder({ directory: join(await temporary(), "oversized"), runId: "run-4" });
     await recorder.prepare();
     await writeFile(recorder.path, "");
-    await truncate(recorder.path, 32 * 1024 * 1024 + 1);
+    await truncate(recorder.path, 128 * 1024 * 1024 + 1);
     expect(await recorder.finish()).toMatchObject({ status: "unavailable", reason: "trace-too-large" });
+  });
+
+  it("retains and hashes a valid trace above the former 32 MiB ceiling", async () => {
+    const recorder = new BenchmarkHarRecorder({ directory: join(await temporary(), "large-valid"), runId: "run-large" });
+    await recorder.prepare();
+    const bytes = JSON.stringify({ log: { entries: har.log.entries,
+      comment: "x".repeat(35 * 1024 * 1024) } });
+    await writeFile(recorder.path, bytes);
+    expect(await recorder.finish()).toMatchObject({ status: "recorded", bytes: Buffer.byteLength(bytes), entries: 1,
+      sha256: createHash("sha256").update(bytes).digest("hex") });
   });
 
   it("attempts browser release after context close fails and never certifies that HAR", async () => {

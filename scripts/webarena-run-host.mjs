@@ -118,7 +118,7 @@ export async function runWebArenaHost({ sessionPath, batchPath, output, host = "
     try {
       const saved = json(await bounded(join(operator.captureDirectory, "task.finished.json"), 1024 * 1024));
       const responseBytes = await bounded(join(operator.captureDirectory, "agent_response.json"), 1024 * 1024);
-      const traceBytes = await bounded(join(operator.captureDirectory, "task", "network.har"), 32 * 1024 * 1024);
+      const traceBytes = await bounded(join(operator.captureDirectory, "task", "network.har"), 128 * 1024 * 1024);
       if (hash(responseBytes) !== saved.submissionSha256 || hash(traceBytes) !== saved.capture?.sha256) {
         throw new Error("Benchmark submission changed after audit");
       }

@@ -85,7 +85,7 @@ export async function auditPersistedBenchmarkTask(options: {
     if (!isDeepStrictEqual(manifest, capture) || start.context !== "task-owned"
       || start.runId !== `task-${options.taskId}` || start.startedAt !== capture?.startedAt
       || start.status !== "not-finalized") issue("task-capture-manifest-mismatch");
-    const har = await readBenchmarkArtifact(directory, "task/network.har", 32 * 1024 * 1024);
+    const har = await readBenchmarkArtifact(directory, "task/network.har", 128 * 1024 * 1024);
     if (benchmarkHash(har) !== capture?.sha256 || har.length !== capture?.bytes) issue("task-network-trace-changed");
     const entries = (parseJson(har).log as Json | undefined)?.entries;
     if (!Array.isArray(entries) || entries.length !== capture?.entries

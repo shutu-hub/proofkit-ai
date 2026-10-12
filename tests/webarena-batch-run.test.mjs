@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { assertPinnedContainer, withSiteLock } from "../scripts/webarena-batch-run.mjs";
+import { assertPinnedContainer, inspectContainer, withSiteLock } from "../scripts/webarena-batch-run.mjs";
 
 const known = { Id: "a".repeat(64), Name: "/webarena_verified_shopping_admin",
   Image: "sha256:d0531dd27ed98d0c459ff9e88118bf2ed8b660b0ed99c38837db46c065a5be13",
@@ -22,6 +22,25 @@ test("the batch reset recognizes only the pinned disposable container", () => {
   ]) {
     assert.throws(() => assertPinnedContainer({ ...known, ...changed }), /unrecognized benchmark container/);
   }
+});
+
+test("read-only container inspection retries transient Docker failures without treating them as absence", async () => {
+  let calls = 0;
+  const found = await inspectContainer({}, async () => {
+    calls++;
+    if (calls < 3) throw Object.assign(new Error("temporary Docker inspect failure"), { stderr: "daemon temporarily unavailable" });
+    return { stdout: JSON.stringify([known]) };
+  });
+  assert.equal(found.Id, known.Id);
+  assert.equal(calls, 3);
+  calls = 0;
+  const absent = await inspectContainer({}, async () => {
+    calls++;
+    throw Object.assign(new Error("missing"), { stderr: "No such container" });
+  });
+  assert.equal(absent, undefined);
+  assert.equal(calls, 1);
+  await assert.rejects(inspectContainer({}, async () => ({ stdout: "[]" })), /Ambiguous benchmark container/);
 });
 
 test("one batch owns a Docker site's reset window and releases it afterward", async () => {

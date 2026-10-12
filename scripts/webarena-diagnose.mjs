@@ -49,7 +49,7 @@ export function summarizeOfficialChecks(official, grade) {
 }
 
 /** Separate the observed failure stage from its unproven root cause. */
-export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
+export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun = undefined) {
   if (!grade || !Array.isArray(grade.cases) || !Number.isSafeInteger(grade.summary?.planned)
     || grade.summary.planned !== grade.cases.length || !Array.isArray(hosts)) {
     throw new Error("Invalid fixed-denominator benchmark report");
@@ -61,6 +61,19 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
     }
     hostByTask.set(host.taskId, host);
   }
+  const admissionByTask = new Map();
+  if (batchRun !== undefined) {
+    if (batchRun?.planned !== grade.summary.planned || !Array.isArray(batchRun.attempts)) {
+      throw new Error("Batch admission record conflicts with the graded denominator");
+    }
+    for (const attempt of batchRun.attempts) {
+      if (!Number.isSafeInteger(attempt?.taskId) || admissionByTask.has(attempt.taskId)
+        || !["associated", "incomplete", "infrastructure-blocked", "batch-blocked"].includes(attempt.status)) {
+        throw new Error("Invalid or duplicate batch admission attempt");
+      }
+      admissionByTask.set(attempt.taskId, attempt);
+    }
+  }
   const seen = new Set();
   const profile = Object.entries(benchmarkProfiles).find(([, value]) =>
     JSON.stringify(value.taskIds) === JSON.stringify(grade.cases.map((item) => item.taskId)));
@@ -70,13 +83,17 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
     if (!Number.isSafeInteger(item?.taskId) || seen.has(item.taskId)) throw new Error("Duplicate or invalid graded task");
     seen.add(item.taskId);
     const host = hostByTask.get(item.taskId);
+    const admission = admissionByTask.get(item.taskId);
     const checks = officialChecks.get(item.taskId) ?? null;
-    const classification = classify(item, host, checks);
+    const classification = classify(item, host, checks, admission);
     const investigationSignals = [];
+    if (admission?.status === "batch-blocked") investigationSignals.push("benchmark-environment-admission");
     if ((host?.toolStats?.preToolStreamReconnects ?? 0) > 0) investigationSignals.push("provider-stream-reconnect");
     if ((host?.toolStats?.resourceDiscoveryFailures ?? 0) > 0) investigationSignals.push("unsupported-resource-discovery");
     if ((host?.toolStats?.inputRejections ?? 0) > 0) investigationSignals.push("tool-input-contract");
     if (host?.execution?.timedOut) investigationSignals.push("host-deadline");
+    if (host?.audit?.issues?.some((issue) => issue === "task-capture-unavailable"
+      || issue === "task-capture-artifact-unavailable")) investigationSignals.push("capture-artifact-unavailable");
     if (checks?.missingNetworkEvent) investigationSignals.push("action-network-evidence");
     if (["failure", "partial_match"].includes(checks?.answer)) investigationSignals.push("answer-oracle-mismatch");
     if (host?.audit?.testStandard === "surface-only" && item.status !== "success") investigationSignals.push("surface-only-verification");
@@ -97,7 +114,9 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
       classification, investigationSignals,
     };
   });
-  if ([...hostByTask.keys()].some((taskId) => !seen.has(taskId))) throw new Error("Host report outside graded batch");
+  if ([...hostByTask.keys(), ...admissionByTask.keys()].some((taskId) => !seen.has(taskId))) {
+    throw new Error("Host or admission report outside graded batch");
+  }
   const counts = Object.fromEntries([...new Set(cases.map((item) => item.classification.code))]
     .sort().map((code) => [code, cases.filter((item) => item.classification.code === code).length]));
   const investigationCounts = Object.fromEntries([...new Set(cases.flatMap((item) => item.investigationSignals))]
@@ -140,14 +159,21 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
     interpretation: "Observed stage only. Product, model, tool and evaluator root causes require evidence review and controlled rerun." };
 }
 
-function classify(grade, host, checks) {
+function classify(grade, host, checks, admission) {
   const result = (code, stage, nextCheck) => ({ code, stage, rootCause: "unconfirmed", nextCheck });
+  if (!host && admission?.status === "batch-blocked") {
+    return result("batch-environment-blocked", "admission", "Inspect the isolated site reset and Docker readback; rerun only from a fresh fixed initial state.");
+  }
   if (!host) return result("no-host-record", "admission", "Locate the task attempt or run it with a recorded host session.");
   if (host.toolStatsIntegrity === "changed") return result("trace-integrity-gap", "evidence", "Verify the saved host JSONL against its recorded SHA-256 before attribution.");
   if (host.execution?.blocker || host.status === "infrastructure-blocked") {
     return result("host-infrastructure-blocked", "host", "Check provider access, MCP availability and host startup separately from task quality.");
   }
   if (host.execution?.timedOut) return result("host-timeout", "agent-loop", "Inspect navigation, selector and tool-call timeline; rerun with the same fixed deadline.");
+  if (host.audit?.issues?.some((issue) => issue === "task-capture-unavailable"
+    || issue === "task-capture-artifact-unavailable")) {
+    return result("capture-unavailable", "evidence", "Inspect the task capture manifest, raw HAR size and recorder limit before repeating the task.");
+  }
   if (host.status !== "associated") return result("submission-gap", "capture", "Inspect terminal submission, task audit and host tool trace.");
   if (grade.status === "not-run" || grade.status === "error") {
     return result("evaluation-gap", "evaluator", "Check staged response/HAR and official evaluator diagnostics.");
@@ -247,13 +273,13 @@ async function main() {
   const args = process.argv.slice(2);
   const values = new Map();
   for (let i = 0; i < args.length; i += 2) {
-    if (!["--grade", "--host", "--output"].includes(args[i]) || !args[i + 1]) throw new Error("Invalid diagnosis argument");
+    if (!["--grade", "--host", "--batch-run", "--output"].includes(args[i]) || !args[i + 1]) throw new Error("Invalid diagnosis argument");
     if (args[i] !== "--host" && values.has(args[i])) throw new Error("Duplicate diagnosis argument");
     values.set(args[i], args[i] === "--host" ? [...(values.get(args[i]) ?? []), args[i + 1]] : args[i + 1]);
   }
   const gradePath = values.get("--grade"), output = values.get("--output");
   if (!gradePath || !output || !isAbsolute(gradePath) || !isAbsolute(output)) {
-    throw new Error("Usage: node scripts/webarena-diagnose.mjs --grade <absolute-report.json> --host <absolute-host-run.json> [--host ...] --output <new-absolute-directory>");
+    throw new Error("Usage: node scripts/webarena-diagnose.mjs --grade <absolute-report.json> --host <absolute-host-run.json> [--host ...] [--batch-run <absolute-admission-or-batch-run.json>] --output <new-absolute-directory>");
   }
   const gradeBytes = await bounded(gradePath, MAX_REPORT_BYTES);
   const grade = JSON.parse(gradeBytes.toString("utf8"));
@@ -268,6 +294,14 @@ async function main() {
   }
   const hosts = [];
   const provenance = { gradeSha256: sha256(gradeBytes), hostReports: [] };
+  let batchRun;
+  if (values.has("--batch-run")) {
+    const batchPath = values.get("--batch-run");
+    if (!isAbsolute(batchPath)) throw new Error("Batch admission path must be absolute");
+    const bytes = await bounded(batchPath, MAX_REPORT_BYTES);
+    batchRun = JSON.parse(bytes.toString("utf8"));
+    provenance.batchAdmissionSha256 = sha256(bytes);
+  }
   for (const hostPath of values.get("--host") ?? []) {
     if (!isAbsolute(hostPath)) throw new Error("Host report paths must be absolute");
     const bytes = await bounded(hostPath, MAX_REPORT_BYTES);
@@ -284,7 +318,7 @@ async function main() {
     hosts.push(host);
     provenance.hostReports.push({ taskId: host.taskId, sha256: sha256(bytes) });
   }
-  const report = { ...diagnoseBatch(grade, hosts, officialChecks), provenance: {
+  const report = { ...diagnoseBatch(grade, hosts, officialChecks, batchRun), provenance: {
     ...provenance, ...(officialDetailsSha256 ? { officialDetailsSha256 } : {}) } };
   await mkdir(resolve(output));
   await writeFile(join(output, "report.json"), JSON.stringify(report, null, 2) + "\n", { flag: "wx" });

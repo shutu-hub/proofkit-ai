@@ -90,15 +90,18 @@ async function docker(options, args, timeout = 30_000) {
   return execute(command, [...prefix, ...args], { timeout, windowsHide: true, maxBuffer: 1024 * 1024 });
 }
 
-async function inspectContainer(options) {
-  try {
-    const result = await docker(options, ["inspect", CONTAINER]);
-    const items = JSON.parse(result.stdout);
-    if (!Array.isArray(items) || items.length !== 1) throw new Error("Ambiguous benchmark container");
-    return items[0];
-  } catch (error) {
-    if (/No such (object|container)/i.test(String(error.stderr ?? ""))) return undefined;
-    throw error;
+export async function inspectContainer(options, inspect = () => docker(options, ["inspect", CONTAINER])) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const result = await inspect();
+      const items = JSON.parse(result.stdout);
+      if (!Array.isArray(items) || items.length !== 1) throw new Error("Ambiguous benchmark container");
+      return items[0];
+    } catch (error) {
+      if (/No such (object|container)/i.test(String(error.stderr ?? ""))) return undefined;
+      if (attempt === 2 || error.message === "Ambiguous benchmark container") throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+    }
   }
 }
 
@@ -162,7 +165,7 @@ export async function withSiteLock(dockerInstance, output, action) {
   }
 }
 
-async function gradeBatch(options, output, hostPaths) {
+async function gradeBatch(options, output, hostPaths, admissionPath) {
   const grade = join(output, "grade");
   const args = [join(ROOT, "scripts", "webarena-benchmark.mjs"), "grade", "--profile", options.profile,
     "--upstream", options.upstream, "--python", options.python, "--batch", options.batch,
@@ -174,7 +177,7 @@ async function gradeBatch(options, output, hostPaths) {
   try { await access(gradeReport); } catch { return { gradeExit, gradeReport: null, diagnosis: null }; }
   const diagnosis = join(output, "diagnosis");
   const diagnoseArgs = [join(ROOT, "scripts", "webarena-diagnose.mjs"), "--grade", gradeReport,
-    ...hostPaths.flatMap((path) => ["--host", path]), "--output", diagnosis];
+    ...hostPaths.flatMap((path) => ["--host", path]), "--batch-run", admissionPath, "--output", diagnosis];
   try {
     await execute(process.execPath, diagnoseArgs, { timeout: 30_000, windowsHide: true, maxBuffer: 1024 * 1024 });
     return { gradeExit, gradeReport, diagnosis: join(diagnosis, "report.json") };
@@ -236,7 +239,9 @@ async function executeBatch(options, plan, output, parent) {
       break;
     }
   }
-  const scoring = await gradeBatch(options, output, hostPaths);
+  const admissionPath = join(output, "admission.json");
+  await save(admissionPath, { schemaVersion: 1, profile: options.profile, planned: plan.tasks.length, attempts });
+  const scoring = await gradeBatch(options, output, hostPaths, admissionPath);
   const official = scoring.gradeReport ? JSON.parse(await readFile(scoring.gradeReport, "utf8")) : undefined;
   const report = { schemaVersion: 1, benchmark: plan.profile.benchmark,
     profile: options.profile, host: options.host, planned: plan.tasks.length, attempted: attempts.length,
