@@ -50,6 +50,7 @@ export function diagnoseBatch(grade, hosts) {
     .sort().map((group) => {
       const items = cases.filter((item) => item.taskGroup === group);
       return [group, { planned: items.length,
+        officialEvaluated: items.filter((item) => ["success", "failure", "partial_match"].includes(item.official.status)).length,
         officialSuccess: items.filter((item) => item.official.status === "success" && item.official.score === 1).length,
         hostTimeout: items.filter((item) => item.classification.code === "host-timeout").length,
         outcomeFailed: items.filter((item) => item.classification.code === "task-outcome-failed").length,
@@ -57,6 +58,7 @@ export function diagnoseBatch(grade, hosts) {
         traceVerified: items.filter((item) => item.host?.toolStatsIntegrity === "verified").length }];
     }));
   return { schemaVersion: 1, planned: grade.summary.planned,
+    officialEvaluated: cases.filter((item) => ["success", "failure", "partial_match"].includes(item.official.status)).length,
     officialSuccess: cases.filter((item) => item.official.status === "success" && item.official.score === 1).length,
     ...(profile ? { profile: profile[0] } : {}),
     classificationCounts: counts,
@@ -113,7 +115,8 @@ function escape(value) {
 
 export function renderDiagnosis(report) {
   const groups = Object.entries(report.capabilityGroups).map(([group, value]) =>
-    `<tr><td>${escape(group)}</td><td>${value.officialSuccess}/${value.planned}</td>`
+    `<tr><td>${escape(group)}</td><td>${value.officialEvaluated ? `${value.officialSuccess}/${value.planned}` : "未评分"}</td>`
+    + `<td>${value.officialEvaluated}/${value.planned}</td>`
     + `<td>${value.hostTimeout}</td><td>${value.outcomeFailed}</td>`
     + `<td>${value.inputRejections}</td><td>${value.traceVerified}/${value.planned}</td></tr>`).join("\n");
   const rows = report.cases.map((item) => `<tr><td>${item.taskId}</td><td>${escape(item.official.status)}</td>`
@@ -124,10 +127,11 @@ export function renderDiagnosis(report) {
     + `<style>body{font:15px system-ui;max-width:1100px;margin:40px auto;padding:0 20px;color:#18212b}`
     + `table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:12px;text-align:left}`
     + `.score{font-size:2rem;font-weight:700}.muted{color:#586470}</style>`
-    + `<h1>基准诊断</h1><p class="score">${report.officialSuccess}/${report.planned} 官方成功</p>`
+    + `<h1>基准诊断</h1><p class="score">${report.officialEvaluated ? `${report.officialSuccess}/${report.planned} 官方成功` : "官方成绩未测量"}</p>`
+    + `<p class="muted">官方已评判 ${report.officialEvaluated}/${report.planned}；未运行题目仍留在固定分母。</p>`
     + `<p class="muted">${report.friction.inputRejections} 次工具入参拒绝；失败类别表示观察到的阶段，根因须复核证据并重复运行。</p>`
     + `<h2>任务能力组</h2><p class="muted">按预先固定的任务意图分组；低分是调查线索，不等于已确认的框架根因。</p>`
-    + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>宿主超时</th><th>结果失败</th><th>入参拒绝</th><th>已核验轨迹</th></tr></thead>`
+    + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>已评判/计划</th><th>宿主超时</th><th>结果失败</th><th>入参拒绝</th><th>已核验轨迹</th></tr></thead>`
     + `<tbody>${groups}</tbody></table><h2>逐题诊断</h2>`
     + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>观察类别</th><th>工具失败/总数</th><th>下一步核查</th></tr></thead>`
     + `<tbody>${rows}</tbody></table></html>`;

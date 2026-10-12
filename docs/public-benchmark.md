@@ -13,7 +13,7 @@
 | 检查 | 实际结果 | 能证明什么 |
 | --- | --- | --- |
 | 官方评判对照 | 7/7 符合预期 | 官方接口能接受正确读取/导航，拒绝错误答案、错误路径和 HTTP 500；空 HAR 返回 error |
-| 基准回归 | 20/20 通过，包括官方 Python 集成测试和诊断工具 | 缺失任务不被丢弃，畸形输入为 error，篡改任务被阻断，历史结果不被覆盖 |
+| 基准回归 | 23/23 通过，包括官方 Python 集成测试、批次重置准入/互斥和诊断工具 | 缺失任务不被丢弃，畸形输入为 error，篡改任务被阻断，历史结果不被覆盖；无提交时成绩显示未测量 |
 | 固定任务批次 | `pilot-12` 十二题；`shopping-admin-4` 四题 | 四题子集独立计分，不能外推为十二题或全量成绩 |
 | 官方单站点 | D 盘 WSL Docker 中固定摘要的 `shopping_admin`；每题重建容器 | 数据库探针在重建后恢复为 0；`/admin` 和控制接口可达，真实 Chrome 免登录进入仪表盘 |
 | 四题真实执行 | 4 题均启动宿主；3 题提交并官方评判，2 成功、1 失败；另 1 题超时 | 官方合并报告按固定分母为 2/4；宿主失败须与官方缺失提交一起阅读 |
@@ -249,7 +249,20 @@ pnpm benchmark:webarena:run-host --session D:/bench/operator-157.json --batch D:
 
 Codex 宿主需使用已登录、保留模型提供方配置的隔离 `CODEX_HOME`。入口先枚举可见 MCP；若另有已启用的 MCP 则在启动前拒绝，以免模型偏离基准专用工具。它仅将该题 allowlist 公开指令交给宿主，保存完整 JSONL，运行宿主轨迹和持久证据审计；只有关联通过，才将按摘要再次核验的响应/HAR 放进 `submissions/<taskId>/`，供独立的 `grade` 命令读取。失败、超时或没有最终提交的宿主不会生成可评判提交。`host-run.json` 始终标记 `officialScore: not-run`，官方判分须另行执行。当前四题实测中，任务 0 的宿主超时会在官方导入报告里显示为缺失提交，必须连同宿主报告一起统计。
 
-当前本机仅证明三份真实宿主轨迹与文件一致。它不负责站点部署或重置，也不构成系统级答案隔离：同一账户仍可能读取上游标准答案。正式可信评测须让 Agent 宿主运行在只含公开输入的独立账户或容器，评判器和完整上游数据留在另一个信任域；并记录模型用量、失败尝试与重复运行稳定性。
+四题早期批次中三份真实宿主轨迹与提交文件关联成功，另一份超时未提交。单题入口不负责站点部署或重置，也不构成系统级答案隔离：同一账户仍可能读取上游标准答案。正式可信评测须让 Agent 宿主运行在只含公开输入的独立账户或容器，评判器和完整上游数据留在另一个信任域；并记录模型用量、失败尝试与重复运行稳定性。
+
+### 固定单站点批次执行
+
+`benchmark:webarena:batch` 支持 `shopping-admin-4` 与 `shopping-admin-12`。先用 `plan` 只读核验已准备批次、上游提交/数据哈希和本地路径；`run` 只接受一个新的外部输出目录。下例的参数可分别用于 `plan` 或 `run`：
+
+```powershell
+pnpm benchmark:webarena:batch plan --profile shopping-admin-12 --batch D:/bench/pilot-admin12-20261012 --config D:/bench/environment-admin4.json --upstream D:/bench/webarena-verified --python D:/bench/evaluator/Scripts/python.exe --chrome 'C:/Program Files/Google/Chrome/Application/chrome.exe' --root D:/bench/benchmark-target --workspace D:/bench/benchmark-workspace --host claude-code --docker-wsl proofkit-docker
+pnpm benchmark:webarena:batch run --profile shopping-admin-12 --batch D:/bench/pilot-admin12-20261012 --config D:/bench/environment-admin4.json --upstream D:/bench/webarena-verified --python D:/bench/evaluator/Scripts/python.exe --chrome 'C:/Program Files/Google/Chrome/Application/chrome.exe' --root D:/bench/benchmark-target --workspace D:/bench/benchmark-workspace --host claude-code --docker-wsl proofkit-docker --output D:/bench/admin12-batch-new
+```
+
+执行器仅会替换名称、镜像摘要、无挂载及回环端口均吻合的官方商城后台容器；每题新建容器，并核验新的容器 ID、固定数据库标记为零、站点控制接口和真实 Chrome 的后台仪表盘。同一 Docker 实例的批次使用临时互斥锁；若进程异常退出后留下锁，先核对锁内 PID 和容器状态，再由操作员处理。每次宿主执行保留独立 operator、HAR、轨迹和提交；全部任务结束后按固定分母运行上游官方评判并生成能力组诊断。若宿主认证或基础设施阻断，会停止后续题目并保留未运行状态。官方评判只读取已封存的提交答案和 HAR，因此可在逐题重建后统一评判。此工具仍依赖有效的宿主认证和独立答案隔离，不能单独认证 Agent 成绩。
+
+2026-10-13 的真实批次演练见 `D:/bench/admin12-batch-run-20261013-002/`：任务 0 前重建和 Chrome 登录检查通过；Claude Code 在首次 MCP 调用前认证失败，执行器停止，12 题均未提交，`officialSuccess: null`、官方成功率未测量。互斥锁已释放，诊断页明确显示“官方成绩未测量”。这验证批次的重置、阻断保留和报告链路，不构成十二题 Agent 成绩。
 
 将官方 `grade` 报告和每题 `host-run.json` 合并为观察阶段诊断，可运行：
 
