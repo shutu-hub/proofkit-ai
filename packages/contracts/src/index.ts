@@ -1025,6 +1025,14 @@ export const IntegrationReadinessInputSchema = z.object({
   charterId: CatalogIdSchema,
 }).strict();
 export type IntegrationReadinessInput = z.input<typeof IntegrationReadinessInputSchema>;
+export const IntegrationReadinessCheckSchema = IntegrationCheckResultSchema.extend({
+  message: z.string().min(1).max(1024),
+  evidence: z.record(z.union([z.string().max(1024), z.number().finite(), z.boolean(), z.null()])).default({}),
+  issues: z.array(z.object({ code: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), guidance: z.string().min(1).max(240) }).strict()).max(32).optional(),
+}).refine((check) => Object.keys(check.evidence).length <= 32
+  && Object.entries(check.evidence).every(([key, value]) => key.length <= 128 && (typeof value !== "string" || value.length <= 1024)),
+"Connector readiness check exceeds output limits");
+export type IntegrationReadinessCheck = z.infer<typeof IntegrationReadinessCheckSchema>;
 export const IntegrationReadinessSchema = z.object({
   schemaVersion: z.literal(1),
   testVerdict: z.literal("not-asserted"),
@@ -1036,11 +1044,7 @@ export const IntegrationReadinessSchema = z.object({
   environment: z.enum(["test", "staging", "local"]),
   status: z.enum(["ready", "blocked", "unavailable"]),
   integration: z.object({ name: z.string().min(1).max(128), version: z.string().min(1).max(128).optional() }).optional(),
-  check: IntegrationCheckResultSchema.extend({
-    issues: z.array(z.object({ code: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), guidance: z.string().min(1).max(240) }).strict()).max(32).optional(),
-  }).refine((check) => check.message.length <= 1024 && Object.keys(check.evidence).length <= 32
-    && Object.entries(check.evidence).every(([key, value]) => key.length <= 128 && (typeof value !== "string" || value.length <= 1024)),
-  "Connector readiness check exceeds output limits").optional(),
+  check: IntegrationReadinessCheckSchema.optional(),
   next: z.array(z.string().min(1).max(240)).max(8),
   checkedAt: z.string().datetime(),
 }).strict().superRefine((value, context) => {

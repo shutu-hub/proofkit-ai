@@ -14,6 +14,7 @@ import { captureSourceState, initProject, inspectTargetBinding, inspectWorkflowI
 import { BlockedError, CancelledError, ExecutionRunner, z, type BusinessOracle, type CapabilityDefinition, type IntegrationPreflight, type IntegrationSetup, type ProjectIntegration, type SurfaceAdapter } from "@proofkit/runner";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { loadProjectIntegration } from "./integration.js";
+import { readinessCredentialValues, sanitizeReadinessCheck } from "./integration-readiness.js";
 import { auditComparisonCurrentSource, compareMissionRecords } from "./mission-comparison.js";
 import { analyzeMissionStability as analyzeMissionStabilityRecords } from "./mission-stability.js";
 import { MissionRepeatSeriesService } from "./mission-repeat-series.js";
@@ -273,6 +274,7 @@ export class LocalRunnerService {
   }
 
   async inspectIntegrationReadiness(input: { charterId: string }, signal?: AbortSignal): Promise<IntegrationReadiness> {
+    signal?.throwIfAborted();
     const request = IntegrationReadinessInputSchema.parse(input);
     const entry = this.config.charters.find((charter) => charter.id === request.charterId);
     if (!entry) throw new Error(`Unknown Charter: ${request.charterId}`);
@@ -293,7 +295,6 @@ export class LocalRunnerService {
       ...base, status: "unavailable", integration: this.integration ? { name: this.integration.name, version: this.integration.version } : undefined,
       next: ["Configure a connector that declares a read-only readiness check before running this Charter."],
     });
-    signal?.throwIfAborted();
     const controller = new AbortController();
     const onAbort = () => controller.abort(signal?.reason);
     signal?.addEventListener("abort", onAbort, { once: true });
@@ -301,6 +302,7 @@ export class LocalRunnerService {
     const deadline = setTimeout(() => controller.abort(new Error("Connector readiness exceeded 15 seconds")), 15_000);
     let removeAbortListener = () => {};
     try {
+      const credentials = readinessCredentialValues();
       const operation = this.integration.readiness({
         charter, environment: this.config.policies.environment, projectRoot: this.root,
         workspaceRoot: this.workspaceRoot, signal: controller.signal,
@@ -311,7 +313,7 @@ export class LocalRunnerService {
         removeAbortListener = () => controller.signal.removeEventListener("abort", rejectAbort);
         if (controller.signal.aborted) rejectAbort();
       });
-      const checked = this.sanitizeReadinessCheck(await Promise.race([operation, aborted]));
+      const checked = sanitizeReadinessCheck(await Promise.race([operation, aborted]), [...credentials, ...readinessCredentialValues()]);
       return IntegrationReadinessSchema.parse({
         ...base, status: checked.passed ? "ready" : "blocked",
         integration: { name: this.integration.name, version: this.integration.version },
@@ -329,15 +331,6 @@ export class LocalRunnerService {
       removeAbortListener();
       signal?.removeEventListener("abort", onAbort);
     }
-  }
-
-  private sanitizeReadinessCheck(check: Awaited<ReturnType<NonNullable<ProjectIntegration["readiness"]>>>): NonNullable<IntegrationReadiness["check"]> {
-    const secrets = Object.values(process.env).filter((value): value is string => Boolean(value && value.length >= 8));
-    const scrub = (value: string): string => secrets.reduce((current, secret) => current.includes(secret) ? current.replaceAll(secret, "[REDACTED]") : current, value).slice(0, 1024);
-    const evidence = Object.fromEntries(Object.entries(check.evidence ?? {}).map(([key, value]) => [key,
-      typeof value === "string" ? scrub(value) : value]));
-    return { ...check, message: scrub(check.message), evidence,
-      issues: check.issues?.map((issue) => ({ code: issue.code, guidance: scrub(issue.guidance).slice(0, 240) })) };
   }
 
   async inspectEnvironment(input: EnvironmentInspectionInput = {}, signal?: AbortSignal): Promise<EnvironmentInspection & { artifact: { path: string; sha256: string } }> {
