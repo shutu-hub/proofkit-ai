@@ -55,6 +55,8 @@ webarena-verified env start --site gitlab
 
 官方优化镜像分别为 `am1n3e/webarena-verified-shopping_admin`、`am1n3e/webarena-verified-shopping`、`am1n3e/webarena-verified-reddit`、`am1n3e/webarena-verified-gitlab`；上游文档标注的镜像大小约为 2.9、13.3、8.41、31.6 GB，GitLab 建议至少 4 GB RAM。可以按站点依次启动，但仍须预留镜像解包、站点数据和 HAR 空间。每次拉取后记录 `docker image inspect <镜像> --format '{{json .RepoDigests}}'` 的 digest，并在任务记录中固定实际 digest；仅记录可变 tag 不够。远程容器的应用和控制端口通过 SSH 隧道映射到本地回环地址，再运行下方 `probe`。不要把控制端口或原始 HAR 暴露给任务 Agent。
 
+**设备规划（我们的建议，不是上游保证值）：**单站点顺序跑完整 pilot，使用 Linux x86_64、4 vCPU、16 GB RAM 和至少 120 GB 空闲 SSD；若四站点同时常驻，建议 8 vCPU、32 GB RAM、200 GB 空闲 SSD。前者已经把四镜像约 56 GB 的标称体积、Docker 解包/数据、浏览器、任务证据及重建余量算入；仍须在实际镜像拉取后核对占用。ProofKit 控制器还需 Node.js 22+、Chrome/Chromium，官方判分侧需 Python 3.11+。无需 GPU。只跑一个较轻的站点可降低起步需求，但不能据此宣称 12 题 pilot 已完成。
+
 **任务前初态不能只凭 `/status` 判定。** 固定上游源码的控制服务仅实现 `POST /init`、`/start`、`/stop`、`/restart` 和 `GET /status`；文档示例中的 `POST /reset` 在该提交里没有路由。上游 `env stop` 会删除容器，`env start` 会新建容器；四个 pilot 站点的默认配置没有外部数据卷。这是可实验的重建路径，尚未在实际镜像上验证数据回到初态。正式执行前应在**独立测试副本**做一次可观察的状态变化，重建容器后由独立读数确认变化消失，并记录容器 ID、镜像 digest、起止时间与健康状态。每道修改类任务都须重建并核验初态；任何恢复失败的题只能标为环境阻断，不能计分。
 
 当前电脑没有 Docker；WSL 根文件系统只有约 16 GiB 空间，物理内存仅约 1.4 GiB 可用，无法在此完成四站点 pilot。正式执行需要独立测试机。此资源观察不影响固定任务和官方评判器的本地协议验证，但**正式 WebArena 任务仍是 0/12**。
