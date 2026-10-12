@@ -424,6 +424,17 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     expect(scope.testVerdict).toBe("not-asserted");
   });
 
+  it("returns bounded source text matches and avoids an unresolved-source gap without implying coverage", async () => {
+    const { runner } = await fixture();
+    await writeFile(join(runner.root, "apps", "web", "src", "resume-copy.ts"), "// 简历获取 UI label\nconst label = 'ready';\n");
+    const scope = await runner.inspectTestScope({ level: "core", surface: "web", focus: "简历获取", limit: 1 });
+    expect(scope.inventory.sourceTextMatches).toEqual({ total: 1, items: [{ source: "apps/web/src/resume-copy.ts", line: 1 }], omitted: 0 });
+    expect(scope.planningReadiness?.gaps).not.toContainEqual(expect.objectContaining({ code: "source-focus-unresolved" }));
+    expect(scope.limitations).toContainEqual(expect.stringContaining("may come from comments or string literals"));
+    expect(scope.testVerdict).toBe("not-asserted");
+    expect(JSON.stringify(scope.inventory.sourceTextMatches)).not.toContain("简历获取");
+  });
+
   it("leaves catalog readiness unverified when the response limit hides compatible plans", async () => {
     const { runner } = await fixture();
     runner.config.charters.push({ id: "a-invalid-core", path: "charters/missing.yml", aliases: ["简历"],

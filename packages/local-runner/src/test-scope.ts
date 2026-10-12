@@ -70,6 +70,14 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const oracleMatches = allOracles.filter((item) => matches(item.name));
   const workspaceCandidates = await inspectWorkspaceCandidates(context, request.focus, limit, requiredSurfaces);
   const { entryPoints: _entries, routeHints: _routes, ...inventory } = project.inventory;
+  const scopedInventory = inventory.sourceTextMatches ? {
+    ...inventory,
+    sourceTextMatches: {
+      total: inventory.sourceTextMatches.total,
+      items: inventory.sourceTextMatches.items.slice(0, limit),
+      omitted: Math.max(0, inventory.sourceTextMatches.total - Math.min(limit, inventory.sourceTextMatches.items.length)),
+    },
+  } : inventory;
   const limitations = [
     "Target configuration is a read-only declaration check; endpoint reachability, process ownership, login and business readiness require separate inspection or execution",
     "Static route-shaped literals and conventional entry points are candidate hints; no execution coverage or product verdict is calculated",
@@ -85,6 +93,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   if (inventory.truncationReasons?.includes("route-hint-cap")) limitations.push("The route-hint result cap was reached; focus on a narrower module or add reviewed route declarations");
   if (inventory.routeDiagnostics?.total) limitations.push(`${inventory.routeDiagnostics.total} Gin route declarations could not be resolved statically; diagnostic locations are hints, not executable route paths`);
   if (focus) limitations.push("Focus is a literal substring filter; the focused view is not whole-project coverage");
+  if (inventory.sourceTextMatches?.total) limitations.push("Source text matches are bounded path/line hints and may come from comments or string literals; they do not prove code ownership, execution coverage or business behavior");
   if (inventory.retentionFocus) limitations.push("Focus prioritizes matching source files, entry points and routes before inventory retention caps; totals describe the retained candidate slice, not all project routes");
   if (inventory.retentionFocus && inventory.truncated) limitations.push("File discovery and source reads remain bounded; route-text focus cannot recover declarations from unscanned files, and filesystem focus prioritizes only discovered paths");
   if (workspaceCandidates.scanStatus === "partial") limitations.push("Workspace Charter discovery or focus matching is incomplete; directory, file-count, size, read or parsing failures may hide candidates");
@@ -98,7 +107,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const compatibleReady = catalogItems.filter((entry) => entry.check.planReady).length + suiteItems.filter((entry) => entry.check.planReady).length;
   const compatibleMatched = compatibleCharters.length + compatibleSuites.length;
   const compatibleOmitted = compatibleMatched - compatibleChecked;
-  const focusUnresolved = Boolean(focus && !selectedCharters.length && !suites.length && !routes.length && !entries.length && !capabilityMatches.length && !oracleMatches.length && !workspaceCandidates.matched);
+  const focusUnresolved = Boolean(focus && !selectedCharters.length && !suites.length && !routes.length && !entries.length && !capabilityMatches.length && !oracleMatches.length && !workspaceCandidates.matched && !inventory.sourceTextMatches?.total);
   const reviewableCandidate = workspaceCandidates.selection !== "fallback-unmatched"
     && workspaceCandidates.items.some((item) => item.parseStatus === "valid" && item.level === level && item.sha256 && item.issues.length === 0);
   const unresolvedCandidateBinding = workspaceCandidates.selection === "focused"
@@ -134,7 +143,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
     reviewableCandidate
       ? "Review the matching Charter and source flow; then pass its exact relative path and SHA-256 to run_test, or register it. Discovery is not execution approval."
       : "External workspace contains unregistered Charter candidates; inspect their level and structural issues before authoring or registering a plan.");
-  if (!compatibleReady && focus && !routes.length && !entries.length) gap("source-focus-unresolved", [],
+  if (!compatibleReady && focus && !routes.length && !entries.length && !inventory.sourceTextMatches?.total) gap("source-focus-unresolved", [],
     "The literal focus matched no retained source entry or route; inspect the owning paths or try a source-language term before claiming absence.");
   if (!compatibleReady && getTestLevelProfile(level).evidencePolicy.requireBusinessOracle) {
     if (!allOracles.length) gap("no-registered-oracle", [],
@@ -150,7 +159,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   return TestScopeSchema.parse({
     schemaVersion: 1, testVerdict: "not-asserted", executionChecks: "not-run",
     projectRoot: project.root, workspaceRoot: context.workspaceRoot, sourceState: context.sourceState, workflowInventory: context.workflowInventory,
-    selection: { ...request, requiredSurfaces }, inventory,
+    selection: { ...request, requiredSurfaces }, inventory: scopedInventory,
     entryPoints: { total: project.inventory.entryPoints.length, matched: entries.length, items: entries.slice(0, limit), omitted: Math.max(0, entries.length - limit) },
     routes: {
       total: mapping.routes.length, matched: routes.length, declaredTargets: mapping.declaredTargets,

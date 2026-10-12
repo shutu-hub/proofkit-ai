@@ -99,4 +99,15 @@ describe("focused project inventory", () => {
   it.each([" ", "x".repeat(129)])("rejects invalid normalized focus rather than implying a scoped scan", async (focus) => {
     await expect(scanProject(await fixture(), { focus })).rejects.toThrow("Inventory focus");
   });
+
+  it("returns bounded source text locations without returning the matching source text or test files", async () => {
+    const root = await fixture();
+    await mkdir(join(root, "src"), { recursive: true });
+    await mkdir(join(root, "tests"), { recursive: true });
+    await writeFile(join(root, "src", "resume.ts"), "const label = '简历获取';\nconst second = '简历获取';\n");
+    await writeFile(join(root, "tests", "resume.test.ts"), "const label = '简历获取';\n");
+    const focused = await scanProject(root, { focus: "简历获取" });
+    expect(focused.inventory.sourceTextMatches).toEqual({ total: 1, items: [{ source: "src/resume.ts", line: 1 }], omitted: 0 });
+    expect(JSON.stringify(focused.inventory.sourceTextMatches)).not.toContain("简历获取");
+  });
 });

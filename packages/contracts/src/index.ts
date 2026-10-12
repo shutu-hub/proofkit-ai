@@ -617,6 +617,15 @@ export const ProjectMapSchema = z.object({
       items: z.array(RouteDiscoveryDiagnosticSchema).max(20),
       omitted: z.number().int().nonnegative(),
     }).optional(),
+    /** One bounded path/line hint per matching source file; no source text is returned. */
+    sourceTextMatches: z.object({
+      total: z.number().int().nonnegative(),
+      items: z.array(z.object({
+        source: z.string().min(1).max(512).refine((value) => !value.startsWith("/") && !value.includes("\\") && !value.split("/").includes("..")),
+        line: z.number().int().positive(),
+      })).max(50),
+      omitted: z.number().int().nonnegative(),
+    }).optional(),
     /** Literal focus prioritizes retention before inventory caps; it is not semantic coverage. */
     retentionFocus: z.string().min(1).max(128).optional(),
   }).default({}),

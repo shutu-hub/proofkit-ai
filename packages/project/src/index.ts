@@ -240,6 +240,7 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
   entryPoints: InventoryEntryPoint[];
   routeHints: InventoryRouteHint[];
   routeDiagnostics: NonNullable<ProjectMap["inventory"]["routeDiagnostics"]>;
+  sourceTextMatches?: NonNullable<ProjectMap["inventory"]["sourceTextMatches"]>;
   retentionFocus?: string;
 }> {
   const focus = options.focus?.trim().normalize("NFKC").toLowerCase();
@@ -262,6 +263,13 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
   const diagnostics = new BoundedInventory<Diagnostic>(20,
     (left, right) => Number(sourceMatches(right.source)) - Number(sourceMatches(left.source)) || inventoryPriority(right.source) - inventoryPriority(left.source) || left.source.localeCompare(right.source) || left.line - right.line,
     (item) => `${item.source}:${item.line}:${item.reason}`);
+  type SourceTextMatch = NonNullable<ProjectMap["inventory"]["sourceTextMatches"]>["items"][number];
+  const textMatches = focus ? new BoundedInventory<SourceTextMatch>(50,
+    (left, right) => Number(sourceMatches(right.source)) - Number(sourceMatches(left.source))
+      || inventoryPriority(right.source) - inventoryPriority(left.source)
+      || left.source.localeCompare(right.source),
+    (item) => item.source) : undefined;
+  let textMatchTotal = 0;
   let diagnosticTotal = 0;
   let filesScanned = 0;
   const truncationReasons = new Set<NonNullable<ProjectMap["inventory"]["truncationReasons"]>[number]>();
@@ -318,7 +326,11 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
       sourceFiles += 1;
       const kind = classifyEntry(path);
       if (kind) addEntry({ kind, path, reason: "conventional entry point" });
-      if (!isTestFile(path) && !(await readRouteHints(absolute, path, addRoute, addDiagnostic))) truncationReasons.add("source-read-incomplete");
+      if (!isTestFile(path) && !(await readRouteHints(absolute, path, addRoute, addDiagnostic, focus, (line) => {
+        textMatchTotal++;
+        if (path.length > 512) truncationReasons.add("source-read-incomplete");
+        else textMatches?.add({ source: path, line });
+      }))) truncationReasons.add("source-read-incomplete");
     } else if (CONFIG_EXTENSIONS.has(extension) || /(^|\/)Dockerfile[^/]*$|\.env(?:\.|$)/i.test(path)) {
       configFiles += 1;
     }
@@ -344,6 +356,8 @@ async function scanInventory(root: string, rootScripts: Record<string, string>, 
     entryPoints: entries.items,
     routeHints: routes.items,
     routeDiagnostics: { total: diagnosticTotal, items: diagnostics.items, omitted: Math.max(0, diagnosticTotal - diagnostics.items.length) },
+    ...(focus ? { sourceTextMatches: { total: textMatchTotal, items: textMatches!.items,
+      omitted: Math.max(0, textMatchTotal - textMatches!.items.length) } } : {}),
     ...(focus ? { retentionFocus: focus } : {}),
   };
 }
@@ -404,13 +418,24 @@ function shouldIncludeInventoryPath(path: string): boolean {
   return directories.every((directory) => !directory.startsWith(".") && !IGNORED_DIRECTORIES.has(directory.toLowerCase()));
 }
 
-async function readRouteHints(path: string, source: string, add: (route: InventoryRouteHint) => void, diagnose: (diagnostic: NonNullable<ProjectMap["inventory"]["routeDiagnostics"]>["items"][number]) => void): Promise<boolean> {
+async function readRouteHints(path: string, source: string, add: (route: InventoryRouteHint) => void,
+  diagnose: (diagnostic: NonNullable<ProjectMap["inventory"]["routeDiagnostics"]>["items"][number]) => void,
+  focus?: string, addTextMatch?: (line: number) => void): Promise<boolean> {
   let content: string;
   try {
     const metadata = await stat(path);
     if (metadata.size > MAX_SOURCE_BYTES) return false;
     content = await readFile(path, "utf8");
   } catch { return false; }
+  if (focus && addTextMatch) {
+    const normalized = content.normalize("NFKC").toLowerCase();
+    const offset = normalized.indexOf(focus);
+    if (offset >= 0) {
+      let line = 1;
+      for (let index = 0; index < offset; index++) if (normalized.charCodeAt(index) === 10) line++;
+      addTextMatch(line);
+    }
+  }
   if (extname(source) === ".go") {
     const gin = extractGinRoutes(content, source);
     if (gin) {
