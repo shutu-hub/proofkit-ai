@@ -52,6 +52,10 @@ test("task design audit rejects missing action evidence and mismatched task grou
   assert.throws(() => auditProfileTasks(dataset.map((task) => task.task_id === 157
     ? { ...task, eval: [{ ...task.eval[0], expected: { task_type: "retrieve" } }, task.eval[1]] } : task),
   "shopping-admin-4"), /matching answer evaluator/);
+  const suspicious = dataset.map((task) => task.task_id === 423
+    ? { ...task, eval: [task.eval[0], { ...task.eval[1], expected: { post_data: { field: "value" } } }] } : task);
+  assert.deepEqual(auditProfileTasks(suspicious, "shopping-admin-4").rubricFlags,
+    [{ taskId: 423, code: "request-body-without-write-method" }]);
 });
 
 test("missing/error tasks retain the planned denominator; partial matches do not pass", () => {

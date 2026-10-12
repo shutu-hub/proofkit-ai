@@ -61,6 +61,7 @@ export function auditProfileTasks(dataset, name) {
   if (groups.size !== tasks.length) throw new Error(`Incomplete task groups in ${name}`);
   const templates = new Set();
   const evaluatorCounts = { agentResponse: 0, networkEvent: 0 };
+  const rubricFlags = [];
   for (const task of tasks) {
     const group = groups.get(task.task_id);
     const agent = task.eval.filter((entry) => entry.evaluator === "AgentResponseEvaluator");
@@ -70,6 +71,11 @@ export function auditProfileTasks(dataset, name) {
     evaluatorCounts.agentResponse += 1;
     const network = task.eval.filter((entry) => entry.evaluator === "NetworkEventEvaluator");
     evaluatorCounts.networkEvent += network.length;
+    for (const check of network) {
+      if (check.expected?.post_data && !["POST", "PUT", "PATCH"].includes(String(check.expected.http_method ?? "GET").toUpperCase())) {
+        rubricFlags.push({ taskId: task.task_id, code: "request-body-without-write-method" });
+      }
+    }
     if (group !== "retrieve" && !network.length) {
       throw new Error(`Task ${task.task_id} lacks an action evaluator`);
     }
@@ -86,7 +92,8 @@ export function auditProfileTasks(dataset, name) {
   }
   return { planned: tasks.length, groups: Object.fromEntries(Object.entries(profile.taskGroups)
     .map(([group, ids]) => [group, ids.length])), distinctIntentTemplates: templates.size || null,
-    evaluatorCounts, rubricCalibration: "pending-live-controls" };
+    evaluatorCounts, rubricFlags,
+    rubricCalibration: rubricFlags.length ? "review-required" : "pending-live-controls" };
 }
 
 export function scorecard(mode, planned, cases) {

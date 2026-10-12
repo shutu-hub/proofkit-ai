@@ -6,10 +6,50 @@ import { benchmarkProfiles } from "./webarena-benchmark-lib.mjs";
 
 const MAX_REPORT_BYTES = 1024 * 1024;
 const MAX_EVENTS_BYTES = 16 * 1024 * 1024;
+const MAX_OFFICIAL_BYTES = 16 * 1024 * 1024;
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
+/** Keep only pass/fail signals; upstream actual, expected and assertion text stay in the trusted grade directory. */
+export function summarizeOfficialChecks(official, grade) {
+  if (!official || !Array.isArray(official.results) || !Array.isArray(grade?.cases)) {
+    throw new Error("Invalid official evaluator details");
+  }
+  const graded = new Map(grade.cases.map((item) => [item.taskId, item]));
+  if (graded.size !== grade.cases.length) throw new Error("Duplicate graded task");
+  const checks = new Map();
+  for (const entry of official.results) {
+    const taskId = Number(entry?.caseId);
+    const result = entry?.result;
+    const item = graded.get(taskId);
+    if (!Number.isSafeInteger(taskId) || String(taskId) !== entry.caseId || checks.has(taskId)
+      || !item || result?.task_id !== taskId || result.status !== item.status || result.score !== item.score
+      || !["success", "failure", "partial_match", "error"].includes(item.status)
+      || !Array.isArray(result.evaluators_results)) {
+      throw new Error("Official evaluator details conflict with the graded batch");
+    }
+    const answer = result.evaluators_results.filter((check) => check?.evaluator_name === "AgentResponseEvaluator");
+    const network = result.evaluators_results.filter((check) => check?.evaluator_name === "NetworkEventEvaluator");
+    if (answer.length !== 1 || answer.length + network.length !== result.evaluators_results.length
+      || [...answer, ...network].some((check) =>
+      !["success", "failure", "partial_match", "error"].includes(check.status))) {
+      throw new Error(`Invalid evaluator checks for task ${taskId}`);
+    }
+    checks.set(taskId, {
+      answer: answer[0].status,
+      network: { passed: network.filter((check) => check.status === "success").length,
+        failed: network.filter((check) => ["failure", "partial_match"].includes(check.status)).length,
+        errors: network.filter((check) => check.status === "error").length },
+      missingNetworkEvent: network.some((check) => check.assertions?.some((assertion) =>
+        assertion?.assertion_name === "missing_navigation_event" && assertion.status === "failure")),
+    });
+  }
+  if (grade.cases.some((item) => ["success", "failure", "partial_match"].includes(item.status)
+    && !checks.has(item.taskId))) throw new Error("Official evaluator details omit a scored task");
+  return checks;
+}
+
 /** Separate the observed failure stage from its unproven root cause. */
-export function diagnoseBatch(grade, hosts) {
+export function diagnoseBatch(grade, hosts, officialChecks = new Map()) {
   if (!grade || !Array.isArray(grade.cases) || !Number.isSafeInteger(grade.summary?.planned)
     || grade.summary.planned !== grade.cases.length || !Array.isArray(hosts)) {
     throw new Error("Invalid fixed-denominator benchmark report");
@@ -30,11 +70,12 @@ export function diagnoseBatch(grade, hosts) {
     if (!Number.isSafeInteger(item?.taskId) || seen.has(item.taskId)) throw new Error("Duplicate or invalid graded task");
     seen.add(item.taskId);
     const host = hostByTask.get(item.taskId);
-    const classification = classify(item, host);
+    const checks = officialChecks.get(item.taskId) ?? null;
+    const classification = classify(item, host, checks);
     return {
       taskId: item.taskId,
       taskGroup: taskGroup.get(item.taskId) ?? "unclassified",
-      official: { status: item.status, score: item.score ?? null },
+      official: { status: item.status, score: item.score ?? null, checks },
       host: host ? { status: host.status, durationMs: host.execution?.durationMs ?? null,
         timedOut: host.execution?.timedOut ?? false, blocker: host.execution?.blocker ?? null,
         toolCalls: host.toolStats?.completed ?? null, failedToolCalls: host.toolStats?.failed ?? null,
@@ -53,13 +94,18 @@ export function diagnoseBatch(grade, hosts) {
         officialEvaluated: items.filter((item) => ["success", "failure", "partial_match"].includes(item.official.status)).length,
         officialSuccess: items.filter((item) => item.official.status === "success" && item.official.score === 1).length,
         hostTimeout: items.filter((item) => item.classification.code === "host-timeout").length,
-        outcomeFailed: items.filter((item) => item.classification.code === "task-outcome-failed").length,
+        outcomeFailed: items.filter((item) => ["failure", "partial_match"].includes(item.official.status)).length,
+        answerCheckFailed: items.filter((item) => ["failure", "partial_match"].includes(item.official.checks?.answer)).length,
+        networkCheckFailed: items.filter((item) => (item.official.checks?.network.failed ?? 0) > 0).length,
+        missingNetworkEvent: items.filter((item) => item.official.checks?.missingNetworkEvent).length,
         inputRejections: items.reduce((sum, item) => sum + (item.host?.inputRejections ?? 0), 0),
         traceVerified: items.filter((item) => item.host?.toolStatsIntegrity === "verified").length }];
     }));
   return { schemaVersion: 1, planned: grade.summary.planned,
     officialEvaluated: cases.filter((item) => ["success", "failure", "partial_match"].includes(item.official.status)).length,
     officialSuccess: cases.filter((item) => item.official.status === "success" && item.official.score === 1).length,
+    officialDetailCoverage: { available: cases.filter((item) => item.official.checks !== null).length,
+      evaluated: cases.filter((item) => ["success", "failure", "partial_match"].includes(item.official.status)).length },
     ...(profile ? { profile: profile[0] } : {}),
     classificationCounts: counts,
     capabilityGroups,
@@ -71,7 +117,7 @@ export function diagnoseBatch(grade, hosts) {
     interpretation: "Observed stage only. Product, model, tool and evaluator root causes require evidence review and controlled rerun." };
 }
 
-function classify(grade, host) {
+function classify(grade, host, checks) {
   const result = (code, stage, nextCheck) => ({ code, stage, rootCause: "unconfirmed", nextCheck });
   if (!host) return result("no-host-record", "admission", "Locate the task attempt or run it with a recorded host session.");
   if (host.toolStatsIntegrity === "changed") return result("trace-integrity-gap", "evidence", "Verify the saved host JSONL against its recorded SHA-256 before attribution.");
@@ -84,6 +130,12 @@ function classify(grade, host) {
     return result("evaluation-gap", "evaluator", "Check staged response/HAR and official evaluator diagnostics.");
   }
   if (grade.status === "success" && grade.score === 1) return result("passed", "complete", "Repeat under the same pinned environment to measure stability.");
+  if (checks?.missingNetworkEvent) return result("network-evidence-missing", "network-evidence",
+    "Inspect the browser action trace and HAR against the official network requirement; verify the rubric before assigning blame.");
+  if (["failure", "partial_match"].includes(checks?.answer)
+    && checks?.network.failed === 0 && checks.network.errors === 0) {
+    return result("answer-check-failed", "answer", "Compare the submitted answer with observed page and independent state; inspect the official answer schema.");
+  }
   return result("task-outcome-failed", "task-or-evaluator", "Compare browser actions and independent state with the official rubric; inspect rubric quality before assigning blame.");
 }
 
@@ -117,10 +169,11 @@ export function renderDiagnosis(report) {
   const groups = Object.entries(report.capabilityGroups).map(([group, value]) =>
     `<tr><td>${escape(group)}</td><td>${value.officialEvaluated ? `${value.officialSuccess}/${value.planned}` : "未评分"}</td>`
     + `<td>${value.officialEvaluated}/${value.planned}</td>`
-    + `<td>${value.hostTimeout}</td><td>${value.outcomeFailed}</td>`
+    + `<td>${value.hostTimeout}</td><td>${value.outcomeFailed}</td><td>${value.answerCheckFailed}</td><td>${value.networkCheckFailed}</td>`
     + `<td>${value.inputRejections}</td><td>${value.traceVerified}/${value.planned}</td></tr>`).join("\n");
   const rows = report.cases.map((item) => `<tr><td>${item.taskId}</td><td>${escape(item.official.status)}</td>`
     + `<td>${escape(item.host?.status ?? "missing")}</td><td>${escape(item.classification.code)}</td>`
+    + `<td>${escape(item.official.checks?.answer ?? "—")}</td><td>${item.official.checks ? `${item.official.checks.network.passed}/${item.official.checks.network.failed}/${item.official.checks.network.errors}` : "—"}</td>`
     + `<td>${item.host?.failedToolCalls ?? "—"}/${item.host?.toolCalls ?? "—"}</td>`
     + `<td>${escape(item.classification.nextCheck)}</td></tr>`).join("\n");
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>ProofKit 基准诊断</title>`
@@ -129,11 +182,12 @@ export function renderDiagnosis(report) {
     + `.score{font-size:2rem;font-weight:700}.muted{color:#586470}</style>`
     + `<h1>基准诊断</h1><p class="score">${report.officialEvaluated ? `${report.officialSuccess}/${report.planned} 官方成功` : "官方成绩未测量"}</p>`
     + `<p class="muted">官方已评判 ${report.officialEvaluated}/${report.planned}；未运行题目仍留在固定分母。</p>`
+    + `<p class="muted">官方子评判可用 ${report.officialDetailCoverage.available}/${report.officialDetailCoverage.evaluated}；仅保留状态，不复制答案和请求内容。</p>`
     + `<p class="muted">${report.friction.inputRejections} 次工具入参拒绝；失败类别表示观察到的阶段，根因须复核证据并重复运行。</p>`
     + `<h2>任务能力组</h2><p class="muted">按预先固定的任务意图分组；低分是调查线索，不等于已确认的框架根因。</p>`
-    + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>已评判/计划</th><th>宿主超时</th><th>结果失败</th><th>入参拒绝</th><th>已核验轨迹</th></tr></thead>`
+    + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>已评判/计划</th><th>宿主超时</th><th>结果失败</th><th>回答判分失败</th><th>网络判分失败</th><th>入参拒绝</th><th>已核验轨迹</th></tr></thead>`
     + `<tbody>${groups}</tbody></table><h2>逐题诊断</h2>`
-    + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>观察类别</th><th>工具失败/总数</th><th>下一步核查</th></tr></thead>`
+    + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>观察类别</th><th>回答判分</th><th>网络通过/失败/错误</th><th>工具失败/总数</th><th>下一步核查</th></tr></thead>`
     + `<tbody>${rows}</tbody></table></html>`;
 }
 
@@ -167,6 +221,16 @@ async function main() {
     throw new Error("Usage: node scripts/webarena-diagnose.mjs --grade <absolute-report.json> --host <absolute-host-run.json> [--host ...] --output <new-absolute-directory>");
   }
   const gradeBytes = await bounded(gradePath, MAX_REPORT_BYTES);
+  const grade = JSON.parse(gradeBytes.toString("utf8"));
+  let officialChecks = new Map();
+  let officialDetailsSha256 = null;
+  try {
+    const bytes = await bounded(join(dirname(gradePath), "official-results.json"), MAX_OFFICIAL_BYTES);
+    officialChecks = summarizeOfficialChecks(JSON.parse(bytes.toString("utf8")), grade);
+    officialDetailsSha256 = sha256(bytes);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
   const hosts = [];
   const provenance = { gradeSha256: sha256(gradeBytes), hostReports: [] };
   for (const hostPath of values.get("--host") ?? []) {
@@ -185,7 +249,8 @@ async function main() {
     hosts.push(host);
     provenance.hostReports.push({ taskId: host.taskId, sha256: sha256(bytes) });
   }
-  const report = { ...diagnoseBatch(JSON.parse(gradeBytes.toString("utf8")), hosts), provenance };
+  const report = { ...diagnoseBatch(grade, hosts, officialChecks), provenance: {
+    ...provenance, ...(officialDetailsSha256 ? { officialDetailsSha256 } : {}) } };
   await mkdir(resolve(output));
   await writeFile(join(output, "report.json"), JSON.stringify(report, null, 2) + "\n", { flag: "wx" });
   await writeFile(join(output, "report.html"), renderDiagnosis(report), { flag: "wx" });
