@@ -1944,7 +1944,9 @@ export class LocalRunnerService {
     }
     if ((input.adapter ?? "web") !== "web") throw new Error(`Unsupported adapter: ${input.adapter}`);
     return new WebAdapter({
-      ...(benchmarkHar ? { benchmarkHar } : {}),
+      ...(benchmarkHar ? this.benchmarkCapture?.webTask
+        ? { taskSession: { session: this.benchmarkCapture.webTask, runId: benchmarkHar.runId } }
+        : { benchmarkHar } : {}),
       baseUrl: input.url ?? this.config.surfaces.web?.baseUrl,
       cdpUrl: input.cdp ?? this.config.surfaces.web?.cdpUrl,
       targetUrlPrefix: this.config.surfaces.web?.targetUrlPrefix,

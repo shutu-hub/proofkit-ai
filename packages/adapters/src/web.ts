@@ -6,6 +6,7 @@ import { AmbiguousSurfaceTargetError, InconclusiveError, InvalidFileInputControl
 import { captureActionResponse } from "./response-capture.js";
 import { projectSurfaceUrl, sanitizeSurfaceText } from "./surface-sanitize.js";
 import { BenchmarkHarRecorder, type BenchmarkHarManifest, type BenchmarkHarOptions } from "./benchmark-har.js";
+import type { WebTaskSession } from "./web-task-session.js";
 
 export type WebAdapterOptions = {
   baseUrl?: string;
@@ -25,6 +26,8 @@ export type WebAdapterOptions = {
   screenshotTimeoutMs?: number;
   /** Raw, unsanitized HAR in a new external benchmark directory. No CDP attach. */
   benchmarkHar?: BenchmarkHarOptions;
+  /** Trusted task owner only; a Run must not close or reset its borrowed context. */
+  taskSession?: { session: WebTaskSession; runId: string };
 };
 
 export class WebAdapter implements SurfaceAdapter {
@@ -47,12 +50,16 @@ export class WebAdapter implements SurfaceAdapter {
   private closing?: Promise<void>;
   private benchmarkCaptureStarted = false;
   private harCloseFailure?: "context-close-failed" | "browser-close-failed";
+  private releaseTask?: () => void;
 
   constructor(options: WebAdapterOptions = {}) {
     this.options = options;
   }
 
   async connect(): Promise<void> {
+    if (this.options.taskSession && (this.options.cdpUrl || this.options.benchmarkHar || this.name !== "web")) {
+      throw new Error("Task sessions require Web without CDP or per-Run HAR");
+    }
     if (this.options.benchmarkHar && this.options.cdpUrl) {
       throw new InconclusiveError("benchmark-har-attach-unsupported", "Benchmark HAR requires a new adapter-owned browser context; existing CDP sessions cannot establish capture from task start.");
     }
@@ -72,6 +79,14 @@ export class WebAdapter implements SurfaceAdapter {
   private async connectBrowser(): Promise<void> {
     this.pendingEvents = [];
     this.droppedPendingEvents = 0;
+    if (this.options.taskSession) {
+      const borrowed = await this.options.taskSession.session.acquire(this.options.taskSession.runId);
+      this.browser = borrowed.browser; this.context = borrowed.context; this.activePage = borrowed.page;
+      this.releaseTask = borrowed.release;
+      this.checkConnectOpen();
+      this.attachPageEvents(borrowed.page);
+      return;
+    }
     const { chromium } = await import("playwright-core");
     this.checkConnectOpen();
     if (this.options.benchmarkHar) {
@@ -345,6 +360,7 @@ export class WebAdapter implements SurfaceAdapter {
 
   close(): Promise<void> {
     this.closeRequested = true;
+    if (this.options.taskSession && this.connecting) this.options.taskSession.session.invalidate("connection-interrupted");
     if (this.closing) return this.closing;
     const closing = this.closeBrowser();
     this.closing = closing;
@@ -367,6 +383,10 @@ export class WebAdapter implements SurfaceAdapter {
     this.eventSink = undefined;
     this.pendingEvents = [];
     this.droppedPendingEvents = 0;
+    if (this.options.taskSession) {
+      this.releaseTask?.(); this.releaseTask = undefined;
+      return;
+    }
     let closeError: unknown;
     let closeFailure: "context-close-failed" | "browser-close-failed" | undefined;
     try {

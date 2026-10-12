@@ -3,13 +3,13 @@ import { mkdir, open, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 /** Trusted benchmark callers only; raw HAR includes headers, cookies and bodies. */
-export type BenchmarkHarOptions = { directory: string; runId: string };
+export type BenchmarkHarOptions = { directory: string; runId: string; contextOwner?: "adapter-owned" | "task-owned" };
 
 export type BenchmarkHarManifest = {
   schemaVersion: 1;
   runId: string;
   purpose: "benchmark-raw-har";
-  context: "adapter-owned";
+  context: "adapter-owned" | "task-owned";
   recording: { mode: "full"; content: "embed"; serviceWorkers: "block" };
   status: "recorded" | "unavailable";
   startedAt: string;
@@ -41,7 +41,7 @@ export class BenchmarkHarRecorder {
     this.startedAt = new Date().toISOString();
     await writeFile(join(this.options.directory, "capture-start.json"), JSON.stringify({
       schemaVersion: 1, runId: this.options.runId, purpose: "benchmark-raw-har",
-      context: "adapter-owned", recording: { mode: "full", content: "embed", serviceWorkers: "block" },
+      context: this.options.contextOwner ?? "adapter-owned", recording: { mode: "full", content: "embed", serviceWorkers: "block" },
       status: "not-finalized", startedAt: this.startedAt,
     }, null, 2) + "\n", { flag: "wx" });
   }
@@ -54,7 +54,7 @@ export class BenchmarkHarRecorder {
   private async finalize(closeFailure?: BenchmarkHarManifest["reason"]): Promise<BenchmarkHarManifest> {
     if (!this.startedAt) throw new Error("Benchmark HAR capture was not prepared");
     const manifest: BenchmarkHarManifest = { schemaVersion: 1, runId: this.options.runId,
-      purpose: "benchmark-raw-har", context: "adapter-owned", status: "unavailable",
+      purpose: "benchmark-raw-har", context: this.options.contextOwner ?? "adapter-owned", status: "unavailable",
       recording: { mode: "full", content: "embed", serviceWorkers: "block" },
       startedAt: this.startedAt, endedAt: new Date().toISOString() };
     if (closeFailure) manifest.reason = closeFailure;

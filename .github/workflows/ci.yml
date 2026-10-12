@@ -30,6 +30,10 @@ jobs:
         env:
           PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome
         run: node tests/benchmark-mission-smoke.mjs
+      - name: Verify continuous benchmark task state and final submission
+        env:
+          PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome
+        run: node tests/benchmark-task-session-smoke.mjs
       - name: Verify evidenced host repair hypothesis and direct replay
         env:
           PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome

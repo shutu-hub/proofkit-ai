@@ -43,6 +43,7 @@
     "test:webarena": "node --test tests/webarena-benchmark.test.mjs tests/webarena-official.test.mjs",
     "test:smoke:benchmark-har": "pnpm build && node tests/benchmark-har-smoke.mjs",
     "test:smoke:benchmark-mission": "pnpm build && node tests/benchmark-mission-smoke.mjs",
+    "test:smoke:benchmark-task": "pnpm build && node tests/benchmark-task-session-smoke.mjs",
     "benchmark:host": "pnpm build && node tests/host-evaluation.mjs",
     "benchmark:host:claude": "pnpm build && node tests/host-evaluation.mjs --host claude-code --implicit-skill",
     "benchmark:host:baseline": "pnpm build && node tests/host-evaluation-baseline.mjs",

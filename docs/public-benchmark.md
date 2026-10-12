@@ -20,6 +20,8 @@
 | 官方评判真实 HAR | 3/3 对照符合预期：正确导航 success，500 和未访问目标页 failure | 任务 44 的评判协议能读取实际网络记录；站点为本地 fixture，不计入 WebArena 成绩 |
 | 基准 MCP 与 Mission 关联 | 5 个真实 Chrome 脚本场景通过，含 core primary/negative 和 guided inspection | 内部任务绑定、失败/取消留证、原始 HAR 隔离和篡改拒绝正常；不证明 AI 自主完成任务 |
 | 专用 MCP stdio 入口 | 子进程握手、工具发现与项目发现通过 | 开发入口可由 MCP 客户端启动；未验证宿主 AI 或跨进程来源认证 |
+| 持续任务浏览器 | 本地脚本 fixture 共 5 个 Run，同一 Chrome 上下文完成探索、登录、失败尝试和最终导航；另验证真实取消及 stdio 断开清理 | Cookie、页面及存储状态跨 Mission 延续；最终 HAR 涵盖全部尝试，篡改被审计拒绝；不计入公开任务完成率 |
+| 官方评判持续任务 HAR | 本地 fixture 的任务 44 返回 success | 证明完整任务录制可送入官方评判器；不是官方 GitLab 环境，也不是 AI 自主解题 |
 
 对照中只有任务 108 使用上游已有成功记录；正确导航对照为**合成 HAR**。任务 107 的上游示例响应是 NAVIGATE，而固定数据要求 RETRIEVE，作为过期示例负对照保留。7/7 是评判校准结果，不是 Agent 完成率。
 
@@ -122,17 +124,23 @@ node scripts/webarena-mcp.mjs --session D:/bench/operator.json
   "captureDirectory": "D:/bench/raw-capture-new",
   "taskId": 44,
   "publicInputPath": "D:/bench/pilot-001/agent-input/tasks.json",
-  "publicInputSha256": "<tasks.json 的实际 SHA-256>"
+  "publicInputSha256": "<tasks.json 的实际 SHA-256>",
+  "browser": {
+    "startUrl": "http://127.0.0.1:8023",
+    "executablePath": "<Chrome 可执行文件的绝对路径>"
+  }
 }
 ```
 
-路径必须为绝对路径；原始采集目录必须新建，并与源码、工作区和普通证据目录分离，目录校验包含 symlink/junction。入口只读取经过 allowlist 投影的公开任务，核验输入摘要和选中任务唯一性，不读取上游答案或评判器；它仍是源码开发入口，没有作为发行命令打包。初始化站点、登录、URL 映射和标准任务终结提交仍须另行实现。
+路径必须为绝对路径；原始采集目录必须新建，并与源码、工作区和普通证据目录分离，目录校验包含 symlink/junction。`browser` 是可信控制器可选配置；`startUrl` 只允许无内嵌凭据的本地回环地址，须指向已初始化的测试站点。入口只读取经过 allowlist 投影的公开任务，核验输入摘要和选中任务唯一性，不读取上游答案或评判器；它仍是源码开发入口，没有作为发行命令打包。正式站点的部署、重置和 URL 映射尚未实现。
 
 通过可信 embedding API 注入 `BenchmarkCaptureSession`，现有 Mission 的 inspection、primary、replay、negative Run 从内部工具上下文取得真实任务绑定。普通 MCP schema、项目配置和 Charter metadata 无法指定原始采集目录或伪造该内部绑定；standalone Run 仍留证，但没有 Mission 关联。该模式禁用 portable recovery，拒绝 CDP、Electron 和 mobile。
 
-会话保存 `session.json`、每 Run 的开始/结束记录、`capture.json` 和 `network.har`。进程内 `session.auditRun(runId)` 重读文件、校验摘要、真实 Run 上下文，以及 Mission 图节点、Observation、AgentStep 和既有执行审计。失败、取消或采集不可用均保留结果；缺失/篡改、孤立 Run 和缺失 Observation 返回 `incomplete`。
+未配置 `browser` 时，会话保存 `session.json`、每 Run 的开始/结束记录、各自的 `capture.json` 和 `network.har`。进程内 `session.auditRun(runId)` 重读文件、校验摘要、真实 Run 上下文，以及 Mission 图节点、Observation、AgentStep 和既有执行审计。失败、取消或采集不可用均保留结果；缺失/篡改、孤立 Run 和缺失 Observation 返回 `incomplete`。
 
-`associated` 只代表本次进程内的运行与文件一致性，不是 AI 执行认证、公开任务成绩、跨进程签名或防止同账户篡改的证明。各 Run 仍使用不同浏览器上下文，inspection 的登录和交互不能延续到 primary；不能挑最后一次成功 Run 冒充完整任务轨迹。HTTP 500 下文字断言通过也不能替代官方判分。报告继续标为 `proofkitEffectiveness: not-measured`。
+配置 `browser` 后，任务控制器持有一个 Chrome 上下文和页面。所有 Run 串行借用同一页面；普通探索可得 `inconclusive`，断言失败也可继续，而取消或未完成的 Run 会封存上下文并禁止继续操作。专用 MCP 的 `submit_benchmark_task` 接收一次符合官方格式的最终答案，要求全部 Run 已结束，然后关闭上下文、刷出 `task/network.har`，保存 `agent_response.json` 和完整任务记录，并审计每次尝试。返回 `captured` 仅代表本地证据一致；不能冒充官方判分。客户端关闭 stdio 时会等待浏览器清理，不生成虚假的最终答案。
+
+`associated` 和 `captured` 只代表本次进程内的运行与文件一致性，不是 AI 执行认证、公开任务成绩、跨进程签名或防止同账户篡改的证明。未配置 `browser` 时各 Run 仍使用不同浏览器上下文；配置后所有尝试进入同一任务轨迹，不能挑最后一次成功 Run 冒充完整执行。HTTP 500 下文字断言通过也不能替代官方判分。报告继续标为 `proofkitEffectiveness: not-measured`。
 
 ```powershell
 # 设置前文的官方评判环境后，追加协议对照；未设置时只验证 MCP/Chrome fixture。
@@ -141,11 +149,13 @@ pnpm test:smoke:benchmark-mission
 
 此 smoke 验证 quick、core、guided inspection 和 stdio 启动；primary/negative 的来源绑定已实测，replay 绑定尚无真实浏览器 smoke。现有 Web release 会要求 Web/Electron 矩阵，而原始 HAR 采集仅支持 Web，因此本阶段不声称完成 release 公测。全部场景由脚本作答，正式任务执行数仍为 0。
 
+`pnpm test:smoke:benchmark-task` 使用真实 Chrome 验证持续登录状态、全部尝试入证、取消后封存、stdio 断开清理、篡改拒绝，并在可用时调用任务 44 的官方评判器。它仍只运行本地脚本 fixture，`webArenaTasksExecuted` 保持 0。
+
 ## 下一阶段：真实执行的准入条件
 
 1. 按[官方环境说明](https://servicenow.github.io/webarena-verified/environments/)部署四个隔离站点，记录镜像 digest、站点配置和任务前初始化结果。Docker 可以在另一台开发机运行；本机的检查目前只探测本地 Docker，不证明远端环境不可用。当前没有站点部署或重置自动化。
 2. 在独立容器/账户中让 Codex、Claude Code 等宿主只读任务输入和已映射的站点 URL，经现有 MCP/CLI 发现页面、生成计划并创建 Mission。禁止事先替 Agent 写完成路径。当前只是文件内容分离，**同一宿主仍可能读取上游标准答案，尚无系统级答案隔离**。
-3. 专用 MCP 入口、内部 Mission/Run 绑定、缺口处理和官方读取已通过真实 Chrome fixture 验证。下一步建立从登录、探索到最终提交的持续任务上下文与完整轨迹，明确多 Run 的终结规则；不能拼接不同会话或只取成功 Run。已有 CDP 会话不能默认视为从任务起点完整采集。原始基准 HAR 留在隔离评测目录。
+3. 专用 MCP 入口、内部 Mission/Run 绑定、持续上下文、全任务 HAR 与最终提交已通过真实 Chrome fixture 验证。下一步将真实站点初始化、任务重置和宿主 AI 执行接入此生命周期，并复核多次运行的稳定性。已有 CDP 会话不能默认视为从任务起点完整采集。原始基准 HAR 留在隔离评测目录。
 4. 独立评判进程在任务结束后读取响应/HAR；认证模式还需核验宿主工具轨迹、实际 Mission、运行来源、初始化状态和输入未变。人工导入或示例回放只能继续用 `grade`，不能升级成 ProofKit 自主成绩。
 5. 先报告固定 12 个任务的完成率、阻断原因、耗时、模型用量与重复运行稳定性，再扩展全量和独立留出任务。在相同站点、模型、预算和重复次数下对比宿主直接使用 Playwright 的基线与宿主使用 ProofKit，避免把模型差异计入框架收益。
 

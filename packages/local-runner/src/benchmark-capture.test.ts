@@ -13,6 +13,18 @@ async function fixture() {
 }
 
 describe("trusted benchmark capture lifecycle", () => {
+  it("does not finalize an empty or active persistent task, or continue after abandonment", async () => {
+    const f = await fixture();
+    const session = new BenchmarkCaptureSession({ directory: join(f.temporary, "captures"), taskId: 44,
+      publicInputSha256: inputHash, browser: { startUrl: "http://127.0.0.1:1" } }); session.bind(f);
+    await expect(session.finalizeTask({})).rejects.toThrow("finished Runs");
+    const simultaneous = await Promise.allSettled([session.begin("first"), session.begin("second")]);
+    expect(simultaneous.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    await expect(session.finalizeTask({})).rejects.toThrow("finished Runs");
+    await session.abandonTask();
+    expect((await session.auditTask()).issues).toContain("task-not-finalized");
+    await expect(session.begin("after-abandonment")).rejects.toThrow("lifecycle");
+  });
   it("rejects invalid identity, nested storage, reused attachment and canonical redirects", async () => {
     const f = await fixture();
     expect(() => new BenchmarkCaptureSession({ directory: "relative", taskId: 44, publicInputSha256: inputHash })).toThrow();
