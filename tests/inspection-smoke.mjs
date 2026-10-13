@@ -305,6 +305,7 @@ try {
   const filtersResult = JSON.parse(filtersResponse.content.find((item) => item.type === "text").text);
   assert.equal(filtersResult.status, "observed");
   assert.ok(filtersResult.snapshot.text.includes("Filters opened"));
+  assert.deepEqual(filtersResult.next, ["inspect_surface"]);
   assert.equal(inspection.snapshot.controls.find((item) => item.selector === "#quantity-from")?.groupName, "Quantity");
   assert.equal(inspection.snapshot.controls.find((item) => item.selector === "#quantity-to")?.groupName, "Quantity");
   assert.equal(inspection.snapshot.controls.find((item) => item.selector === "#price-from")?.groupName, "Price");

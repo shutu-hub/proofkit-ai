@@ -116,6 +116,7 @@ export type SurfaceInteraction = {
   testVerdict: "not-asserted";
   action: { kind: SurfaceInteractionInput["action"]["kind"]; status: string; failureCode?: string };
   snapshot?: Pick<SurfaceSnapshot, "capturedAt" | "url" | "title" | "text" | "controls" | "controlsTruncated">;
+  next?: Array<"inspect_surface">;
   runtimeHealth?: RunSummary["runtimeHealth"];
   findings: string[];
   evidence: EvidenceRef[];
@@ -482,6 +483,9 @@ export class LocalRunnerService {
         ...(observed ? { snapshot: { capturedAt: observed.capturedAt, url: observed.url, title: observed.title,
           text: observed.text?.slice(0, 2_000), controls: compactControls,
           controlsTruncated: Boolean(observed.controlsTruncated || (observed.controls?.length ?? 0) > 20) } } : {}),
+        ...(observed && ["goto", "click"].includes(action.kind)
+          && (observed.controlsTruncated || (observed.controls?.length ?? 0) > 20)
+          ? { next: ["inspect_surface" as const] } : {}),
         runtimeHealth: summary.runtimeHealth,
         findings: summary.findings.filter((finding) => finding !== "No executable assertion or business oracle was declared.")
           .slice(0, 5).map((finding) => finding.slice(0, 400)),

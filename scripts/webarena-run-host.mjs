@@ -84,6 +84,7 @@ export async function runWebArenaHost({ sessionPath, batchPath, output, host = "
     + `The owned browser starts at ${start.href}. Use only this ProofKit MCP for browser actions.\n`
     + `This server exposes tools, not MCP resources or resource templates; do not call resource discovery APIs.\n`
     + `Inspect the page, then use interact_surface for individual goto/click/fill/press/selectOption/selectOptions/setChecked actions; it preserves task browser state and returns a compact observation, not a success verdict. Prefer unique control.selector hints from the latest inspection. If an action fails with surface-target-ambiguous or runner-action-timeout, inspect again and change the target instead of repeating the failed selector. Native form hints distinguish single and multiple selects; selectOptions replaces the complete selected set. `
+    + `After a click exposes a form, follow next=inspect_surface when the compact controls are truncated. For repeated field names, use groupName and the unique selector in the full inspection; do not guess an nth input position. `
     + `After the requested end state is visible, use run_test for a Mission that checks the actual task claim, not just incidental page text. `
     + `For an inline Charter, put action/assertion kinds inside charter and do not also supply top-level url, expect, mode or sideEffectPolicy. `
     + `A click Charter needs sideEffectPolicy=allow. If the requested end state is visible, stop repeating the workflow.\n`

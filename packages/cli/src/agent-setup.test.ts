@@ -243,6 +243,7 @@ describe("Agent onboarding", () => {
     const skill = await readFile(join(result.skill.path, "SKILL.md"), "utf8");
     expect(skill).toContain("terminal result's evidenceIntegrity.status");
     expect(skill).toContain("A report field is a");
+    expect(skill).toContain("groupName");
     const frontmatter = parse(skill.split("---")[1]!);
     expect(frontmatter.name).toBe("proofkit-test");
     const reference = await readFile(join(result.skill.path, "references", "charter-authoring.md"), "utf8");

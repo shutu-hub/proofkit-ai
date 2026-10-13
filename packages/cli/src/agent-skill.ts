@@ -124,6 +124,10 @@ The readyWhen text must be visible before the action being tested. Do not use
 the success text expected only after a click or submission as inspection
 readiness. Repeat inspect_surface only after the page state changes or the first
 observation lacked the controls needed to author the Charter.
+When a click opens a form and the compact interaction reports
+next=inspect_surface, inspect the complete controls before filling. For repeated
+labels such as from/to, use each control's groupName and unique selector;
+do not guess an nth position from the order of inputs.
 These observations return not-asserted and cannot establish a product pass.
 
 If the catalog has no suitable scenario, use a reviewed digest-pinned workspace
