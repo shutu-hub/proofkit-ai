@@ -5,7 +5,7 @@ import { LocalExecutionOwnership } from "@proofkit/evidence";
 import { MissionRepeatSeriesSchema, MissionRepeatSeriesStatusSchema, type MissionRepeatSeries, type MissionRepeatSeriesStatus, type SourceState, type TestMission } from "@proofkit/contracts";
 import { resolveWithinWorkspace, sameProjectPath } from "@proofkit/project";
 import { missionScopeHash } from "./mission-comparison.js";
-import { expectedProductRunFailure, hasStableOwnedBinding } from "./mission-stability.js";
+import { analyzeMissionStability as analyzeMissionStabilityRecords, expectedProductRunFailure, hasStableOwnedBinding } from "./mission-stability.js";
 import type { LocalRunnerService } from "./index.js";
 
 const TERMINAL = new Set<TestMission["status"]>(["completed", "failed", "blocked", "cancelled"]);
@@ -60,6 +60,8 @@ export class MissionRepeatSeriesService {
       return this.result(series, "inconclusive", ids, "Baseline Mission or its evidence is unavailable");
     }
     if (!eligibleEvidence(baselineEvidence)) return this.result(series, "inconclusive", ids, "Baseline business or Git evidence is no longer complete");
+    const samples = [{ mission: baseline, result: baselineEvidence.summary,
+      sourceState: baselineEvidence.sourceState, finalSourceState: baselineEvidence.finalSourceState }];
     const baseSource = baselineEvidence.finalSourceState!;
     const baseScope = missionScopeHash(baseline);
     let missingSlot = false;
@@ -96,13 +98,18 @@ export class MissionRepeatSeriesService {
       if (!eligibleEvidence(evidence) || !sameGitSource(baseSource, evidence.sourceState) || !sameGitSource(baseSource, evidence.finalSourceState)) {
         return this.result(series, "inconclusive", ids, `Repeat slot ${ordinal} lacks matching current Git and business evidence`);
       }
+      samples.push({ mission: child, result: evidence.summary,
+        sourceState: evidence.sourceState, finalSourceState: evidence.finalSourceState });
     }
     if (ids.length < series.targetSamples) {
       const previous = (await this.runner.missionStatus(ids.at(-1)!)).mission;
       const nextOrdinal = ids.length;
       return this.result(series, "ready", ids, undefined, undefined, nextOrdinal, replayNeedsApproval(previous));
     }
-    const analysis = await this.runner.analyzeMissionStability(ids);
+    // Reuse the audits completed in this status call. Re-auditing the same
+    // three to five Missions here repeatedly made a release series exceed its
+    // own execution deadline without adding a new observation.
+    const analysis = await analyzeMissionStabilityRecords(samples, (runId) => this.runner.wait(runId));
     return MissionRepeatSeriesStatusSchema.parse({ series, state: analysis.status === "inconclusive" ? "inconclusive" : "complete",
       missionIds: ids, ...(analysis.gaps.length ? { reason: analysis.gaps[0] } : {}), analysis });
   }
@@ -129,22 +136,23 @@ export class MissionRepeatSeriesService {
 
   /** Automate only approval-free slots; one explicit approval can authorize at most one interactive replay. */
   async drive(seriesId: string, approveNext = false): Promise<MissionRepeatSeriesStatus> {
-    const initial = await this.status(seriesId);
-    const approvalOrdinal = approveNext && (initial.state === "ready" || initial.state === "awaiting-approval")
-      ? initial.nextOrdinal : undefined;
+    let current = await this.status(seriesId);
+    const approvalOrdinal = approveNext && (current.state === "ready" || current.state === "awaiting-approval")
+      ? current.nextOrdinal : undefined;
     for (;;) {
-      const current = await this.status(seriesId);
       const credit = approvalOrdinal !== undefined && current.nextOrdinal === approvalOrdinal;
       if (current.state === "complete" || current.state === "inconclusive") return current;
       if (current.state === "awaiting-approval" && !credit) return current;
       if (current.state === "running") {
         if (current.currentMissionId) await this.runner.waitMission(current.currentMissionId);
         else await new Promise((resolve) => setTimeout(resolve, 200));
+        current = await this.status(seriesId);
         continue;
       }
       const next = await this.advance(seriesId, credit);
       if (next.state === "awaiting-approval" || next.state === "complete" || next.state === "inconclusive") return next;
       if (next.currentMissionId) await this.runner.waitMission(next.currentMissionId);
+      current = await this.status(seriesId);
     }
   }
 
