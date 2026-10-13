@@ -84,14 +84,17 @@ export async function runWebArenaHost({ sessionPath, batchPath, output, host = "
     + `The owned browser starts at ${start.href}. Use only this ProofKit MCP for browser actions.\n`
     + `This server exposes tools, not MCP resources or resource templates; do not call resource discovery APIs.\n`
     + `Inspect the page, then use interact_surface for individual goto/click/fill/press/selectOption/selectOptions/setChecked actions; it preserves task browser state and returns a compact observation, not a success verdict. Native form hints distinguish single and multiple selects; selectOptions replaces the complete selected set. `
-    + `After the requested end state is visible, use run_test for a quick positive surface check or a stronger Mission if available. `
+    + `After the requested end state is visible, use run_test for a Mission that checks the actual task claim, not just incidental page text. `
     + `For an inline Charter, put action/assertion kinds inside charter and do not also supply top-level url, expect, mode or sideEffectPolicy. `
     + `A click Charter needs sideEffectPolicy=allow. If the requested end state is visible, stop repeating the workflow.\n`
+    + `For RETRIEVE, derive the answer from observed results. Check the relevant scope, filters, ordering, pagination and ties before claiming an aggregate or top result; use inspect_surface.readText on a unique result region with continuation when the overview is incomplete. `
+    + `A passing text-visible assertion proves only that the text appeared. If the exact answer remains unsupported, submit an error status and explain the uncertainty. `
+    + `Reserve time to submit before the host deadline; stop open-ended exploration when there is not enough time to verify the result.\n`
     + `You MUST call submit_benchmark_task exactly once before your final message, even if the task fails. `
     + `Infer task_type as RETRIEVE, NAVIGATE or MUTATE from the intent. Submit status SUCCESS only when the observed `
     + `result supports it; use an error status otherwise. For NAVIGATE use retrieved_data=null; always include error_details.\n`
     + `await_test_result timeoutMs must be at most 30000; repeat the call for longer Missions. `
-    + `A passing page-text assertion alone does not establish task success. Report uncertainty in your final explanation.\n`
+    + `Report uncertainty in your final explanation.\n`
     + `Do not use shell or filesystem tools to perform the task or alter benchmark artifacts.`;
   await writeFile(join(agentDir, "prompt.txt"), prompt + "\n", { flag: "wx" });
   const eventsPath = join(outputRoot, "host-events.jsonl");
