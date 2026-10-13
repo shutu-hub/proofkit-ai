@@ -116,7 +116,9 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
     if (host?.audit?.issues?.includes("task-context-interrupted")) investigationSignals.push("task-context-interrupted");
     const declaredStatus = host?.submissionStatusIntegrity === "verified" && RESPONSE_STATUSES.has(host.submissionStatus)
       ? host.submissionStatus : null;
-    if (declaredStatus && declaredStatus !== "SUCCESS") investigationSignals.push("agent-declared-error");
+    if (declaredStatus && declaredStatus !== "SUCCESS" && !(item.status === "success" && item.score === 1)) {
+      investigationSignals.push("agent-declared-error");
+    }
     if (checks?.missingNetworkEvent) investigationSignals.push("action-network-evidence");
     if (["failure", "partial_match"].includes(checks?.answer)
       && (declaredStatus === null || declaredStatus === "SUCCESS")) investigationSignals.push("answer-oracle-mismatch");

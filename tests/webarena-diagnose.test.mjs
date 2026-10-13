@@ -104,6 +104,15 @@ test("official status mismatch is reported without copying the expected answer",
   assert.doesNotMatch(JSON.stringify(report) + renderDiagnosis(report), /private-expected|private-actual|private-assertion/);
 });
 
+test("an officially accepted not-found response is not diagnosed as an Agent error", () => {
+  const grade = { summary: { planned: 1 }, cases: [{ taskId: 183, status: "success", score: 1 }] };
+  const host = { taskId: 183, status: "associated", submissionStatus: "NOT_FOUND_ERROR",
+    submissionStatusIntegrity: "verified", toolStatsIntegrity: "verified" };
+  const report = diagnoseBatch(grade, [host]);
+  assert.equal(report.cases[0].classification.code, "passed");
+  assert.deepEqual(report.cases[0].investigationSignals, []);
+});
+
 test("separates a sealed Agent error submission from an incorrect success claim", () => {
   const grade = { summary: { planned: 1 }, cases: [{ taskId: 62, status: "failure", score: 0 }] };
   const details = summarizeOfficialChecks({ results: [{ caseId: "62", result: {
