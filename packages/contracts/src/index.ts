@@ -325,6 +325,8 @@ export const SurfaceControlSchema = z.object({
   tag: z.string().min(1),
   role: z.string().min(1),
   name: z.string().max(120).optional(),
+  /** Nearest fieldset legend when a form control has a broader field group. */
+  groupName: z.string().max(120).optional(),
   selector: z.string().min(1).optional(),
   selectorKind: z.enum(["test-id", "id", "role", "css"]).optional(),
   inputType: z.string().optional(),

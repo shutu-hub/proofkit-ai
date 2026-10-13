@@ -169,6 +169,10 @@ export class WebAdapter implements SurfaceAdapter {
             ? html instanceof HTMLSelectElement && (html.multiple || html.size > 1) ? "listbox" : "combobox" : "textbox");
         const labelled = html instanceof HTMLInputElement || html instanceof HTMLTextAreaElement || html instanceof HTMLSelectElement
           ? html.labels?.[0]?.innerText : undefined;
+        const legend = html instanceof HTMLInputElement || html instanceof HTMLTextAreaElement || html instanceof HTMLSelectElement
+          ? html.closest("fieldset")?.querySelector(":scope > legend") : undefined;
+        const legendText = legend instanceof HTMLElement ? legend.innerText.trim() : undefined;
+        const fieldsetLegend = legendText && legendText.length <= 512 ? legendText : undefined;
         const name = [html.getAttribute("aria-label"), labelled, html.getAttribute("placeholder"), html.innerText, html.getAttribute("title")]
           .find((value) => typeof value === "string" && value.trim().length > 0) ?? "";
         const testIdAttribute = html.hasAttribute("data-testid") ? "data-testid" : html.hasAttribute("data-test") ? "data-test" : undefined;
@@ -176,7 +180,8 @@ export class WebAdapter implements SurfaceAdapter {
         const id = html.id || undefined;
         return { tag, role, inputType: tag === "input" ? type ?? "text" : undefined,
           visible: html.getClientRects().length > 0 && getComputedStyle(html).visibility !== "hidden" && html.getAttribute("aria-hidden") !== "true",
-          name: name.trim(), domText: ["a", "button"].includes(tag) ? html.textContent?.trim() : undefined,
+          name: name.trim(), fieldsetLegend,
+          domText: ["a", "button"].includes(tag) ? html.textContent?.trim() : undefined,
           id, idSelector: id ? `#${CSS.escape(id)}` : undefined,
           testId, testIdAttribute, disabled: html.matches(":disabled") || html.getAttribute("aria-disabled") === "true",
           nativeForm: html instanceof HTMLSelectElement ? { kind: "select" as const, multiple: html.multiple,
@@ -190,9 +195,12 @@ export class WebAdapter implements SurfaceAdapter {
     for (const candidate of candidates) {
       const rawName = candidate.name.slice(0, 120);
       const name = sanitizeSurfaceText(rawName, 120);
+      const groupName = candidate.fieldsetLegend
+        ? sanitizeSurfaceText(candidate.fieldsetLegend, candidate.fieldsetLegend.length).slice(0, 120) : "";
       const control: SurfaceControl = { tag: candidate.tag, role: candidate.role, disabled: candidate.disabled,
         visible: candidate.visible, ...(candidate.inputType ? { inputType: candidate.inputType } : {}),
-        ...(name ? { name } : {}), ...(candidate.nativeForm ? { nativeForm: candidate.nativeForm } : {}) };
+        ...(name ? { name } : {}), ...(groupName && groupName !== name ? { groupName } : {}),
+        ...(candidate.nativeForm ? { nativeForm: candidate.nativeForm } : {}) };
       const selectors: Array<{ value: string; kind: NonNullable<SurfaceControl["selectorKind"]> }> = [];
       if (candidate.testId && candidate.testIdAttribute && sanitizeSurfaceText(candidate.testId, 120) === candidate.testId) {
         selectors.push({ value: `[${candidate.testIdAttribute}=${JSON.stringify(candidate.testId)}]`, kind: "test-id" });

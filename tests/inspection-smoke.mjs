@@ -61,6 +61,9 @@ const web = createServer((request, response) => {
     <a href="#" role="menuitem" style="text-transform:uppercase" onclick="document.querySelector('#result').textContent='Catalog opened';return false"><span>Catalog</span></a>
     <button role="menuitem" onclick="document.querySelector('#result').textContent='Filters opened'">Filters</button><button style="display:none">Filters</button>
     <div id="result"></div>
+    <fieldset><legend>Quantity</legend><label>from <input id="quantity-from"></label><label>to <input id="quantity-to"></label></fieldset>
+    <fieldset><legend>Price</legend><label>from <input id="price-from"></label></fieldset>
+    <fieldset><legend>Private qa@example.com</legend><label>value <input id="private-group"></label></fieldset>
     <select id="status" onchange="document.querySelector('#selection').textContent='Selection '+this.value">
       <option value="">Choose</option><option value="complete">Complete</option><option value="pending">Pending</option>
       <option value="off" disabled>Disabled</option><optgroup label="Unavailable" disabled><option value="group-off">Group disabled</option></optgroup>
@@ -184,7 +187,14 @@ async function verifyNativeForms(interact, readRun, persistent = false) {
     assert.ok(result.snapshot.text.includes(output), "The real page must reflect exactly the requested set");
     const run = await readRun(result.interactionId);
     assert.deepEqual(run.steps[0].receipt.metadata.nativeForm, { kind: "selectOptions", verified: true, selectedCount: options.length });
-    assert.deepEqual(result.snapshot.controls.find((control) => control.selector === "#multi").nativeForm,
+    const multiAfterAction = result.snapshot.controls.find((control) => control.selector === "#multi");
+    assert.ok(multiAfterAction, `Missing #multi after native action: ${JSON.stringify({
+      controls: result.snapshot.controls.length, truncated: result.snapshot.controlsTruncated,
+      selectors: result.snapshot.controls.map((control) => control.selector),
+    })}`);
+    assert.equal(result.snapshot.controls.length, 20);
+    assert.equal(result.snapshot.controlsTruncated, true);
+    assert.deepEqual(multiAfterAction.nativeForm,
       { kind: "select", multiple: true, optionCount: 5, selectedCount: options.length });
   }
   const negatives = [
@@ -295,6 +305,12 @@ try {
   const filtersResult = JSON.parse(filtersResponse.content.find((item) => item.type === "text").text);
   assert.equal(filtersResult.status, "observed");
   assert.ok(filtersResult.snapshot.text.includes("Filters opened"));
+  assert.equal(inspection.snapshot.controls.find((item) => item.selector === "#quantity-from")?.groupName, "Quantity");
+  assert.equal(inspection.snapshot.controls.find((item) => item.selector === "#quantity-to")?.groupName, "Quantity");
+  assert.equal(inspection.snapshot.controls.find((item) => item.selector === "#price-from")?.groupName, "Price");
+  assert.equal(inspection.snapshot.controls.find((item) => item.selector === "#private-group")?.groupName,
+    "Private [REDACTED_EMAIL]");
+  assert.equal(JSON.stringify(inspection).includes("qa@example.com"), false);
   assert.deepEqual(inspection.snapshot.controls.find((item) => item.selector === "#status").nativeActions, ["selectOption"]);
   const multipleControl = inspection.snapshot.controls.find((item) => item.selector === "#multi");
   assert.equal(multipleControl.role, "listbox");
@@ -579,7 +595,7 @@ try {
   console.log(JSON.stringify({ inspectionId: inspection.inspectionId, controls: inspection.snapshot.controls.length,
     ...(process.env.PROOFKIT_INSPECTION_RUNS ? { artifacts: scratch } : {}),
     selector: details.selector, electronReadiness: process.env.PROOFKIT_ELECTRON_PATH ? "verified" : "not-run",
-    verified: ["scoped-text-reconstruction-and-eof", "scoped-text-window-redaction", "scoped-text-persisted-full-window", "scoped-text-negative-evidence", "scoped-text-page-and-region-binding", "scoped-text-changed-source-rejected", "scoped-text-invalid-input-before-run", "current-page-table-row-reconstruction", "current-page-table-pii-redaction", "current-page-table-negative-evidence", "current-page-table-never-claims-all-pages", "native-select-exact-value-and-label", "native-multiple-select-exact-set-replacement-and-clear", "native-multiple-select-prevalidation-and-readback", "native-form-state-and-action-hints", "native-checkbox-idempotency", "native-form-readback", "native-form-negative-evidence", "native-form-write-policy", "mcp-inspect-surface", "single-step-web-interaction", ...(process.env.PROOFKIT_ELECTRON_PATH ? ["single-step-electron-interaction", "electron-scoped-text-positive-negative-and-continuation", "electron-current-page-table-read-and-change-rejection"] : []), "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
+    verified: ["scoped-text-reconstruction-and-eof", "scoped-text-window-redaction", "scoped-text-persisted-full-window", "scoped-text-negative-evidence", "scoped-text-page-and-region-binding", "scoped-text-changed-source-rejected", "scoped-text-invalid-input-before-run", "current-page-table-row-reconstruction", "current-page-table-pii-redaction", "current-page-table-negative-evidence", "current-page-table-never-claims-all-pages", "native-select-exact-value-and-label", "native-multiple-select-exact-set-replacement-and-clear", "native-multiple-select-prevalidation-and-readback", "native-form-state-and-action-hints", "native-checkbox-idempotency", "native-form-readback", "native-form-negative-evidence", "native-form-write-policy", "acted-control-in-compact-observation", "fieldset-group-name-redaction", "mcp-inspect-surface", "single-step-web-interaction", ...(process.env.PROOFKIT_ELECTRON_PATH ? ["single-step-electron-interaction", "electron-scoped-text-positive-negative-and-continuation", "electron-current-page-table-read-and-change-rejection"] : []), "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
 } finally {
   if (electron && electron.exitCode === null) {
     const exited = new Promise((done) => electron.once("exit", done));

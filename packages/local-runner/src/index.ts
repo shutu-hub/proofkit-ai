@@ -468,12 +468,19 @@ export class LocalRunnerService {
       const status = summary.verdict === "blocked" || summary.verdict === "cancelled" ? summary.verdict
         : first?.status === "passed" && observed ? "observed" : "failed";
       const evidence = this.runEvidence(summary);
+      const compactControls = observed?.controls?.slice(0, 20);
+      if (compactControls && "selector" in action && typeof action.selector === "string") {
+        const actedControl = observed?.controls?.find((control) => control.selector === action.selector);
+        if (actedControl && !compactControls.includes(actedControl)) {
+          compactControls.splice(compactControls.length - 1, 1, actedControl);
+        }
+      }
       return {
         interactionId: summary.runId, surface, status, testVerdict: "not-asserted",
         action: { kind: action.kind, status: first?.status ?? "not-run",
           ...(first?.failureCode ? { failureCode: first.failureCode } : {}) },
         ...(observed ? { snapshot: { capturedAt: observed.capturedAt, url: observed.url, title: observed.title,
-          text: observed.text?.slice(0, 2_000), controls: observed.controls?.slice(0, 20),
+          text: observed.text?.slice(0, 2_000), controls: compactControls,
           controlsTruncated: Boolean(observed.controlsTruncated || (observed.controls?.length ?? 0) > 20) } } : {}),
         runtimeHealth: summary.runtimeHealth,
         findings: summary.findings.filter((finding) => finding !== "No executable assertion or business oracle was declared.")
