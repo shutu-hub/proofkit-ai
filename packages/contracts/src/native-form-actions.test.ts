@@ -15,4 +15,14 @@ describe("native form action contracts", () => {
     expect(ActionSchema.safeParse({ kind: "setChecked", selector: "#enabled" }).success).toBe(false);
     expect(ActionSchema.safeParse({ kind: "setChecked", selector: "#enabled", checked: true, force: true }).success).toBe(false);
   });
+  it("requires a bounded, explicit multiple-select set and allows an empty set", () => {
+    for (const options of [[], [{ label: "Complete" }, { value: "pending" }]]) {
+      expect(ActionSchema.parse({ kind: "selectOptions", selector: "#statuses", options })).toMatchObject({ options });
+    }
+    for (const options of [undefined, [{ label: "Same" }, { label: "Same" }], [{ value: "a" }, { value: "a" }],
+      [{ index: 1 }], Array.from({ length: 33 }, (_, index) => ({ value: String(index) }))]) {
+      expect(ActionSchema.safeParse({ kind: "selectOptions", selector: "#statuses", options }).success).toBe(false);
+    }
+    expect(ActionSchema.safeParse({ kind: "selectOptions", selector: "#statuses", options: [], force: true }).success).toBe(false);
+  });
 });

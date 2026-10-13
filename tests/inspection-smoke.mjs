@@ -43,7 +43,14 @@ const web = createServer((request, response) => {
     <script>window.changes=0</script>
     <select id="ambiguous-option"><option>Choose</option><option value="a">Same</option><option value="b">Same</option></select>
     <select id="disabled-select" disabled><option>Choose</option></select>
-    <select id="multi" multiple><option>Choose</option></select>
+    <select id="multi" multiple onchange="document.querySelector('#multi-selection').textContent='Multi '+(Array.from(this.selectedOptions).map(o=>o.value).join(',')||'none')">
+      <option value="complete">Complete</option><option value="pending" selected>Pending</option><option value="other">Other</option>
+      <option value="off" disabled>Disabled</option><optgroup disabled label="Unavailable"><option value="group-off">Group disabled</option></optgroup>
+    </select><div id="multi-selection">Multi pending</div>
+    <select id="ambiguous-multi" multiple><option value="a">Same</option><option value="b">Same</option></select>
+    <select id="duplicate-value-multi" multiple><option value="a">First</option><option value="a">Second</option></select>
+    <select id="reset-multi" multiple onchange="this.options[1].selected=true"><option value="a">First</option><option value="b">Second</option></select>
+    <fieldset disabled><select id="fieldset-multi" multiple><option value="a">First</option></select></fieldset>
     <select id="reset-select" onchange="this.selectedIndex=0"><option value="">Choose</option><option value="complete">Complete</option></select>
     <input id="radio" type="radio" name="group"><div id="custom" role="checkbox" aria-checked="false">Custom checkbox</div>`);
 });
@@ -66,6 +73,20 @@ async function verifyNativeForms(interact, readRun, persistent = false) {
   }
   const radio = await interact({ kind: "setChecked", selector: "#radio", checked: true });
   assert.equal(radio.status, "observed");
+  for (const [options, output] of [
+    [[{ value: "complete" }, { label: "Pending" }], "Multi complete,pending"],
+    [[{ label: "Pending" }, { value: "complete" }], "Multi complete,pending"],
+    [[{ value: "complete" }], "Multi complete"], [[], "Multi none"],
+  ]) {
+    const result = await interact({ kind: "selectOptions", selector: "#multi", options });
+    assert.equal(result.status, "observed");
+    assert.equal(result.testVerdict, "not-asserted");
+    assert.ok(result.snapshot.text.includes(output), "The real page must reflect exactly the requested set");
+    const run = await readRun(result.interactionId);
+    assert.deepEqual(run.steps[0].receipt.metadata.nativeForm, { kind: "selectOptions", verified: true, selectedCount: options.length });
+    assert.deepEqual(result.snapshot.controls.find((control) => control.selector === "#multi").nativeForm,
+      { kind: "select", multiple: true, optionCount: 5, selectedCount: options.length });
+  }
   const negatives = [
     [{ kind: "selectOption", selector: "#status", option: { value: "missing" } }, "native-option-match"],
     [{ kind: "selectOption", selector: "#ambiguous-option", option: { label: "Same" } }, "native-option-match"],
@@ -73,6 +94,15 @@ async function verifyNativeForms(interact, readRun, persistent = false) {
     [{ kind: "selectOption", selector: "#status", option: { value: "group-off" } }, "native-option-disabled"],
     [{ kind: "selectOption", selector: "#disabled-select", option: { label: "Choose" } }, "native-control-disabled"],
     [{ kind: "selectOption", selector: "#multi", option: { label: "Choose" } }, "native-control-type"],
+    [{ kind: "selectOptions", selector: "#status", options: [] }, "native-control-type"],
+    [{ kind: "selectOptions", selector: "#multi", options: [{ value: "complete" }, { value: "missing" }] }, "native-option-match"],
+    [{ kind: "selectOptions", selector: "#multi", options: [{ value: "complete" }, { label: "Complete" }] }, "native-option-match"],
+    [{ kind: "selectOptions", selector: "#ambiguous-multi", options: [{ label: "Same" }] }, "native-option-match"],
+    [{ kind: "selectOptions", selector: "#duplicate-value-multi", options: [{ value: "a" }] }, "native-option-match"],
+    [{ kind: "selectOptions", selector: "#multi", options: [{ value: "complete" }, { value: "off" }] }, "native-option-disabled"],
+    [{ kind: "selectOptions", selector: "#multi", options: [{ value: "complete" }, { value: "group-off" }] }, "native-option-disabled"],
+    [{ kind: "selectOptions", selector: "#fieldset-multi", options: [] }, "native-control-disabled"],
+    [{ kind: "selectOptions", selector: "#reset-multi", options: [{ value: "a" }] }, "native-state-unverified"],
     [{ kind: "selectOption", selector: "#fetch", option: { label: "Complete" } }, "native-control-type"],
     [{ kind: "selectOption", selector: "#reset-select", option: { value: "complete" } }, "native-state-unverified"],
     [{ kind: "setChecked", selector: "#custom", checked: true }, "native-control-type"],
@@ -87,6 +117,11 @@ async function verifyNativeForms(interact, readRun, persistent = false) {
     assert.equal(run.steps[0].receipt, undefined);
     const gap = JSON.parse(await readFile(join(workspaceRoot, ".proofkit/runs", run.steps[0].artifacts.find((path) => path.endsWith("-response-gap.json"))), "utf8"));
     assert.equal(gap.code, code);
+    if (persistent && action.kind === "selectOptions" && action.selector === "#multi") {
+      const unchanged = await interact({ kind: "waitForText", text: "Multi none", timeoutMs: 1000 });
+      assert.equal(unchanged.status, "observed", "A rejected set must not partially mutate the persistent page");
+      assert.equal(unchanged.snapshot.controls.find((control) => control.selector === "#multi").nativeForm.selectedCount, 0);
+    }
   }
 }
 
@@ -137,6 +172,16 @@ try {
   assert.equal(details?.selector, 'role=button[name="Show details"]');
   assert.equal(duplicates.length, 2);
   assert.ok(duplicates.every((item) => item.selector === undefined));
+  assert.deepEqual(inspection.snapshot.controls.find((item) => item.selector === "#status").nativeActions, ["selectOption"]);
+  const multipleControl = inspection.snapshot.controls.find((item) => item.selector === "#multi");
+  assert.equal(multipleControl.role, "listbox");
+  assert.deepEqual(multipleControl.nativeActions, ["selectOptions"]);
+  assert.deepEqual(multipleControl.nativeForm, { kind: "select", multiple: true, optionCount: 5, selectedCount: 1 });
+  assert.deepEqual(inspection.snapshot.controls.find((item) => item.selector === "#enabled").nativeForm, { kind: "checkable", checked: false });
+  assert.deepEqual(inspection.snapshot.controls.find((item) => item.selector === "#enabled").nativeActions, ["setChecked"]);
+  const disabledMultiple = inspection.snapshot.controls.find((item) => item.selector === "#fieldset-multi");
+  assert.equal(disabledMultiple.disabled, true);
+  assert.deepEqual(disabledMultiple.nativeActions, []);
   assert.ok(inspection.evidence.some((item) => item.kind === "screenshot"));
   const saved = JSON.parse(await readFile(join(workspaceRoot, ".proofkit", "runs", inspection.inspectionId, "run.json"), "utf8"));
   assert.equal(saved.steps[0].afterSnapshot.controls.length >= 2, true);
@@ -152,15 +197,19 @@ try {
   const idempotent = await runner.start({ adapter: "web", start: false, charter: {
     intent: "Native form state and idempotency", level: "quick", mode: "deterministic", preconditions: [],
     actions: [{ kind: "selectOption", selector: "#status", option: { label: "Complete" } },
+      { kind: "selectOptions", selector: "#multi", options: [{ value: "complete" }, { label: "Pending" }] },
+      { kind: "selectOptions", selector: "#multi", options: [{ label: "Pending" }, { value: "complete" }] },
+      { kind: "selectOptions", selector: "#multi", options: [{ value: "complete" }] },
       { kind: "setChecked", selector: "#enabled", checked: true }, { kind: "setChecked", selector: "#enabled", checked: true },
       { kind: "setChecked", selector: "#enabled", checked: false }],
-    assertions: [{ kind: "text-visible", text: "Selection complete" }, { kind: "text-visible", text: "Changes 2 checked false" }], sideEffectPolicy: "allow", metadata: {},
+    assertions: [{ kind: "text-visible", text: "Selection complete" }, { kind: "text-visible", text: "Multi complete" }, { kind: "text-visible", text: "Changes 2 checked false" }], sideEffectPolicy: "allow", metadata: {},
   } });
   assert.equal((await runner.wait(idempotent.runId)).verdict, "passed");
   const deniedRunner = new LocalRunnerService({ root: source, workspaceRoot, config: { ...runner.config,
     policies: { ...runner.config.policies, sideEffects: "deny" } } });
   const beforeDenied = await readdir(join(workspaceRoot, ".proofkit/runs"));
   await assert.rejects(deniedRunner.interactSurface({ action: { kind: "selectOption", selector: "#status", option: { value: "complete" } } }), /sideEffects=allow/);
+  await assert.rejects(deniedRunner.interactSurface({ action: { kind: "selectOptions", selector: "#multi", options: [] } }), /sideEffects=allow/);
   await assert.rejects(deniedRunner.interactSurface({ action: { kind: "setChecked", selector: "#enabled", checked: true } }), /sideEffects=allow/);
   assert.deepEqual(await readdir(join(workspaceRoot, ".proofkit/runs")), beforeDenied);
   const origin = new URL(baseUrl).origin;
@@ -306,7 +355,7 @@ try {
   console.log(JSON.stringify({ inspectionId: inspection.inspectionId, controls: inspection.snapshot.controls.length,
     ...(process.env.PROOFKIT_INSPECTION_RUNS ? { artifacts: scratch } : {}),
     selector: details.selector, electronReadiness: process.env.PROOFKIT_ELECTRON_PATH ? "verified" : "not-run",
-    verified: ["native-select-exact-value-and-label", "native-checkbox-idempotency", "native-form-readback", "native-form-negative-evidence", "native-form-write-policy", "mcp-inspect-surface", "single-step-web-interaction", ...(process.env.PROOFKIT_ELECTRON_PATH ? ["single-step-electron-interaction"] : []), "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
+    verified: ["native-select-exact-value-and-label", "native-multiple-select-exact-set-replacement-and-clear", "native-multiple-select-prevalidation-and-readback", "native-form-state-and-action-hints", "native-checkbox-idempotency", "native-form-readback", "native-form-negative-evidence", "native-form-write-policy", "mcp-inspect-surface", "single-step-web-interaction", ...(process.env.PROOFKIT_ELECTRON_PATH ? ["single-step-electron-interaction"] : []), "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
 } finally {
   if (electron && electron.exitCode === null) {
     const exited = new Promise((done) => electron.once("exit", done));

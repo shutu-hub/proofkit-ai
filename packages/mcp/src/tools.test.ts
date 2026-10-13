@@ -80,6 +80,7 @@ describe("ProofKit MCP tools", () => {
       expect(runner.interactSurface).toHaveBeenCalledWith({ adapter: "web", url: undefined,
         action: { kind: "click", selector: "#orders" }, signal: expect.any(AbortSignal) });
       for (const action of [{ kind: "selectOption", selector: "#status", option: { label: "Complete" } },
+        { kind: "selectOptions", selector: "#statuses", options: [{ label: "Complete" }, { value: "pending" }] },
         { kind: "setChecked", selector: "#enabled", checked: false }]) {
         expect((await client.callTool({ name: "interact_surface", arguments: { action } })).isError).toBeUndefined();
         expect(runner.interactSurface).toHaveBeenLastCalledWith({ adapter: "web", url: undefined, action, signal: expect.any(AbortSignal) });

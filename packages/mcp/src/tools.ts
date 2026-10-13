@@ -2,7 +2,7 @@ import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestCharter, TestMission } from "@proofkit/contracts";
-import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, SelectOptionActionSchema, SetCheckedActionSchema, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
+import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, SelectOptionActionSchema, SelectOptionsActionSchema, SetCheckedActionSchema, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 import { briefMissionEvidence } from "./mission-evidence-brief.js";
 import { RepairHypothesisInputSchema } from "@proofkit/contracts";
@@ -49,7 +49,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "inspect_surface",
-    "Observe the configured Web, Electron or mobile surface after an optional visible-text prerequisite. Web/Electron return bounded controls; mobile returns a bounded driver snapshot. This is reconnaissance, not a product pass verdict.",
+    "Observe the configured Web, Electron or mobile surface after an optional visible-text prerequisite. Web/Electron return bounded controls with native form state and advisory native action hints; mobile returns a bounded driver snapshot. This is reconnaissance, not a product pass verdict.",
     { surface: z.enum(["web", "electron", "mobile"]).default("web"), url: z.string().url().optional(), readyWhen: SurfaceReadinessSchema.optional() },
     async ({ surface, url, readyWhen }, extra) => {
       if (surface !== "web" && url) throw new Error("Only Web inspection accepts a URL override; Electron uses CDP and mobile uses its configured WebDriver server");
@@ -59,7 +59,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "interact_surface",
-    "Perform exactly one exploratory Web/Electron action, then observe the resulting page in the same owned browser context. Use this to navigate before authoring a full test. It saves a Run and evidence but always returns testVerdict=not-asserted; a click or form action needs sideEffects=allow in the test workspace. For product acceptance use run_test with a positive assertion and independent business Oracle when required.",
+    "Perform exactly one exploratory Web/Electron action, then observe the resulting page in the same owned browser context. selectOption targets a native single-select; selectOptions replaces the entire native multiple-select set (empty options clears it). Exact labels or values only; no guessed index. It saves a Run and evidence but always returns testVerdict=not-asserted; a click or form action needs sideEffects=allow in the test workspace. For product acceptance use run_test with a positive assertion and independent business Oracle when required.",
     { surface: z.enum(["web", "electron"]).default("web"), url: z.string().url().optional(),
       action: z.discriminatedUnion("kind", [
         z.object({ kind: z.literal("goto"), url: z.string().url() }),
@@ -67,6 +67,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
         z.object({ kind: z.literal("fill"), selector: z.string().min(1).max(512), value: z.string().max(4096) }),
         z.object({ kind: z.literal("press"), selector: z.string().min(1).max(512), key: z.string().min(1).max(64) }),
         SelectOptionActionSchema,
+        SelectOptionsActionSchema,
         SetCheckedActionSchema,
         z.object({ kind: z.literal("waitForText"), text: z.string().min(1).max(512), timeoutMs: z.number().int().min(100).max(30_000).optional() }),
       ]) },

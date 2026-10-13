@@ -142,12 +142,20 @@ export const InlineHttpOracleSchema = ConfiguredHttpOracleSchema.extend({
 export type InlineHttpOracle = z.infer<typeof InlineHttpOracleSchema>;
 
 /** One exact native option; indices and ambiguous value/label combinations are not portable. */
+export const NativeOptionSchema = z.union([
+  z.object({ value: z.string().max(4096) }).strict(),
+  z.object({ label: z.string().min(1).max(4096) }).strict(),
+]);
 export const SelectOptionActionSchema = z.object({
   kind: z.literal("selectOption"), selector: z.string().min(1).max(512),
-  option: z.union([
-    z.object({ value: z.string().max(4096) }).strict(),
-    z.object({ label: z.string().min(1).max(4096) }).strict(),
-  ]),
+  option: NativeOptionSchema,
+}).strict();
+/** Replace the complete native multiple-select set; an explicit empty set clears it. */
+export const SelectOptionsActionSchema = z.object({
+  kind: z.literal("selectOptions"), selector: z.string().min(1).max(512),
+  options: z.array(NativeOptionSchema).max(32).refine((options) =>
+    new Set(options.map((option) => "value" in option ? `value:${option.value}` : `label:${option.label}`)).size === options.length,
+  "Requested options must be distinct"),
 }).strict();
 export const SetCheckedActionSchema = z.object({
   kind: z.literal("setChecked"), selector: z.string().min(1).max(512), checked: z.boolean(),
@@ -160,6 +168,7 @@ export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("setInputFiles"), selector: z.string().min(1), files: z.array(FixturePathSchema).min(1).max(10) }).strict(),
   z.object({ kind: z.literal("press"), selector: z.string().min(1), key: z.string().min(1) }),
   SelectOptionActionSchema,
+  SelectOptionsActionSchema,
   SetCheckedActionSchema,
   z.object({ kind: z.literal("waitForText"), text: z.string().min(1), timeoutMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("screenshot"), name: z.string().min(1).optional() }),
@@ -262,6 +271,13 @@ export const SurfaceControlSchema = z.object({
   inputType: z.string().optional(),
   visible: z.boolean().optional(),
   disabled: z.boolean(),
+  /** Live native state only; no option labels, values or arbitrary input values. */
+  nativeForm: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("select"), multiple: z.boolean(), optionCount: z.number().int().nonnegative(), selectedCount: z.number().int().nonnegative() }),
+    z.object({ kind: z.literal("checkable"), checked: z.boolean() }),
+  ]).optional(),
+  /** Advisory native action hints, never authorization or guaranteed actionability. */
+  nativeActions: z.array(z.enum(["selectOption", "selectOptions", "setChecked"])).max(1).optional(),
 });
 export type SurfaceControl = z.infer<typeof SurfaceControlSchema>;
 

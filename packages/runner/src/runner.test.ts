@@ -45,6 +45,7 @@ describe("ExecutionRunner", () => {
   it("blocks native form mutations before connecting when writes are denied", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-native-policy-"));
     for (const action of [{ kind: "selectOption", selector: "#status", option: { label: "Complete" } },
+      { kind: "selectOptions", selector: "#statuses", options: [] },
       { kind: "setChecked", selector: "#enabled", checked: true }] as Action[]) {
       const adapter = new FakeAdapter();
       const connect = vi.spyOn(adapter, "connect");

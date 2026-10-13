@@ -161,7 +161,8 @@ export class WebAdapter implements SurfaceAdapter {
         const tag = html.tagName.toLowerCase();
         const type = html.getAttribute("type")?.toLowerCase();
         const role = type === "file" ? "file-input" : html.getAttribute("role") ?? (tag === "a" ? "link" : tag === "button" || type === "button" || type === "submit" ? "button"
-          : type === "checkbox" ? "checkbox" : type === "radio" ? "radio" : tag === "select" ? "combobox" : "textbox");
+          : type === "checkbox" ? "checkbox" : type === "radio" ? "radio" : tag === "select"
+            ? html instanceof HTMLSelectElement && (html.multiple || html.size > 1) ? "listbox" : "combobox" : "textbox");
         const labelled = html instanceof HTMLInputElement || html instanceof HTMLTextAreaElement || html instanceof HTMLSelectElement
           ? html.labels?.[0]?.innerText : undefined;
         const name = [html.getAttribute("aria-label"), labelled, html.getAttribute("placeholder"), html.innerText, html.getAttribute("title")]
@@ -172,7 +173,11 @@ export class WebAdapter implements SurfaceAdapter {
         return { tag, role, inputType: tag === "input" ? type ?? "text" : undefined,
           visible: html.getClientRects().length > 0 && getComputedStyle(html).visibility !== "hidden" && html.getAttribute("aria-hidden") !== "true",
           name: name.trim(), id, idSelector: id ? `#${CSS.escape(id)}` : undefined,
-          testId, testIdAttribute, disabled: html.hasAttribute("disabled") || html.getAttribute("aria-disabled") === "true" };
+          testId, testIdAttribute, disabled: html.matches(":disabled") || html.getAttribute("aria-disabled") === "true",
+          nativeForm: html instanceof HTMLSelectElement ? { kind: "select" as const, multiple: html.multiple,
+            optionCount: html.options.length, selectedCount: html.selectedOptions.length }
+            : html instanceof HTMLInputElement && ["checkbox", "radio"].includes(html.type)
+              ? { kind: "checkable" as const, checked: html.checked } : undefined };
       });
       return { candidates, total: visible.length };
     });
@@ -182,7 +187,7 @@ export class WebAdapter implements SurfaceAdapter {
       const name = sanitizeSurfaceText(rawName, 120);
       const control: SurfaceControl = { tag: candidate.tag, role: candidate.role, disabled: candidate.disabled,
         visible: candidate.visible, ...(candidate.inputType ? { inputType: candidate.inputType } : {}),
-        ...(name ? { name } : {}) };
+        ...(name ? { name } : {}), ...(candidate.nativeForm ? { nativeForm: candidate.nativeForm } : {}) };
       const selectors: Array<{ value: string; kind: NonNullable<SurfaceControl["selectorKind"]> }> = [];
       if (candidate.testId && candidate.testIdAttribute && sanitizeSurfaceText(candidate.testId, 120) === candidate.testId) {
         selectors.push({ value: `[${candidate.testIdAttribute}=${JSON.stringify(candidate.testId)}]`, kind: "test-id" });
@@ -190,7 +195,7 @@ export class WebAdapter implements SurfaceAdapter {
       if (candidate.idSelector && candidate.id && sanitizeSurfaceText(candidate.id, 120) === candidate.id) {
         selectors.push({ value: candidate.idSelector, kind: "id" });
       }
-      if (rawName && name === rawName && ["button", "link", "textbox", "combobox", "checkbox", "radio"].includes(candidate.role)) {
+      if (rawName && name === rawName && ["button", "link", "textbox", "combobox", "listbox", "checkbox", "radio"].includes(candidate.role)) {
         selectors.push({ value: `role=${candidate.role}[name=${JSON.stringify(rawName)}]`, kind: "role" });
       }
       if (candidate.inputType === "file") selectors.push({ value: 'input[type="file"]', kind: "css" });
@@ -199,6 +204,10 @@ export class WebAdapter implements SurfaceAdapter {
         control.selector = selector.value;
         control.selectorKind = selector.kind;
         break;
+      }
+      if (control.nativeForm) {
+        control.nativeActions = control.selector && control.visible && !control.disabled
+          ? [control.nativeForm.kind === "select" ? control.nativeForm.multiple ? "selectOptions" : "selectOption" : "setChecked"] : [];
       }
       controls.push(control);
     }
@@ -248,6 +257,7 @@ export class WebAdapter implements SurfaceAdapter {
         await (await uniqueActionLocator(page, action.selector)).press(action.key);
         break;
       case "selectOption":
+      case "selectOptions":
       case "setChecked":
         nativeForm = await actNativeForm(page, action, context?.signal);
         break;
@@ -471,7 +481,7 @@ async function uniqueActionLocator(page: Page, selector: string, state: "visible
 }
 
 /** Native controls only. Never guess an option, force a click, or persist option contents. */
-async function actNativeForm(page: Page, action: Extract<Action, { kind: "selectOption" | "setChecked" }>, signal?: AbortSignal) {
+async function actNativeForm(page: Page, action: Extract<Action, { kind: "selectOption" | "selectOptions" | "setChecked" }>, signal?: AbortSignal) {
   signal?.throwIfAborted();
   const control = await uniqueActionLocator(page, action.selector);
   signal?.throwIfAborted();
@@ -488,26 +498,36 @@ async function actNativeForm(page: Page, action: Extract<Action, { kind: "select
     if (!matches) throw new InconclusiveError("native-state-unverified", "Native checked state did not match the requested state after the action.");
     return { kind: action.kind, verified: true, checked: action.checked };
   }
-  const option = await control.evaluate((element, requested) => {
-    if (!(element instanceof HTMLSelectElement) || element.multiple) return { valid: false, count: 0, index: -1, disabled: false };
-    const matches = Array.from(element.options).filter((item) => "value" in requested ? item.value === requested.value : item.label === requested.label);
-    const match = matches[0];
-    return { valid: true, count: matches.length, index: match?.index ?? -1,
-      disabled: Boolean(match?.disabled || (match?.parentElement instanceof HTMLOptGroupElement && match.parentElement.disabled)) };
-  }, action.option);
-  if (!option.valid) throw new InconclusiveError("native-control-type", "selectOption requires a native single-select control.");
-  if (option.count !== 1) throw new InconclusiveError("native-option-match", `Exact option matched ${option.count} entries; no selection was performed.`);
-  if (option.disabled) throw new InconclusiveError("native-option-disabled", "Requested option is disabled; no selection was performed.");
+  const requested = { multiple: action.kind === "selectOptions", options: action.kind === "selectOptions" ? action.options : [action.option] };
+  const selection = await control.evaluate((element, requested) => {
+    if (!(element instanceof HTMLSelectElement) || element.multiple !== requested.multiple) return { valid: false, matches: [] };
+    return { valid: true, matches: requested.options.map((option) => {
+      const matches = Array.from(element.options).filter((item) => "value" in option ? item.value === option.value : item.label === option.label);
+      const match = matches[0];
+      return { count: matches.length, index: match?.index ?? -1,
+        disabled: Boolean(match?.disabled || (match?.parentElement instanceof HTMLOptGroupElement && match.parentElement.disabled)) };
+    }) };
+  }, requested);
+  if (!selection.valid) throw new InconclusiveError("native-control-type", `${action.kind} requires a native ${requested.multiple ? "multiple" : "single"}-select control.`);
+  const invalid = selection.matches.find((match) => match.count !== 1);
+  if (invalid) throw new InconclusiveError("native-option-match", `Exact option matched ${invalid.count} entries; no selection was performed.`);
+  if (new Set(selection.matches.map((match) => match.index)).size !== selection.matches.length) {
+    throw new InconclusiveError("native-option-match", "Requested options resolve to the same entry; no selection was performed.");
+  }
+  if (selection.matches.some((match) => match.disabled)) throw new InconclusiveError("native-option-disabled", "Requested option is disabled; no selection was performed.");
   signal?.throwIfAborted();
-  await control.selectOption({ index: option.index }, { timeout: 10_000 });
+  await control.selectOption(selection.matches.map((match) => ({ index: match.index })), { timeout: 10_000 });
   signal?.throwIfAborted();
   const matches = await control.evaluate((element, requested) => {
-    if (!(element instanceof HTMLSelectElement) || element.multiple || element.selectedOptions.length !== 1) return false;
-    const exact = Array.from(element.options).filter((item) => "value" in requested ? item.value === requested.value : item.label === requested.label);
-    return exact.length === 1 && element.selectedOptions[0] === exact[0];
-  }, action.option);
-  if (!matches) throw new InconclusiveError("native-state-unverified", "Native selected state did not match the exact requested option after the action.");
-  return { kind: action.kind, verified: true, selectedCount: 1 };
+    if (!(element instanceof HTMLSelectElement) || element.multiple !== requested.multiple
+      || element.selectedOptions.length !== requested.options.length) return false;
+    const exact = requested.options.map((option) => Array.from(element.options)
+      .filter((item) => "value" in option ? item.value === option.value : item.label === option.label));
+    return exact.every((matches) => matches.length === 1) && new Set(exact.map((matches) => matches[0])).size === exact.length
+      && exact.every((matches) => Array.from(element.selectedOptions).includes(matches[0]!));
+  }, requested);
+  if (!matches) throw new InconclusiveError("native-state-unverified", "Native selected state did not match the exact requested option set after the action.");
+  return { kind: action.kind, verified: true, selectedCount: requested.options.length };
 }
 
 /** Project only declared patterns from the live URL; hash parameters stay local. */

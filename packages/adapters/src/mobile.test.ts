@@ -13,6 +13,7 @@ describe("MobileAdapter", () => {
     globalThis.fetch = vi.fn() as typeof fetch;
     const adapter = new MobileAdapter({ serverUrl: "http://127.0.0.1:4723", sessionId: "existing" });
     await expect(adapter.act({ kind: "selectOption", selector: "#status", option: { label: "Complete" } })).rejects.toThrow("not supported");
+    await expect(adapter.act({ kind: "selectOptions", selector: "#statuses", options: [] })).rejects.toThrow("not supported");
     await expect(adapter.act({ kind: "setChecked", selector: "#enabled", checked: true })).rejects.toThrow("not supported");
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebAdapter } from "@proofkit/adapters";
 import { ProofkitConfigSchema, TestCharterSchema } from "@proofkit/contracts";
+import type { Action } from "@proofkit/contracts";
 import { initProject } from "@proofkit/project";
 import { ProjectRuntime } from "@proofkit/runtime";
 import { LocalRunnerService } from "./index.js";
@@ -140,7 +141,8 @@ describe("external test workspace", () => {
     await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], actions: [{ kind: "click", selector: "#submit" }] } }))
       .rejects.toThrow("interactive action click requires sideEffectPolicy=allow");
     for (const action of [{ kind: "selectOption", selector: "#status", option: { label: "Complete" } },
-      { kind: "setChecked", selector: "#enabled", checked: true }] as const) {
+      { kind: "selectOptions", selector: "#statuses", options: [] },
+      { kind: "setChecked", selector: "#enabled", checked: true }] satisfies Action[]) {
       await expect(service.createMission({ intent: submitted.intent, charter: { ...submitted, oracles: [], actions: [action] } }))
         .rejects.toThrow(`interactive action ${action.kind} requires sideEffectPolicy=allow`);
     }

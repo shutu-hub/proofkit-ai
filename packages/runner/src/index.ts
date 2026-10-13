@@ -371,7 +371,7 @@ export class ExecutionRunner {
         }
       }
       assertFillEnvironment(charter.actions);
-      if (charter.actions.some((action) => action.kind === "selectOption" || action.kind === "setChecked") && charter.sideEffectPolicy !== "allow") {
+      if (charter.actions.some((action) => action.kind === "selectOption" || action.kind === "selectOptions" || action.kind === "setChecked") && charter.sideEffectPolicy !== "allow") {
         throw new BlockedError("Native form actions require sideEffectPolicy=allow");
       }
       if (charter.actions.some((action) => action.kind === "captureResponse")) {
