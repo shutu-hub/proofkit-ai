@@ -10,7 +10,7 @@ It is designed for workflows where a green button is not enough: a resume must b
 
 See the [Chinese architecture overview](docs/architecture-overview.zh-CN.md) for the host-agent integration, execution layers and current capability boundaries.
 
-Public evaluation uses [WebArena-Verified](docs/public-benchmark.md) with pinned tasks and independent official scoring. The latest complete single-site, single-host run scored **8/12**, including two timeouts without submissions; this is one observed run, not a certified or stable effectiveness score. The [validation program](docs/validation-program.md) separates framework checks, public tasks and AIHR business acceptance, with 24 WebArena candidates, 20 lightweight interaction candidates and 12 AIHR business candidates at different readiness stages.
+Public evaluation uses [WebArena-Verified](docs/public-benchmark.md) with pinned tasks and independent official scoring. The latest complete single-site, single-host run scored **6/12**, including one timeout without submission, down from the previous **8/12**. Fewer failed actions did not improve task outcomes; model identity remains unsealed, so these observations establish neither causal improvement nor stable effectiveness. The [validation program](docs/validation-program.md) separates framework checks, public tasks and AIHR business acceptance, with 24 WebArena candidates, 20 lightweight interaction candidates and 12 AIHR business candidates at different readiness stages.
 
 ## What it does
 

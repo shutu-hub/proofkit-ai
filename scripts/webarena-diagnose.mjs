@@ -94,7 +94,9 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
     const classification = classify(item, host, checks, admission);
     const investigationSignals = [];
     if (admission?.status === "batch-blocked") investigationSignals.push("benchmark-environment-admission");
-    if ((host?.toolStats?.preToolStreamReconnects ?? 0) > 0) investigationSignals.push("provider-stream-reconnect");
+    if ((host?.toolStats?.preToolStreamReconnects ?? 0) + (host?.toolStats?.postToolStreamReconnects ?? 0) > 0) {
+      investigationSignals.push("provider-stream-reconnect");
+    }
     if ((host?.toolStats?.resourceDiscoveryFailures ?? 0) > 0) investigationSignals.push("unsupported-resource-discovery");
     if ((host?.toolStats?.inputRejections ?? 0) > 0) investigationSignals.push("tool-input-contract");
     const exploratoryActions = host?.toolStatsIntegrity === "verified" ? host.toolStats?.exploratoryActions ?? null : null;
@@ -119,6 +121,7 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
         resourceDiscoveryFailures: host.toolStats?.resourceDiscoveryFailures ?? null,
         taskToolFailures: host.toolStats?.taskToolFailures ?? null,
         preToolStreamReconnects: host.toolStats?.preToolStreamReconnects ?? null,
+        postToolStreamReconnects: host.toolStats?.postToolStreamReconnects ?? null,
         firstToolCallAtMs: host.execution?.milestones?.firstToolCallAtMs ?? null,
         testStandard: host.audit?.testStandard ?? null,
         toolStatsIntegrity: host.toolStatsIntegrity ?? "unavailable" } : null,
@@ -149,6 +152,7 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
         resourceDiscoveryFailures: items.reduce((sum, item) => sum + (item.host?.resourceDiscoveryFailures ?? 0), 0),
         taskToolFailures: items.reduce((sum, item) => sum + (item.host?.taskToolFailures ?? 0), 0),
         preToolStreamReconnects: items.reduce((sum, item) => sum + (item.host?.preToolStreamReconnects ?? 0), 0),
+        postToolStreamReconnects: items.reduce((sum, item) => sum + (item.host?.postToolStreamReconnects ?? 0), 0),
         exploratoryActions: sumActions(items),
         traceVerified: items.filter((item) => item.host?.toolStatsIntegrity === "verified").length }];
     }));
@@ -168,7 +172,8 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
       inputRejections: cases.reduce((sum, item) => sum + (item.host?.inputRejections ?? 0), 0),
       resourceDiscoveryFailures: cases.reduce((sum, item) => sum + (item.host?.resourceDiscoveryFailures ?? 0), 0),
       taskToolFailures: cases.reduce((sum, item) => sum + (item.host?.taskToolFailures ?? 0), 0),
-      preToolStreamReconnects: cases.reduce((sum, item) => sum + (item.host?.preToolStreamReconnects ?? 0), 0) },
+      preToolStreamReconnects: cases.reduce((sum, item) => sum + (item.host?.preToolStreamReconnects ?? 0), 0),
+      postToolStreamReconnects: cases.reduce((sum, item) => sum + (item.host?.postToolStreamReconnects ?? 0), 0) },
     cases,
     interpretation: "Observed stage only. Product, model, tool and evaluator root causes require evidence review and controlled rerun." };
 }
@@ -204,15 +209,18 @@ function classify(grade, host, checks, admission) {
 
 export function summarizeHostEvents(jsonl) {
   let completed = 0, failed = 0, inputRejections = 0;
-  let resourceDiscoveryFailures = 0, taskToolFailures = 0, preToolStreamReconnects = 0;
+  let resourceDiscoveryFailures = 0, taskToolFailures = 0, preToolStreamReconnects = 0, postToolStreamReconnects = 0;
   let firstToolCompleted = false;
   const tools = new Map();
   const exploratoryActions = emptyActions();
   for (const line of jsonl.split(/\r?\n/)) {
     let event;
     try { event = JSON.parse(line); } catch { continue; }
-    if (!firstToolCompleted && event?.type === "error" && typeof event.message === "string"
-      && /stream disconnected|reconnecting/i.test(event.message)) preToolStreamReconnects += 1;
+    if (event?.type === "error" && typeof event.message === "string"
+      && /stream disconnected|reconnecting/i.test(event.message)) {
+      if (firstToolCompleted) postToolStreamReconnects += 1;
+      else preToolStreamReconnects += 1;
+    }
     if (event?.type !== "item.completed" || event.item?.type !== "mcp_tool_call") continue;
     firstToolCompleted = true;
     const name = typeof event.item.tool === "string" ? event.item.tool : "unknown";
@@ -247,6 +255,7 @@ export function summarizeHostEvents(jsonl) {
     tools.set(name, (tools.get(name) ?? 0) + 1);
   }
   return { completed, failed, inputRejections, resourceDiscoveryFailures, taskToolFailures, preToolStreamReconnects,
+    postToolStreamReconnects,
     exploratoryActions,
     tools: Object.fromEntries([...tools].sort(([a], [b]) => a.localeCompare(b))) };
 }
@@ -267,7 +276,8 @@ export function renderDiagnosis(report) {
     + `<td>${escape(item.official.checks?.answer ?? "—")}</td><td>${item.official.checks ? `${item.official.checks.network.passed}/${item.official.checks.network.failed}/${item.official.checks.network.errors}` : "—"}</td>`
     + `<td>${item.host?.failedToolCalls ?? "—"}/${item.host?.toolCalls ?? "—"}</td><td>${item.host?.resourceDiscoveryFailures ?? "—"}</td>`
     + `<td>${item.host?.exploratoryActions ? `${item.host.exploratoryActions.failed}/${item.host.exploratoryActions.attempted}; ${item.host.exploratoryActions.unknown} unknown` : "未核验"}</td>`
-    + `<td>${item.host?.preToolStreamReconnects ?? "—"} / ${item.host?.firstToolCallAtMs ?? "—"} ms</td>`
+    + `<td>${item.host?.preToolStreamReconnects ?? "—"} / ${item.host?.postToolStreamReconnects ?? "—"}</td>`
+    + `<td>${item.host?.firstToolCallAtMs ?? "—"} ms</td>`
     + `<td>${escape(item.investigationSignals.join(", ") || "—")}</td>`
     + `<td>${escape(item.classification.nextCheck)}</td></tr>`).join("\n");
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>ProofKit 基准诊断</title>`
@@ -277,7 +287,7 @@ export function renderDiagnosis(report) {
     + `<h1>基准诊断</h1><p class="score">${report.officialEvaluated ? `${report.officialSuccess}/${report.planned} 官方成功` : "官方成绩未测量"}</p>`
     + `<p class="muted">官方已评判 ${report.officialEvaluated}/${report.planned}；未运行题目仍留在固定分母。</p>`
     + `<p class="muted">官方子评判可用 ${report.officialDetailCoverage.available}/${report.officialDetailCoverage.evaluated}；仅保留状态，不复制答案和请求内容。</p>`
-    + `<p class="muted">${report.friction.inputRejections} 次工具入参拒绝；${report.friction.resourceDiscoveryFailures} 次 MCP resources 探测失败；首次已完成工具调用前有 ${report.friction.preToolStreamReconnects} 次模型流重连。失败类别表示观察到的阶段，根因须复核证据并重复运行。</p>`
+    + `<p class="muted">${report.friction.inputRejections} 次工具入参拒绝；${report.friction.resourceDiscoveryFailures} 次 MCP resources 探测失败；首次工具调用完成前/后有 ${report.friction.preToolStreamReconnects} / ${report.friction.postToolStreamReconnects ?? 0} 次模型流重连。重连仅为调查信号，不证明超时或失败根因。失败类别表示观察到的阶段，根因须复核证据并重复运行。</p>`
     + `<h2>探索动作结果</h2><p class="muted">已核验动作轨迹 ${report.friction.actionTraceCoverage}/${report.planned} 题。RPC 完成不等于页面动作成功；observed 仅表示执行并观察，不证明业务正确。</p>`
     + `<p>${Object.entries(report.friction.exploratoryActions).map(([status, count]) => `${escape(status)}: ${count}`).join(" · ")}</p>`
     + `<h2>调查信号</h2><p class="muted">一题可有多个信号；计数是受影响题数，不是已确认根因。</p>`
@@ -285,7 +295,7 @@ export function renderDiagnosis(report) {
     + `<h2>任务能力组</h2><p class="muted">按预先固定的任务意图分组；低分是调查线索，不等于已确认的框架根因。</p>`
     + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>已评判/计划</th><th>宿主超时</th><th>结果失败</th><th>回答判分失败</th><th>网络判分失败</th><th>入参拒绝</th><th>动作失败/尝试；未知</th><th>Mission/仅表面</th><th>已核验轨迹</th></tr></thead>`
     + `<tbody>${groups}</tbody></table><h2>逐题诊断</h2>`
-    + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>测试标准</th><th>观察类别</th><th>回答判分</th><th>网络通过/失败/错误</th><th>RPC 失败/总数</th><th>resources 失败</th><th>动作失败/尝试；未知</th><th>首工具前重连/首工具时间</th><th>调查信号</th><th>下一步核查</th></tr></thead>`
+    + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>测试标准</th><th>观察类别</th><th>回答判分</th><th>网络通过/失败/错误</th><th>RPC 失败/总数</th><th>resources 失败</th><th>动作失败/尝试；未知</th><th>首次工具完成前/后重连</th><th>首工具事件时间</th><th>调查信号</th><th>下一步核查</th></tr></thead>`
     + `<tbody>${rows}</tbody></table></html>`;
 }
 
