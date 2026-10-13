@@ -58,6 +58,8 @@ const web = createServer((request, response) => {
     <button id="fetch" onclick="document.querySelector('#result').textContent='Resume ready'">Fetch resume</button>
     <button onclick="document.querySelector('#result').textContent='Details ready'">Show details</button>
     <button>Duplicate</button><button>Duplicate</button>
+    <a href="#" role="menuitem" style="text-transform:uppercase" onclick="document.querySelector('#result').textContent='Catalog opened';return false"><span>Catalog</span></a>
+    <button role="menuitem" onclick="document.querySelector('#result').textContent='Filters opened'">Filters</button><button style="display:none">Filters</button>
     <div id="result"></div>
     <select id="status" onchange="document.querySelector('#selection').textContent='Selection '+this.value">
       <option value="">Choose</option><option value="complete">Complete</option><option value="pending">Pending</option>
@@ -279,6 +281,20 @@ try {
   assert.equal(details?.selector, 'role=button[name="Show details"]');
   assert.equal(duplicates.length, 2);
   assert.ok(duplicates.every((item) => item.selector === undefined));
+  const catalog = inspection.snapshot.controls.find((item) => item.name === "CATALOG");
+  assert.equal(catalog?.selector, 'a:has(:text-is("Catalog")):visible');
+  const catalogResponse = await client.callTool({ name: "interact_surface", arguments: {
+    action: { kind: "click", selector: catalog.selector } } });
+  const catalogResult = JSON.parse(catalogResponse.content.find((item) => item.type === "text").text);
+  assert.equal(catalogResult.status, "observed");
+  assert.ok(catalogResult.snapshot.text.includes("Catalog opened"));
+  const filters = inspection.snapshot.controls.find((item) => item.name === "Filters");
+  assert.equal(filters?.selector, 'button:text-is("Filters"):visible');
+  const filtersResponse = await client.callTool({ name: "interact_surface", arguments: {
+    action: { kind: "click", selector: filters.selector } } });
+  const filtersResult = JSON.parse(filtersResponse.content.find((item) => item.type === "text").text);
+  assert.equal(filtersResult.status, "observed");
+  assert.ok(filtersResult.snapshot.text.includes("Filters opened"));
   assert.deepEqual(inspection.snapshot.controls.find((item) => item.selector === "#status").nativeActions, ["selectOption"]);
   const multipleControl = inspection.snapshot.controls.find((item) => item.selector === "#multi");
   assert.equal(multipleControl.role, "listbox");

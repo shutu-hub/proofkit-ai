@@ -176,7 +176,8 @@ export class WebAdapter implements SurfaceAdapter {
         const id = html.id || undefined;
         return { tag, role, inputType: tag === "input" ? type ?? "text" : undefined,
           visible: html.getClientRects().length > 0 && getComputedStyle(html).visibility !== "hidden" && html.getAttribute("aria-hidden") !== "true",
-          name: name.trim(), id, idSelector: id ? `#${CSS.escape(id)}` : undefined,
+          name: name.trim(), domText: ["a", "button"].includes(tag) ? html.textContent?.trim() : undefined,
+          id, idSelector: id ? `#${CSS.escape(id)}` : undefined,
           testId, testIdAttribute, disabled: html.matches(":disabled") || html.getAttribute("aria-disabled") === "true",
           nativeForm: html instanceof HTMLSelectElement ? { kind: "select" as const, multiple: html.multiple,
             optionCount: html.options.length, selectedCount: html.selectedOptions.length }
@@ -201,6 +202,17 @@ export class WebAdapter implements SurfaceAdapter {
       }
       if (rawName && name === rawName && ["button", "link", "textbox", "combobox", "listbox", "checkbox", "radio"].includes(candidate.role)) {
         selectors.push({ value: `role=${candidate.role}[name=${JSON.stringify(rawName)}]`, kind: "role" });
+      }
+      // CSS text-transform can change innerText without changing DOM text or the
+      // accessible name. Exact text may live in a nested span; each fallback
+      // still requires a unique visible match.
+      const domText = candidate.domText?.slice(0, 120);
+      if (domText && sanitizeSurfaceText(domText, 120) === domText) {
+        if (domText !== rawName && ["link", "button"].includes(candidate.role)) {
+          selectors.push({ value: `role=${candidate.role}[name=${JSON.stringify(domText)}]`, kind: "role" });
+        }
+        selectors.push({ value: `${candidate.tag}:text-is(${JSON.stringify(domText)}):visible`, kind: "css" });
+        selectors.push({ value: `${candidate.tag}:has(:text-is(${JSON.stringify(domText)})):visible`, kind: "css" });
       }
       if (candidate.inputType === "file") selectors.push({ value: 'input[type="file"]', kind: "css" });
       for (const selector of selectors) {
