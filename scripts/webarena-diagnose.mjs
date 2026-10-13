@@ -7,6 +7,8 @@ import { benchmarkProfiles } from "./webarena-benchmark-lib.mjs";
 const MAX_REPORT_BYTES = 1024 * 1024;
 const MAX_EVENTS_BYTES = 16 * 1024 * 1024;
 const MAX_OFFICIAL_BYTES = 16 * 1024 * 1024;
+const RESPONSE_STATUSES = new Set(["SUCCESS", "ACTION_NOT_ALLOWED_ERROR", "PERMISSION_DENIED_ERROR",
+  "NOT_FOUND_ERROR", "DATA_VALIDATION_ERROR", "UNKNOWN_ERROR"]);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const emptyActions = () => ({ attempted: 0, observed: 0, failed: 0, blocked: 0, cancelled: 0, unknown: 0, rpcFailed: 0 });
 const sumActions = (items) => items.reduce((total, item) => {
@@ -109,8 +111,12 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
     if (host?.execution?.timedOut) investigationSignals.push("host-deadline");
     if (host?.audit?.issues?.some((issue) => issue === "task-capture-unavailable"
       || issue === "task-capture-artifact-unavailable")) investigationSignals.push("capture-artifact-unavailable");
+    const declaredStatus = host?.submissionStatusIntegrity === "verified" && RESPONSE_STATUSES.has(host.submissionStatus)
+      ? host.submissionStatus : null;
+    if (declaredStatus && declaredStatus !== "SUCCESS") investigationSignals.push("agent-declared-error");
     if (checks?.missingNetworkEvent) investigationSignals.push("action-network-evidence");
-    if (["failure", "partial_match"].includes(checks?.answer)) investigationSignals.push("answer-oracle-mismatch");
+    if (["failure", "partial_match"].includes(checks?.answer)
+      && (declaredStatus === null || declaredStatus === "SUCCESS")) investigationSignals.push("answer-oracle-mismatch");
     if (host?.audit?.testStandard === "surface-only" && item.status !== "success") investigationSignals.push("surface-only-verification");
     return {
       taskId: item.taskId,
@@ -121,6 +127,8 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
         toolCalls: host.toolStats?.completed ?? null, failedToolCalls: host.toolStats?.failed ?? null,
         exploratoryActions,
         exploratoryFailureCodes: failureCodes,
+        submissionStatus: declaredStatus,
+        submissionStatusIntegrity: host.submissionStatusIntegrity ?? "unavailable",
         inputRejections: host.toolStats?.inputRejections ?? null,
         resourceDiscoveryFailures: host.toolStats?.resourceDiscoveryFailures ?? null,
         taskToolFailures: host.toolStats?.taskToolFailures ?? null,
@@ -148,6 +156,7 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
         hostTimeout: items.filter((item) => item.classification.code === "host-timeout").length,
         outcomeFailed: items.filter((item) => ["failure", "partial_match"].includes(item.official.status)).length,
         answerCheckFailed: items.filter((item) => ["failure", "partial_match"].includes(item.official.checks?.answer)).length,
+        agentDeclaredError: items.filter((item) => item.classification.code === "agent-declared-error").length,
         networkCheckFailed: items.filter((item) => (item.official.checks?.network.failed ?? 0) > 0).length,
         missingNetworkEvent: items.filter((item) => item.official.checks?.missingNetworkEvent).length,
         missionVerified: items.filter((item) => item.host?.testStandard === "mission-verified").length,
@@ -189,6 +198,7 @@ function classify(grade, host, checks, admission) {
   }
   if (!host) return result("no-host-record", "admission", "Locate the task attempt or run it with a recorded host session.");
   if (host.toolStatsIntegrity === "changed") return result("trace-integrity-gap", "evidence", "Verify the saved host JSONL against its recorded SHA-256 before attribution.");
+  if (host.submissionStatusIntegrity === "changed") return result("submission-integrity-gap", "evidence", "Verify the submitted response against its sealed SHA-256 before attribution.");
   if (host.execution?.blocker || host.status === "infrastructure-blocked") {
     return result("host-infrastructure-blocked", "host", "Check provider access, MCP availability and host startup separately from task quality.");
   }
@@ -202,6 +212,11 @@ function classify(grade, host, checks, admission) {
     return result("evaluation-gap", "evaluator", "Check staged response/HAR and official evaluator diagnostics.");
   }
   if (grade.status === "success" && grade.score === 1) return result("passed", "complete", "Repeat under the same pinned environment to measure stability.");
+  if (host.submissionStatusIntegrity === "verified" && RESPONSE_STATUSES.has(host.submissionStatus)
+    && host.submissionStatus !== "SUCCESS") {
+    return result("agent-declared-error", "agent-result",
+      "Inspect why the host could not verify an exact result; preserve its declared error separately from an incorrect success claim.");
+  }
   if (checks?.missingNetworkEvent) return result("network-evidence-missing", "network-evidence",
     "Inspect the browser action trace and HAR against the official network requirement; verify the rubric before assigning blame.");
   if (["failure", "partial_match"].includes(checks?.answer)
@@ -280,10 +295,10 @@ export function renderDiagnosis(report) {
   const groups = Object.entries(report.capabilityGroups).map(([group, value]) =>
     `<tr><td>${escape(group)}</td><td>${value.officialEvaluated ? `${value.officialSuccess}/${value.planned}` : "未评分"}</td>`
     + `<td>${value.officialEvaluated}/${value.planned}</td>`
-    + `<td>${value.hostTimeout}</td><td>${value.outcomeFailed}</td><td>${value.answerCheckFailed}</td><td>${value.networkCheckFailed}</td>`
+    + `<td>${value.hostTimeout}</td><td>${value.outcomeFailed}</td><td>${value.answerCheckFailed}</td><td>${value.agentDeclaredError}</td><td>${value.networkCheckFailed}</td>`
     + `<td>${value.inputRejections}</td><td>${value.exploratoryActions.failed}/${value.exploratoryActions.attempted}; ${value.exploratoryActions.unknown} unknown</td><td>${value.missionVerified}/${value.surfaceOnly}</td><td>${value.traceVerified}/${value.planned}</td></tr>`).join("\n");
   const rows = report.cases.map((item) => `<tr><td>${item.taskId}</td><td>${escape(item.official.status)}</td>`
-    + `<td>${escape(item.host?.status ?? "missing")}</td><td>${escape(item.host?.testStandard ?? "—")}</td><td>${escape(item.classification.code)}</td>`
+    + `<td>${escape(item.host?.status ?? "missing")}${item.host?.submissionStatus ? ` · ${escape(item.host.submissionStatus)}` : ""}</td><td>${escape(item.host?.testStandard ?? "—")}</td><td>${escape(item.classification.code)}</td>`
     + `<td>${escape(item.official.checks?.answer ?? "—")}</td><td>${item.official.checks ? `${item.official.checks.network.passed}/${item.official.checks.network.failed}/${item.official.checks.network.errors}` : "—"}</td>`
     + `<td>${item.host?.failedToolCalls ?? "—"}/${item.host?.toolCalls ?? "—"}</td><td>${item.host?.resourceDiscoveryFailures ?? "—"}</td>`
     + `<td>${item.host?.exploratoryActions ? `${item.host.exploratoryActions.failed}/${item.host.exploratoryActions.attempted}; ${item.host.exploratoryActions.unknown} unknown` : "未核验"}</td>`
@@ -304,7 +319,7 @@ export function renderDiagnosis(report) {
     + `<h2>调查信号</h2><p class="muted">一题可有多个信号；计数是受影响题数，不是已确认根因。</p>`
     + `<p>${Object.entries(report.investigationCounts).map(([signal, count]) => `${escape(signal)}: ${count}`).join(" · ") || "暂无"}</p>`
     + `<h2>任务能力组</h2><p class="muted">按预先固定的任务意图分组；低分是调查线索，不等于已确认的框架根因。</p>`
-    + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>已评判/计划</th><th>宿主超时</th><th>结果失败</th><th>回答判分失败</th><th>网络判分失败</th><th>入参拒绝</th><th>动作失败/尝试；未知</th><th>Mission/仅表面</th><th>已核验轨迹</th></tr></thead>`
+    + `<table><thead><tr><th>任务组</th><th>官方成功</th><th>已评判/计划</th><th>宿主超时</th><th>结果失败</th><th>回答判分失败</th><th>Agent 声明错误</th><th>网络判分失败</th><th>入参拒绝</th><th>动作失败/尝试；未知</th><th>Mission/仅表面</th><th>已核验轨迹</th></tr></thead>`
     + `<tbody>${groups}</tbody></table><h2>逐题诊断</h2>`
     + `<table><thead><tr><th>任务</th><th>官方</th><th>宿主</th><th>测试标准</th><th>观察类别</th><th>回答判分</th><th>网络通过/失败/错误</th><th>RPC 失败/总数</th><th>resources 失败</th><th>动作失败/尝试；未知</th><th>首次工具完成前/后重连</th><th>首工具事件时间</th><th>调查信号</th><th>下一步核查</th></tr></thead>`
     + `<tbody>${rows}</tbody></table></html>`;
@@ -373,6 +388,22 @@ async function main() {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
       host.toolStatsIntegrity = "unavailable";
+    }
+    host.submissionStatusIntegrity = "unavailable";
+    if (host.status === "associated" && typeof host.submission?.responseSha256 === "string") {
+      try {
+        const responsePath = join(dirname(hostPath), "submissions", String(host.taskId), "agent_response.json");
+        const responseBytes = await bounded(responsePath, MAX_REPORT_BYTES);
+        if (sha256(responseBytes) === host.submission.responseSha256) {
+          const response = JSON.parse(responseBytes.toString("utf8"));
+          if (RESPONSE_STATUSES.has(response?.status)) {
+            host.submissionStatus = response.status;
+            host.submissionStatusIntegrity = "verified";
+          } else host.submissionStatusIntegrity = "changed";
+        } else host.submissionStatusIntegrity = "changed";
+      } catch (error) {
+        if (error.code !== "ENOENT") host.submissionStatusIntegrity = "changed";
+      }
     }
     hosts.push(host);
     provenance.hostReports.push({ taskId: host.taskId, sha256: sha256(bytes) });

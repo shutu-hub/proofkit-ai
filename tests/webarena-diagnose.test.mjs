@@ -25,15 +25,15 @@ test("merges every planned task with the host attempt and keeps root causes unco
   assert.deepEqual(report.classificationCounts, { "host-timeout": 1, passed: 2, "task-outcome-failed": 1 });
   assert.deepEqual(report.capabilityGroups, {
     mutate: { planned: 1, officialEvaluated: 1, officialSuccess: 0, hostTimeout: 0, outcomeFailed: 1,
-      answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 0,
+      answerCheckFailed: 0, agentDeclaredError: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 0,
       resourceDiscoveryFailures: 0, taskToolFailures: 0, preToolStreamReconnects: 0, postToolStreamReconnects: 0,
       exploratoryActions: noActions(), missionVerified: 0, surfaceOnly: 0, traceVerified: 1 },
     navigate: { planned: 1, officialEvaluated: 1, officialSuccess: 1, hostTimeout: 0, outcomeFailed: 0,
-      answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 3,
+      answerCheckFailed: 0, agentDeclaredError: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 3,
       resourceDiscoveryFailures: 0, taskToolFailures: 0, preToolStreamReconnects: 0, postToolStreamReconnects: 0,
       exploratoryActions: noActions(), missionVerified: 0, surfaceOnly: 0, traceVerified: 1 },
     retrieve: { planned: 2, officialEvaluated: 1, officialSuccess: 1, hostTimeout: 1, outcomeFailed: 0,
-      answerCheckFailed: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 5,
+      answerCheckFailed: 0, agentDeclaredError: 0, networkCheckFailed: 0, missingNetworkEvent: 0, inputRejections: 5,
       resourceDiscoveryFailures: 0, taskToolFailures: 0, preToolStreamReconnects: 0, postToolStreamReconnects: 0,
       exploratoryActions: noActions(), missionVerified: 0, surfaceOnly: 0, traceVerified: 2 },
   });
@@ -84,6 +84,25 @@ test("an answer-only failure stays separate from network action failures", () =>
   assert.equal(report.cases[0].classification.code, "answer-check-failed");
   assert.equal(report.capabilityGroups.unclassified.answerCheckFailed, 1);
   assert.equal(report.capabilityGroups.unclassified.networkCheckFailed, 0);
+});
+
+test("separates a sealed Agent error submission from an incorrect success claim", () => {
+  const grade = { summary: { planned: 1 }, cases: [{ taskId: 62, status: "failure", score: 0 }] };
+  const details = summarizeOfficialChecks({ results: [{ caseId: "62", result: {
+    task_id: 62, status: "failure", score: 0,
+    evaluators_results: [{ evaluator_name: "AgentResponseEvaluator", status: "failure" }],
+  } }] }, grade);
+  const host = { taskId: 62, status: "associated", submissionStatus: "UNKNOWN_ERROR",
+    submissionStatusIntegrity: "verified", toolStatsIntegrity: "verified" };
+  const report = diagnoseBatch(grade, [host], details);
+  assert.equal(report.cases[0].classification.code, "agent-declared-error");
+  assert.equal(report.cases[0].host.submissionStatus, "UNKNOWN_ERROR");
+  assert.deepEqual(report.cases[0].investigationSignals, ["agent-declared-error"]);
+  assert.equal(report.capabilityGroups.unclassified.agentDeclaredError, 1);
+  assert.equal(report.capabilityGroups.unclassified.answerCheckFailed, 1);
+  assert.match(renderDiagnosis(report), /UNKNOWN_ERROR/);
+  const changed = diagnoseBatch(grade, [{ ...host, submissionStatusIntegrity: "changed" }], details);
+  assert.equal(changed.cases[0].classification.code, "submission-integrity-gap");
 });
 
 test("an admission blocker never appears as a measured zero score", () => {
