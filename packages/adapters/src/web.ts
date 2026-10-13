@@ -491,7 +491,41 @@ async function actNativeForm(page: Page, action: Extract<Action, { kind: "select
     if (type !== "checkbox" && type !== "radio") throw new InconclusiveError("native-control-type", "setChecked requires a native checkbox or radio input.");
     if (type === "radio" && !action.checked) throw new InconclusiveError("native-radio-uncheck", "Select another radio option to clear this radio input.");
     signal?.throwIfAborted();
-    await control.setChecked(action.checked, { timeout: 10_000 });
+    if (await control.isChecked() !== action.checked) {
+      await control.scrollIntoViewIfNeeded({ timeout: 10_000 });
+      // Styled native switches often cover the input with its own associated label.
+      // Use only the label at the input click point, never a nearby caption or forced click.
+      const activation = await control.evaluateHandle((element) => {
+        if (!(element instanceof HTMLInputElement)) return null;
+        const rect = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        const labels = Array.from(element.labels ?? []).filter((label) => label.control === element
+          && (label === hit || label.contains(hit)) && !label.contains(element));
+        return labels.length > 1 ? "ambiguous" : labels[0] ?? null;
+      });
+      try {
+        const label = activation.asElement();
+        if (label) {
+          const input = await control.elementHandle();
+          try {
+            signal?.throwIfAborted();
+            if (!input || !await label.evaluate((element, input) => element instanceof HTMLLabelElement
+              && element.control === input, input)) {
+              throw new InconclusiveError("native-state-unverified", "Native label association changed before activation.");
+            }
+            if (!await control.isEnabled()) throw new InconclusiveError("native-control-disabled", "Native form control is disabled; no action was performed.");
+            // Another UI event may already have achieved the requested state while scrolling.
+            if (await control.isChecked() !== action.checked) await label.click({ timeout: 10_000 });
+          } finally { await input?.dispose(); }
+        } else {
+          if (await activation.jsonValue() === "ambiguous") {
+            throw new InconclusiveError("native-label-match", "Multiple native labels cover the control; no action was performed.");
+          }
+          signal?.throwIfAborted();
+          await control.setChecked(action.checked, { timeout: 10_000 });
+        }
+      } finally { await activation.dispose(); }
+    }
     signal?.throwIfAborted();
     const matches = await control.evaluate((element, checked) => element instanceof HTMLInputElement
       && ["checkbox", "radio"].includes(element.type) && element.checked === checked, action.checked);

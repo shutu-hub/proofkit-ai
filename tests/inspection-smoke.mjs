@@ -40,7 +40,14 @@ const web = createServer((request, response) => {
       <option value="off" disabled>Disabled</option><optgroup label="Unavailable" disabled><option value="group-off">Group disabled</option></optgroup>
     </select><div id="selection"></div>
     <input type="checkbox" id="enabled" onchange="document.querySelector('#changes').textContent='Changes '+(++window.changes)+' checked '+this.checked"><div id="changes">Changes 0 checked false</div>
-    <script>window.changes=0</script>
+    <style>.native-toggle{position:relative;display:inline-block;width:48px;height:24px;margin:8px}.native-toggle input{position:absolute;inset:0;width:48px;height:24px;margin:0}.native-toggle label,.native-toggle .unrelated-cover{position:absolute;inset:0;background:#ddd;border:1px solid #888;z-index:2}.native-toggle label span{display:block;width:100%;height:100%}</style>
+    <label for="styled">Styled caption</label><div class="native-toggle"><input id="styled" type="checkbox" onchange="document.querySelector('#styled-changes').textContent='Styled '+(++window.styledChanges)+' checked '+this.checked"><label for="styled"><span></span></label></div><div id="styled-changes">Styled 0 checked false</div>
+    <div class="native-toggle"><input id="styled-radio" type="radio" name="styled-group"><label for="styled-radio"><span></span></label></div>
+    <div class="native-toggle"><input id="styled-disabled" type="checkbox" disabled><label for="styled-disabled"><span></span></label></div>
+    <div class="native-toggle"><input id="styled-reset" type="checkbox" onchange="this.checked=false"><label for="styled-reset"><span></span></label></div>
+    <div class="native-toggle"><input id="unrelated-overlay" type="checkbox"><div class="unrelated-cover"></div></div>
+    <div class="native-toggle"><input id="ambiguous-label" type="checkbox"><label for="ambiguous-label"><label for="ambiguous-label"><span></span></label></label></div>
+    <script>window.changes=0;window.styledChanges=0</script>
     <select id="ambiguous-option"><option>Choose</option><option value="a">Same</option><option value="b">Same</option></select>
     <select id="disabled-select" disabled><option>Choose</option></select>
     <select id="multi" multiple onchange="document.querySelector('#multi-selection').textContent='Multi '+(Array.from(this.selectedOptions).map(o=>o.value).join(',')||'none')">
@@ -73,6 +80,14 @@ async function verifyNativeForms(interact, readRun, persistent = false) {
   }
   const radio = await interact({ kind: "setChecked", selector: "#radio", checked: true });
   assert.equal(radio.status, "observed");
+  for (const [checked, output] of [[true, "Styled 1 checked true"], [true, "Styled 1 checked true"], [false, persistent ? "Styled 2 checked false" : "Styled 0 checked false"]]) {
+    const result = await interact({ kind: "setChecked", selector: "#styled", checked });
+    assert.equal(result.status, "observed");
+    assert.ok(result.snapshot.text.includes(output), "Associated covering label must activate exactly once and retain idempotency");
+    const run = await readRun(result.interactionId);
+    assert.deepEqual(run.steps[0].receipt.metadata.nativeForm, { kind: "setChecked", verified: true, checked });
+  }
+  assert.equal((await interact({ kind: "setChecked", selector: "#styled-radio", checked: true })).status, "observed");
   for (const [options, output] of [
     [[{ value: "complete" }, { label: "Pending" }], "Multi complete,pending"],
     [[{ label: "Pending" }, { value: "complete" }], "Multi complete,pending"],
@@ -107,6 +122,10 @@ async function verifyNativeForms(interact, readRun, persistent = false) {
     [{ kind: "selectOption", selector: "#reset-select", option: { value: "complete" } }, "native-state-unverified"],
     [{ kind: "setChecked", selector: "#custom", checked: true }, "native-control-type"],
     [{ kind: "setChecked", selector: "#radio", checked: false }, "native-radio-uncheck"],
+    [{ kind: "setChecked", selector: "#styled-disabled", checked: true }, "native-control-disabled"],
+    [{ kind: "setChecked", selector: "#styled-reset", checked: true }, "native-state-unverified"],
+    [{ kind: "setChecked", selector: "#ambiguous-label", checked: true }, "native-label-match"],
+    [{ kind: "setChecked", selector: "#unrelated-overlay", checked: true }, "runner-operation-unverified"],
   ];
   for (const [action, code] of negatives) {
     const result = await interact(action);
@@ -117,6 +136,11 @@ async function verifyNativeForms(interact, readRun, persistent = false) {
     assert.equal(run.steps[0].receipt, undefined);
     const gap = JSON.parse(await readFile(join(workspaceRoot, ".proofkit/runs", run.steps[0].artifacts.find((path) => path.endsWith("-response-gap.json"))), "utf8"));
     assert.equal(gap.code, code);
+    if (persistent && action.kind === "setChecked" && ["#styled-disabled", "#ambiguous-label", "#unrelated-overlay"].includes(action.selector)) {
+      const unchanged = await interact({ kind: "waitForText", text: "Resume intake", timeoutMs: 1000 });
+      assert.equal(unchanged.status, "observed", "Rejected activation must preserve the original unchecked state");
+      assert.equal(unchanged.snapshot.controls.find((control) => control.selector === action.selector).nativeForm.checked, false);
+    }
     if (persistent && action.kind === "selectOptions" && action.selector === "#multi") {
       const unchanged = await interact({ kind: "waitForText", text: "Multi none", timeoutMs: 1000 });
       assert.equal(unchanged.status, "observed", "A rejected set must not partially mutate the persistent page");

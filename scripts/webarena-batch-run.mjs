@@ -157,7 +157,8 @@ async function verifyBrowser(chrome) {
   } finally { await browser.close(); }
 }
 
-async function resetSite(options, config) {
+/** Shared by real Agent batches and independent live UI evaluator controls. */
+export async function resetSite(options, config) {
   const old = await inspectContainer(options);
   if (old) assertPinnedContainer(old);
   await dockerRead(options, ["image", "inspect", IMAGE, "--format", "{{.Id}}"]).then(({ stdout }) => {

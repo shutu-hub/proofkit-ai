@@ -26,6 +26,8 @@
 
 新诊断：`D:/bench/admin12-codex-20261013-004-diagnosis-v3/report.html`，只读重算原始输入，不改官方判分；首次工具完成前/后重连分别 0/1 次，后者来自最终通过的 496，只是调查信号。004 是实际 Agent 回归，诊断重算未增加执行次数。24 题包含这 12 题、只新增 12 题，尚未真实整批执行或完成 UI 正例校准。扩容、轻量基准及 AIHR 候选见[验收方案](validation-program.md)。
 
+新增独立真实 UI 校准：`D:/bench/admin-live-controls-20261013-005/report.html`。453 的保存正例/无操作负例均通过校准，刷新和独立数据库状态一致；679 的正例虽完成筛选并录到正确请求，仍被官方拒绝，固定源码确认 NAVIGATE + GET 分支只选最后一次文档导航，与实际 AJAX 路径不一致。四个控制中三个符合预期；它们均为脚本控制，**AI 执行 0、原 6/12 不变**。679 诊断应标为评判器疑义，不能直接算作 ProofKit 筛选能力短板；24 题尚不能成为已校准的发布门槛。完整证据和改进闭环见[真实 UI 评判校准](validation-program.md#真实-ui-评判校准)。
+
 2026-10-12–13 的历史接口/fixture 验证（不计入上述 Agent 成绩）：
 
 | 检查 | 实际结果 | 能证明什么 |
@@ -295,6 +297,16 @@ pnpm benchmark:webarena:diagnose --grade D:/bench/grade-admin4-final-20261012/re
 ```
 
 输出 `report.json` 和简洁的 `report.html`，固定分母同时显示已尝试但未提交的超时题、官方结果、RPC 失败/入参拒绝、探索动作结果和待复核项。探索动作仅从哈希一致的宿主 JSONL 汇总，缺失结果为 unknown，未核验轨迹显示未核验；报告记录诊断脚本哈希。模型流重连按首次 MCP 工具完成前/后分别计数；首工具事件时间随宿主格式可能记录完成或 tool_use 事件，不是统一的动作开始时间。重连不改变官方分数或直接确认根因。后续基准扩容、AIHR 合成用例与修复回归门槛见[标准验收方案](validation-program.md)。
+
+### 独立真实 UI 校准入口
+
+可信评测侧执行，不向 Agent 开放。options JSON 使用批次执行器相同的绝对路径字段 `batch/config/upstream/python/chrome/root/workspaceRoot`，以及 `profile/host/dockerWsl/timeoutMs/output`；Windows 当前可复用 `D:/bench/admin-live-controls-20261013-options-005.json` 并将 `output` 改为新目录。批次须包含 453/679 开发题。这个专用校准器只运行四个控制，不读取新增保留题来调试工具：
+
+```powershell
+node scripts/webarena-live-controls.mjs D:/bench/live-calibration-options.json
+```
+
+输出目录必须全新且在产品、目标项目、工作区、上游和准备批次之外。每项使用固定站点重建和真实 UI，产品修改后刷新并独立读库；控制执行失败保留截图/HAR 后继续从新初态运行下一项。原始官方结果仅留在可信目录，HTML 和 stdout 只输出脱敏状态。任何控制未符合预期都会非零退出，不能把“成功拒绝负例”看作失败任务，或把校准比例算作 AI 成功率。
 
 ## 下一阶段：从真实试跑到可信评测
 
