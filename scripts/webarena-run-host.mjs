@@ -92,7 +92,10 @@ export async function runWebArenaHost({ sessionPath, batchPath, output, host = "
     + `Reserve time to submit before the host deadline; stop open-ended exploration when there is not enough time to verify the result.\n`
     + `You MUST call submit_benchmark_task exactly once before your final message, even if the task fails. `
     + `Infer task_type as RETRIEVE, NAVIGATE or MUTATE from the intent. Submit status SUCCESS only when the observed `
-    + `result supports it; use an error status otherwise. For NAVIGATE use retrieved_data=null; always include error_details.\n`
+    + `result supports it; use an error status otherwise. For RETRIEVE, SUCCESS requires an observed nonempty answer. `
+    + `If the correctly scoped search is verified empty, use NOT_FOUND_ERROR with retrieved_data=null; `
+    + `if the search scope or answer remains uncertain, use UNKNOWN_ERROR with retrieved_data=null. `
+    + `For NAVIGATE use retrieved_data=null; always include error_details.\n`
     + `await_test_result timeoutMs must be at most 30000; repeat the call for longer Missions. `
     + `Report uncertainty in your final explanation.\n`
     + `Do not use shell or filesystem tools to perform the task or alter benchmark artifacts.`;

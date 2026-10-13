@@ -63,7 +63,8 @@ test("official evaluator details identify missing action evidence without leakin
   assert.equal(report.cases[0].classification.code, "network-evidence-missing");
   assert.deepEqual(report.officialDetailCoverage, { available: 1, evaluated: 1 });
   assert.deepEqual(report.cases[0].official.checks,
-    { answer: "failure", network: { passed: 0, failed: 1, errors: 0 }, missingNetworkEvent: true });
+    { answer: "failure", answerStatusMismatch: false,
+      network: { passed: 0, failed: 1, errors: 0 }, missingNetworkEvent: true });
   assert.equal(report.capabilityGroups.unclassified.answerCheckFailed, 1);
   assert.equal(report.capabilityGroups.unclassified.networkCheckFailed, 1);
   assert.deepEqual(report.cases[0].investigationSignals,
@@ -84,6 +85,23 @@ test("an answer-only failure stays separate from network action failures", () =>
   assert.equal(report.cases[0].classification.code, "answer-check-failed");
   assert.equal(report.capabilityGroups.unclassified.answerCheckFailed, 1);
   assert.equal(report.capabilityGroups.unclassified.networkCheckFailed, 0);
+});
+
+test("official status mismatch is reported without copying the expected answer", () => {
+  const grade = { summary: { planned: 1 }, cases: [{ taskId: 183, status: "failure", score: 0 }] };
+  const details = summarizeOfficialChecks({ results: [{ caseId: "183", result: {
+    task_id: 183, status: "failure", score: 0,
+    evaluators_results: [{ evaluator_name: "AgentResponseEvaluator", status: "failure",
+      expected: { status: "private-expected-value" }, actual: "private-actual-value",
+      assertions: [{ assertion_name: "agent_response.status_mismatch", status: "failure",
+        assertion_msgs: ["private-assertion-detail"] }] }],
+  } }] }, grade);
+  const host = { taskId: 183, status: "associated", submissionStatus: "SUCCESS",
+    submissionStatusIntegrity: "verified", toolStatsIntegrity: "verified" };
+  const report = diagnoseBatch(grade, [host], details);
+  assert.equal(report.cases[0].classification.code, "answer-status-mismatch");
+  assert.deepEqual(report.cases[0].investigationSignals, ["answer-oracle-mismatch", "answer-status-mismatch"]);
+  assert.doesNotMatch(JSON.stringify(report) + renderDiagnosis(report), /private-expected|private-actual|private-assertion/);
 });
 
 test("separates a sealed Agent error submission from an incorrect success claim", () => {

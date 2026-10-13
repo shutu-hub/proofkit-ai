@@ -44,6 +44,8 @@ export function summarizeOfficialChecks(official, grade) {
     }
     checks.set(taskId, {
       answer: answer[0].status,
+      answerStatusMismatch: Array.isArray(answer[0].assertions) && answer[0].assertions.some((assertion) =>
+        assertion?.assertion_name === "agent_response.status_mismatch" && assertion.status === "failure"),
       network: { passed: network.filter((check) => check.status === "success").length,
         failed: network.filter((check) => ["failure", "partial_match"].includes(check.status)).length,
         errors: network.filter((check) => check.status === "error").length },
@@ -118,6 +120,7 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
     if (checks?.missingNetworkEvent) investigationSignals.push("action-network-evidence");
     if (["failure", "partial_match"].includes(checks?.answer)
       && (declaredStatus === null || declaredStatus === "SUCCESS")) investigationSignals.push("answer-oracle-mismatch");
+    if (checks?.answerStatusMismatch) investigationSignals.push("answer-status-mismatch");
     if (host?.audit?.testStandard === "surface-only" && item.status !== "success") investigationSignals.push("surface-only-verification");
     return {
       taskId: item.taskId,
@@ -224,6 +227,8 @@ function classify(grade, host, checks, admission) {
   }
   if (checks?.missingNetworkEvent) return result("network-evidence-missing", "network-evidence",
     "Inspect the browser action trace and HAR against the official network requirement; verify the rubric before assigning blame.");
+  if (checks?.answerStatusMismatch) return result("answer-status-mismatch", "answer-contract",
+    "Compare the sealed submission status with the observed result and official status contract; do not infer the correct answer from UI assertions alone.");
   if (["failure", "partial_match"].includes(checks?.answer)
     && checks?.network.failed === 0 && checks.network.errors === 0) {
     return result("answer-check-failed", "answer", "Compare the submitted answer with observed page and independent state; inspect the official answer schema.");
