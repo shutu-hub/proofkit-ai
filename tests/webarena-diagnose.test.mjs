@@ -122,7 +122,8 @@ test("summarizes tool calls without copying arguments, results or error content"
   const stats = summarizeHostEvents(events);
   assert.deepEqual(stats, { completed: 3, failed: 2, inputRejections: 1, resourceDiscoveryFailures: 1,
     taskToolFailures: 1, preToolStreamReconnects: 1, postToolStreamReconnects: 0,
-    exploratoryActions: noActions(), tools: { inspect_surface: 1, list_mcp_resources: 1, run_test: 1 } });
+    exploratoryActions: noActions(), exploratoryFailureCodes: {},
+    tools: { inspect_surface: 1, list_mcp_resources: 1, run_test: 1 } });
   assert.doesNotMatch(JSON.stringify(stats), /hidden|private/);
 });
 
@@ -188,6 +189,26 @@ test("separates completed RPC from failed or unavailable exploratory action resu
     assert.deepEqual(unverified.friction.exploratoryActions, noActions());
     assert.equal(unverified.investigationCounts["exploratory-action-failed"], undefined);
   }
+});
+
+test("keeps only safe action failure categories in benchmark diagnosis", () => {
+  const item = (failureCode) => ({ type: "item.completed", item: { type: "mcp_tool_call",
+    tool: "interact_surface", status: "completed", result: { structured_content: {
+      interactionId: "run-1", testVerdict: "not-asserted", status: "failed",
+      action: { kind: "click", status: "failed", failureCode },
+      findings: ["private page and selector"],
+    } } } });
+  const stats = summarizeHostEvents([
+    item("surface-target-ambiguous"), item("runner-action-timeout"), item("private-secret-code"),
+  ].map((event) => JSON.stringify(event)).join("\n"));
+  assert.deepEqual(stats.exploratoryFailureCodes,
+    { "surface-target-ambiguous": 1, "runner-action-timeout": 1, other: 1 });
+  const report = diagnoseBatch({ summary: { planned: 1 }, cases: [{ taskId: 62, status: "not-run", score: null }] },
+    [{ taskId: 62, status: "incomplete", execution: { timedOut: true },
+      toolStats: stats, toolStatsIntegrity: "verified" }]);
+  assert.deepEqual(report.cases[0].investigationSignals,
+    ["exploratory-action-failed", "surface-target-ambiguous", "exploratory-action-timeout", "host-deadline"]);
+  assert.doesNotMatch(JSON.stringify(report) + renderDiagnosis(report), /private page|private-secret-code/);
 });
 
 test("keeps independent host, tool, action and answer investigation signals", () => {

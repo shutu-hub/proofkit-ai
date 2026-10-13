@@ -113,7 +113,7 @@ export type SurfaceInteraction = {
   surface: "web" | "electron";
   status: "observed" | "failed" | "blocked" | "cancelled";
   testVerdict: "not-asserted";
-  action: { kind: SurfaceInteractionInput["action"]["kind"]; status: string };
+  action: { kind: SurfaceInteractionInput["action"]["kind"]; status: string; failureCode?: string };
   snapshot?: Pick<SurfaceSnapshot, "capturedAt" | "url" | "title" | "text" | "controls" | "controlsTruncated">;
   runtimeHealth?: RunSummary["runtimeHealth"];
   findings: string[];
@@ -467,7 +467,8 @@ export class LocalRunnerService {
       const evidence = this.runEvidence(summary);
       return {
         interactionId: summary.runId, surface, status, testVerdict: "not-asserted",
-        action: { kind: action.kind, status: first?.status ?? "not-run" },
+        action: { kind: action.kind, status: first?.status ?? "not-run",
+          ...(first?.failureCode ? { failureCode: first.failureCode } : {}) },
         ...(observed ? { snapshot: { capturedAt: observed.capturedAt, url: observed.url, title: observed.title,
           text: observed.text?.slice(0, 2_000), controls: observed.controls?.slice(0, 20),
           controlsTruncated: Boolean(observed.controlsTruncated || (observed.controls?.length ?? 0) > 20) } } : {}),

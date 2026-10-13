@@ -569,6 +569,8 @@ export class ExecutionRunner {
           const cause = safeRunError(error);
           step.status = cause instanceof BlockedError ? "blocked" : "failed";
           step.error = cause.message;
+          if (cause instanceof InconclusiveError) step.failureCode = cause.code;
+          else if (cause instanceof AmbiguousSurfaceTargetError) step.failureCode = "surface-target-ambiguous";
           if (cause instanceof InconclusiveError) step.artifacts.push(await this.store.writeJson(runId, `${stepId}-response-gap`, { code: cause.code, message: cause.message }));
           executionError = cause;
           summary.findings.push(`${stepId}: ${cause.message}`);

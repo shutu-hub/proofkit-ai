@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceSnapshot } from "@proofkit/contracts";
-import { CancelledError, ExecutionRunner, type AdapterEvent, type SurfaceAdapter } from "./index.js";
+import { AmbiguousSurfaceTargetError, CancelledError, ExecutionRunner, type AdapterEvent, type SurfaceAdapter } from "./index.js";
 
 class FakeAdapter implements SurfaceAdapter {
   readonly name = "fake";
@@ -201,8 +201,21 @@ describe("ExecutionRunner", () => {
     const gap = summary.steps[0]!.artifacts.find((path) => path.endsWith("response-gap.json"))!;
     const saved = await readFile(join(root, gap), "utf8");
     expect(JSON.parse(saved).code).toBe("runner-action-timeout");
+    expect(summary.steps[0]?.failureCode).toBe("runner-action-timeout");
     expect(summary.verdict).toBe("inconclusive");
     expect(JSON.stringify(summary) + saved).not.toContain("private selector and page content");
+  });
+
+  it("returns a stable code for an ambiguous action selector", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-target-ambiguous-"));
+    const adapter = new FakeAdapter();
+    adapter.act = async () => { throw new AmbiguousSurfaceTargetError(4); };
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
+      intent: "inspect target", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: ".item" }], assertions: [], sideEffectPolicy: "allow", metadata: {},
+    }, "target-ambiguous");
+    expect(summary.steps[0]?.failureCode).toBe("surface-target-ambiguous");
+    expect(summary.steps[0]?.status).toBe("failed");
   });
 
   it("keeps preflight exception text out of Run evidence", async () => {

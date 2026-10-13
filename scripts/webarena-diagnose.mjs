@@ -101,6 +101,9 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
     if ((host?.toolStats?.inputRejections ?? 0) > 0) investigationSignals.push("tool-input-contract");
     const exploratoryActions = host?.toolStatsIntegrity === "verified" ? host.toolStats?.exploratoryActions ?? null : null;
     if ((exploratoryActions?.failed ?? 0) > 0) investigationSignals.push("exploratory-action-failed");
+    const failureCodes = host?.toolStatsIntegrity === "verified" ? host.toolStats?.exploratoryFailureCodes ?? {} : {};
+    if ((failureCodes["surface-target-ambiguous"] ?? 0) > 0) investigationSignals.push("surface-target-ambiguous");
+    if ((failureCodes["runner-action-timeout"] ?? 0) > 0) investigationSignals.push("exploratory-action-timeout");
     if ((exploratoryActions?.blocked ?? 0) > 0) investigationSignals.push("exploratory-action-blocked");
     if ((exploratoryActions?.unknown ?? 0) > 0) investigationSignals.push("exploratory-action-result-unavailable");
     if (host?.execution?.timedOut) investigationSignals.push("host-deadline");
@@ -117,6 +120,7 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
         timedOut: host.execution?.timedOut ?? false, blocker: host.execution?.blocker ?? null,
         toolCalls: host.toolStats?.completed ?? null, failedToolCalls: host.toolStats?.failed ?? null,
         exploratoryActions,
+        exploratoryFailureCodes: failureCodes,
         inputRejections: host.toolStats?.inputRejections ?? null,
         resourceDiscoveryFailures: host.toolStats?.resourceDiscoveryFailures ?? null,
         taskToolFailures: host.toolStats?.taskToolFailures ?? null,
@@ -213,6 +217,7 @@ export function summarizeHostEvents(jsonl) {
   let firstToolCompleted = false;
   const tools = new Map();
   const exploratoryActions = emptyActions();
+  const exploratoryFailureCodes = {};
   for (const line of jsonl.split(/\r?\n/)) {
     let event;
     try { event = JSON.parse(line); } catch { continue; }
@@ -242,6 +247,12 @@ export function summarizeHostEvents(jsonl) {
           && result.testVerdict === "not-asserted" && ["observed", "failed", "blocked", "cancelled"].includes(result.status)
           ? result.status : "unknown";
         exploratoryActions[status] += 1;
+        if (status === "failed") {
+          const code = result?.action?.failureCode;
+          const category = code === "surface-target-ambiguous" || code === "runner-action-timeout"
+            ? code : code === undefined ? "unavailable" : "other";
+          exploratoryFailureCodes[category] = (exploratoryFailureCodes[category] ?? 0) + 1;
+        }
       }
     }
     if (event.item.status === "failed") {
@@ -256,7 +267,7 @@ export function summarizeHostEvents(jsonl) {
   }
   return { completed, failed, inputRejections, resourceDiscoveryFailures, taskToolFailures, preToolStreamReconnects,
     postToolStreamReconnects,
-    exploratoryActions,
+    exploratoryActions, exploratoryFailureCodes,
     tools: Object.fromEntries([...tools].sort(([a], [b]) => a.localeCompare(b))) };
 }
 

@@ -393,6 +393,8 @@ export const StepResultSchema = z.object({
   afterSnapshot: SurfaceSnapshotSchema.optional(),
   artifacts: z.array(z.string()).default([]),
   capabilityOutput: z.unknown().optional(),
+  /** Stable non-sensitive failure category; older saved Runs may omit it. */
+  failureCode: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).optional(),
   error: z.string().optional(),
 });
 export type StepResult = z.infer<typeof StepResultSchema>;
