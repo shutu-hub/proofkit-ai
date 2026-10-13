@@ -165,15 +165,23 @@ export async function startPinnedContainer(options,
   }
 }
 
-async function verifyBrowser(chrome) {
-  const browser = await chromium.launch({ executablePath: chrome, headless: true });
-  try {
-    const context = await browser.newContext({ extraHTTPHeaders: { "X-M2-Admin-Auto-Login": LOGIN_HEADER } });
-    const page = await context.newPage();
-    await page.goto("http://localhost:7780/admin", { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await page.waitForURL((url) => url.pathname.startsWith("/admin/admin/dashboard"), { timeout: 15_000 });
-    return { status: "dashboard-observed", url: page.url() };
-  } finally { await browser.close(); }
+export async function verifyBrowser(chrome, launch = (options) => chromium.launch(options)) {
+  const started = Date.now();
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const browser = await launch({ executablePath: chrome, headless: true });
+    try {
+      const context = await browser.newContext({ extraHTTPHeaders: { "X-M2-Admin-Auto-Login": LOGIN_HEADER } });
+      const page = await context.newPage();
+      await page.goto("http://localhost:7780/admin", { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await page.waitForURL((url) => url.pathname.startsWith("/admin/admin/dashboard"), { timeout: 15_000 });
+      return { status: "dashboard-observed", url: page.url(), attempts: attempt, elapsedMs: Date.now() - started };
+    } catch (error) {
+      if (!(error instanceof Error) || error.name !== "TimeoutError") throw error;
+      if (attempt === 3) throw new Error("Benchmark dashboard login did not become ready after 3 browser attempts", { cause: error });
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    } finally { await browser.close(); }
+  }
+  throw new Error("Benchmark browser admission ended without a result");
 }
 
 /** Shared by real Agent batches and independent live UI evaluator controls. */

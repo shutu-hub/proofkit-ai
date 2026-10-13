@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { assertPinnedContainer, inspectContainer, removePinnedContainer, selectBatchTasks, startPinnedContainer, withSiteLock } from "../scripts/webarena-batch-run.mjs";
+import { assertPinnedContainer, inspectContainer, removePinnedContainer, selectBatchTasks, startPinnedContainer, verifyBrowser, withSiteLock } from "../scripts/webarena-batch-run.mjs";
 
 const known = { Id: "a".repeat(64), Name: "/webarena_verified_shopping_admin",
   Image: "sha256:d0531dd27ed98d0c459ff9e88118bf2ed8b660b0ed99c38837db46c065a5be13",
@@ -50,6 +50,28 @@ test("read-only container inspection retries transient Docker failures without t
   assert.equal(absent, undefined);
   assert.equal(calls, 1);
   await assert.rejects(inspectContainer({}, async () => ({ stdout: "[]" })), /Ambiguous benchmark container/);
+});
+
+test("browser admission retries a cold dashboard timeout with a fresh browser and records attempts", async () => {
+  let launched = 0;
+  let closed = 0;
+  const launch = async () => {
+    const index = ++launched;
+    const page = { goto: async () => { if (index === 1) throw Object.assign(new Error("cold start"), { name: "TimeoutError" }); },
+      waitForURL: async (predicate) => { assert.equal(predicate(new URL("http://localhost:7780/admin/admin/dashboard/")), true); },
+      url: () => "http://localhost:7780/admin/admin/dashboard/" };
+    return { newContext: async () => ({ newPage: async () => page }), close: async () => { closed++; } };
+  };
+  const result = await verifyBrowser("isolated-chrome", launch);
+  assert.equal(result.status, "dashboard-observed");
+  assert.equal(result.attempts, 2);
+  assert.equal(launched, 2);
+  assert.equal(closed, 2);
+  await assert.rejects(verifyBrowser("isolated-chrome", async () => ({
+    newContext: async () => ({ newPage: async () => ({ goto: async () => { throw new Error("invalid launch"); } }) }),
+    close: async () => { closed++; },
+  })), /invalid launch/);
+  assert.equal(closed, 3, "Non-timeout errors must close the browser and fail immediately");
 });
 
 test("reset reconciles Docker writes against the pinned container identity before retrying", async () => {
