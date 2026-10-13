@@ -214,6 +214,23 @@ describe("ProofKit MCP tools", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  it("validates scoped reads and passes parsed continuation through the real MCP protocol", async () => {
+    const runner = { config: { surfaces: {} }, inspectSurface: vi.fn(async () => ({ status: "observed", testVerdict: "not-asserted" })) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      for (const readText of [{ selector: "#results", offset: 1 }, { selector: "#results", limit: 8001 }]) {
+        expect((await client.callTool({ name: "inspect_surface", arguments: { readText } })).isError).toBe(true);
+      }
+      expect((await client.callTool({ name: "inspect_surface", arguments: { surface: "mobile", readText: { selector: "#results" } } })).isError).toBe(true);
+      expect(runner.inspectSurface).not.toHaveBeenCalled();
+      expect((await client.callTool({ name: "inspect_surface", arguments: { readText: { selector: "#results" } } })).isError).toBeUndefined();
+      expect(runner.inspectSurface).toHaveBeenLastCalledWith(expect.objectContaining({ readText: { selector: "#results", offset: 0, limit: 4000 } }));
+      const readText = { selector: "#results", offset: 4000, limit: 4000, expectedSourceSha256: "a".repeat(64) };
+      expect((await client.callTool({ name: "inspect_surface", arguments: { readText } })).isError).toBeUndefined();
+      expect(runner.inspectSurface).toHaveBeenLastCalledWith(expect.objectContaining({ readText }));
+    } finally { await client.close(); await server.close(); }
+  });
+
   it("validates reconnaissance prerequisites and propagates MCP cancellation to the inspector", async () => {
     let markStarted!: () => void;
     const started = new Promise<void>((done) => { markStarted = done; });

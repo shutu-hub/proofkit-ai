@@ -1,5 +1,5 @@
 import { createRunId, EvidenceStore, LocalExecutionOwnership, type LocalExecutionLease } from "@proofkit/evidence";
-import { hasIncompleteIntegrationCleanup, IntegrationCheckResultSchema, OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, TargetBindingSchema, type IntegrationSetupPolicy, type RuntimeFinding } from "@proofkit/contracts";
+import { hasIncompleteIntegrationCleanup, IntegrationCheckResultSchema, OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, SurfaceTextReadObservationSchema, TargetBindingSchema, type IntegrationSetupPolicy, type RuntimeFinding, type SurfaceTextReadRequest } from "@proofkit/contracts";
 import { z } from "zod";
 import { InputFileError, inputFileFacts, resolveInputFiles, sameInputFileFacts, type InputFileFact, type SurfaceActionContext } from "./input-files.js";
 import { IntegrationLifecycle, releaseLateIntegration, validateSetupPolicy, type IntegrationRecoveryContext, type IntegrationSetup, type IntegrationSetupEntry } from "./integration-lifecycle.js";
@@ -41,6 +41,8 @@ export interface SurfaceAdapter {
   readonly supportsResponseCapture?: boolean;
   connect(): Promise<void>;
   discover(): Promise<SurfaceSnapshot>;
+  /** Optional targeted reader; absence must never silently fall back to a page overview. */
+  readText?(request: SurfaceTextReadRequest): Promise<SurfaceSnapshot>;
   snapshot(): Promise<SurfaceSnapshot>;
   act(action: Action, context?: SurfaceActionContext): Promise<ActionReceipt>;
   assert(assertion: Assertion): Promise<AssertionResult>;
@@ -540,7 +542,19 @@ export class ExecutionRunner {
                 ? { ...receipt, metadata: { ...receipt.metadata, inputFiles: inputFileFacts(actionContext.inputFiles) } }
                 : receipt;
             }
-            const afterSnapshot = await withAbort(action.kind === "observe" ? this.adapter.discover() : this.adapter.snapshot(), signal, `${stepId} snapshot`);
+            let afterSnapshot: SurfaceSnapshot;
+            if (action.kind === "observe" && action.readText) {
+              if (!this.adapter.readText) throw new InconclusiveError("surface-text-read-unsupported", "This adapter does not support targeted rendered-text reads.");
+              afterSnapshot = await withAbort(this.adapter.readText(action.readText), signal, `${stepId} targeted text read`);
+              const read = SurfaceTextReadObservationSchema.safeParse(afterSnapshot.textRead);
+              if (!read.success || read.data.offset !== action.readText.offset || read.data.limit !== action.readText.limit
+                || read.data.text !== afterSnapshot.text
+                || action.readText.expectedSourceSha256 && read.data.sourceSha256 !== action.readText.expectedSourceSha256) {
+                throw new InconclusiveError("surface-text-read-unverified", "Adapter did not return a consistent targeted rendered-text observation.");
+              }
+            } else {
+              afterSnapshot = await withAbort(action.kind === "observe" ? this.adapter.discover() : this.adapter.snapshot(), signal, `${stepId} snapshot`);
+            }
             step.afterSnapshot = afterSnapshot;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-after`, afterSnapshot));
             try {

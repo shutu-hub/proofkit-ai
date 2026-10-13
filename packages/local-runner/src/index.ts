@@ -5,7 +5,7 @@ import { analyzeRun, selectEvidencedBusinessFailure, InMemoryMissionToolRegistry
 import { ElectronAdapter, MobileAdapter, WebAdapter, resolveElectronCdpUrl, type BenchmarkHarOptions } from "@proofkit/adapters";
 import { auditMissionVerdict, createRunId, EvidenceStore, LocalExecutionOwnership, MissionReportStore, sha256, type LocalExecutionLease } from "@proofkit/evidence";
 import type { EnvironmentInspection, EnvironmentInspectionInput, IntegrationReadiness, IntegrationReadinessInput } from "@proofkit/contracts";
-import { SurfaceReadinessSchema, type SurfaceReadiness } from "@proofkit/contracts";
+import { SurfaceReadinessSchema, SurfaceTextReadRequestSchema, type SurfaceReadiness, type SurfaceTextReadRequest } from "@proofkit/contracts";
 import { inspectEnvironment } from "./environment.js";
 import { ActionSchema, FailureBoundarySchema, FindingSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, IntegrationReadinessSchema, NegativeCaseSchema, ObservationSchema, SourceStateSchema, suiteChecks, TargetBindingSchema, TestCharterSchema, TestLevelSelectionSchema, TestScopeInputSchema, TestSuiteSchema, workflowChecks, type Action, type EvidenceRef, type MissionAcceptanceIntegrity, type MissionComparison, type MissionEvidenceIntegrity, type MissionProofClassification, type MissionRecoveryInspection, type NegativeCase, type ProofkitConfig, type ProjectMap, type RouteCoverageTarget, type RunMode, type RunSummary, type SideEffectPolicy, type SourceState, type SurfaceSnapshot, type TargetBinding, type TestCharter, type TestLevel, type TestMission, type TestScope, type TestScopeInput, type TestSuite, type Verdict, type WorkflowInventory } from "@proofkit/contracts";
 import { configuredHttpOracle, httpOracle } from "@proofkit/oracles";
@@ -87,6 +87,7 @@ export type LocalRunStatus = {
 
 export type SurfaceInspectionInput = Pick<LocalRunInput, "adapter" | "url" | "cdp" | "devtoolsPortFile" | "mobileServer" | "headful" | "signal"> & {
   readyWhen?: { text: string; timeoutMs?: number };
+  readText?: SurfaceTextReadRequest;
 };
 export type SurfaceInspection = {
   inspectionId: string;
@@ -395,6 +396,8 @@ export class LocalRunnerService {
     }
     const configuredReadiness = input.readyWhen ?? this.config.surfaces[surface]?.readyWhen;
     const readyWhen = configuredReadiness === undefined ? undefined : SurfaceReadinessSchema.parse(configuredReadiness);
+    const readText = input.readText === undefined ? undefined : SurfaceTextReadRequestSchema.parse(input.readText);
+    if (readText && surface === "mobile") throw new Error("Targeted rendered-text inspection currently supports Web and Electron only");
     const controller = new AbortController();
     const onAbort = () => controller.abort(input.signal?.reason);
     if (input.signal?.aborted) onAbort();
@@ -403,7 +406,7 @@ export class LocalRunnerService {
     try {
       const charter = TestCharterSchema.parse({
         intent: `Inspect the current ${surface} surface`, level: "quick", mode: "deterministic",
-        actions: [...(readyWhen ? [{ kind: "waitForText", ...readyWhen }] : []), { kind: "observe" }], assertions: [], sideEffectPolicy: "deny",
+        actions: [...(readyWhen ? [{ kind: "waitForText", ...readyWhen }] : []), { kind: "observe", ...(readText ? { readText } : {}) }], assertions: [], sideEffectPolicy: "deny",
         metadata: { purpose: "surface-inspection" },
       });
       const started = await this.startRun({ ...input, adapter: surface, charter, start: false, signal: controller.signal }, this.benchmarkMissionBindings.get(input));
@@ -418,7 +421,7 @@ export class LocalRunnerService {
         surface,
         status: stopped ?? (observed ? "observed" : "failed"),
         testVerdict: "not-asserted",
-        ...(observed ? { snapshot: { ...observed, text: observed.text?.slice(0, 2_000) } } : {}),
+        ...(observed ? { snapshot: { ...observed, text: observed.textRead ? observed.text : observed.text?.slice(0, 2_000) } } : {}),
         ...(summary.targetBinding ? { targetBinding: summary.targetBinding } : {}),
         runtimeHealth: summary.runtimeHealth,
         readiness: readyWhen ? { status: readinessObserved ? "observed" : "unverified", condition: readyWhen } : { status: "not-requested" },

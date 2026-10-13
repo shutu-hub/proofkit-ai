@@ -16,6 +16,32 @@ export const SurfaceReadinessSchema = z.object({
 }).strict();
 export type SurfaceReadiness = z.infer<typeof SurfaceReadinessSchema>;
 
+/** Offsets refer to sanitized rendered text, not source HTML or backend records. */
+export const SurfaceTextReadRequestSchema = z.object({
+  selector: z.string().min(1).max(512),
+  offset: z.number().int().min(0).max(200_000).default(0),
+  limit: z.number().int().min(1).max(8_000).default(4_000),
+  expectedSourceSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}).strict().refine((value) => value.offset === 0 || value.expectedSourceSha256 !== undefined,
+  "Continuing a text read requires the previous sourceSha256; restart if the rendered region changes");
+export type SurfaceTextReadRequest = z.infer<typeof SurfaceTextReadRequestSchema>;
+
+export const SurfaceTextReadObservationSchema = z.object({
+  scope: z.literal("rendered-main-frame-region"),
+  text: z.string().max(8_000),
+  sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  offset: z.number().int().min(0).max(200_000),
+  limit: z.number().int().min(1).max(8_000),
+  totalChars: z.number().int().min(0).max(200_000),
+  returnedChars: z.number().int().min(0).max(8_000),
+  nextOffset: z.number().int().min(0).max(200_000).nullable(),
+}).strict().refine((value) => value.offset <= value.totalChars
+  && value.returnedChars === value.text.length
+  && value.returnedChars === Math.min(value.limit, value.totalChars - value.offset)
+  && value.nextOffset === (value.offset + value.returnedChars < value.totalChars ? value.offset + value.returnedChars : null),
+  "Text read counts and continuation must match the returned sanitized window");
+export type SurfaceTextReadObservation = z.infer<typeof SurfaceTextReadObservationSchema>;
+
 /** Persist an environment variable name, never its runtime value, for credential fields. */
 export const FillValueSchema = z.union([
   z.string(),
@@ -173,7 +199,7 @@ export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("waitForText"), text: z.string().min(1), timeoutMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("screenshot"), name: z.string().min(1).optional() }),
   z.object({ kind: z.literal("capability"), name: z.string().min(1), input: z.record(z.string(), z.unknown()).default({}) }),
-  z.object({ kind: z.literal("observe") }),
+  z.object({ kind: z.literal("observe"), readText: SurfaceTextReadRequestSchema.optional() }).strict(),
   CaptureResponseActionSchema,
 ]);
 export type Action = z.infer<typeof ActionSchema>;
@@ -286,6 +312,7 @@ export const SurfaceSnapshotSchema = z.object({
   url: z.string().optional(),
   title: z.string().optional(),
   text: z.string().optional(),
+  textRead: SurfaceTextReadObservationSchema.optional(),
   controls: z.array(SurfaceControlSchema).max(60).optional(),
   controlsTruncated: z.boolean().optional(),
   frameCount: z.number().int().positive().optional(),

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Browser, BrowserContext, Locator, Page, Request, Response } from "playwright-core";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceControl, SurfaceSnapshot } from "@proofkit/contracts";
+import { SurfaceTextReadRequestSchema, type SurfaceTextReadRequest } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceAdapter, SurfaceActionContext } from "@proofkit/runner";
 import { AmbiguousSurfaceTargetError, InconclusiveError, InvalidFileInputControlError } from "@proofkit/runner";
 import { captureActionResponse } from "./response-capture.js";
@@ -213,6 +214,41 @@ export class WebAdapter implements SurfaceAdapter {
     }
     return { ...snapshot, controls, controlsTruncated: total > candidates.length,
       frameCount: page.frames().length, metadata: { ...snapshot.metadata, controlScope: "main-frame", includesHiddenFileInputs: true } };
+  }
+
+  /** Read only rendered text of one visible main-frame region, with verified continuation. */
+  async readText(input: SurfaceTextReadRequest): Promise<SurfaceSnapshot> {
+    const request = SurfaceTextReadRequestSchema.parse(input);
+    let locator: Locator;
+    try {
+      locator = await uniqueActionLocator(this.page(), request.selector);
+    } catch (error) {
+      if (error instanceof AmbiguousSurfaceTargetError) throw new InconclusiveError("surface-text-read-ambiguous", "Targeted text reading requires exactly one rendered region.");
+      throw error;
+    }
+    const observed = await locator.evaluate((element) => element instanceof HTMLElement && window === window.top
+      ? { text: element.innerText.slice(0, 200_001), url: document.URL, title: document.title } : null);
+    if (observed === null) throw new InconclusiveError("surface-text-read-control", "Targeted text reading requires a rendered main-frame HTML region.");
+    const capturedAt = new Date().toISOString();
+    if (observed.text.length > 200_000) throw new InconclusiveError("surface-text-read-too-large", "Rendered region exceeds the text-read limit; select a smaller region.");
+    // Redact the entire bounded region before slicing; credentials spanning a window boundary stay redacted.
+    const text = sanitizeSurfaceText(observed.text, observed.text.length);
+    if (text.length > 200_000) throw new InconclusiveError("surface-text-read-too-large", "Sanitized region exceeds the text-read limit; select a smaller region.");
+    const sourceSha256 = createHash("sha256").update(JSON.stringify({ url: observed.url, selector: request.selector, text })).digest("hex");
+    if (request.expectedSourceSha256 && request.expectedSourceSha256 !== sourceSha256) {
+      throw new InconclusiveError("surface-text-read-changed", "Rendered region changed since the previous read; restart the read instead of combining different states.");
+    }
+    if (request.offset > text.length) throw new InconclusiveError("surface-text-read-range", "Requested offset is outside the current sanitized region.");
+    const textWindow = text.slice(request.offset, request.offset + request.limit);
+    const projected = projectSurfaceUrl(observed.url, this.options.routePatterns);
+    const fileDocumentSha256 = fileDocumentFingerprint(observed.url);
+    return { capturedAt, url: projected.value, title: sanitizeSurfaceText(observed.title, 200), text: textWindow, textRead: {
+      scope: "rendered-main-frame-region", text: textWindow, sourceSha256,
+      offset: request.offset, limit: request.limit, totalChars: text.length, returnedChars: textWindow.length,
+      nextOffset: request.offset + textWindow.length < text.length ? request.offset + textWindow.length : null,
+    }, metadata: { adapter: this.name, urlPathEvidence: projected.pathEvidence,
+      matchedRoutePaths: matchDeclaredRoutePaths(observed.url, this.options.routePatterns ?? []),
+      ...(fileDocumentSha256 ? { fileDocumentSha256 } : {}) } };
   }
 
   async snapshot(): Promise<SurfaceSnapshot> {

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestCharter, TestMission } from "@proofkit/contracts";
-import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, SelectOptionActionSchema, SelectOptionsActionSchema, SetCheckedActionSchema, SurfaceReadinessSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
+import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, SelectOptionActionSchema, SelectOptionsActionSchema, SetCheckedActionSchema, SurfaceReadinessSchema, SurfaceTextReadRequestSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
 import { LocalRunnerService } from "@proofkit/local-runner";
 import { briefMissionEvidence } from "./mission-evidence-brief.js";
 import { RepairHypothesisInputSchema } from "@proofkit/contracts";
@@ -49,11 +49,12 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "inspect_surface",
-    "Observe the configured Web, Electron or mobile surface after an optional visible-text prerequisite. Web/Electron return bounded controls with native form state and advisory native action hints; mobile returns a bounded driver snapshot. This is reconnaissance, not a product pass verdict.",
-    { surface: z.enum(["web", "electron", "mobile"]).default("web"), url: z.string().url().optional(), readyWhen: SurfaceReadinessSchema.optional() },
-    async ({ surface, url, readyWhen }, extra) => {
+    "Observe the configured Web, Electron or mobile surface after an optional visible-text prerequisite. Web/Electron return bounded controls with native form hints. The overview text is limited to 2000 characters. For a longer rendered region supply readText={selector,offset:0,limit:4000}; follow snapshot.textRead.nextOffset with its sourceSha256 as expectedSourceSha256. A changed region rejects continuation; restart instead of mixing states. Region text is sanitized and covers only rendered main-frame content, not hidden, virtualized or other-page records. Mobile does not support readText. This is reconnaissance, not a product pass verdict.",
+    { surface: z.enum(["web", "electron", "mobile"]).default("web"), url: z.string().url().optional(), readyWhen: SurfaceReadinessSchema.optional(), readText: SurfaceTextReadRequestSchema.optional() },
+    async ({ surface, url, readyWhen, readText }, extra) => {
       if (surface !== "web" && url) throw new Error("Only Web inspection accepts a URL override; Electron uses CDP and mobile uses its configured WebDriver server");
-      return result(await runner.inspectSurface({ adapter: surface, url: surfaceUrl(url, runner), readyWhen, signal: extra.signal }));
+      if (surface === "mobile" && readText) throw new Error("Targeted rendered-text inspection currently supports Web and Electron only");
+      return result(await runner.inspectSurface({ adapter: surface, url: surfaceUrl(url, runner), readyWhen, readText, signal: extra.signal }));
     },
   );
 

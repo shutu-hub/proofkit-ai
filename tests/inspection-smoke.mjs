@@ -17,9 +17,23 @@ const previousFillValue = process.env[fillEnvName];
 let mcp;
 let client;
 let electron;
+let textRevision = 0;
+const regionText = `${"Row content ".repeat(341)} qa@example.com password=synthetic-secret ${" More content".repeat(700)} LONG_REGION_END`;
+// Match rendered HTML whitespace independently of ProofKit's sanitizer.
+const expectedRegionText = regionText.replace(/\s+/g, " ").trim()
+  .replace("qa@example.com", "[REDACTED_EMAIL]").replace("password=synthetic-secret", "password=[REDACTED]");
 const web = createServer((request, response) => {
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   const path = new URL(request.url, "http://127.0.0.1").pathname;
+  if (path === "/long-read" || path === "/long-read-other") {
+    response.end(`<!doctype html><title>Long text fixture</title><h1>Long reading ready</h1>
+      <p>${"Overview prefix ".repeat(180)}</p><div id="region">${regionText}${textRevision ? " Revised" : ""}</div>
+      <div id="other-region">${regionText}</div><div class="duplicate-region">First</div><div class="duplicate-region">Second</div>
+      <svg id="non-html-region" width="100" height="30"><text x="0" y="20">SVG fixture</text></svg>
+      <div id="hidden-region" hidden>Hidden fixture content</div><div id="oversized-region">${"Z".repeat(200001)}</div>
+      <button id="revise-region" onclick="document.querySelector('#region').textContent+=' Revised'">Revise reading</button>`);
+    return;
+  }
   if (["/delayed", "/diagnostics", "/auth-blocked", "/never"].includes(path)) {
     response.end(`<!doctype html><title>Delayed inspection fixture</title><p style="display:none">Delayed controls ready</p><div id="app"></div><script>
       ${path === "/diagnostics" ? "setTimeout(()=>{for(let i=0;i<15;i++)console.error('runtime diagnostic '+i+' qa@example.com');},450);" : ""}
@@ -59,8 +73,67 @@ const web = createServer((request, response) => {
     <select id="reset-multi" multiple onchange="this.options[1].selected=true"><option value="a">First</option><option value="b">Second</option></select>
     <fieldset disabled><select id="fieldset-multi" multiple><option value="a">First</option></select></fieldset>
     <select id="reset-select" onchange="this.selectedIndex=0"><option value="">Choose</option><option value="complete">Complete</option></select>
-    <input id="radio" type="radio" name="group"><div id="custom" role="checkbox" aria-checked="false">Custom checkbox</div>`);
+    <input id="radio" type="radio" name="group"><div id="custom" role="checkbox" aria-checked="false">Custom checkbox</div>
+    <a id="long-read" href="/long-read">Long reading fixture</a>`);
 });
+
+async function verifyTextReading(inspect, readRun) {
+  const overview = await inspect();
+  assert.equal(overview.status, "observed");
+  assert.ok(overview.snapshot.text.length <= 2000);
+  assert.equal(overview.snapshot.text.includes("LONG_REGION_END"), false);
+  let offset = 0;
+  let sourceSha256;
+  let combined = "";
+  let windows = 0;
+  do {
+    const result = await inspect({ readText: { selector: "#region", offset, limit: 4096,
+      ...(sourceSha256 ? { expectedSourceSha256: sourceSha256 } : {}) } });
+    assert.equal(result.status, "observed");
+    assert.equal(result.testVerdict, "not-asserted");
+    const read = result.snapshot.textRead;
+    assert.equal(read.scope, "rendered-main-frame-region");
+    assert.equal(read.offset, offset);
+    assert.equal(read.totalChars, expectedRegionText.length);
+    assert.equal(read.returnedChars, read.text.length);
+    assert.equal(read.text, result.snapshot.text);
+    if (sourceSha256) assert.equal(read.sourceSha256, sourceSha256);
+    sourceSha256 = read.sourceSha256;
+    combined += read.text;
+    const run = await readRun(result.inspectionId);
+    assert.equal(run.verdict, "inconclusive");
+    assert.deepEqual(run.steps.at(-1).afterSnapshot.textRead, read);
+    assert.equal(run.steps.at(-1).afterSnapshot.text, read.text, "Saved and returned windows must retain the full requested text");
+    offset = read.nextOffset;
+    windows++;
+  } while (offset !== null);
+  assert.ok(windows >= 3);
+  assert.equal(combined, expectedRegionText, "All sanitized rendered text must be reconstructed without omissions or overlaps");
+  const eof = await inspect({ readText: { selector: "#region", offset: combined.length, expectedSourceSha256: sourceSha256 } });
+  assert.equal(eof.status, "observed");
+  assert.equal(eof.snapshot.textRead.text, "");
+  assert.equal(eof.snapshot.textRead.nextOffset, null);
+  for (const [request, code] of [
+    [{ selector: "#region", offset: combined.length + 1, expectedSourceSha256: sourceSha256 }, "surface-text-read-range"],
+    [{ selector: "#other-region", expectedSourceSha256: sourceSha256 }, "surface-text-read-changed"],
+    [{ selector: "#oversized-region" }, "surface-text-read-too-large"],
+    [{ selector: "#non-html-region" }, "surface-text-read-control"],
+    [{ selector: ".duplicate-region" }, "surface-text-read-ambiguous"],
+    [{ selector: "#hidden-region" }, "runner-operation-unverified"],
+    [{ selector: "#missing-region" }, "runner-operation-unverified"],
+  ]) {
+    const result = await inspect({ readText: request });
+    assert.equal(result.status, "failed");
+    assert.equal(result.testVerdict, "not-asserted");
+    assert.equal(result.snapshot, undefined, "An unsuccessful scoped read must not fall back to the overview");
+    const run = await readRun(result.inspectionId);
+    assert.equal(run.verdict, "inconclusive");
+    const step = run.steps.at(-1);
+    const gap = JSON.parse(await readFile(join(workspaceRoot, ".proofkit/runs", step.artifacts.find((path) => path.endsWith("-response-gap.json"))), "utf8"));
+    assert.equal(gap.code, code);
+  }
+  return sourceSha256;
+}
 
 async function verifyNativeForms(interact, readRun, persistent = false) {
   for (const [option, output] of [[{ value: "complete" }, "Selection complete"], [{ label: "Pending" }, "Selection pending"], [{ value: "" }, "Selection"]]) {
@@ -237,6 +310,25 @@ try {
   await assert.rejects(deniedRunner.interactSurface({ action: { kind: "setChecked", selector: "#enabled", checked: true } }), /sideEffects=allow/);
   assert.deepEqual(await readdir(join(workspaceRoot, ".proofkit/runs")), beforeDenied);
   const origin = new URL(baseUrl).origin;
+  const inspectWebText = async (input = {}) => {
+    const response = await client.callTool({ name: "inspect_surface", arguments: { surface: "web", url: `${origin}/long-read`, ...input } });
+    assert.equal(response.isError, undefined);
+    return JSON.parse(response.content.find((item) => item.type === "text").text);
+  };
+  const webTextSha256 = await verifyTextReading(inspectWebText, readRun);
+  const beforeInvalidText = await readdir(join(workspaceRoot, ".proofkit/runs"));
+  const invalidText = await client.callTool({ name: "inspect_surface", arguments: { readText: { selector: "#region", offset: 1 } } });
+  assert.equal(invalidText.isError, true);
+  assert.deepEqual(await readdir(join(workspaceRoot, ".proofkit/runs")), beforeInvalidText);
+  const changedPage = await runner.inspectSurface({ url: `${origin}/long-read-other`, readText: { selector: "#region", offset: 4096, expectedSourceSha256: webTextSha256 } });
+  assert.equal(changedPage.status, "failed", "An unchanged text region on another page must reject the old fingerprint");
+  textRevision = 1;
+  const changedText = await inspectWebText({ readText: { selector: "#region", offset: 4096, expectedSourceSha256: webTextSha256 } });
+  assert.equal(changedText.status, "failed");
+  const changedRun = await readRun(changedText.inspectionId);
+  const changedGap = JSON.parse(await readFile(join(workspaceRoot, ".proofkit/runs", changedRun.steps.at(-1).artifacts.find((path) => path.endsWith("-response-gap.json"))), "utf8"));
+  assert.equal(changedGap.code, "surface-text-read-changed");
+  textRevision = 0;
   const readyWhen = { text: "Delayed controls ready", timeoutMs: 5000 };
   const delayedResponse = await client.callTool({ name: "inspect_surface", arguments: { surface: "web", url: `${origin}/delayed`, readyWhen } });
   assert.equal(delayedResponse.isError, undefined);
@@ -331,6 +423,16 @@ try {
     const openForms = await desktopRunner.interactSurface({ adapter: "electron", action: { kind: "click", selector: "#forms" } });
     assert.equal(openForms.status, "observed");
     await verifyNativeForms((action) => desktopRunner.interactSurface({ adapter: "electron", action }), readRun, true);
+    assert.equal((await desktopRunner.interactSurface({ adapter: "electron", action: { kind: "click", selector: "#long-read" } })).status, "observed");
+    const textReady = { text: "Long reading ready", timeoutMs: 1000 };
+    const inspectDesktopText = (input = {}) => desktopRunner.inspectSurface({ adapter: "electron", readyWhen: textReady, ...input });
+    const desktopTextSha256 = await verifyTextReading(inspectDesktopText, readRun);
+    assert.equal((await desktopRunner.interactSurface({ adapter: "electron", action: { kind: "click", selector: "#revise-region" } })).status, "observed");
+    const desktopChanged = await inspectDesktopText({ readText: { selector: "#region", offset: 4096, expectedSourceSha256: desktopTextSha256 } });
+    assert.equal(desktopChanged.status, "failed");
+    const desktopChangedRun = await readRun(desktopChanged.inspectionId);
+    const desktopGap = JSON.parse(await readFile(join(workspaceRoot, ".proofkit/runs", desktopChangedRun.steps.at(-1).artifacts.find((path) => path.endsWith("-response-gap.json"))), "utf8"));
+    assert.equal(desktopGap.code, "surface-text-read-changed");
     const desktopAbsent = await desktopRunner.inspectSurface({ adapter: "electron", readyWhen: { text: "Missing condition", timeoutMs: 100 } });
     assert.equal(desktopAbsent.status, "failed");
     assert.equal(desktopAbsent.readiness.status, "unverified");
@@ -379,7 +481,7 @@ try {
   console.log(JSON.stringify({ inspectionId: inspection.inspectionId, controls: inspection.snapshot.controls.length,
     ...(process.env.PROOFKIT_INSPECTION_RUNS ? { artifacts: scratch } : {}),
     selector: details.selector, electronReadiness: process.env.PROOFKIT_ELECTRON_PATH ? "verified" : "not-run",
-    verified: ["native-select-exact-value-and-label", "native-multiple-select-exact-set-replacement-and-clear", "native-multiple-select-prevalidation-and-readback", "native-form-state-and-action-hints", "native-checkbox-idempotency", "native-form-readback", "native-form-negative-evidence", "native-form-write-policy", "mcp-inspect-surface", "single-step-web-interaction", ...(process.env.PROOFKIT_ELECTRON_PATH ? ["single-step-electron-interaction"] : []), "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
+    verified: ["scoped-text-reconstruction-and-eof", "scoped-text-window-redaction", "scoped-text-persisted-full-window", "scoped-text-negative-evidence", "scoped-text-page-and-region-binding", "scoped-text-changed-source-rejected", "scoped-text-invalid-input-before-run", "native-select-exact-value-and-label", "native-multiple-select-exact-set-replacement-and-clear", "native-multiple-select-prevalidation-and-readback", "native-form-state-and-action-hints", "native-checkbox-idempotency", "native-form-readback", "native-form-negative-evidence", "native-form-write-policy", "mcp-inspect-surface", "single-step-web-interaction", ...(process.env.PROOFKIT_ELECTRON_PATH ? ["single-step-electron-interaction", "electron-scoped-text-positive-negative-and-continuation"] : []), "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
 } finally {
   if (electron && electron.exitCode === null) {
     const exited = new Promise((done) => electron.once("exit", done));

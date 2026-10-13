@@ -42,6 +42,41 @@ class SlowAdapter extends FakeAdapter {
 }
 
 describe("ExecutionRunner", () => {
+  it("does not substitute a page overview for an unsupported or invalid targeted read", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-text-read-"));
+    for (const variant of ["unsupported", "invalid", "wrong-source", "wrong-window"] as const) {
+      const adapter = new FakeAdapter() as FakeAdapter & { readText?: SurfaceAdapter["readText"] };
+      if (variant !== "unsupported") adapter.readText = async () => ({ capturedAt: new Date().toISOString(), text: "abc", metadata: {},
+        textRead: { scope: "rendered-main-frame-region", text: "abc", sourceSha256: variant === "wrong-source" ? "b".repeat(64) : "a".repeat(64),
+          offset: variant === "wrong-window" ? 1 : 0, limit: 3, totalChars: 5, returnedChars: 3, nextOffset: variant === "invalid" ? null : variant === "wrong-window" ? 4 : 3 } });
+      const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
+        intent: "read a pinned region", level: "quick", mode: "deterministic", preconditions: [],
+        actions: [{ kind: "observe", readText: { selector: "#results", offset: 0, limit: 3, expectedSourceSha256: "a".repeat(64) } }],
+        assertions: [], sideEffectPolicy: "deny", metadata: {},
+      });
+      expect(summary.verdict).toBe("inconclusive");
+      expect(summary.steps[0]?.afterSnapshot).toBeUndefined();
+      const path = summary.steps[0]!.artifacts.find((path) => path.endsWith("response-gap.json"))!;
+      expect(JSON.parse(await readFile(join(root, path), "utf8")).code).toBe(variant === "unsupported" ? "surface-text-read-unsupported" : "surface-text-read-unverified");
+    }
+  });
+
+  it("records a valid targeted observation without treating it as product acceptance", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-text-read-"));
+    const adapter = new FakeAdapter() as FakeAdapter & { readText: NonNullable<SurfaceAdapter["readText"]> };
+    adapter.readText = async () => ({ capturedAt: new Date().toISOString(), text: "abc", metadata: {}, textRead: {
+      scope: "rendered-main-frame-region", text: "abc", sourceSha256: "a".repeat(64), offset: 0, limit: 3, totalChars: 5, returnedChars: 3, nextOffset: 3,
+    } });
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
+      intent: "read only", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "observe", readText: { selector: "#results", offset: 0, limit: 3 } }],
+      assertions: [], sideEffectPolicy: "deny", metadata: {},
+    });
+    expect(summary.steps[0]?.status).toBe("passed");
+    expect(summary.steps[0]?.afterSnapshot?.textRead?.nextOffset).toBe(3);
+    expect(summary.verdict).toBe("inconclusive");
+  });
+
   it("blocks native form mutations before connecting when writes are denied", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-native-policy-"));
     for (const action of [{ kind: "selectOption", selector: "#status", option: { label: "Complete" } },
