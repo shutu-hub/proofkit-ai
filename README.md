@@ -268,6 +268,8 @@ For a new workflow with a read-only terminal-status API, the Charter can also de
 
 For a new UI workflow, `inspect_surface` (or `proofkit inspect`) first records a read-only Web/Electron observation with visible control hints and evidence links. Its `not-asserted` result is not a product verdict; use the observed selectors in a Charter and verify them during the test Run.
 
+For a long result table, the MCP tool accepts `readTable: { selector: "#results", offset: 0, limit: 20, columns: [0, 2] }`. Continue with `snapshot.tableRead.nextOffset` and its `sourceSha256` as `expectedSourceSha256`; a changed table rejects continuation. `allPagesVerified` is always `false`: the rows cover only the current rendered page, so check pagination, filters and an independent business result before claiming full coverage. Table cells follow the normal sensitive-data redaction policy.
+
 For an unfamiliar Web or Electron workflow, MCP `interact_surface` can perform one `goto`, `click`, `fill`, `press`, or `waitForText` action and return a compact, scrubbed page observation. It keeps the owned browser context for the next action, saves a Run with evidence, and always returns `testVerdict: "not-asserted"`. Web navigation is limited to loopback or the configured origin; Electron navigation stays within the application UI. Click, fill, and press require `policies.sideEffects: allow` in the isolated test workspace. Once the desired state is reached, use `run_test` with a positive assertion and an independent business Oracle where the requested intensity requires one. A visible page or successful exploratory action alone is never a product acceptance result.
 
 ```bash

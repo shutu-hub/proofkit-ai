@@ -1,13 +1,16 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { Browser, BrowserContext, Locator, Page, Request, Response } from "playwright-core";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceControl, SurfaceSnapshot } from "@proofkit/contracts";
-import { SurfaceTextReadRequestSchema, type SurfaceTextReadRequest } from "@proofkit/contracts";
+import { SurfaceTableReadRequestSchema, SurfaceTextReadRequestSchema, type SurfaceTableReadRequest, type SurfaceTextReadRequest } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceAdapter, SurfaceActionContext } from "@proofkit/runner";
 import { AmbiguousSurfaceTargetError, InconclusiveError, InvalidFileInputControlError } from "@proofkit/runner";
 import { captureActionResponse } from "./response-capture.js";
 import { projectSurfaceUrl, sanitizeSurfaceText } from "./surface-sanitize.js";
 import { BenchmarkHarRecorder, type BenchmarkHarManifest, type BenchmarkHarOptions } from "./benchmark-har.js";
 import type { WebTaskSession } from "./web-task-session.js";
+
+/** Process-local key keeps a saved source fingerprint from becoming a PII guessing oracle. */
+const TABLE_READ_FINGERPRINT_KEY = randomBytes(32);
 
 export type WebAdapterOptions = {
   baseUrl?: string;
@@ -249,6 +252,67 @@ export class WebAdapter implements SurfaceAdapter {
     }, metadata: { adapter: this.name, urlPathEvidence: projected.pathEvidence,
       matchedRoutePaths: matchDeclaredRoutePaths(observed.url, this.options.routePatterns ?? []),
       ...(fileDocumentSha256 ? { fileDocumentSha256 } : {}) } };
+  }
+
+  /** Read a bounded row window from one visible HTML table, never claiming other pages. */
+  async readTable(input: SurfaceTableReadRequest): Promise<SurfaceSnapshot> {
+    const request = SurfaceTableReadRequestSchema.parse(input);
+    let locator: Locator;
+    try {
+      locator = this.page().locator(request.selector).filter({ visible: true });
+      await locator.first().waitFor({ state: "visible", timeout: 10_000 });
+      const count = await locator.count();
+      if (count !== 1) throw new AmbiguousSurfaceTargetError(count);
+    } catch (error) {
+      if (error instanceof AmbiguousSurfaceTargetError) throw new InconclusiveError("surface-table-read-ambiguous", "Table reading requires exactly one visible table.");
+      throw error;
+    }
+    const observed = await locator.evaluate((element) => {
+      if (!(element instanceof HTMLTableElement) || window !== window.top) return null;
+      const headers = Array.from(element.querySelectorAll("thead tr:last-child th, thead tr:last-child td"))
+        .map((cell) => (cell as HTMLElement).innerText.trim());
+      const rows = Array.from(element.tBodies).flatMap((body) => Array.from(body.rows))
+        .filter((row) => row.getClientRects().length > 0 && getComputedStyle(row).visibility !== "hidden")
+        .map((row) => Array.from(row.cells).map((cell) => cell.innerText.trim()));
+      return { headers, rows, url: document.URL, title: document.title };
+    });
+    if (!observed) throw new InconclusiveError("surface-table-read-control", "Targeted table reading requires a visible main-frame HTML table.");
+    if (!observed.headers.length || observed.headers.length > 32 || observed.rows.length > 500
+      || observed.rows.some((row) => row.length !== observed.headers.length)
+      || [...observed.headers, ...observed.rows.flat()].some((value) => value.length > 2_000)) {
+      throw new InconclusiveError("surface-table-read-shape", "Rendered table is too large or has unsupported merged/misaligned cells.");
+    }
+    const headers = observed.headers.map((value) => sanitizeSurfaceText(value, value.length));
+    const rows = observed.rows.map((row) => row.map((value) => sanitizeSurfaceText(value, value.length)));
+    if ([...headers, ...rows.flat()].some((value) => value.length > 512)) {
+      throw new InconclusiveError("surface-table-read-cell", "A rendered table cell exceeds the bounded read limit; select a smaller region.");
+    }
+    const indices = request.columns ?? headers.map((_, index) => index);
+    if (indices.length > 16 || indices.some((index) => index >= headers.length)) {
+      throw new InconclusiveError("surface-table-read-columns", "Requested columns are outside the visible table or exceed the selected-column limit.");
+    }
+    const sourceSha256 = createHmac("sha256", TABLE_READ_FINGERPRINT_KEY)
+      .update(JSON.stringify({ url: observed.url, selector: request.selector, headers: observed.headers, rows: observed.rows })).digest("hex");
+    if (request.expectedSourceSha256 && request.expectedSourceSha256 !== sourceSha256) {
+      throw new InconclusiveError("surface-table-read-changed", "Rendered table changed since the previous row window; restart instead of combining pages or states.");
+    }
+    if (request.offset > rows.length) throw new InconclusiveError("surface-table-read-range", "Requested row offset is outside the current rendered table.");
+    const rowWindow = rows.slice(request.offset, request.offset + request.limit).map((row) => indices.map((index) => row[index]!));
+    if (rowWindow.flat().reduce((size, value) => size + value.length, 0) > 32_000) {
+      throw new InconclusiveError("surface-table-read-window", "Projected table window is too large; request fewer rows or columns.");
+    }
+    const projected = projectSurfaceUrl(observed.url, this.options.routePatterns);
+    const fileDocumentSha256 = fileDocumentFingerprint(observed.url);
+    return { capturedAt: new Date().toISOString(), url: projected.value, title: sanitizeSurfaceText(observed.title, 200),
+      text: `Read ${rowWindow.length} of ${rows.length} rendered rows on this page. Other pages and virtualized rows are not verified.`,
+      tableRead: { scope: "rendered-current-page-table", sourceSha256,
+        columns: indices.map((index) => ({ index, header: headers[index]! })), rows: rowWindow,
+        offset: request.offset, limit: request.limit, totalRows: rows.length, returnedRows: rowWindow.length,
+        nextOffset: request.offset + rowWindow.length < rows.length ? request.offset + rowWindow.length : null,
+        allPagesVerified: false },
+      metadata: { adapter: this.name, urlPathEvidence: projected.pathEvidence,
+        matchedRoutePaths: matchDeclaredRoutePaths(observed.url, this.options.routePatterns ?? []),
+        ...(fileDocumentSha256 ? { fileDocumentSha256 } : {}) } };
   }
 
   async snapshot(): Promise<SurfaceSnapshot> {

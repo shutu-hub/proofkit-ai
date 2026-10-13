@@ -42,6 +42,38 @@ export const SurfaceTextReadObservationSchema = z.object({
   "Text read counts and continuation must match the returned sanitized window");
 export type SurfaceTextReadObservation = z.infer<typeof SurfaceTextReadObservationSchema>;
 
+/** A row window from one rendered table page; pagination must be checked separately. */
+export const SurfaceTableReadRequestSchema = z.object({
+  selector: z.string().min(1).max(512),
+  offset: z.number().int().min(0).max(500).default(0),
+  limit: z.number().int().min(1).max(50).default(20),
+  columns: z.array(z.number().int().min(0).max(31)).min(1).max(16)
+    .refine((value) => new Set(value).size === value.length, "Column indices must be distinct").optional(),
+  expectedSourceSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}).strict().refine((value) => value.offset === 0 || value.expectedSourceSha256 !== undefined,
+  "Continuing a table read requires the previous sourceSha256");
+export type SurfaceTableReadRequest = z.infer<typeof SurfaceTableReadRequestSchema>;
+
+export const SurfaceTableReadObservationSchema = z.object({
+  scope: z.literal("rendered-current-page-table"),
+  sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  columns: z.array(z.object({ index: z.number().int().nonnegative(), header: z.string().max(512) }).strict()).min(1).max(16),
+  rows: z.array(z.array(z.string().max(512))).max(50),
+  offset: z.number().int().min(0).max(500),
+  limit: z.number().int().min(1).max(50),
+  totalRows: z.number().int().min(0).max(500),
+  returnedRows: z.number().int().min(0).max(50),
+  nextOffset: z.number().int().min(0).max(500).nullable(),
+  /** Exhausting rows here never proves that other pages or virtualized rows were read. */
+  allPagesVerified: z.literal(false),
+}).strict().refine((value) => value.offset <= value.totalRows
+  && value.returnedRows === value.rows.length
+  && value.returnedRows === Math.min(value.limit, value.totalRows - value.offset)
+  && value.rows.every((row) => row.length === value.columns.length)
+  && value.nextOffset === (value.offset + value.returnedRows < value.totalRows ? value.offset + value.returnedRows : null),
+  "Table row counts and continuation must match the returned window");
+export type SurfaceTableReadObservation = z.infer<typeof SurfaceTableReadObservationSchema>;
+
 /** Persist an environment variable name, never its runtime value, for credential fields. */
 export const FillValueSchema = z.union([
   z.string(),
@@ -199,7 +231,8 @@ export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("waitForText"), text: z.string().min(1), timeoutMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("screenshot"), name: z.string().min(1).optional() }),
   z.object({ kind: z.literal("capability"), name: z.string().min(1), input: z.record(z.string(), z.unknown()).default({}) }),
-  z.object({ kind: z.literal("observe"), readText: SurfaceTextReadRequestSchema.optional() }).strict(),
+  z.object({ kind: z.literal("observe"), readText: SurfaceTextReadRequestSchema.optional(),
+    readTable: SurfaceTableReadRequestSchema.optional() }).strict(),
   CaptureResponseActionSchema,
 ]);
 export type Action = z.infer<typeof ActionSchema>;
@@ -313,6 +346,7 @@ export const SurfaceSnapshotSchema = z.object({
   title: z.string().optional(),
   text: z.string().optional(),
   textRead: SurfaceTextReadObservationSchema.optional(),
+  tableRead: SurfaceTableReadObservationSchema.optional(),
   controls: z.array(SurfaceControlSchema).max(60).optional(),
   controlsTruncated: z.boolean().optional(),
   frameCount: z.number().int().positive().optional(),

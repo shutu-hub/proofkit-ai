@@ -18,6 +18,7 @@ let mcp;
 let client;
 let electron;
 let textRevision = 0;
+let tableEmailRevision = 0;
 const regionText = `${"Row content ".repeat(341)} qa@example.com password=synthetic-secret ${" More content".repeat(700)} LONG_REGION_END`;
 // Match rendered HTML whitespace independently of ProofKit's sanitizer.
 const expectedRegionText = regionText.replace(/\s+/g, " ").trim()
@@ -31,7 +32,16 @@ const web = createServer((request, response) => {
       <div id="other-region">${regionText}</div><div class="duplicate-region">First</div><div class="duplicate-region">Second</div>
       <svg id="non-html-region" width="100" height="30"><text x="0" y="20">SVG fixture</text></svg>
       <div id="hidden-region" hidden>Hidden fixture content</div><div id="oversized-region">${"Z".repeat(200001)}</div>
-      <button id="revise-region" onclick="document.querySelector('#region').textContent+=' Revised'">Revise reading</button>`);
+      <button id="revise-region" onclick="document.querySelector('#region').textContent+=' Revised'">Revise reading</button>
+      <a id="table-read-link" href="/table-read">Table reading fixture</a>`);
+    return;
+  }
+  if (path === "/table-read") {
+    response.end(`<!doctype html><title>Table fixture</title><h1>Current results page</h1>
+      <p>Page 1 of 2</p><table class="read-grid" hidden><thead><tr><th>Hidden</th></tr></thead><tbody><tr><td>clone</td></tr></tbody></table>
+      <table id="data-table" class="read-grid"><thead><tr><th>ID</th><th>Contact</th><th>Status</th></tr></thead>
+      <tbody>${Array.from({ length: 45 }, (_, index) => `<tr><td>${index + 1}</td><td>${tableEmailRevision && index === 0 ? "other" : `qa${index}`}@example.com</td><td>Complete</td></tr>`).join("")}</tbody></table>
+      <div id="not-a-table">Other region</div><button id="revise-table" onclick="document.querySelector('#data-table tbody tr:first-child td:last-child').textContent='Revised'">Revise table</button>`);
     return;
   }
   if (["/delayed", "/diagnostics", "/auth-blocked", "/never"].includes(path)) {
@@ -119,8 +129,8 @@ async function verifyTextReading(inspect, readRun) {
     [{ selector: "#oversized-region" }, "surface-text-read-too-large"],
     [{ selector: "#non-html-region" }, "surface-text-read-control"],
     [{ selector: ".duplicate-region" }, "surface-text-read-ambiguous"],
-    [{ selector: "#hidden-region" }, "runner-operation-unverified"],
-    [{ selector: "#missing-region" }, "runner-operation-unverified"],
+    [{ selector: "#hidden-region" }, "runner-operation-timeout"],
+    [{ selector: "#missing-region" }, "runner-operation-timeout"],
   ]) {
     const result = await inspect({ readText: request });
     assert.equal(result.status, "failed");
@@ -198,7 +208,7 @@ async function verifyNativeForms(interact, readRun, persistent = false) {
     [{ kind: "setChecked", selector: "#styled-disabled", checked: true }, "native-control-disabled"],
     [{ kind: "setChecked", selector: "#styled-reset", checked: true }, "native-state-unverified"],
     [{ kind: "setChecked", selector: "#ambiguous-label", checked: true }, "native-label-match"],
-    [{ kind: "setChecked", selector: "#unrelated-overlay", checked: true }, "runner-operation-unverified"],
+    [{ kind: "setChecked", selector: "#unrelated-overlay", checked: true }, "runner-action-timeout"],
   ];
   for (const [action, code] of negatives) {
     const result = await interact(action);
@@ -316,6 +326,57 @@ try {
     return JSON.parse(response.content.find((item) => item.type === "text").text);
   };
   const webTextSha256 = await verifyTextReading(inspectWebText, readRun);
+  const inspectWebTable = async (input = {}) => {
+    const response = await client.callTool({ name: "inspect_surface", arguments: { surface: "web", url: `${origin}/table-read`, ...input } });
+    assert.equal(response.isError, undefined);
+    return JSON.parse(response.content.find((item) => item.type === "text").text);
+  };
+  let tableOffset = 0;
+  let tableSha256;
+  const tableRows = [];
+  do {
+    const result = await inspectWebTable({ readTable: { selector: ".read-grid", offset: tableOffset, limit: 20,
+      columns: [0, 1], ...(tableSha256 ? { expectedSourceSha256: tableSha256 } : {}) } });
+    assert.equal(result.status, "observed");
+    assert.equal(result.testVerdict, "not-asserted");
+    const read = result.snapshot.tableRead;
+    assert.equal(read.scope, "rendered-current-page-table");
+    assert.equal(read.totalRows, 45);
+    assert.equal(read.allPagesVerified, false, "Finishing a table page must not claim all pages");
+    assert.deepEqual(read.columns.map((column) => column.header), ["ID", "Contact"]);
+    if (tableSha256) assert.equal(read.sourceSha256, tableSha256);
+    tableSha256 = read.sourceSha256;
+    tableRows.push(...read.rows);
+    assert.deepEqual((await readRun(result.inspectionId)).steps.at(-1).afterSnapshot.tableRead, read);
+    tableOffset = read.nextOffset;
+  } while (tableOffset !== null);
+  assert.equal(tableRows.length, 45);
+  assert.deepEqual(tableRows[0], ["1", "[REDACTED_EMAIL]"]);
+  const beforeInvalidTable = await readdir(join(workspaceRoot, ".proofkit/runs"));
+  for (const readTable of [{ selector: "#data-table", offset: 1 }, { selector: "#data-table", columns: [0, 0] }]) {
+    const rejected = await client.callTool({ name: "inspect_surface", arguments: { readTable } });
+    assert.equal(rejected.isError, true);
+  }
+  const conflicting = await client.callTool({ name: "inspect_surface", arguments: {
+    readText: { selector: "#data-table" }, readTable: { selector: "#data-table" } } });
+  assert.equal(conflicting.isError, true);
+  assert.deepEqual(await readdir(join(workspaceRoot, ".proofkit/runs")), beforeInvalidTable);
+  for (const [readTable, code] of [
+    [{ selector: "#not-a-table" }, "surface-table-read-control"],
+    [{ selector: "#data-table", columns: [7] }, "surface-table-read-columns"],
+    [{ selector: ".read-grid", offset: 46, expectedSourceSha256: tableSha256 }, "surface-table-read-range"],
+  ]) {
+    const failed = await inspectWebTable({ readTable });
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.snapshot, undefined);
+    const run = await readRun(failed.inspectionId);
+    const gap = JSON.parse(await readFile(join(workspaceRoot, ".proofkit/runs", run.steps.at(-1).artifacts.find((path) => path.endsWith("-response-gap.json"))), "utf8"));
+    assert.equal(gap.code, code);
+  }
+  tableEmailRevision = 1;
+  const changedTable = await inspectWebTable({ readTable: { selector: ".read-grid", offset: 20, columns: [0, 1], expectedSourceSha256: tableSha256 } });
+  assert.equal(changedTable.status, "failed");
+  tableEmailRevision = 0;
   const beforeInvalidText = await readdir(join(workspaceRoot, ".proofkit/runs"));
   const invalidText = await client.callTool({ name: "inspect_surface", arguments: { readText: { selector: "#region", offset: 1 } } });
   assert.equal(invalidText.isError, true);
@@ -436,6 +497,27 @@ try {
     const desktopAbsent = await desktopRunner.inspectSurface({ adapter: "electron", readyWhen: { text: "Missing condition", timeoutMs: 100 } });
     assert.equal(desktopAbsent.status, "failed");
     assert.equal(desktopAbsent.readiness.status, "unverified");
+    assert.equal((await desktopRunner.interactSurface({ adapter: "electron", action: { kind: "click", selector: "#table-read-link" } })).status, "observed");
+    const desktopTable = await desktopRunner.inspectSurface({ adapter: "electron",
+      readyWhen: { text: "Current results page", timeoutMs: 1000 },
+      readTable: { selector: "#data-table", limit: 10, columns: [0, 1] } });
+    assert.equal(desktopTable.status, "observed");
+    assert.equal(desktopTable.snapshot.tableRead.totalRows, 45);
+    assert.equal(desktopTable.snapshot.tableRead.nextOffset, 10);
+    assert.equal(desktopTable.snapshot.tableRead.allPagesVerified, false);
+    const desktopTableNext = await desktopRunner.inspectSurface({ adapter: "electron",
+      readyWhen: { text: "Current results page", timeoutMs: 1000 },
+      readTable: { selector: "#data-table", offset: 10, limit: 10, columns: [0, 1],
+        expectedSourceSha256: desktopTable.snapshot.tableRead.sourceSha256 } });
+    assert.equal(desktopTableNext.status, "observed");
+    assert.equal(desktopTableNext.snapshot.tableRead.nextOffset, 20);
+    const desktopRevision = await desktopRunner.interactSurface({ adapter: "electron", action: { kind: "click", selector: "#revise-table" } });
+    assert.equal(desktopRevision.status, "observed", JSON.stringify({ findings: desktopRevision.findings, action: desktopRevision.action }));
+    const desktopTableChanged = await desktopRunner.inspectSurface({ adapter: "electron",
+      readyWhen: { text: "Current results page", timeoutMs: 1000 },
+      readTable: { selector: "#data-table", offset: 20, columns: [0, 1],
+        expectedSourceSha256: desktopTable.snapshot.tableRead.sourceSha256 } });
+    assert.equal(desktopTableChanged.status, "failed");
   }
   const started = await runner.start({ adapter: "web", start: false, charter: {
     intent: "Use the observed semantic selector", level: "quick", mode: "deterministic", preconditions: [],
@@ -481,7 +563,7 @@ try {
   console.log(JSON.stringify({ inspectionId: inspection.inspectionId, controls: inspection.snapshot.controls.length,
     ...(process.env.PROOFKIT_INSPECTION_RUNS ? { artifacts: scratch } : {}),
     selector: details.selector, electronReadiness: process.env.PROOFKIT_ELECTRON_PATH ? "verified" : "not-run",
-    verified: ["scoped-text-reconstruction-and-eof", "scoped-text-window-redaction", "scoped-text-persisted-full-window", "scoped-text-negative-evidence", "scoped-text-page-and-region-binding", "scoped-text-changed-source-rejected", "scoped-text-invalid-input-before-run", "native-select-exact-value-and-label", "native-multiple-select-exact-set-replacement-and-clear", "native-multiple-select-prevalidation-and-readback", "native-form-state-and-action-hints", "native-checkbox-idempotency", "native-form-readback", "native-form-negative-evidence", "native-form-write-policy", "mcp-inspect-surface", "single-step-web-interaction", ...(process.env.PROOFKIT_ELECTRON_PATH ? ["single-step-electron-interaction", "electron-scoped-text-positive-negative-and-continuation"] : []), "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
+    verified: ["scoped-text-reconstruction-and-eof", "scoped-text-window-redaction", "scoped-text-persisted-full-window", "scoped-text-negative-evidence", "scoped-text-page-and-region-binding", "scoped-text-changed-source-rejected", "scoped-text-invalid-input-before-run", "current-page-table-row-reconstruction", "current-page-table-pii-redaction", "current-page-table-negative-evidence", "current-page-table-never-claims-all-pages", "native-select-exact-value-and-label", "native-multiple-select-exact-set-replacement-and-clear", "native-multiple-select-prevalidation-and-readback", "native-form-state-and-action-hints", "native-checkbox-idempotency", "native-form-readback", "native-form-negative-evidence", "native-form-write-policy", "mcp-inspect-surface", "single-step-web-interaction", ...(process.env.PROOFKIT_ELECTRON_PATH ? ["single-step-electron-interaction", "electron-scoped-text-positive-negative-and-continuation", "electron-current-page-table-read-and-change-rejection"] : []), "delayed-ui-readiness", "configured-readiness", "unverified-missing-condition", "bounded-runtime-diagnostics", "readiness-with-environment-blocker", "readiness-cancellation", "invalid-input-before-run", "redacted-snapshot", "unique-role-selector", "ambiguous-controls-without-selector", "ambiguous-action-rejected", "reusable-selector", "runtime-fill-reference", "source-unchanged"] }, null, 2));
 } finally {
   if (electron && electron.exitCode === null) {
     const exited = new Promise((done) => electron.once("exit", done));

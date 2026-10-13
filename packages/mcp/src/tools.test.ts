@@ -228,6 +228,17 @@ describe("ProofKit MCP tools", () => {
       const readText = { selector: "#results", offset: 4000, limit: 4000, expectedSourceSha256: "a".repeat(64) };
       expect((await client.callTool({ name: "inspect_surface", arguments: { readText } })).isError).toBeUndefined();
       expect(runner.inspectSurface).toHaveBeenLastCalledWith(expect.objectContaining({ readText }));
+      for (const readTable of [{ selector: "#orders", offset: 1 }, { selector: "#orders", columns: [0, 0] }]) {
+        expect((await client.callTool({ name: "inspect_surface", arguments: { readTable } })).isError).toBe(true);
+      }
+      expect((await client.callTool({ name: "inspect_surface", arguments: {
+        surface: "mobile", readTable: { selector: "#orders" } } })).isError).toBe(true);
+      expect((await client.callTool({ name: "inspect_surface", arguments: {
+        readText: { selector: "#orders" }, readTable: { selector: "#orders" } } })).isError).toBe(true);
+      expect((await client.callTool({ name: "inspect_surface", arguments: {
+        readTable: { selector: "#orders", columns: [0, 2] } } })).isError).toBeUndefined();
+      expect(runner.inspectSurface).toHaveBeenLastCalledWith(expect.objectContaining({
+        readTable: { selector: "#orders", offset: 0, limit: 20, columns: [0, 2] } }));
     } finally { await client.close(); await server.close(); }
   });
 

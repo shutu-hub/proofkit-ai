@@ -1,5 +1,5 @@
 import { createRunId, EvidenceStore, LocalExecutionOwnership, type LocalExecutionLease } from "@proofkit/evidence";
-import { hasIncompleteIntegrationCleanup, IntegrationCheckResultSchema, OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, SurfaceTextReadObservationSchema, TargetBindingSchema, type IntegrationSetupPolicy, type RuntimeFinding, type SurfaceTextReadRequest } from "@proofkit/contracts";
+import { hasIncompleteIntegrationCleanup, IntegrationCheckResultSchema, OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, SurfaceTableReadObservationSchema, SurfaceTextReadObservationSchema, TargetBindingSchema, type IntegrationSetupPolicy, type RuntimeFinding, type SurfaceTableReadRequest, type SurfaceTextReadRequest } from "@proofkit/contracts";
 import { z } from "zod";
 import { InputFileError, inputFileFacts, resolveInputFiles, sameInputFileFacts, type InputFileFact, type SurfaceActionContext } from "./input-files.js";
 import { IntegrationLifecycle, releaseLateIntegration, validateSetupPolicy, type IntegrationRecoveryContext, type IntegrationSetup, type IntegrationSetupEntry } from "./integration-lifecycle.js";
@@ -43,6 +43,7 @@ export interface SurfaceAdapter {
   discover(): Promise<SurfaceSnapshot>;
   /** Optional targeted reader; absence must never silently fall back to a page overview. */
   readText?(request: SurfaceTextReadRequest): Promise<SurfaceSnapshot>;
+  readTable?(request: SurfaceTableReadRequest): Promise<SurfaceSnapshot>;
   snapshot(): Promise<SurfaceSnapshot>;
   act(action: Action, context?: SurfaceActionContext): Promise<ActionReceipt>;
   assert(assertion: Assertion): Promise<AssertionResult>;
@@ -543,6 +544,9 @@ export class ExecutionRunner {
                 : receipt;
             }
             let afterSnapshot: SurfaceSnapshot;
+            if (action.kind === "observe" && action.readText && action.readTable) {
+              throw new InconclusiveError("surface-read-conflict", "Choose one scoped read per observation.");
+            }
             if (action.kind === "observe" && action.readText) {
               if (!this.adapter.readText) throw new InconclusiveError("surface-text-read-unsupported", "This adapter does not support targeted rendered-text reads.");
               afterSnapshot = await withAbort(this.adapter.readText(action.readText), signal, `${stepId} targeted text read`);
@@ -551,6 +555,15 @@ export class ExecutionRunner {
                 || read.data.text !== afterSnapshot.text
                 || action.readText.expectedSourceSha256 && read.data.sourceSha256 !== action.readText.expectedSourceSha256) {
                 throw new InconclusiveError("surface-text-read-unverified", "Adapter did not return a consistent targeted rendered-text observation.");
+              }
+            } else if (action.kind === "observe" && action.readTable) {
+              if (!this.adapter.readTable) throw new InconclusiveError("surface-table-read-unsupported", "This adapter does not support targeted table reads.");
+              afterSnapshot = await withAbort(this.adapter.readTable(action.readTable), signal, `${stepId} targeted table read`);
+              const read = SurfaceTableReadObservationSchema.safeParse(afterSnapshot.tableRead);
+              if (!read.success || read.data.offset !== action.readTable.offset || read.data.limit !== action.readTable.limit
+                || action.readTable.columns && JSON.stringify(read.data.columns.map((column) => column.index)) !== JSON.stringify(action.readTable.columns)
+                || action.readTable.expectedSourceSha256 && read.data.sourceSha256 !== action.readTable.expectedSourceSha256) {
+                throw new InconclusiveError("surface-table-read-unverified", "Adapter did not return a consistent targeted table observation.");
               }
             } else {
               afterSnapshot = await withAbort(action.kind === "observe" ? this.adapter.discover() : this.adapter.snapshot(), signal, `${stepId} snapshot`);
