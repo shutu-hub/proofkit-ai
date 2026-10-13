@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "suiteId": "aihr-resume-core-candidates-v0.1",
+  "suiteId": "aihr-resume-core-candidates-v0.2",
   "status": "source-derived-candidates-not-scored",
   "source": {
     "repository": "AIHR-Microservices",
@@ -42,10 +42,10 @@
       "readiness": "requires-isolated-worker-and-oracle"
     },
     {
-      "id": "R02", "surface": "web", "scenario": "相同 client_item_key 重试不重复生成业务结果",
-      "sourceAnchors": ["apps/desktop-shell/src/resume-channel-backend-bridge.ts", "services/resume-collection-service/internal/http/router/router.go"],
-      "oracle": "同一作用域的文件、候选人、评估和计费身份满足审阅后的幂等契约", "fixture": "synthetic-pdf-and-stable-client-item-key",
-      "readiness": "requires-idempotency-contract-review"
+      "id": "R02", "surface": "api", "scenario": "同一采集 Run 与 client_item_key 的筛选事实重试只记录一次",
+      "sourceAnchors": ["services/resume-collection-service/internal/repository/workflow_execution_repository.go", "services/resume-collection-service/internal/repository/workflow_execution_repository_test.go"],
+      "oracle": "独立读取 workflow_executions，核对同一租户、Run、client_item_key 只有一条且事实一致；冲突事实另测拒绝", "fixture": "isolated-run-and-stable-client-item-key",
+      "readiness": "requires-isolated-workflow-fixture-and-reader"
     },
     {
       "id": "R03", "surface": "web", "scenario": "非法文件被拒绝且不产生候选人或计费",
@@ -64,6 +64,18 @@
       "sourceAnchors": ["services/resume-collection-service/internal/service/resume_post_processor.go"],
       "oracle": "终态失败、页面提示和无成功评估事实一致", "fixture": "isolated-terminal-failure",
       "readiness": "requires-isolated-fault-injection"
+    },
+    {
+      "id": "R06", "surface": "api", "scenario": "同租户同来源同内容重复上传复用原文件",
+      "sourceAnchors": ["services/resume-collection-service/internal/service/file_service.go", "services/resume-collection-service/internal/repository/file_repository.go", "services/resume-collection-service/internal/service/file_service_test.go"],
+      "oracle": "两次响应与独立 resume_files 读数确认同一文件 ID 和内容哈希，且没有第二条未删除文件", "fixture": "isolated-tenant-and-identical-synthetic-pdf",
+      "readiness": "requires-isolated-file-fixture-and-reader"
+    },
+    {
+      "id": "R07", "surface": "api", "scenario": "同租户跨来源的相同内容不误复用文件",
+      "sourceAnchors": ["services/resume-collection-service/internal/service/file_service.go", "services/resume-collection-service/internal/repository/file_repository.go", "services/resume-collection-service/internal/service/file_service_test.go"],
+      "oracle": "独立 resume_files 读数确认不同来源各自的文件 ID 与来源字段，内容哈希相同；先确认两来源均有合法隔离测试入口", "fixture": "isolated-tenant-two-source-identical-synthetic-pdf",
+      "readiness": "requires-two-valid-source-adapters-and-isolated-reader"
     },
     {
       "id": "O01", "surface": "electron", "scenario": "在线简历阶段到达可核对的业务终态",
