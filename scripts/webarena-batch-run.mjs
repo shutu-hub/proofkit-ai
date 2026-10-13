@@ -39,6 +39,22 @@ export function assertPinnedContainer(info) {
   return info.Id;
 }
 
+/** Keep the frozen profile denominator while running an explicit development subset. */
+export function selectBatchTasks(tasks, taskIds) {
+  if (taskIds === undefined) return tasks;
+  if (typeof taskIds !== "string" || !/^(0|[1-9]\d*)(,(0|[1-9]\d*))*$/.test(taskIds)) {
+    throw new Error("Task selection must be a comma-separated list of task IDs");
+  }
+  const ids = taskIds.split(",").map(Number);
+  if (ids.some((id) => !Number.isSafeInteger(id)) || new Set(ids).size !== ids.length) {
+    throw new Error("Task selection has an invalid or duplicate ID");
+  }
+  const known = new Set(tasks.map((task) => task.taskId));
+  if (ids.some((id) => !known.has(id))) throw new Error("Task selection is outside the frozen profile");
+  const selected = new Set(ids);
+  return tasks.filter((task) => selected.has(task.taskId));
+}
+
 export async function planBatch(options) {
   if (!["shopping-admin-4", "shopping-admin-12", "shopping-admin-24"].includes(options.profile) ||
     !["codex", "claude-code"].includes(options.host) ||
@@ -82,7 +98,8 @@ export async function planBatch(options) {
     { timeout: 15_000, windowsHide: true });
   const dataset = await readFile(join(options.upstream, "assets", "dataset", "webarena-verified.json"));
   if (sha256(dataset) !== manifest.provenance?.datasetSha256) throw new Error("Pinned upstream dataset changed");
-  return { profile, tasks, config, publicInputSha256: manifest.publicInputSha256,
+  const selectedTasks = selectBatchTasks(tasks, options.taskIds);
+  return { profile, tasks, selectedTasks, config, publicInputSha256: manifest.publicInputSha256,
     image: IMAGE, container: CONTAINER };
 }
 
@@ -245,7 +262,7 @@ async function executeBatch(options, plan, output, parent) {
   for (const child of ["operators", "captures", "hosts", "submissions", "resets"]) await mkdir(join(output, child));
   const attempts = [], hostPaths = [];
   let abortedReason = null;
-  for (const task of plan.tasks) {
+  for (const task of plan.selectedTasks) {
     try {
       const reset = await resetSite(options, plan.config);
       await save(join(output, "resets", `${task.taskId}.json`), reset);
@@ -282,11 +299,13 @@ async function executeBatch(options, plan, output, parent) {
     }
   }
   const admissionPath = join(output, "admission.json");
-  await save(admissionPath, { schemaVersion: 1, profile: options.profile, planned: plan.tasks.length, attempts });
+  await save(admissionPath, { schemaVersion: 1, profile: options.profile, planned: plan.tasks.length,
+    selectedTaskIds: plan.selectedTasks.map((task) => task.taskId), attempts });
   const scoring = await gradeBatch(options, output, hostPaths, admissionPath);
   const official = scoring.gradeReport ? JSON.parse(await readFile(scoring.gradeReport, "utf8")) : undefined;
   const report = { schemaVersion: 1, benchmark: plan.profile.benchmark,
-    profile: options.profile, host: options.host, planned: plan.tasks.length, attempted: attempts.length,
+    profile: options.profile, host: options.host, planned: plan.tasks.length,
+    selectedTaskIds: plan.selectedTasks.map((task) => task.taskId), attempted: attempts.length,
     associated: attempts.filter((item) => item.status === "associated").length,
     officialEvaluated: official?.summary?.evaluated ?? null,
     officialSuccess: official?.summary?.evaluated ? official.summary.successful : null,
@@ -299,22 +318,24 @@ async function executeBatch(options, plan, output, parent) {
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const mode = process.argv[2];
   const names = new Set(["--profile", "--batch", "--config", "--upstream", "--python", "--chrome",
-    "--root", "--workspace", "--output", "--host", "--cli", "--model", "--docker-wsl", "--timeout-ms"]);
+    "--root", "--workspace", "--output", "--host", "--cli", "--model", "--docker-wsl", "--timeout-ms", "--task-ids"]);
   const values = new Map();
   for (let i = 3; i < process.argv.length; i += 2) {
     if (!names.has(process.argv[i]) || !process.argv[i + 1] || values.has(process.argv[i])) throw new Error("Invalid batch argument");
     values.set(process.argv[i], process.argv[i + 1]);
   }
-  if (!["plan", "run"].includes(mode)) throw new Error("Usage: node scripts/webarena-batch-run.mjs <plan|run> --profile shopping-admin-4|shopping-admin-12|shopping-admin-24 --batch <prepared> --config <environment> --upstream <pinned> --python <venv-python> --chrome <chrome.exe> --root <target> --workspace <external-workspace> --output <new-dir> [--host codex|claude-code] [--cli <native-executable>] [--model <identifier>] [--docker-wsl proofkit-docker] [--timeout-ms 600000]");
+  if (!["plan", "run"].includes(mode)) throw new Error("Usage: node scripts/webarena-batch-run.mjs <plan|run> --profile shopping-admin-4|shopping-admin-12|shopping-admin-24 --batch <prepared> --config <environment> --upstream <pinned> --python <venv-python> --chrome <chrome.exe> --root <target> --workspace <external-workspace> --output <new-dir> [--task-ids 41,62] [--host codex|claude-code] [--cli <native-executable>] [--model <identifier>] [--docker-wsl proofkit-docker] [--timeout-ms 600000]");
   const options = { profile: values.get("--profile") ?? "shopping-admin-12", batch: values.get("--batch"),
     config: values.get("--config"), upstream: values.get("--upstream"), python: values.get("--python"),
     chrome: values.get("--chrome"), root: values.get("--root"), workspaceRoot: values.get("--workspace"),
     output: values.get("--output"), host: values.get("--host") ?? "codex", cli: values.get("--cli"),
     model: values.get("--model"),
-    dockerWsl: values.get("--docker-wsl"), timeoutMs: Number(values.get("--timeout-ms") ?? 600_000) };
+    dockerWsl: values.get("--docker-wsl"), timeoutMs: Number(values.get("--timeout-ms") ?? 600_000),
+    taskIds: values.get("--task-ids") };
   const result = mode === "plan" ? await planBatch(options) : await runBatch(options);
   process.stdout.write(JSON.stringify(mode === "plan" ? { profile: options.profile,
-    planned: result.tasks.length, taskIds: result.profile.taskIds, image: result.image,
+    planned: result.tasks.length, taskIds: result.profile.taskIds,
+    selectedTaskIds: result.selectedTasks.map((task) => task.taskId), image: result.image,
     testVerdict: "not-asserted" } : result) + "\n");
   if (mode === "run" && (result.abortedReason || result.officialSuccess !== result.planned)) process.exitCode = 1;
 }

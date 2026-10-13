@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { assertPinnedContainer, inspectContainer, removePinnedContainer, startPinnedContainer, withSiteLock } from "../scripts/webarena-batch-run.mjs";
+import { assertPinnedContainer, inspectContainer, removePinnedContainer, selectBatchTasks, startPinnedContainer, withSiteLock } from "../scripts/webarena-batch-run.mjs";
 
 const known = { Id: "a".repeat(64), Name: "/webarena_verified_shopping_admin",
   Image: "sha256:d0531dd27ed98d0c459ff9e88118bf2ed8b660b0ed99c38837db46c065a5be13",
@@ -9,6 +9,15 @@ const known = { Id: "a".repeat(64), Name: "/webarena_verified_shopping_admin",
     "8877/tcp": [{ HostIp: "127.0.0.1", HostPort: "7781" }],
     "80/tcp": [{ HostIp: "127.0.0.1", HostPort: "7780" }],
   } } };
+
+test("development subsets preserve frozen task identity and profile order", () => {
+  const tasks = [{ taskId: 0 }, { taskId: 41 }, { taskId: 62 }, { taskId: 704 }];
+  assert.equal(selectBatchTasks(tasks), tasks);
+  assert.deepEqual(selectBatchTasks(tasks, "704,41"), [tasks[1], tasks[3]]);
+  for (const input of ["", "41,", "41,41", "041", "-1", "41,999", "41 62", "9007199254740993"]) {
+    assert.throws(() => selectBatchTasks(tasks, input), /Task selection/);
+  }
+});
 
 test("the batch reset recognizes only the pinned disposable container", () => {
   assert.equal(assertPinnedContainer(known), known.Id);
