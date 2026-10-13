@@ -9,6 +9,7 @@ import { chromium } from "playwright-core";
 import { benchmarkProfile, upstreamCommit } from "./webarena-benchmark-lib.mjs";
 import { probePilotEnvironment } from "./webarena-environment.mjs";
 import { runWebArenaHost } from "./webarena-run-host.mjs";
+import { validBenchmarkModel } from "./benchmark-provenance.mjs";
 
 const execute = promisify(execFile);
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -45,6 +46,7 @@ export async function planBatch(options) {
       options.root, options.workspaceRoot].every((value) => typeof value === "string" && isAbsolute(value)) ||
     (options.dockerWsl && !/^[A-Za-z0-9_.-]{1,64}$/.test(options.dockerWsl)) ||
     (options.cli && !isAbsolute(options.cli)) ||
+    (options.model !== undefined && !validBenchmarkModel(options.model)) ||
     !Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 10_000 || options.timeoutMs > 900_000) {
     throw new Error("Invalid pinned single-site batch options");
   }
@@ -256,7 +258,7 @@ async function executeBatch(options, plan, output, parent) {
           headless: true, extraHTTPHeaders: { "X-M2-Admin-Auto-Login": LOGIN_HEADER } } });
       const hostOutput = join(output, "hosts", String(task.taskId));
       const report = await runWebArenaHost({ sessionPath: operatorPath, batchPath: options.batch,
-        output: hostOutput, host: options.host, cliPath: options.cli, timeoutMs: options.timeoutMs });
+        output: hostOutput, host: options.host, cliPath: options.cli, model: options.model, timeoutMs: options.timeoutMs });
       hostPaths.push(join(hostOutput, "host-run.json"));
       if (report.status === "associated") {
         const source = join(hostOutput, "submissions", String(task.taskId));
@@ -297,17 +299,18 @@ async function executeBatch(options, plan, output, parent) {
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const mode = process.argv[2];
   const names = new Set(["--profile", "--batch", "--config", "--upstream", "--python", "--chrome",
-    "--root", "--workspace", "--output", "--host", "--cli", "--docker-wsl", "--timeout-ms"]);
+    "--root", "--workspace", "--output", "--host", "--cli", "--model", "--docker-wsl", "--timeout-ms"]);
   const values = new Map();
   for (let i = 3; i < process.argv.length; i += 2) {
     if (!names.has(process.argv[i]) || !process.argv[i + 1] || values.has(process.argv[i])) throw new Error("Invalid batch argument");
     values.set(process.argv[i], process.argv[i + 1]);
   }
-  if (!["plan", "run"].includes(mode)) throw new Error("Usage: node scripts/webarena-batch-run.mjs <plan|run> --profile shopping-admin-4|shopping-admin-12|shopping-admin-24 --batch <prepared> --config <environment> --upstream <pinned> --python <venv-python> --chrome <chrome.exe> --root <target> --workspace <external-workspace> --output <new-dir> [--host codex|claude-code] [--cli <native-executable>] [--docker-wsl proofkit-docker] [--timeout-ms 600000]");
+  if (!["plan", "run"].includes(mode)) throw new Error("Usage: node scripts/webarena-batch-run.mjs <plan|run> --profile shopping-admin-4|shopping-admin-12|shopping-admin-24 --batch <prepared> --config <environment> --upstream <pinned> --python <venv-python> --chrome <chrome.exe> --root <target> --workspace <external-workspace> --output <new-dir> [--host codex|claude-code] [--cli <native-executable>] [--model <identifier>] [--docker-wsl proofkit-docker] [--timeout-ms 600000]");
   const options = { profile: values.get("--profile") ?? "shopping-admin-12", batch: values.get("--batch"),
     config: values.get("--config"), upstream: values.get("--upstream"), python: values.get("--python"),
     chrome: values.get("--chrome"), root: values.get("--root"), workspaceRoot: values.get("--workspace"),
     output: values.get("--output"), host: values.get("--host") ?? "codex", cli: values.get("--cli"),
+    model: values.get("--model"),
     dockerWsl: values.get("--docker-wsl"), timeoutMs: Number(values.get("--timeout-ms") ?? 600_000) };
   const result = mode === "plan" ? await planBatch(options) : await runBatch(options);
   process.stdout.write(JSON.stringify(mode === "plan" ? { profile: options.profile,

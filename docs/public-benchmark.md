@@ -263,6 +263,10 @@ pnpm benchmark:webarena:host-audit --session D:/bench/operator.json --events D:/
 
 ### 单题宿主执行入口
 
+可用 `--model <identifier>` 显式固定本次请求的模型（批次入口同样支持）；省略时沿用宿主配置。入口保存 `execution-input.json` 与 `execution-provenance.json`：请求模型、允许的宿主模型事件、CLI/Node/Git 版本、超时预算、提示/operator/config 摘要，以及实际 `packages/*/dist/**/*.js` 和 CLI launcher 哈希。原始配置和模型消息不进入这些元数据。执行前后重新核验运行产物、operator 与显式 Codex 配置；缺失或变化时保留终态和问题代码，拒绝封存可评判提交。
+
+Codex 当前事件没有提供可信的实际模型字段，故显式请求仍标为 `requested-only`；Claude 的 init/assistant 模型字段仅表示 `host-reported`。两者均不验证服务商实际模型身份；别名与版本标识不同不自动判为错误。这些记录不构成完整依赖链认证或隔离认证，也不能仅凭单轮成绩变化宣布因果提升。封存前运行 `pnpm build`；评测期间不得修改工具产物。
+
 官方站点、准备批次和任务前初态到位后，可信控制器为**一题**创建新的 operator JSON（含该题映射后的回环起始 URL），然后启动已配置模型认证的 Codex 或 Claude Code CLI。商城后台必须映射到 `/admin`；其官方优化镜像可由可信控制器在 `browser.extraHTTPHeaders` 中传入免登录请求头，原始 HAR 会保留该头：
 
 ```powershell

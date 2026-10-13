@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { auditWebArenaHostTrace } from "./webarena-host-audit.mjs";
 import { benchmarkProfiles, upstreamCommit } from "./webarena-benchmark-lib.mjs";
 import { runHost } from "./host-runtime.mjs";
+import { captureBenchmarkProvenance, sealBenchmarkProvenance, validBenchmarkModel } from "./benchmark-provenance.mjs";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 const MCP_SCRIPT = join(dirname(SCRIPT), "webarena-mcp.mjs");
@@ -17,10 +18,11 @@ const DATASET_SHA256 = "315af52919d4afb5f5f168be58c796d35ff10d65cb49c9b762bf2b8b
 const execute = promisify(execFile);
 
 /** Execute one prepared public task through a real host CLI; scoring remains a separate trusted step. */
-export async function runWebArenaHost({ sessionPath, batchPath, output, host = "codex", cliPath, timeoutMs = 600_000 }) {
+export async function runWebArenaHost({ sessionPath, batchPath, output, host = "codex", cliPath, model, timeoutMs = 600_000 }) {
   if (![sessionPath, batchPath, output].every((path) => typeof path === "string" && isAbsolute(path))
     || !["codex", "claude-code"].includes(host) || !Number.isSafeInteger(timeoutMs)
-    || timeoutMs < 10_000 || timeoutMs > 900_000) throw new Error("Invalid benchmark host run options");
+    || timeoutMs < 10_000 || timeoutMs > 900_000
+    || model !== undefined && !validBenchmarkModel(model)) throw new Error("Invalid benchmark host run options");
   const operator = json(await bounded(sessionPath, 1024 * 1024));
   for (const key of ["root", "workspaceRoot", "captureDirectory", "publicInputPath"]) {
     if (typeof operator[key] !== "string" || !isAbsolute(operator[key])) throw new Error("Invalid benchmark operator paths");
@@ -93,8 +95,18 @@ export async function runWebArenaHost({ sessionPath, batchPath, output, host = "
     + `Do not use shell or filesystem tools to perform the task or alter benchmark artifacts.`;
   await writeFile(join(agentDir, "prompt.txt"), prompt + "\n", { flag: "wx" });
   const eventsPath = join(outputRoot, "host-events.jsonl");
-  const args = host === "codex" ? await codexArgs(launcher.prefix, sessionPath, agentDir, operator.workspaceRoot, prompt)
-    : await claudeArgs(launcher.prefix, sessionPath, agentDir, prompt);
+  const args = host === "codex" ? await codexArgs(launcher.prefix, sessionPath, agentDir, operator.workspaceRoot, prompt, model)
+    : await claudeArgs(launcher.prefix, sessionPath, agentDir, prompt, model);
+  let provenance;
+  try { provenance = await captureBenchmarkProvenance({ root: dirname(dirname(SCRIPT)), launcher,
+    host, model, prompt, operatorPath: sessionPath, timeoutMs }); }
+  catch {
+    const report = { schemaVersion: 1, taskId: selected.taskId, host, status: "infrastructure-blocked",
+      reason: "execution-provenance-unavailable", officialScore: "not-run", proofkitEffectiveness: "not-measured" };
+    await save(join(outputRoot, "host-run.json"), report);
+    return report;
+  }
+  await save(join(outputRoot, "execution-input.json"), provenance);
   let execution;
   try { execution = await runHost(launcher.executable, args, agentDir, timeoutMs, eventsPath); }
   catch (error) {
@@ -104,8 +116,11 @@ export async function runWebArenaHost({ sessionPath, batchPath, output, host = "
     await save(join(outputRoot, "host-run.json"), report);
     return report;
   }
+  provenance = await sealBenchmarkProvenance(provenance, { root: dirname(dirname(SCRIPT)), launcher,
+    host, model, transcript: execution.transcript, eventsPath, operatorPath: sessionPath });
+  await save(join(outputRoot, "execution-provenance.json"), provenance);
   let audit;
-  if (!execution.timedOut && execution.code === 0 && !execution.blocker) {
+  if (provenance.sealStatus === "complete" && !execution.timedOut && execution.code === 0 && !execution.blocker) {
     try { audit = await auditWebArenaHostTrace({ operatorPath: sessionPath, eventsPath, host, serverName: SERVER }); }
     catch (error) { audit = { status: "incomplete", issues: ["benchmark-capture-not-auditable"],
       detail: String(error.message).slice(0, 300) }; }
@@ -131,7 +146,11 @@ export async function runWebArenaHost({ sessionPath, batchPath, output, host = "
     } catch (error) { status = "incomplete"; stagingIssue = String(error.message).slice(0, 300); }
   }
   const report = { schemaVersion: 1, taskId: selected.taskId, host, status,
-    sessionInputSha256: operator.publicInputSha256, eventsSha256: hash(await readFile(eventsPath)),
+    sessionInputSha256: operator.publicInputSha256, eventsSha256: provenance.eventsSha256,
+    provenance: { path: join(outputRoot, "execution-provenance.json"),
+      sha256: hash(await readFile(join(outputRoot, "execution-provenance.json"))),
+      model: provenance.model, runtimeStable: provenance.runtimeStable, sealStatus: provenance.sealStatus,
+      issues: provenance.issues },
     execution: { code: execution.code, timedOut: execution.timedOut, blocker: execution.blocker,
       stopReason: execution.stopReason, durationMs: execution.durationMs, milestones: execution.milestones },
     ...(audit ? { audit } : {}), ...(submission ? { submission } : {}),
@@ -141,7 +160,7 @@ export async function runWebArenaHost({ sessionPath, batchPath, output, host = "
   return report;
 }
 
-async function codexArgs(prefix, sessionPath, agentDir, workspaceRoot, prompt) {
+async function codexArgs(prefix, sessionPath, agentDir, workspaceRoot, prompt, model) {
   const toml = (value) => JSON.stringify(value);
   const overrides = [`mcp_servers.${SERVER}.command=${toml(process.execPath)}`,
     `mcp_servers.${SERVER}.args=${toml([MCP_SCRIPT, "--session", sessionPath])}`,
@@ -150,7 +169,7 @@ async function codexArgs(prefix, sessionPath, agentDir, workspaceRoot, prompt) {
   return [...prefix, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "workspace-write",
     "--cd", agentDir, "--add-dir", workspaceRoot,
     "--output-last-message", join(agentDir, "last-message.txt"), "-c", 'approval_policy="never"',
-    ...overrides.flatMap((value) => ["-c", value]), prompt];
+    ...overrides.flatMap((value) => ["-c", value]), ...(model ? ["--model", model] : []), prompt];
 }
 
 async function ensureCodexMcpIsolation(launcher) {
@@ -168,13 +187,13 @@ async function ensureCodexMcpIsolation(launcher) {
   if (ambient.length) throw new Error(`Codex host has enabled ambient MCP servers (${ambient.join(", ")}); use an isolated CODEX_HOME`);
 }
 
-async function claudeArgs(prefix, sessionPath, agentDir, prompt) {
+async function claudeArgs(prefix, sessionPath, agentDir, prompt, model) {
   const configPath = join(agentDir, "mcp.json");
   await save(configPath, { mcpServers: { [SERVER]: { command: process.execPath,
     args: [MCP_SCRIPT, "--session", sessionPath] } } });
   return [...prefix, "-p", prompt, "--output-format", "stream-json", "--verbose",
     "--mcp-config", configPath, "--strict-mcp-config", "--no-session-persistence",
-    "--permission-mode", "dontAsk", "--allowedTools", `mcp__${SERVER}__*`];
+    "--permission-mode", "dontAsk", "--allowedTools", `mcp__${SERVER}__*`, ...(model ? ["--model", model] : [])];
 }
 
 async function resolveLauncher(cliPath, host) {
@@ -224,17 +243,17 @@ async function save(path, value) { await writeFile(path, JSON.stringify(value, n
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const options = new Map();
   for (let i = 2; i < process.argv.length; i += 2) {
-    if (!["--session", "--batch", "--output", "--host", "--cli", "--timeout-ms"].includes(process.argv[i])
+    if (!["--session", "--batch", "--output", "--host", "--cli", "--model", "--timeout-ms"].includes(process.argv[i])
       || !process.argv[i + 1] || options.has(process.argv[i])) throw new Error("Invalid host runner arguments");
     options.set(process.argv[i], process.argv[i + 1]);
   }
   if (!options.has("--session") || !options.has("--batch") || !options.has("--output")) {
-    throw new Error("Usage: node scripts/webarena-run-host.mjs --session <operator-json> --batch <prepared-dir> --output <new-external-dir> [--host codex|claude-code] [--cli <executable>] [--timeout-ms 600000]");
+    throw new Error("Usage: node scripts/webarena-run-host.mjs --session <operator-json> --batch <prepared-dir> --output <new-external-dir> [--host codex|claude-code] [--cli <executable>] [--model <identifier>] [--timeout-ms 600000]");
   }
   const report = await runWebArenaHost({ sessionPath: resolve(options.get("--session")),
     batchPath: resolve(options.get("--batch")), output: resolve(options.get("--output")),
     host: options.get("--host") ?? "codex",
-    cliPath: options.get("--cli"), timeoutMs: Number(options.get("--timeout-ms") ?? 600_000) });
+    cliPath: options.get("--cli"), model: options.get("--model"), timeoutMs: Number(options.get("--timeout-ms") ?? 600_000) });
   console.log(JSON.stringify({ status: report.status, taskId: report.taskId,
     report: join(resolve(options.get("--output")), "host-run.json"), officialScore: "not-run" }));
   if (report.status !== "associated") process.exitCode = 1;

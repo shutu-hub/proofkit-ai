@@ -59,6 +59,62 @@ test("a CLI that exits before emitting events is an infrastructure blocker", asy
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
+test("explicit model reaches the child CLI and provenance seals metadata without prompt text", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(f.cli, 'import {writeFileSync} from "node:fs"; if (process.argv.includes("mcp")) process.stdout.write("[]"); else if(process.argv.includes("--version")) process.stdout.write("codex-cli 0.132.0"); else { writeFileSync("model-request.json",JSON.stringify({model:process.argv[process.argv.indexOf("--model")+1]})); process.stdout.write(JSON.stringify({type:"turn.completed"})+"\\n"); }');
+    const result = await runWebArenaHost({ sessionPath: f.operatorPath, batchPath: f.batch,
+      output: f.output, host: "codex", cliPath: f.cli, model: "gpt-6-sol", timeoutMs: 10_000 });
+    assert.equal(JSON.parse(await readFile(join(f.output, "agent", "model-request.json"), "utf8")).model, "gpt-6-sol");
+    const input = JSON.parse(await readFile(join(f.output, "execution-input.json"), "utf8"));
+    const seal = JSON.parse(await readFile(join(f.output, "execution-provenance.json"), "utf8"));
+    assert.equal(input.cliVersion, "codex-cli 0.132.0");
+    assert.equal(input.promptSha256, hash(await readFile(join(f.output, "agent", "prompt.txt"))));
+    assert.equal(seal.sealStatus, "complete"); assert.equal(seal.runtimeStable, true);
+    assert.equal(seal.operatorStable, true); assert.equal(seal.model.status, "requested-only");
+    assert.ok(!JSON.stringify(seal).includes("View the details"));
+    assert.equal(result.officialScore, "not-run");
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("invalid model rejects before any host or output creation", async () => {
+  const f = await fixture();
+  try {
+    await assert.rejects(runWebArenaHost({ sessionPath: f.operatorPath, batchPath: f.batch,
+      output: f.output, cliPath: f.cli, model: "gpt; injected" }), /Invalid benchmark host run options/);
+    await assert.rejects(readdir(f.output), { code: "ENOENT" });
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("Claude model option reaches the child and only host reported fields enter provenance", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(f.cli, 'import {writeFileSync} from "node:fs"; if(process.argv.includes("--version")) process.stdout.write("2.1.0 (Claude Code)"); else {writeFileSync("model-request.json",JSON.stringify({model:process.argv[process.argv.indexOf("--model")+1]}));for(const event of [{type:"system",subtype:"init",model:"claude-version"},{type:"result",subtype:"success",is_error:false}]) process.stdout.write(JSON.stringify(event)+"\\n");}');
+    const result = await runWebArenaHost({ sessionPath: f.operatorPath, batchPath: f.batch,
+      output: f.output, host: "claude-code", cliPath: f.cli, model: "claude-alias", timeoutMs: 10_000 });
+    assert.equal(JSON.parse(await readFile(join(f.output, "agent", "model-request.json"), "utf8")).model, "claude-alias");
+    assert.equal(result.provenance.model.status, "host-reported");
+    assert.deepEqual(result.provenance.model.reported, ["claude-version"]);
+    assert.equal(result.provenance.model.identifiers, "different-identifiers");
+    assert.equal(result.provenance.sealStatus, "complete");
+    assert.equal(result.status, "incomplete");
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("runtime disappearance preserves terminal host evidence without staging a submission", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(f.cli, 'import {unlinkSync} from "node:fs"; if (process.argv.includes("mcp")) process.stdout.write("[]"); else if(process.argv.includes("--version")) process.stdout.write("codex-cli 0.132.0"); else {unlinkSync(process.argv[1]);process.stdout.write(JSON.stringify({type:"turn.completed"})+"\\n");}');
+    const result = await runWebArenaHost({ sessionPath: f.operatorPath, batchPath: f.batch,
+      output: f.output, cliPath: f.cli, timeoutMs: 10_000 });
+    assert.equal(result.status, "incomplete"); assert.equal(result.execution.code, 0);
+    assert.equal(result.provenance.sealStatus, "incomplete");
+    assert.ok(result.provenance.issues.includes("runtime-unavailable"));
+    assert.equal(JSON.parse(await readFile(join(f.output, "host-run.json"), "utf8")).status, "incomplete");
+    await assert.rejects(readdir(join(f.output, "submissions")), { code: "ENOENT" });
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
 test("rejects an ambient browser MCP before launching a benchmark host", async () => {
   const f = await fixture();
   try {
