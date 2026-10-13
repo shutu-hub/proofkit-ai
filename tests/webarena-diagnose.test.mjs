@@ -260,3 +260,16 @@ test("separates a failed capture from a later batch reset blocker", () => {
     { taskId: 470, status: "batch-blocked" }, { taskId: 470, status: "batch-blocked" },
   ] }), /duplicate batch admission/);
 });
+
+test("classifies an interrupted task browser separately from an Agent answer failure", () => {
+  const grade = { summary: { planned: 1 }, cases: [{ taskId: 183, status: "not-run", score: null }] };
+  const host = { taskId: 183, status: "incomplete", execution: { timedOut: false },
+    audit: { issues: ["task-context-interrupted", "host-submission-result-mismatch"] },
+    toolStatsIntegrity: "verified" };
+  const report = diagnoseBatch(grade, [host]);
+  assert.equal(report.officialEvaluated, 0);
+  assert.equal(report.cases[0].classification.code, "browser-task-interrupted");
+  assert.equal(report.cases[0].classification.stage, "browser-session");
+  assert.equal(report.cases[0].classification.rootCause, "unconfirmed");
+  assert.deepEqual(report.cases[0].investigationSignals, ["task-context-interrupted"]);
+});

@@ -111,6 +111,7 @@ export function diagnoseBatch(grade, hosts, officialChecks = new Map(), batchRun
     if (host?.execution?.timedOut) investigationSignals.push("host-deadline");
     if (host?.audit?.issues?.some((issue) => issue === "task-capture-unavailable"
       || issue === "task-capture-artifact-unavailable")) investigationSignals.push("capture-artifact-unavailable");
+    if (host?.audit?.issues?.includes("task-context-interrupted")) investigationSignals.push("task-context-interrupted");
     const declaredStatus = host?.submissionStatusIntegrity === "verified" && RESPONSE_STATUSES.has(host.submissionStatus)
       ? host.submissionStatus : null;
     if (declaredStatus && declaredStatus !== "SUCCESS") investigationSignals.push("agent-declared-error");
@@ -206,6 +207,10 @@ function classify(grade, host, checks, admission) {
   if (host.audit?.issues?.some((issue) => issue === "task-capture-unavailable"
     || issue === "task-capture-artifact-unavailable")) {
     return result("capture-unavailable", "evidence", "Inspect the task capture manifest, raw HAR size and recorder limit before repeating the task.");
+  }
+  if (host.audit?.issues?.includes("task-context-interrupted")) {
+    return result("browser-task-interrupted", "browser-session",
+      "Inspect the first browser Run and task capture reason; repeat from a fresh fixed site before attributing this to task quality.");
   }
   if (host.status !== "associated") return result("submission-gap", "capture", "Inspect terminal submission, task audit and host tool trace.");
   if (grade.status === "not-run" || grade.status === "error") {
