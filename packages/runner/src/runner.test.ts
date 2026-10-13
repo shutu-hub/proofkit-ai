@@ -186,6 +186,25 @@ describe("ExecutionRunner", () => {
     }
   });
 
+  it("classifies an action timeout without copying the adapter error", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-action-timeout-"));
+    const adapter = new FakeAdapter();
+    adapter.act = async () => {
+      const error = new Error("private selector and page content");
+      error.name = "TimeoutError";
+      throw error;
+    };
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
+      intent: "inspect timeout evidence", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#target" }], assertions: [], sideEffectPolicy: "allow", metadata: {},
+    }, "action-timeout");
+    const gap = summary.steps[0]!.artifacts.find((path) => path.endsWith("response-gap.json"))!;
+    const saved = await readFile(join(root, gap), "utf8");
+    expect(JSON.parse(saved).code).toBe("runner-action-timeout");
+    expect(summary.verdict).toBe("inconclusive");
+    expect(JSON.stringify(summary) + saved).not.toContain("private selector and page content");
+  });
+
   it("keeps preflight exception text out of Run evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-preflight-error-"));
     const privateErrorText = "candidate-email=private@example.invalid token=secret-credential";

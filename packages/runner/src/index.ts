@@ -1050,6 +1050,10 @@ async function withAbort<T>(promise: Promise<T>, signal: AbortSignal, label: str
     if (signal.aborted) throw abortReason(signal);
     if (error instanceof InconclusiveError || error instanceof InputFileError
       || error instanceof AmbiguousSurfaceTargetError || error instanceof InvalidFileInputControlError) throw error;
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new InconclusiveError(label.endsWith(" action") ? "runner-action-timeout" : "runner-operation-timeout",
+        `${label} timed out without a verified result; inspect trusted local diagnostics.`);
+    }
     throw new InconclusiveError("runner-operation-unverified",
       `${label} failed without a verified result; inspect trusted local diagnostics.`);
   } finally {
