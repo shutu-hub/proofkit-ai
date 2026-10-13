@@ -145,7 +145,7 @@ export type InlineHttpOracle = z.infer<typeof InlineHttpOracleSchema>;
 export const NativeOptionSchema = z.union([
   z.object({ value: z.string().max(4096) }).strict(),
   z.object({ label: z.string().min(1).max(4096) }).strict(),
-]);
+]).describe('An object with exactly one key: {"value":"exact option value"} or {"label":"exact visible label"}. A plain string or numeric index is invalid.');
 export const SelectOptionActionSchema = z.object({
   kind: z.literal("selectOption"), selector: z.string().min(1).max(512),
   option: NativeOptionSchema,
@@ -155,7 +155,7 @@ export const SelectOptionsActionSchema = z.object({
   kind: z.literal("selectOptions"), selector: z.string().min(1).max(512),
   options: z.array(NativeOptionSchema).max(32).refine((options) =>
     new Set(options.map((option) => "value" in option ? `value:${option.value}` : `label:${option.label}`)).size === options.length,
-  "Requested options must be distinct"),
+  "Requested options must be distinct").describe('The complete replacement selection, for example [{"label":"First"},{"value":"second"}]. Use [] to clear. Every item must be an object, never a string.'),
 }).strict();
 export const SetCheckedActionSchema = z.object({
   kind: z.literal("setChecked"), selector: z.string().min(1).max(512), checked: z.boolean(),
