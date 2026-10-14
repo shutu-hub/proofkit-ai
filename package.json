@@ -16,6 +16,7 @@
     "typecheck": "pnpm -r build && pnpm -r typecheck",
     "test": "pnpm -r --workspace-concurrency 2 test",
     "test:smoke:web": "pnpm build && node tests/web-smoke.mjs",
+    "test:smoke:browser": "pnpm build && node tests/browser-presentation-smoke.mjs",
     "test:smoke:inspect": "pnpm build && node tests/inspection-smoke.mjs",
     "test:smoke:electron": "pnpm build && node tests/electron-smoke.mjs",
     "test:smoke:target-continuity": "pnpm build && node tests/target-continuity-smoke.mjs",

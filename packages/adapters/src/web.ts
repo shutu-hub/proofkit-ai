@@ -36,43 +36,60 @@ export class WebAdapter implements SurfaceAdapter {
   private pendingEvents: AdapterEvent[] = [];
   private droppedPendingEvents = 0;
   private detachPageEvents?: () => void;
+  private connecting?: Promise<void>;
 
   constructor(options: WebAdapterOptions = {}) {
     this.options = options;
   }
 
   async connect(): Promise<void> {
-    this.pendingEvents = [];
-    this.droppedPendingEvents = 0;
+    if (this.connecting) return this.connecting;
+    const connecting = this.connectBrowser();
+    this.connecting = connecting;
+    try {
+      await connecting;
+    } finally {
+      this.connecting = undefined;
+    }
+  }
+
+  private async connectBrowser(): Promise<void> {
+    // A reconnect owns a fresh session; release any previous browser or CDP connection first.
+    await this.close();
     const { chromium } = await import("playwright-core");
-    if (this.options.cdpUrl) {
-      this.browser = await chromium.connectOverCDP(this.options.cdpUrl);
-      const deadline = Date.now() + 5_000;
-      while (true) {
-        const pages = this.browser.contexts().flatMap((context) => context.pages());
-        const selected = await selectAttachedPage(pages, this.options);
-        if (selected) {
-          this.context = selected.context();
-          this.activePage = selected;
-          this.attachPageEvents(selected);
-          return;
+    try {
+      if (this.options.cdpUrl) {
+        this.browser = await chromium.connectOverCDP(this.options.cdpUrl);
+        const deadline = Date.now() + 5_000;
+        while (true) {
+          const pages = this.browser.contexts().flatMap((context) => context.pages());
+          const selected = await selectAttachedPage(pages, this.options);
+          if (selected) {
+            this.context = selected.context();
+            this.activePage = selected;
+            this.attachPageEvents(selected);
+            if (this.options.headless === false) await selected.bringToFront();
+            return;
+          }
+          if (Date.now() >= deadline) {
+            throw new Error("CDP attachment found no matching application page. Open the app or configure targetUrlPrefix/targetTitleContains in the test workspace.");
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
         }
-        if (Date.now() >= deadline) {
-          throw new Error("CDP attachment found no matching application page. Open the app or configure targetUrlPrefix/targetTitleContains in the test workspace.");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100));
       }
-    } else {
+      const headless = this.options.headless ?? true;
       this.browser = await chromium.launch({
-        headless: this.options.headless ?? true,
+        headless,
         executablePath: this.options.executablePath,
       });
-    }
-    this.context = this.browser.contexts()[0] ?? await this.browser.newContext();
-    this.activePage = this.context.pages()[0] ?? await this.context.newPage();
-    this.attachPageEvents(this.activePage);
-    if (this.options.baseUrl && (await this.activePage.url()) === "about:blank") {
-      await this.activePage.goto(this.options.baseUrl, { waitUntil: "domcontentloaded" });
+      this.context = await this.browser.newContext(headless ? undefined : { viewport: null });
+      this.activePage = await this.context.newPage();
+      this.attachPageEvents(this.activePage);
+      if (!headless) await this.activePage.bringToFront();
+      if (this.options.baseUrl) await this.activePage.goto(this.options.baseUrl, { waitUntil: "domcontentloaded" });
+    } catch (error) {
+      await this.close().catch(() => {});
+      throw error;
     }
   }
 
@@ -266,7 +283,9 @@ export class WebAdapter implements SurfaceAdapter {
     return this.page().screenshot({
       type: "png",
       timeout: this.options.screenshotTimeoutMs ?? 5_000,
-      animations: "disabled",
+      // Evidence must observe the live state, not finish transitions or restart looping animations.
+      animations: "allow",
+      caret: "initial",
     });
   }
 
@@ -293,14 +312,18 @@ export class WebAdapter implements SurfaceAdapter {
     this.eventSink = undefined;
     this.pendingEvents = [];
     this.droppedPendingEvents = 0;
-    await this.browser?.close();
-    this.browser = undefined;
-    this.context = undefined;
-    this.activePage = undefined;
+    try {
+      await this.browser?.close();
+    } finally {
+      this.browser = undefined;
+      this.context = undefined;
+      this.activePage = undefined;
+    }
   }
 
   protected page(): Page {
     if (!this.activePage) throw new Error("Web adapter is not connected");
+    if (this.activePage.isClosed()) throw new Error("Web adapter page is closed; reconnect before continuing.");
     return this.activePage;
   }
 

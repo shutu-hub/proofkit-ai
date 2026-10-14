@@ -53,6 +53,7 @@ describe("declared route projection", () => {
   it("saves a file document fingerprint and route pattern without the local path or hash ID", async () => {
     const adapter = new WebAdapter({ routePatterns: ["/resumes/:id"], targetUrlPrefix: "file:///C:/fixture/index.html" });
     (adapter as unknown as { activePage: Page }).activePage = {
+      isClosed: () => false,
       url: () => "file:///C:/fixture/index.html#/resumes/private-candidate-123",
       title: async () => "Resume",
       locator: () => ({ innerText: async () => "Resume ready" }),
@@ -67,6 +68,7 @@ describe("declared route projection", () => {
   it("does not bind a different file with the same route hash", async () => {
     const adapter = new WebAdapter({ routePatterns: ["/resumes/:id"], targetUrlPrefix: "file:///C:/fixture/index.html" });
     (adapter as unknown as { activePage: Page }).activePage = {
+      isClosed: () => false,
       url: () => "file:///C:/fixture/index.html.evil#/resumes/private-candidate-123",
       title: async () => "Resume",
       locator: () => ({ innerText: async () => "Resume ready" }),
@@ -89,6 +91,7 @@ describe("declared route projection", () => {
   it("records route patterns in action receipts without the observed record ID", async () => {
     const adapter = new WebAdapter({ routePatterns: ["/resumes/:id"] });
     (adapter as unknown as { activePage: Page }).activePage = {
+      isClosed: () => false,
       url: () => "http://fixture/resumes/private-candidate-123?token=private",
       title: async () => "Resume",
     } as unknown as Page;

@@ -206,6 +206,12 @@ pnpm --filter @proofkit/cli dev -- run "resume check" \
   --headful
 ```
 
+For a newly launched Web browser, `--headful` brings its fresh page to the foreground once and uses the browser window's actual size. Without an explicit visibility setting, Web runs remain headless. Evidence screenshots leave animations and the text caret untouched, so collecting evidence does not finish UI transitions or restart looping animations. A closed page produces a connection error; reconnecting releases the previous session and creates a fresh page.
+
+For visible MCP and Mission execution, set `surfaces.web.headless: false` in the external workspace's `.proofkit/config.yaml`. CLI `--headful` takes precedence over this setting; omitting both keeps the headless default. Inspection and Run cleanup still close their owned browser, so repeated `inspect_surface` calls are not a live viewer. Use a visible test Run to watch the actions as they execute.
+
+`pnpm test:smoke:browser` checks animation continuity, window size, reconnect cleanup and workspace visibility. It also opens visible sessions; use `xvfb-run -a pnpm test:smoke:browser` on Linux hosts without a display.
+
 Attach to an existing Electron instance. Start that app with remote debugging enabled and point ProofKit at its loopback CDP endpoint or `DevToolsActivePort` file:
 
 ```bash
@@ -217,6 +223,8 @@ pnpm --filter @proofkit/cli dev -- run "resume check" \
 ```
 
 For CDP attachment, ProofKit waits for an application page and requires a unique target. If the browser or Electron app has several windows, set `surfaces.electron.targetUrlPrefix` or `targetTitleContains` in the external workspace's `.proofkit/config.yaml` (the Web surface accepts the same fields). It never picks an arbitrary first tab. A configured Web `baseUrl` also narrows attached pages to that origin when no explicit target is set.
+
+CDP attachment uses that existing application page rather than creating a new tab. Web attachment with `--headful` foregrounds the selected page once. To launch a new Web browser, omit both `--cdp` and `surfaces.web.cdpUrl`. A reconnect to CDP disconnects the previous client session and repeats target selection; it does not create a replacement application window.
 
 On Windows and Linux hosts with usable `/proc` socket metadata, a loopback Web/Electron target also records the listening process's Git checkout. For an Electron `file:` page, ProofKit checks the configured CDP listener when there is no HTTP page server; a port file is resolved at inspection time. A Run using a port file checks the final leased and pinned CDP endpoint again before connecting, and keeps later association checks on that endpoint if the file changes. A different checkout blocks the run by default, so a server left running from another working tree cannot silently count as this project's test. `unverified` means ProofKit could not establish that association; a matching process path still does not attest the served source bytes. Linux process association passed a privileged Ubuntu runner smoke for stable and replaced listeners plus a foreign checkout. Ordinary-user `/proc` access can still be denied and remains `unverified`; WSL 1 does not expose the required socket table.
 

@@ -1765,7 +1765,7 @@ export class LocalRunnerService {
       targetUrlPrefix: this.config.surfaces.web?.targetUrlPrefix,
       targetTitleContains: this.config.surfaces.web?.targetTitleContains,
       routePatterns: input.coverageRouteTargets?.filter((target) => target.kind === "web").map((target) => target.path),
-      headless: !input.headful,
+      headless: input.headful === undefined ? this.config.surfaces.web?.headless ?? true : !input.headful,
       executablePath: this.config.surfaces.web?.executablePath ?? process.env.PROOFKIT_BROWSER_PATH,
     });
   }

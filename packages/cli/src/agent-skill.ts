@@ -107,7 +107,11 @@ For an Electron HTTP renderer, check both source-binding for the page server
 and application-source-binding for the CDP process. A reachable CDP endpoint
 or matching page server alone does not identify the app being controlled.
 MCP does not start the configured application command; use the project's
-documented development startup workflow when authorized. Use inspect_surface
+documented development startup workflow when authorized. For a user-visible Web
+test, set surfaces.web.headless: false in the external workspace config, or use
+CLI --headful. CDP attaches to the selected existing page. Inspection closes its
+owned browser when it completes; do not repeatedly inspect to simulate a live
+viewer. Use a visible test Run for live actions. Use inspect_surface
 when controls or readiness are unknown, then inspect the owning source and
 API contract. Configure readyWhen for a real visible prerequisite if needed.
 The readyWhen text must be visible before the action being tested. Do not use

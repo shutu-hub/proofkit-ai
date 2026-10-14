@@ -23,6 +23,10 @@ jobs:
       - run: pnpm test:host-verifier
       - name: Verify mobile MCP and WebDriver lifecycle
         run: node tests/mobile-smoke.mjs
+      - name: Verify browser presentation and page lifecycle
+        env:
+          PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome
+        run: xvfb-run -a node tests/browser-presentation-smoke.mjs
       - name: Verify scripted Claude protocol and evidence chain
         env:
           PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome

@@ -1039,6 +1039,7 @@ export const ProofkitConfigSchema = z.object({
       targetUrlPrefix: z.string().min(1).optional(),
       targetTitleContains: z.string().min(1).optional(),
       executablePath: z.string().min(1).optional(),
+      headless: z.boolean().optional(),
       readyWhen: SurfaceReadinessSchema.optional(),
     }).optional(),
     electron: z.object({

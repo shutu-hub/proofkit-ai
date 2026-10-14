@@ -13,7 +13,7 @@ const action = CaptureResponseActionSchema.parse({ kind: "captureResponse", name
 function fixture() {
   const events = new EventEmitter();
   const frame = {};
-  const page = Object.assign(events, { mainFrame: () => frame }) as unknown as Page;
+  const page = Object.assign(events, { mainFrame: () => frame, isClosed: () => false }) as unknown as Page;
   const request = (options: { url?: string; frame?: unknown; redirected?: boolean; method?: string } = {}) => ({
     url: () => options.url ?? action.response.url, method: () => options.method ?? "POST",
     frame: () => options.frame ?? frame, redirectedFrom: () => options.redirected ? {} : null,
