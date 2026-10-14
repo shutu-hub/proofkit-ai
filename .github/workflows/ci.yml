@@ -21,6 +21,21 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:host-verifier
+      - run: pnpm test:benchmark-datasets
+      - name: Fetch pinned public browser tasks
+        run: pnpm benchmark:datasets:fetch --dataset miniwob
+      - name: Verify public MiniWoB task verdicts and evidence
+        env:
+          PROOFKIT_BROWSER_PATH: /usr/bin/google-chrome
+        run: node tests/miniwob-benchmark.mjs
+      - name: Preserve public benchmark evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proofkit-miniwob-regression
+          path: .proofkit/benchmarks/miniwob-*/
+          if-no-files-found: ignore
+          include-hidden-files: true
       - name: Verify mobile MCP and WebDriver lifecycle
         run: node tests/mobile-smoke.mjs
       - name: Verify browser presentation and page lifecycle

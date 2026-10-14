@@ -295,6 +295,28 @@ pnpm benchmark:planner
 
 The benchmark reports level selection, action safety, assertion and Oracle presence for fixed quick/core/release cases. It is a planning-structure check; a passing benchmark does not replace a real business run.
 
+Public datasets complement the synthetic fixtures. Fetch fixed upstream revisions
+with per-file SHA-256 verification, inspect the WebArena-Verified task inventory,
+and run six MiniWoB++ task types against the actual Web adapter and Runner:
+
+```bash
+pnpm benchmark:datasets:fetch
+pnpm benchmark:datasets:inventory
+pnpm benchmark:miniwob
+```
+
+The default MiniWoB regression covers three seeds and correct, incorrect and
+unfinished submissions (54 Runs), including positive partial checkbox rewards
+that must fail. It saves source-state evidence and reports under
+`.proofkit/benchmarks/`; downloaded assets stay under `.proofkit/datasets/`.
+Use `PROOFKIT_BROWSER_PATH` for a custom Chrome/Chromium path. Subsequent runs
+need no dataset download; `pnpm benchmark:datasets:fetch --check` verifies the
+local cache offline. This scripted regression measures adapter/verdict behavior,
+not model performance or independent backend business acceptance.
+WebArena-Verified inventory exports 812 answer-free task prompts and its 258-task
+hard subset; those tasks still need resettable sites and official execution
+scoring. See [public benchmark selection and limits](docs/public-test-datasets.zh-CN.md).
+
 For host integration, `pnpm benchmark:host:baseline` exercises six synthetic
 cases through the generated native MCP launcher and real Chrome. It verifies
 saved Mission/Run results and evidence, but uses scripted calls. After that,

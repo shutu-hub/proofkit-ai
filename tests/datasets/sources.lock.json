@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "datasets": {
+    "miniwob": {
+      "repository": "Farama-Foundation/miniwob-plusplus",
+      "revision": "33c3b4ddef8c6eb67c57a29663d844b1eda7e614",
+      "license": "MIT",
+      "taskIds": [
+        "click-test-2",
+        "enter-text",
+        "enter-password",
+        "login-user",
+        "click-checkboxes",
+        "click-option"
+      ],
+      "files": [
+        {
+          "path": "LICENSE",
+          "bytes": 1222,
+          "sha256": "fd6529fb8f648d4130fd969e3d7fc740c9992a0bd94a1998f52555a873311511"
+        },
+        {
+          "path": "miniwob/html/common/ui_utils.js",
+          "bytes": 78175,
+          "sha256": "65301ee11f483df7e9114f3fac2e2938e8b56933fecbed36bce310e2d8d90368"
+        },
+        {
+          "path": "miniwob/html/core/core.css",
+          "bytes": 1582,
+          "sha256": "795f8e686125b71e89a21ffe9e03406c6498f1e135175ba63321f3051a720042"
+        },
+        {
+          "path": "miniwob/html/core/core.js",
+          "bytes": 22274,
+          "sha256": "db8f489ab947a3194b99e718bce5e59ea9aaf0a3c35410d8c9c79e56e6123d14"
+        },
+        {
+          "path": "miniwob/html/core/d3.v3.min.js",
+          "bytes": 151665,
+          "sha256": "8ca4da6691fb142cd76283014e887e7c3e61e3b63eff9ebb08eeb5c51d56aafb"
+        },
+        {
+          "path": "miniwob/html/core/jquery-ui/external/jquery/jquery.js",
+          "bytes": 293430,
+          "sha256": "430f36f9b5f21aae8cc9dca6a81c4d3d84da5175eaedcf2fdc2c226302cb3575"
+        },
+        {
+          "path": "miniwob/html/core/jquery-ui/images/ui-icons_444444_256x240.png",
+          "bytes": 7006,
+          "sha256": "eaf7c7ee2747275dda6c53e731a10db1a7b15f4fbb46e1b69d6bb2056bc9fd81"
+        },
+        {
+          "path": "miniwob/html/core/jquery-ui/images/ui-icons_555555_256x240.png",
+          "bytes": 7074,
+          "sha256": "5d04051dfd9d2d740355404f98a683d1ec0feb2fca7d76e533c1a6e5ce92dd2e"
+        },
+        {
+          "path": "miniwob/html/core/jquery-ui/images/ui-icons_777620_256x240.png",
+          "bytes": 4676,
+          "sha256": "9dbe4a0d03feed6f65eb2560a0a8b4ba4264545ee8fd31c1763a3b219d0328d6"
+        },
+        {
+          "path": "miniwob/html/core/jquery-ui/images/ui-icons_777777_256x240.png",
+          "bytes": 7013,
+          "sha256": "e75b27211e16fcf94715168001bb7055ca376d46f928110ba3d0825232452e5a"
+        },
+        {
+          "path": "miniwob/html/core/jquery-ui/images/ui-icons_cc0000_256x240.png",
+          "bytes": 4632,
+          "sha256": "02891575d4358e9edde3e42d94057f8e9f82a9d64376f71ee86cef149d30537e"
+        },
+        {
+          "path": "miniwob/html/core/jquery-ui/images/ui-icons_ffffff_256x240.png",
+          "bytes": 6313,
+          "sha256": "b6b06deef2b924cc3835d63f4883d47882734a33e71b212d917a68cede3b8e9d"
+        },
+        {
+          "path": "miniwob/html/core/jquery-ui/jquery-ui.min.css",
+          "bytes": 32076,
+          "sha256": "ac1c8f94750b39b12327a5d0c56fdf946dabfb6d91e5d2a202879ff9a5d67e29"
+        },
+        {
+          "path": "miniwob/html/core/jquery-ui/jquery-ui.min.js",
+          "bytes": 253669,
+          "sha256": "28ce75d953678c4942df47a11707a15e3c756021cf89090e3e6aa7ad6b6971c3"
+        },
+        {
+          "path": "miniwob/html/miniwob/click-checkboxes.html",
+          "bytes": 1973,
+          "sha256": "b799bd1749dd603029e7479c56efceb38a425af47c04267fe46f6d7a64ac1895"
+        },
+        {
+          "path": "miniwob/html/miniwob/click-option.html",
+          "bytes": 1656,
+          "sha256": "b918237b51a1b364d990714deffbec9942dc8c1fac0920dce06adb2c07c5da6e"
+        },
+        {
+          "path": "miniwob/html/miniwob/click-test-2.html",
+          "bytes": 1151,
+          "sha256": "8f48bfe4d45a5ec736e38651bd501438d3252f639cd0fdd6547eafa141708d47"
+        },
+        {
+          "path": "miniwob/html/miniwob/enter-password.html",
+          "bytes": 1434,
+          "sha256": "fb9dc861a5bacbeaf60da75736b83ba98f4681f06d1bb6fc09b05f4bd7092f6e"
+        },
+        {
+          "path": "miniwob/html/miniwob/enter-text.html",
+          "bytes": 1396,
+          "sha256": "cea0bd69c5070d069552879007c935fe6d715a05642127fa465b87f7e4bcaf05"
+        },
+        {
+          "path": "miniwob/html/miniwob/login-user.html",
+          "bytes": 1495,
+          "sha256": "378df4b6bf6f9100319eff052fdcd25d718916f4812b28a4d5581370ff08b692"
+        }
+      ]
+    },
+    "webarena-verified": {
+      "repository": "ServiceNow/webarena-verified",
+      "revision": "6473f72db5dcefc97b5725b59e734504edc28a21",
+      "license": "Apache-2.0",
+      "files": [
+        {
+          "path": "assets/dataset/subsets/webarena-verified-hard.json",
+          "bytes": 2431,
+          "sha256": "3b0a4df231bb5a0c642215e521c3fa97701a384f52a734dc2db8f617ad0591a7"
+        },
+        {
+          "path": "assets/dataset/webarena-verified.json",
+          "bytes": 927596,
+          "sha256": "d65275660814663375028e9017e1f929e3c38321041b125795e2713b52243d30"
+        },
+        {
+          "path": "LICENSE",
+          "bytes": 11357,
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        }
+      ]
+    }
+  }
+}
