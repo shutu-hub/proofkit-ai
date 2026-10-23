@@ -50,6 +50,12 @@ and the exact `charterSha256` returned by `inspect_test_scope`. These replace
 `proofkit readiness --candidate <path> --candidate-sha256 <digest> --root <source> --workspace <test-workspace>`.
 The shared candidate reader rejects changed file bytes or resolved endpoint
 bindings, redirected/oversized files and paths already registered in the catalog.
+
+For a newly authored draft, call `inspect_integration_readiness({charter: reviewedDraft})` before product writes. The complete draft must declare `surfaces`; do not combine it with a catalog or candidate selector. ProofKit accepts at most 128 KiB of serialized draft content, normalizes the JSON through `TestCharterSchema`, and returns `draftSha256` for the exact checked content. It does not return the draft values, save a Charter, create a Run, or clear planning gaps. Changes to requirements, actions, metadata or concrete endpoints require a new check. This digest is not the saved candidate file digest and is not Mission approval. Caller-owned nested metadata is isolated before invoking the connector; a connector-modified draft cannot claim readiness.
+
+CLI accepts `proofkit readiness --draft .proofkit/charters/draft.yml --root <source> --workspace <test-workspace>`. The existing bounded YAML reader and external workspace path rules apply; this form does not require catalog registration or a prior scope-inspection digest. JSON-formatted YAML is also accepted. Exit status remains 0 for ready, 1 for blocked and 2 for unavailable.
+
+Readiness is advisory preparation, not an automatic execution gate. A connector that needs to prevent writes when required observations are unavailable must also register an execution-time `preflight` check. An explicitly read-only helper may intentionally be shared by both hooks; ProofKit still never invokes an arbitrary lifecycle preflight during a readiness inspection. Recheck at execution time because the sample, authentication or endpoints may have changed. Keep all intent-required fields in the contract. A representative record exposing a field type is not acceptance of a new record, proof of deployment identity, or verification of the POST response shape.
 Candidates must declare their supported surfaces. The result carries that
 path/digest identity, level and declared surfaces. A `ready` result does not
 clear planning gaps, authorize writes or admit a Mission; retain the requested
@@ -399,6 +405,30 @@ For a `core` or `release` Run whose pre-action listener check identified one PID
 
 Before drafting a new Charter, call `inspect_surface({ surface: "web" })` or `inspect_surface({ surface: "electron" })` against an already running local page. It records a read-only observation Run and returns bounded controls, including hidden file inputs with `inputType: "file"` and `visible: false`, and a selector only when it matched exactly one element at inspection time. The result says `testVerdict: "not-asserted"`; it is reconnaissance, not a pass. Control hints cover the main frame only, are capped at 60, omit input values, and can become stale after navigation. Web/Electron `click`, `fill`, `press` and `setInputFiles` recheck selector uniqueness during the test Run and fail on ambiguity. The Run keeps snapshot, screenshot and event evidence in the external workspace. Use isolated test data because screenshots can contain everything visible on the page.
 
+Dense pages can use `inspect_surface({controlOffset:0})` and follow
+`snapshot.controlWindow.nextOffset` for later windows of 60 current main-frame
+controls. Offsets are limited to 0–500; when that budget is exhausted,
+`nextOffset:null` does not imply full observation: inspect `total`, `returned`
+and `allControlsObserved`. Windows are separately saved and manifest-pinned;
+use each window's original pin for the controls it observed. Changed layouts
+require reobservation, and rows or custom widgets outside supported control
+types remain a gap. Native `tr[tabindex]` rows with nonnegative tabindex are now
+observed as rows; other arbitrary custom widgets are not inferred from CSS cursor
+alone. Use the returned selector and original inspection pin to open a record.
+Row text is normalized and rechecked before execution; a changed identity or
+duplicate row blocks the action. Cell-derived candidates must uniquely match the
+original row, without positional planning. Rendering/virtualization/pagination
+still limit what can be observed. CLI equivalent: `proofkit inspect --control-offset 60`.
+Combine no other scoped text/table read with a control window. Web/Electron
+candidate selectors must uniquely match the exact original DOM element; a
+semantic footer/form/header scope may distinguish otherwise identical labels.
+The original test-id/ID selector remains the primary hint for compatibility.
+When `alternateSelectors` are present, each was independently checked as
+unique and pointing to that same observed element. Use the source inspection
+pin when choosing a stable role/name alternative for a form whose generated
+ID will change. An alternative is not a license to invent a future-state
+selector, and live uniqueness/identity checks still gate execution.
+
 The overview returns at most 2,000 text characters. To read a longer rendered region, use the same tool:
 
 ```json
@@ -452,6 +482,85 @@ remain in Run artifacts. An observed page can have failed `runtimeHealth`.
 MCP cancellation reaches the same Run lifecycle. Inspection uses trusted
 integration preflight/setup/cleanup hooks when configured; those hooks remain
 responsible for test isolation even when browser actions only observe.
+
+The plan command produces a draft, not a test result. In YAML mode it keeps
+stdout as the Charter and sends status, missing requirements and next steps to
+stderr. Use `--format json` for one machine-readable response containing
+`status`, `gaps`, `missingInputs`, `next` and `charter`. `--out` always saves
+the editable YAML Charter, including incomplete drafts.
+
+- `needs-input` exits 2: author the missing workflow/checks or acquire the
+  missing observation before attempting execution. A default core plan without
+  independent business checks remains a draft even if an expected text is set.
+- `ready-for-review` exits 0: the declared plan has no reported structural
+  gaps. Review it and check environment/connector prerequisites before running.
+  This is not an executable-readiness certificate or a business pass.
+- A model `needs-observation` receipt also exits 2, returns the existing
+  observation continuation, and does not overwrite the requested Charter file.
+
+All planning states retain `testVerdict: not-asserted`. `executionStarted: false`
+means no product test was started by that planning response; a model plan may
+already have collected read-only page observations. `notEstablished` lists
+runtime, authentication, data, business, evidence and intent-completeness claims
+that this structural summary cannot establish. It does not deny earlier
+inspection work. MCP `plan_test` returns the same structural state alongside
+its existing Charter; follow the returned action/reason guidance without
+weakening the original intent. These states guide review and do not replace
+the existing Mission readiness and execution gates.
+
+MCP can start a read-only owned Web context using
+`inspect_surface({ surface: "web", keepSession: true, headful: true })`, which
+returns a pinned `inspectionId`, manifest digest and `sessionId` without an
+exploratory click. Alternatively, `plan_test` with `keepSession: true` starts
+that observation before model planning; use only for a new Web plan, not with
+an existing session, continuation, inspection pins or caller snapshot. The
+returned `observationRequest.sessionId` or ready-for-review `sessionId` is a
+handle for the same browser, not proof of login or business correctness.
+Subsequent reviewed interactions use original inspection pins; formal execution
+must replay the entire workflow, independently validate business state when
+required, and close the retained session to seal its video. An unexpected
+planning failure closes a newly owned session; a session supplied by the caller
+remains theirs. CLI plan across independent processes needs explicitly
+configured encrypted session persistence before resuming a browser context.
+
+Saved planning continuations reduce manual state reconstruction. A verified
+model observation request includes `observationRequest.continuation` containing
+an ID and original SHA-256. After collecting the next `inspect_surface` pin,
+call the same `plan_test` with only that reference and the new pin:
+
+~~~json
+{
+  "continuation": { "id": "<returned UUID>", "sha256": "<returned digest>" },
+  "inspections": [{ "runId": "<new inspectionId>", "manifestSha256": "<original manifest.sha256>" }]
+}
+~~~
+
+The saved request restores original intent, target, expected outcomes, reader
+names, level, coverage, mode, side-effect policy, surface, visibility and
+session. Previous original observations are merged and audited again. Supplying
+changed requirements rejects before another model call; start a new plan to
+change the task. The final Charter still needs ordinary admission, review and
+formal execution with its retained session where applicable. The continuation
+never executes a proposal or grants permission for an interaction.
+
+The same flow works through `proofkit plan --continuation <id:sha256>
+--inspection <run-id:manifest-sha256> --root <source> --workspace <workspace>`.
+No intent argument is required for resume. Independent CLI processes can
+recover planning requirements, but a lost retained browser session still needs
+the existing explicitly configured encrypted session persistence. It will not
+silently attach a new unauthenticated context.
+
+Records live in `<workspace>/.proofkit/planning/<id>.json` with a 256 KiB limit,
+source/workspace identity and exclusive-file writes. The reference is returned
+only after writing and syncing the record. Missing/changed/redirected or foreign
+records are refused. Each lineage permits ten saved observation requests and
+ten distinct states; an eleventh model result that still asks for another state
+stops instead of creating another continuation. Reusing an earlier reference
+starts another bounded branch; these limits are not a global spend quota.
+There is no clock expiry or automatic pruning. The files retain request text
+like Charters; they are neither encrypted credential storage nor a substitute
+for a preserved external digest. They are planning context, not business
+acceptance evidence or an executed Mission.
 
 When the workspace has no matching catalog entry, the host agent can inspect the source and `discover_project` result, then submit a complete structured Charter directly to `run_test` or `create_test_mission`. This is a one-Mission test contract; it does not modify the tested project or silently register a reusable catalog entry. For example, after the workspace has registered a read-only `resume.terminal` Oracle:
 
@@ -532,6 +641,18 @@ assertions:
 oracles: [resume.terminal]
 ```
 
+To retain diagnostics from the first unexpected response, optionally declare `response.errorFields` using the same bounded JSON-pointer projection format as `fields`. For example: `errorFields: {message: {pointer: /message, type: string}}`. If the actual status is outside `statuses`, the step still fails with `response-status` and the Run remains inconclusive; selected facts are saved separately as `step-NNN-response-error.json` and `step.responseError`, never as successful response identity for an Oracle. Later actions and Oracles do not execute. This path does not retry or replay the trigger. A rejection that is itself the intended successful test outcome should be declared in `statuses` and checked against that explicit acceptance contract.
+
+For a declared status with a complete bounded JSON body, missing or invalid selected response fields, or a failed request projection, retain valid selected facts as `responseError.kind: "incomplete-fields"`. The original response/request gap code and inconclusive outcome remain; partial identity never becomes `step.response` or flows into a successful Oracle. Only the action’s declared success fields are eligible for this diagnostic kind, and selected string diagnostics receive the same surface sanitization as unexpected-status diagnostics. Non-JSON, unavailable or oversized bodies still retain their existing gaps. No capture path retries a business write. Reports show an unchanged separate artifact as “Incomplete response diagnostics” and withdraw it after modification.
+
+Control discovery can distinguish repeated actions and unnamed fields using an observed visible label, legend or heading in a bounded ancestor scope. Every offered locator must still match exactly one element. Duplicate contexts, unsafe/sensitive context text and targets without a unique selector remain unbound. These scopes use exact text and child structure, never DOM ordinals; original observation binding and live target checks still apply. If an application loads asynchronously, use the existing `readyWhen` text condition for an inspection rather than assuming an empty initial observation means no controls exist.
+
+Only predeclared scalar error fields and optional `requestFields` are retained, with existing JSON/UTF-8 form, type, size and privacy bounds. Missing or invalid fields and unavailable bodies become explicit gaps. Without `errorFields`, error bodies are not acquired; request-only diagnostics can still retain declared request facts. Redirects, duplicate matching requests and cancellation cannot produce trusted unexpected-response diagnostics. Reports sanitize runtime facts and withdraw the diagnostic display when its separate artifact is missing or changed.
+
+For fields populated asynchronously, use an observed `waitForValue` checkpoint before advancing. Example: `{kind: "waitForValue", selector: "#street", value: "Reviewed street", stableForMs: 750, timeoutMs: 5000}`. Formal Charters may set `value: {env: "PROOFKIT_EXPECTED_STREET"}`; exploratory proposals must use bounded literal values. The runtime checks one unique native input, textarea or single select and keeps its observed identity bound throughout the check. The expected interval must be shorter than the deadline; both are bounded, and pauses above 250 ms restart the matching interval. Value-free checkpoint facts are saved as a separate digest-checked artifact. Modified or missing facts withdraw the report's checkpoint display. The report hides the expected value; screenshots retain their existing masking policy.
+
+Wait for known dependent work to complete first, such as a postcode lookup observed by `captureResponse`, then fill and check the final manual values. A finite sampled check cannot prove future immutability or backend acceptance. The final business Oracle must still verify all intended submitted fields, including billing values, rather than only object identity or total. Unsupported controls, identity drift, ambiguous targets, timeout and cancellation stop the checkpoint. This native Web implementation is shared with Electron; this latest real-browser checkpoint regression covers Web. Mobile rejects it explicitly.
+
 For a delayed request, add `requestStartTimeoutMs` to the capture and set
 `timeoutMs` to cover the trigger, request wait and response. If a reviewed
 confirmation button may appear after the first click, add one bounded
@@ -539,6 +660,8 @@ confirmation button may appear after the first click, add one bounded
 `captureResponse`. It records `clicked` or `skipped` in the response evidence;
 multiple visible matches or a missing request remain inconclusive. The
 follow-up is an interactive write action and uses the same side-effect policy.
+
+If the application's API has a different origin from its Web page, list its exact HTTP(S) origin in `surfaces.web.apiOrigins` in the external workspace config. Restricted/MCP runs then permit response capture and independent HTTP readers for that declared backend. Navigation is still limited to the configured browser target and existing loopback targets. At most eight distinct origins are accepted; wildcard hosts, credentials, paths, queries and fragments are invalid. Keep the backend list specific to the reviewed application.
 
 Register a read-only identity/status check in the external config. The example
 assumes the existing independent GET accepts `file_id` and returns
@@ -587,15 +710,84 @@ httpOracles:
 
 ProofKit validates the name, endpoint, bounds and capture-step references
 before saving the Mission. Every scenario that uses this Oracle must bind at
-least one `id` field captured in that scenario. The reader sends bounded GET
+least one `id` or `identifier` field captured in that scenario. The reader sends bounded GET
 requests, checks that the independent JSON identifies the current object, and
 then evaluates its declared terminal state. In MCP mode its URL must be on
-loopback. It cannot carry credentials, arbitrary headers or code, and it does
+loopback or an exact API origin declared for the selected surface. It cannot
+carry credentials, arbitrary headers or code, and it does
 not create the application's status API. Keep authentication, multiple
 readers and richer file/candidate/job invariants in a trusted external
 workspace connector. An ID mismatch is a failed business check; an absent
 response or terminal state is inconclusive. A one-time HTTP 200 without these
 predicates is not a business pass.
+
+The configured reader and inline `httpOracles` also accept `expectFields`.
+Declare every reviewed scalar business requirement instead of accepting only
+the object ID and success marker. For example, append the following only if
+the independent GET actually returns these fields and the original intent
+requires exactly these values:
+
+```yaml
+expectFields:
+  - name: candidateCount
+    pointer: /data/candidateCount
+    expected: 14
+    retainValue: true
+  - name: charged
+    pointer: /data/charged
+    expected: false
+```
+
+Acceptance requires the captured current-object identity, declared successful
+state and every field to match. Equality is strict: a number is different
+from its string representation, and an absent field is different from an
+explicit null. A missing or ill-typed observation remains pending, then
+inconclusive at the deadline. A definite value difference in a successful
+terminal record fails, including when another required field is missing.
+Temporary differences while the record is still pending may settle; they
+do not establish a terminal business failure. An unavailable response or
+unestablished current identity supplies `not-evaluated` field facts.
+
+Each reader may declare 1–16 distinct names and JSON pointers. Expected
+values are bounded strings of at most 256 characters without ASCII controls,
+finite numbers, booleans or null. Arrays, objects, computed expectations,
+collections and cross-record invariants require a trusted business connector.
+Expected literals remain in the saved plan; do not put secrets in them.
+Observed values are saved only with explicit `retainValue: true`, and only
+when they meet the same scalar bounds. Otherwise the source records the
+field name, pointer and result without its observed value. This setting
+does not redact other independently declared request/response captures.
+
+The standard report displays required-field facts only when the separate
+original source and verdict artifacts verify and the declared field map is
+complete. Changing those artifacts withdraws the derived presentation.
+Polling keeps at most 100 observations within a 60 KiB serialized source
+envelope, recording the number of earlier observations omitted. An oversized
+single observation cannot yield a pass without retained source evidence.
+These are bounded declaration checks, not automatic discovery of every
+business requirement or proof that all application data are persisted.
+
+Use `type: id` only for positive decimal integer identifiers. Use
+`type: identifier` for UUIDs and application identifiers such as
+`request-42`; it preserves the exact string and rejects numeric coercion,
+whitespace, query delimiters and unbounded values. Declare the API's actual
+field format rather than replacing all existing decimal ID declarations.
+The selected fields are shown in the Run report only while the original
+response artifact is intact. Inline reader facts in that report are similarly
+digest-checked and bounded to the declared query fields; a changed source or
+verdict artifact withdraws the excerpt. Business acceptance still comes from
+the independent reader's verified result, not from the UI assertion or POST
+response alone.
+
+When the host has already drafted a Charter, call `plan_test` with `charter`,
+the original `intent`, required `expect` texts and `oracleNames`, plus original
+`inspections` pins and the retained `sessionId`. ProofKit revalidates the draft,
+binds its controls to those observations and returns a reviewed Charter without
+calling another model provider. The draft may include an inline HTTP reader
+bound to the current response. Preserve the returned Charter and session for
+`run_test`; formal execution and independent business facts own acceptance.
+Missing observed selectors remain explicit gaps. This admission step does not
+infer unknown business rules or grant write permission.
 
 Step IDs are one-based action positions; update the binding if actions are
 inserted. Use the actual API's field pointers and status values. Missing or
@@ -644,7 +836,7 @@ charters:
     surfaces: [web, electron]
 ```
 
-The Charter must declare a real surface assertion and, for `core` or `release`, a registered independent business Oracle. An agent can say “测试简历获取核心链路”; ProofKit selects the matching alias at the requested level and surface, records `catalogId`, and executes the saved Charter. A more specific alias may supersede its own generic substring; matches for distinct workflows require an explicit `charterId`. An explicit ID supplies its catalog level when `level` is omitted. A `release` Charter must support both Web and Electron when either is selected. Ad-hoc `url`, `expect`, Oracle, mode or side-effect options bypass automatic catalog matching. `list_test_charters` shows the available IDs and aliases. The source project remains untouched.
+The Charter must declare a real surface assertion and, for `core` or `release`, a registered independent business Oracle. An agent can say “测试简历获取核心链路”; ProofKit selects the matching alias at the requested level and surface, records `catalogId`, and executes the saved Charter. A more specific alias may supersede its own generic substring; matches for distinct workflows require an explicit `charterId`. An explicit ID supplies its catalog level when `level` is omitted. A `release` Charter honors its explicitly declared platforms, including Web-only declarations. The selected surface must belong to that matrix. Catalog declarations are frozen into saved release Charters, conflicting declarations are rejected, and platforms explicitly requested in the intent cannot be omitted. An undeclared release plan retains the legacy Web/Electron default. Ad-hoc `url`, `expect`, Oracle, mode or side-effect options bypass automatic catalog matching. `list_test_charters` shows the available IDs and aliases. The source project remains untouched.
 
 For a multi-workflow release run, declare the exact scope in the same external config:
 
@@ -731,6 +923,32 @@ Repair comparison is `inconclusive` when one side has no target association reco
 
 The protocol deliberately separates the audit layers: `AgentStep` explains why a task was selected, `ToolCall` records the registered operation, `Observation` records typed facts, and `Evidence` points to artifacts that can be reviewed. `summary.agentTraceAudit` rechecks their saved ownership and attempt chain when evidence is opened. A missing legacy chain is `unverified`; a contradictory chain is `incomplete`. Both withdraw the current `testVerdict` for a saved pass or failure while preserving its historical `verdict`. The evidence response is bounded; large tool inputs and outputs remain in the local Mission file rather than being copied into every MCP response.
 
+The Mission workflow section shows up to 200 original planned actions per
+displayed Run, including explicit not-run states and links to late action
+evidence. Capture-response entries include the observed trigger name after
+the existing text sanitization. Larger plans show an omission count; use the
+full Run report for all actions, selected API facts and its timeline. These
+details require the original Run-summary digest and do not establish business
+acceptance.
+
+For durable handoff, export the saved terminal snapshot with
+`proofkit mission export <mission-id> --root <project> --workspace <workspace> --out <new-directory>`.
+Close retained sessions first to include their final requested recording.
+The new directory includes original Mission/Run evidence and manifests with
+relative report links; it excludes workspace configuration, project code and
+browser session state. Preserve the returned archiveSha256 separately. Verify
+at a new location with
+`proofkit verify-archive <directory> --archive-sha256 <original-digest>`.
+No project, connector or application network access is needed for verification.
+Both operations return testVerdict not-asserted; savedTestVerdict and savedScope
+keep the original acceptance, network completeness and omitted context separate
+from archive integrity. Historical context with no original manifest requires
+snapshot-pinned summaries/reports and a sealed event log covering every artifact;
+it is explicitly labeled and never replaces an execution Run's manifest.
+Read `docs/evidence-archives.md` for bounds, failure semantics and API usage.
+The delivery acceptance gates and actual moved-directory test are recorded in
+`docs/evidence-delivery-acceptance.md` and `docs/mission-archive-validation.md`.
+
 ## Project onboarding
 
 The zero application-code-change path needs a local Web, Electron or Appium-compatible mobile endpoint and a ProofKit config. A new project's test files default to `~/.proofkit/workspaces/<project-name>-<path-hash>/.proofkit/`. CLI `--workspace` and MCP `PROOFKIT_WORKSPACE_ROOT` select an explicit test workspace; `--root` / `PROOFKIT_ROOT` always identify the tested source. An existing project-local `.proofkit` remains compatible unless an explicit workspace is supplied.
@@ -792,7 +1010,14 @@ export function createIntegration() {
       environments: ["test"],
       cleanupTimeoutMs: 5000,
     },
-    async setup({ runId, signal }) {
+    async setup({ runId, signal, registerResources }) {
+      if (!registerResources) throw new Error("This connector requires early resource registration");
+      const handle = {
+        resources: [{ resourceId: "scope", kind: "fixture-namespace",
+          scope: runId, evidence: { owner: runId } }],
+        cleanup: ({ signal: cleanupSignal }) => removeAndReadback(runId, cleanupSignal),
+      };
+      await registerResources(handle);
       const url = new URL(`/api/v1/test-scopes/${runId}`, origin);
       try {
         const created = await fetch(url, { method: "PUT", signal });
@@ -808,11 +1033,7 @@ export function createIntegration() {
         }
         throw error;
       }
-      return {
-        resources: [{ resourceId: "scope", kind: "fixture-namespace",
-          scope: runId, evidence: { owner: runId } }],
-        cleanup: ({ signal: cleanupSignal }) => removeAndReadback(runId, cleanupSignal),
-      };
+      return handle;
     },
     async recover({ runId, resources, signal }) {
       if (resources.length !== 1 || resources[0].resourceId !== "scope"
@@ -827,6 +1048,28 @@ export function createIntegration() {
 ```
 
 Resource IDs must be unique within a Run; facts are limited to scalar values,
+and must identify only the isolated resources this connector is authorized to remove.
+For recoverable multi-step setup, call and await `registerResources(handle)`
+once before creating data when a deterministic isolated scope is available.
+The Runner persists the registration and its provenance before resolving the
+callback. The handle must describe the full bounded scope for that setup, and
+cleanup must tolerate a registered resource that was never created. Returning
+the same handle after setup is optional and does not register or clean it twice.
+Existing return-only setup remains supported; its pre-return crash window
+cannot be recovered from an absent registration. If the target assigns an ID
+only after creation and has no operator-defined namespace, this API alone does
+not close the interval between the remote write and registration.
+
+Registration callbacks close when setup ends or its cancellation grace expires.
+After cancellation, late acquisition may trigger another cleanup attempt with
+a fresh bounded signal. Cleanup therefore needs idempotent deletion and
+scope readback; late cleanup cannot rewrite a previously unverified Run result.
+The hook is optional in the TypeScript context for compatibility with direct
+connector invocation, and is supplied by this Runner. A connector that relies
+on it must check availability before writing. It does not store credentials or
+provide authentication recovery; configure those separately with the connector.
+
+Resource facts contain only non-sensitive scalar observations,
 and no credentials or response bodies belong in them. The cleanup callback
 receives a fresh signal after cancellation and must honor it. Deletion
 acknowledgement alone does not establish removal: read the same scope after
@@ -874,6 +1117,20 @@ environment in advance or use a separate read-only connector.
 
 If the user does not specify a level, ProofKit selects `core`. An explicit `quick` request is never silently upgraded by the planner.
 Mission creation rejects a supplied `level`, inline Charter, catalog Charter or suite that conflicts with an unambiguous intensity in the user's wording. If the wording contains multiple intensity cues, the host should interpret them in context; ProofKit does not treat one keyword as a definitive conflict. A neutral request such as “测试登录功能” may use an explicitly selected Charter at its registered level.
+
+Intensity hints apply to the supported positive scope of a clause. A bounded
+`targeted field-reader regression` or `core regression` description does not
+by itself require release intensity; unqualified/full regression and explicit
+release cues retain their existing meaning. Supported negations such as
+`no release regression` do not upgrade a smoke check, while `do not skip
+release regression` still requires release. English word substrings and
+URL paths do not establish intensity. Original intent text remains unchanged
+in the saved Mission and Charter. These are finite rules: the host still
+owns interpretation of unsupported nested conditions, quotation and mixed
+requests, and must not rewrite the user request to bypass a conflict. This
+intensity inference does not turn natural-language business exclusions into
+operation permissions. See `docs/intent-level-validation.md` for the original
+real-world regression, unchanged-intent replay and exact verification scope.
 
 ## Choosing acceptance scope
 
