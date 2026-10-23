@@ -68,7 +68,7 @@ export class MobileAdapter implements SurfaceAdapter {
   }
 
   async act(action: Action, context?: SurfaceActionContext): Promise<ActionReceipt> {
-    if (action.kind === "selectOption" || action.kind === "selectOptions" || action.kind === "setChecked") throw new BlockedError("Native browser form actions are not supported by the mobile adapter");
+    if (action.kind === "selectOption" || action.kind === "selectOptions" || action.kind === "setChecked" || action.kind === "waitForValue") throw new BlockedError("Native browser form actions are not supported by the mobile adapter");
     if (action.kind === "setInputFiles") throw new BlockedError("File selection is not supported by the mobile adapter");
     if (action.kind === "captureResponse") throw new BlockedError("Response capture is not supported by the mobile adapter");
     const signal = context?.signal;
@@ -78,6 +78,8 @@ export class MobileAdapter implements SurfaceAdapter {
     const before = await this.readUrl(signal);
     signal?.throwIfAborted();
     switch (action.kind) {
+      case "switchPage":
+        throw new InconclusiveError("surface-page-unsupported", "Page switching currently requires an owned Web context.");
       case "goto":
         await this.command("POST", "/url", { url: action.url }, signal);
         break;

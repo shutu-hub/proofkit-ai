@@ -153,6 +153,7 @@ try {
     for (const mode of ["chunked", "gzip", "delayed"]) {
       const result = await run(charter(mode), surface);
       assert.equal(result.status.mission.verdict, "passed", JSON.stringify(result.status.mission.findings));
+      assert.equal((await savedRun(result.evidence.summary.runs[0].runId)).steps[2].response.queryFields.mode, mode);
       if (mode === "delayed") {
         const capture = (await savedRun(result.evidence.summary.runs[0].runId)).steps[2].response;
         assert.ok(Date.parse(capture.requestStartedAt) - Date.parse(capture.windowStartedAt) >= 100);
@@ -211,7 +212,7 @@ function charter(mode, level = "core") {
     { kind: "setInputFiles", selector: 'input[type="file"]', files: [fixtureRef] },
     { kind: "captureResponse", name: "intake", trigger: { kind: "click", selector: "#submit" }, requestWindowMs: 100,
       ...(mode === "delayed" || mode === "delayed-missing" ? { requestStartTimeoutMs: mode === "delayed" ? 800 : 80 } : {}), timeoutMs: 2_000,
-      response: { url: `${baseUrl}/api/v1/intakes`, method: "POST", statuses: [mode === "rejected" ? 422 : 201], fields: {
+      response: { url: `${baseUrl}/api/v1/intakes`, method: "POST", queryFields: { mode: { pointer: "/mode", type: "identifier" } }, statuses: [mode === "rejected" ? 422 : 201], fields: {
         fileId: { pointer: "/data/file_id", type: "id" }, candidateId: { pointer: "/data/candidate_id", type: "id" }, jobId: { pointer: "/data/job_id", type: "id" } } } },
     { kind: "waitForText", text: mode === "rejected" ? "Rejected" : "Accepted" }];
   return TestCharterSchema.parse({ intent: "Verify current resume intake and terminal facts", level, sideEffectPolicy: "allow", actions: actions(mode),

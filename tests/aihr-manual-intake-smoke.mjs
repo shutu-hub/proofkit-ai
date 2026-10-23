@@ -144,6 +144,7 @@ try {
   for (const surface of ["web", "electron"]) {
     const accepted = await run(charter("good"), surface);
     assert.equal(accepted.status.mission.verdict, "passed", JSON.stringify(accepted.status.mission.findings));
+    assert.equal((await savedRun(accepted.evidence.summary.runs[0].runId)).steps[2].response.queryFields.mode, "good");
     const replayed = await replay(accepted.started.missionId);
     assert.equal(replayed.status.mission.verdict, "passed");
     assert.notEqual(await capturedId(replayed), await capturedId(accepted));
@@ -201,7 +202,7 @@ function charter(mode) {
       { kind: "goto", url: `${baseUrl}/case/${mode}` },
       { kind: "setInputFiles", selector: 'input[type="file"]', files: [fixtureRef] },
       { kind: "captureResponse", name: "manual", trigger: { kind: "click", selector: "#submit" }, requestWindowMs: 100, timeoutMs: 2000,
-        response: { url: `${baseUrl}/api/v1/resume-collection/candidate-intakes`, method: "POST", statuses: [201],
+        response: { url: `${baseUrl}/api/v1/resume-collection/candidate-intakes`, method: "POST", queryFields: { mode: { pointer: "/mode", type: "identifier" } }, statuses: [201],
           fields: Object.fromEntries(Object.entries({ fileId: "resume_file_id", candidateId: "candidate_id", versionId: "resume_version_id",
             jobId: "job_id", relationId: "job_candidate_id" }).map(([key, field]) => [key, { pointer: `/data/${field}`, type: "id" }])) } },
       { kind: "waitForText", text: "Candidate added" } ], assertions: [{ kind: "text-visible", text: "Candidate added" }],

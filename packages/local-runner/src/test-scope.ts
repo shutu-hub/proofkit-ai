@@ -26,11 +26,6 @@ export type ScopeContext = {
 export async function inspectTestScope(context: ScopeContext, request: Request): Promise<TestScope> {
   const { project, config } = context;
   const { level, surface, limit } = request;
-  const requiredSurfaces = requiredCatalogSurfaces(level, surface);
-  const targetConfiguration = {
-    required: requiredSurfaces.map((required) => ({ surface: required, status: targetConnectionStatus(config, required) })),
-    runtimeChecked: false as const,
-  };
   const focus = request.focus?.normalize("NFKC").toLowerCase();
   const matches = (...values: Array<string | undefined>) => !focus || values.some((value) => value?.normalize("NFKC").toLowerCase().includes(focus));
   const eligibleCharters = config.charters.filter((entry) => supportsCatalogCharter(entry, level, surface));
@@ -46,6 +41,14 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const suiteIds = new Set(eligibleSuites.map((entry) => entry.id));
   const suites = config.suites.filter((entry) => matches(entry.id, ...entry.aliases) || entry.charterIds.some((id) => focusedIds.has(id)))
     .sort((left, right) => Number(suiteIds.has(right.id)) - Number(suiteIds.has(left.id)) || left.id.localeCompare(right.id));
+  const declared = level === "release" ? [...new Set([surface,
+    ...selectedCharters.filter((entry) => eligibleIds.has(entry.id)).flatMap((entry) => entry.surfaces),
+    ...suites.filter((entry) => suiteIds.has(entry.id)).flatMap((entry) => entry.surfaces)])] : undefined;
+  const requiredSurfaces = requiredCatalogSurfaces(level, surface, declared);
+  const targetConfiguration = {
+    required: requiredSurfaces.map((required) => ({ surface: required, status: targetConnectionStatus(config, required) })),
+    runtimeChecked: false as const,
+  };
   const check = async (eligible: boolean, validate: () => Promise<void>): Promise<Check> => {
     if (!eligible) return { eligible: false, planReady: false, issues: ["Catalog level or required surface matrix does not match this request"] };
     try {
@@ -68,7 +71,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const capabilityMatches = context.capabilities.filter((item) => matches(item.name, item.description));
   const allOracles = [...context.oracles.map((item) => ({ name: item.name, kind: "registered" as const })), ...config.oracles.map((item) => ({ name: item.name, kind: "configured-http" as const }))];
   const oracleMatches = allOracles.filter((item) => matches(item.name));
-  const workspaceCandidates = await inspectWorkspaceCandidates(context, request.focus, limit, requiredSurfaces);
+  const workspaceCandidates = await inspectWorkspaceCandidates(context, request.focus, limit, [surface]);
   const { entryPoints: _entries, routeHints: _routes, ...inventory } = project.inventory;
   const scopedInventory = inventory.sourceTextMatches ? {
     ...inventory,
@@ -121,7 +124,7 @@ export async function inspectTestScope(context: ScopeContext, request: Request):
   const wrongLevel = selectedCharters.filter((entry) => entry.level !== level);
   if (!compatibleReady && wrongLevel.length) gap("intensity-mismatch", wrongLevel.map((entry) => entry.id),
     `Matching Charter level differs from requested ${level}; do not lower test intensity to reuse a weaker plan.`);
-  const wrongSurface = selectedCharters.filter((entry) => entry.level === level && !requiredSurfaces.every((required) => entry.surfaces.includes(required)));
+  const wrongSurface = selectedCharters.filter((entry) => entry.level === level && !supportsCatalogCharter(entry, level, surface));
   if (!compatibleReady && wrongSurface.length) gap("surface-mismatch", wrongSurface.map((entry) => entry.id),
     `Matching Charter does not cover the required ${requiredSurfaces.join(" + ")} surface matrix.`);
   const invalidPlans = [...catalogItems, ...suiteItems].filter((entry) => entry.check.eligible && !entry.check.planReady);

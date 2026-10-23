@@ -36,7 +36,7 @@ export async function loadProjectIntegration(
     throw new Error("ProofKit integrations must be JavaScript modules (.mjs, .js or .cjs)");
   }
 
-  const loaded = await import(`${pathToFileURL(path).href}?proofkit=${Date.now()}`) as {
+  const loaded = await import(/* @vite-ignore */ decodeURI(pathToFileURL(path).href)) as {
     default?: unknown;
     integration?: unknown;
     createIntegration?: (context: ProjectIntegrationFactoryContext) => unknown | Promise<unknown>;

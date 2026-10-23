@@ -74,6 +74,30 @@ describe("external test workspace", () => {
     catch (error) { if (!["EPERM", "ENOTSUP"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; }
     await expect(service.createMission({ ...options, charterPath: ".proofkit/charters/linked.yml" })).rejects.toThrow("unavailable or redirected");
   });
+
+  it("blocks an approved Mission with an explicit planning gap before opening Web", async () => {
+    const { root, workspaceRoot } = await fixture();
+    const service = await LocalRunnerService.create({ root, workspaceRoot });
+    const mission = await service.createMission({
+      intent: "save a record and verify persistence",
+      surface: "web",
+      level: "core",
+      charter: TestCharterSchema.parse({
+        intent: "save a record and verify persistence",
+        level: "core",
+        surfaces: ["web"],
+        actions: [{ kind: "observe" }],
+        assertions: [{ kind: "text-visible", text: "Saved" }],
+        planning: { source: "submitted", confidence: 0.2, assumptions: [], missingInputs: ["独立业务 Oracle"], evidenceGaps: ["business-oracle"] },
+        sideEffectPolicy: "deny",
+      }),
+    });
+    await service.startMission(mission.missionId, { approve: true });
+    const result = await service.waitMission(mission.missionId);
+    expect(result).toMatchObject({ status: "blocked", verdict: "blocked", firstFailure: { kind: "evidence" } });
+    expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Mission planning is incomplete" })]));
+    expect(WebAdapter.prototype.connect).not.toHaveBeenCalled();
+  });
   it.each([
     ["missing version", "recover: async () => []", "explicit connector version"],
     ["blank version", "version: ' ', recover: async () => []", "non-empty string version"],

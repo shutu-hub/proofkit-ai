@@ -47,8 +47,20 @@ structural issue, but it still needs source-flow review and the normal runtime
 checks before run_test; it is not an acceptance claim. Scope limit is at most 50.
 For a registered business Charter, call inspect_integration_readiness with its
 charterId before creating or starting a Mission. For an unregistered candidate,
-use its charterPath and exact charterSha256 from scope inspection instead;
-never combine both selection forms. It invokes only an explicit
+use its charterPath and exact charterSha256 from scope inspection instead.
+For a newly authored plan, pass the full charter draft with explicit surfaces
+before product writes; retain draftSha256 and check again after any edit.
+Never combine selection forms. Keep every required business field in the
+contract. A source-code example does not prove the deployed response schema;
+request fields, response echoes and UI confirmation do not substitute for an
+independent final record. Ask the connector to identify unavailable required
+observations before submitting data. For an independent HTTP reader, use
+expectFields for each reviewed scalar requirement; a successValues marker
+does not verify the remaining fields. Missing or ill-typed observations alone
+cannot establish acceptance or a business failure. Use retainValue only for reviewed values permitted
+in evidence; declarations and literal expectations remain part of the plan.
+Preserve blocked or unavailable
+results instead of removing requirements to obtain ready. It invokes only an explicit
 connector read-only readiness hook; it never invokes the Run lifecycle
 preflight, setup, capabilities or Oracles. A blocked result names prerequisites
 to resolve; unavailable means no read-only hook is registered or it could not
@@ -78,8 +90,11 @@ environment URL and configure the reviewed test gateway in the ProofKit
 CLI/MCP process. Reinspect scope after changing it; never substitute a
 production URL merely to clear the issue.
 Direct candidate files must declare surfaces such as [web] or [electron].
-For release on Web or Electron, declare both. A missing or mismatched platform
-is a planning gap; inspect the owning UI flow before changing this declaration.
+For release, explicitly declare the platforms that the workflow supports.
+Web-only release plans can declare [web]; include both platforms when requested.
+A missing or mismatched platform is a planning gap; inspect the owning UI flow
+before changing this declaration. Undeclared release plans retain the legacy
+Web/Electron default; catalog declarations are frozen into the saved plan.
 Inspect the Charter and source flow, and repair missing assertions or Oracles.
 After review and connector readiness inspection, use run_test with the relative charterPath exactly as returned
 by workspaceCandidates and the exact charterSha256 from the same scope
@@ -124,11 +139,57 @@ The readyWhen text must be visible before the action being tested. Do not use
 the success text expected only after a click or submission as inspection
 readiness. Repeat inspect_surface only after the page state changes or the first
 observation lacked the controls needed to author the Charter.
+For dense Web/Electron pages, inspect_surface({controlOffset:0}) returns at most
+60 controls plus controlWindow counts. Follow nextOffset for the same current
+page, up to offset500; a final window can still have controlsTruncated=true.
+Use that window's own inspection pin for an action observed there. Do not merge
+windows into a claim of full application coverage or guess a missing selector.
+Native controls may have semantic container selectors to distinguish identical
+labels; the returned selector is checked against the actual original element.
+When alternateSelectors are present, they were independently checked against
+the same original element. A stable role/name alternative can outlive a
+generated field ID; the original ID selector remains valid for existing plans.
+Use only returned alternatives with their original inspection pin. Missing or
+duplicated live matches remain non-executable; do not synthesize unobserved
+future-state selectors and call them pinned.
+Focusable native table rows can appear with tag=tr and role=row, with a selector
+derived from an actually observed cell or row name. Use the original inspection
+pin for a reviewed row action; changed content or duplicate matches require a
+fresh observation. This does not infer clickability for arbitrary divs, hidden
+rows, negative-tabindex static rows, or rows not present in the rendered window.
 When a click opens a form and the compact interaction reports
 next=inspect_surface, inspect the complete controls before filling. For repeated
 labels such as from/to, use each control's groupName and unique selector;
 do not guess an nth position from the order of inputs.
 These observations return not-asserted and cannot establish a product pass.
+If a reviewed connector must create isolated test resources before multi-state
+exploration, open a retained Web session, then explicitly call
+prepare_surface_session with its sessionId and reviewed write-enabled Web
+Charter. This requires the operator's write opt-in and a versioned recovery
+hook; setup must register exact ownership before creating data. Keep its
+preparationRunId. Exploratory actions and the formal Run can use this same
+session; the connector must independently verify and adopt that exact scope
+from the formal setup context without duplicating it. Close the session after
+the formal Run to get its separate cleanup receipt and sealed recording. A
+crash leaves the original preparation not-asserted: inspect_run_resources and
+recover_run_resources by its Run ID, never resubmit the write to guess.
+Do not use this feature with encrypted cross-process browser persistence.
+
+When calling plan_test, read its status before using the returned Charter.
+needs-input means a draft with unresolved planning requirements: follow gaps,
+missingInputs and the action/reason entries in next. ready-for-review means
+only that the declared structure has no reported gaps, not that the app, login,
+test data or business result was checked. Both return testVerdict: not-asserted
+and executionStarted: false. Never present a generated plan as a completed test.
+The default deterministic planner supplies navigation and observation scaffolding;
+author the actual workflow from current observations or explicitly configure a
+model planner. A model needs-observation receipt is a different state: review
+its proposal, gather a new inspection, and resume with the returned continuation.
+
+CLI plan emits YAML plus status guidance on stderr by default; --format json
+returns status, requirements, next steps and charter together. Missing-input
+drafts remain available for editing but exit 2. Exit 0 means ready for review,
+never a product pass. Do not approve a Mission merely to bypass a draft gap.
 
 If the catalog has no suitable scenario, use a reviewed digest-pinned workspace
 candidate or submit a structured Charter to run_test. Read [Charter authoring](references/charter-authoring.md)
@@ -142,6 +203,12 @@ name in oracles. For authenticated or multi-entity checks, use a trusted
 workspace connector. When no valid reader exists, report the missing contract;
 do not invent an Oracle name or infer backend success from a toast. Observe
 test identities and isolation before write actions.
+For captureResponse requests with URL query parameters, keep response.url
+query-free and declare response.queryFields for every reviewed query key with
+one distinct pointer per key. Only those selected values may become evidence.
+An unreviewed, duplicate or malformed query leaves capture inconclusive after
+the action; inspect current business state before any retry. Do not remove
+the query requirement to force a passing response contract.
 Use authorization already given by the user. Missing access or write permission
 is a concrete prerequisite, not a reason to weaken the test.
 
@@ -198,6 +265,24 @@ recoverable orphan, the original connector and existing write authorization.
 Resource recovery does not change the original product verdict.
 
 ## Present and verify the result
+
+For a retained Web session, a terminal Mission may precede recording seal.
+Read the session capture integrity in get_mission_evidence; when not-sealed,
+close_surface_session after the last needed interaction and call
+get_mission_evidence again. The first report is provisional for recording
+delivery, not a playable-video claim. Do not discard an original finding.
+When the user needs durable or shareable evidence, use the saved terminal
+Mission snapshot with proofkit mission export MISSION --root PROJECT
+--workspace WORKSPACE --out NEW_DIRECTORY. Close retained sessions first so
+requested recordings have their final evidence. Export reads existing bytes
+and does not run application or connector code. Keep the returned archiveSha256
+separately and verify the relocated directory with proofkit verify-archive
+DIRECTORY --archive-sha256 DIGEST. The directory is an evidence snapshot,
+not a runnable test workspace. Export/verification return testVerdict
+not-asserted; savedTestVerdict remains the saved business result. Describe
+network partial and coverage gaps as recorded. If export fails because an
+original digest, complete Run list or source seal is unavailable, retain
+that failure and resolve its cause without resealing changed evidence.
 
 Use the terminal wait's testVerdict and report path for the user-facing
 outcome. The separate verdict field is the saved historical result. Give the tested scope

@@ -48,4 +48,10 @@ describe("Mission platform selection", () => {
     await expect(runner.createMission({ intent: "测试 Web 和 Electron 核心链路", charter }))
       .rejects.toThrow("electron surface is absent");
   });
+
+  it("freezes the requested Web visibility in the Mission execution profile", async () => {
+    const runner = await service();
+    const mission = await runner.createMission({ intent: "打开可见浏览器检查登录页面", surface: "web", headful: true, charter });
+    expect(mission.plan.executionProfile.webVisibility).toBe("headful");
+  });
 });

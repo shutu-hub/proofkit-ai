@@ -9,12 +9,40 @@ const projectMap = {
 };
 
 describe("IntentPlanner", () => {
+  it("propagates cancellation to the configured provider request", async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    const provider = new OpenAICompatiblePlannerProvider({ baseUrl: "http://127.0.0.1/v1", model: "fixture", fetchImpl: async (_input, init) => {
+      requestSignal = init!.signal as AbortSignal;
+      return new Promise<Response>((_resolve, reject) => { requestSignal!.addEventListener("abort", () => reject(requestSignal!.reason), { once: true }); });
+    } });
+    const pending = provider.plan({ intent: "Observe", projectMap, constraints: {}, signal: controller.signal });
+    const reason = new Error("Stop model planning"); controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
   it("creates executable navigation and text assertions", () => {
     const charter = new IntentPlanner().plan("打开招聘页", { url: "https://example.com", expect: ["Example"] });
     expect(charter.actions).toEqual([{ kind: "goto", url: "https://example.com" }, { kind: "observe" }]);
     expect(charter.assertions).toEqual([{ kind: "text-visible", text: "Example" }]);
     expect(charter.metadata.planner).toBe("deterministic-v1");
     expect(charter.level).toBe("core");
+  });
+
+  it("marks a plan selector as unverified when it is absent from the supplied surface observation", () => {
+    const charter = {
+      intent: "submit the form", level: "quick" as const, mode: "guided" as const,
+      preconditions: [], actions: [{ kind: "click" as const, selector: "#submit" }, { kind: "observe" as const }],
+      assertions: [{ kind: "text-visible" as const, text: "Saved" }], sideEffectPolicy: "allow" as const,
+      metadata: {},
+    };
+    const quality = assessPlanningQuality(charter, {
+      constraints: { requireAssertions: true },
+      surfaceSnapshot: { capturedAt: new Date().toISOString(), url: "http://fixture", controls: [{ tag: "input", role: "textbox", selector: "#email", disabled: false }], metadata: {} },
+    });
+    expect(quality.evidenceGaps).toContain("surface-selector");
+    expect(quality.missingInputs[0]).toContain("#submit");
   });
 
   it("records missing core proof and release negative cases as planning gaps", () => {
@@ -131,9 +159,11 @@ describe("IntentPlanner", () => {
       intent: "观察首页",
       projectMap,
       constraints: {},
+      surfaceSnapshot: { capturedAt: new Date().toISOString(), url: "http://fixture", controls: [{ tag: "button", role: "button", selector: "#ready", disabled: false }], metadata: {} },
     });
     expect(output).toMatchObject({ intent: "local" });
     expect(requestBody).toContain('"model":"local-test"');
     expect(requestBody).toContain("ProofKit Test Charter");
+    expect(requestBody).toContain("surfaceSnapshot");
   });
 });

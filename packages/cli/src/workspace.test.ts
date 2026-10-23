@@ -138,6 +138,8 @@ describe("CLI workspace onboarding", () => {
     }));
     const run = (...args: string[]) => createProgram().parseAsync(["node", "proofkit", "inspect", "--root", root, "--workspace", workspace, ...args]);
     await expect(run("--ready-timeout-ms", "100")).rejects.toThrow("requires --ready-text");
+    for (const offset of ["-1", "501", "1.5", "NaN"]) await expect(run("--control-offset", offset)).rejects.toThrow("Control windows");
+    await expect(run("--adapter", "mobile", "--control-offset", "0")).rejects.toThrow("Control windows");
     await expect(run("--ready-text", " ")).rejects.toThrow();
     await expect(run("--ready-text", "ready", "--ready-timeout-ms", "NaN")).rejects.toThrow();
     await expect(run("--ready-text", "ready", "--ready-timeout-ms", "15001")).rejects.toThrow();
@@ -208,7 +210,7 @@ describe("CLI workspace onboarding", () => {
     log.mockClear();
     await run("--level", "release", "--surface", "electron", "--limit", "1");
     const limited = JSON.parse(String(log.mock.calls[0]?.[0]));
-    expect(limited.selection.requiredSurfaces).toEqual(["web", "electron"]);
+    expect(limited.selection.requiredSurfaces).toEqual(["electron"]);
     expect(limited.routes).toMatchObject({ matched: 2, omitted: 1 });
     expect(limited.routes.items).toHaveLength(1);
     log.mockClear();

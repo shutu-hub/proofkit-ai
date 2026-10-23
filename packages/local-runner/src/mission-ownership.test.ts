@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TestCharterSchema } from "@proofkit/contracts";
+import { MissionAgent } from "@proofkit/agent";
 import type { SurfaceAdapter } from "@proofkit/runner";
 import { LocalRunnerService } from "./index.js";
 
@@ -24,6 +25,7 @@ vi.mock("@proofkit/adapters", () => {
 
 const roots: string[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   adapterState.connected = 0;
 });
@@ -35,6 +37,19 @@ function deferred() {
 }
 
 describe("Local Runner Mission ownership", () => {
+  it("reads the final Mission after checking that its execution owner has released", async () => {
+    const base = await mkdtemp(join(tmpdir(), "proofkit-owner-snapshot-")); roots.push(base);
+    const service = new LocalRunnerService({ root: base, workspaceRoot: base });
+    const mission = await service.createMission({ intent: "Verify final owner snapshot", surface: "web", charter: TestCharterSchema.parse({
+      intent: "Verify final owner snapshot", level: "quick", actions: [], assertions: [{ kind: "text-visible", text: "ready" }], sideEffectPolicy: "deny" }) });
+    let ownerChecked = false;
+    vi.spyOn(MissionAgent.prototype, "load").mockImplementation(async () => ({ ...mission, status: ownerChecked ? "completed" : "running", verdict: "passed" }));
+    vi.spyOn(MissionAgent.prototype, "isRunning").mockImplementation(async () => { ownerChecked = true; return false; });
+    expect(await service.missionStatus(mission.missionId)).toMatchObject({ running: false, mission: { status: "completed", verdict: "passed" } });
+    ownerChecked = false;
+    expect(await service.missionEvidence(mission.missionId)).toMatchObject({ running: false, status: "completed" });
+  });
+
   it("joins a Mission owned by another service without repeating the surface run, then cancels it remotely", async () => {
     const base = await mkdtemp(join(tmpdir(), "proofkit-service-owner-"));
     roots.push(base);

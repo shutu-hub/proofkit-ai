@@ -7,7 +7,7 @@ const RUN_TOOLS: Record<string, RunKind> = {
   "surface.replay-charter": "replay",
   "surface.run-negative-charter": "negative",
 };
-const EVIDENCE_PRIORITY = ["report", "business", "screenshot", "network", "runtime", "snapshot", "process", "console", "api", "log", "other"];
+const EVIDENCE_PRIORITY = ["report", "business", "screenshot", "video", "network", "runtime", "snapshot", "process", "console", "api", "log", "other"];
 
 /** Project stored facts for presentation. Acceptance remains owned by Mission verification. */
 export function projectMissionResult(mission: TestMission, options: {
@@ -82,10 +82,27 @@ export function projectMissionResult(mission: TestMission, options: {
     verdict: mission.verdict,
     level: mission.level,
     levelSelection: mission.levelSelection,
+    executionProfile: mission.plan.executionProfile,
+    planSummary: {
+      planId: mission.plan.planId,
+      generatedBy: mission.plan.generatedBy,
+      successCriteria: mission.plan.successCriteria,
+      assumptions: mission.plan.assumptions,
+      tasks: mission.plan.graph.tasks.map((task) => ({
+        taskId: task.taskId,
+        title: task.title,
+        objective: task.objective,
+        tool: task.tool,
+        dependsOn: task.dependsOn ?? [],
+        status: task.status,
+        ...(task.error ? { error: task.error } : {}),
+      })),
+    },
     revision: mission.revision,
     updatedAt: mission.updatedAt,
     generatedAt: new Date().toISOString(),
     planning: mission.plan.planning,
+    sessionContext: mission.sessionContext,
     scope: {
       surfaces: mission.plan.executionProfile.surfaceMatrix,
       charterCount: mission.suite?.charters.length ?? (mission.charter ? 1 : 0),
@@ -231,6 +248,8 @@ function projectRun(mission: TestMission, task: TaskNode | undefined, observatio
     verdict: verdict.success ? verdict.data : undefined,
     expectedVerdict: expected.success ? expected.data : undefined,
     outcomeMatched: typeof data.outcomeMatched === "boolean" ? data.outcomeMatched : undefined,
+    executionVisibility: data.executionVisibility === "headful" || data.executionVisibility === "headless" || data.executionVisibility === "external" ? data.executionVisibility : undefined,
+    executionSessionId: typeof data.executionSessionId === "string" && /^[0-9a-f-]{36}$/i.test(data.executionSessionId) ? data.executionSessionId : undefined,
     assertions: counts(data.passedAssertions, data.assertions),
     oracles: counts(data.passedOracles, data.oracles),
     businessFacts: numberValue(data.businessEvidence),
@@ -276,8 +295,16 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
 
 function selectEvidence(evidence: EvidenceRef[]): { items: EvidenceRef[]; omitted: number } {
   const unique = [...new Map(evidence.map((item) => [item.evidenceId, item])).values()];
-  unique.sort((left, right) => EVIDENCE_PRIORITY.indexOf(left.kind) - EVIDENCE_PRIORITY.indexOf(right.kind));
-  return { items: unique.slice(0, 6), omitted: Math.max(0, unique.length - 6) };
+  const priority = (ref: EvidenceRef) => {
+    if (/(?:^|[\\/])run\.json$/.test(ref.path)) return -1;
+    if (ref.kind === "snapshot" && /(?:^|[\\/])assertion-\d{3}-snapshot\.json$/.test(ref.path)
+      || ref.kind === "screenshot" && /(?:^|[\\/])assertion-\d{3}\.png$/.test(ref.path)) return 1.5;
+    if (ref.kind === "video") return 1.75;
+    const index = EVIDENCE_PRIORITY.indexOf(ref.kind);
+    return index >= 0 ? index : EVIDENCE_PRIORITY.length;
+  };
+  unique.sort((left, right) => priority(left) - priority(right));
+  return { items: unique.slice(0, 8), omitted: Math.max(0, unique.length - 8) };
 }
 
 function findingPriority(finding: TestMission["findings"][number]): number {

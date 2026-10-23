@@ -11,6 +11,28 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 describe("Run evidence provenance", () => {
+  it("classifies a sealed WebM as video and withdraws it after modification", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-video-provenance-")); roots.push(root);
+    const evidenceDir = join(root, ".proofkit", "runs");
+    const store = new EvidenceStore(evidenceDir);
+    const now = new Date().toISOString();
+    const summary = RunSummarySchema.parse({ runId: "run-video", startedAt: now, endedAt: now, status: "completed", verdict: "passed",
+      charter: { intent: "record UI", level: "quick", mode: "deterministic", actions: [], assertions: [], sideEffectPolicy: "deny" },
+      steps: [], assertions: [], oracles: [], artifacts: [], findings: [] });
+    await store.startRun(summary);
+    const videoFile = join(evidenceDir, "run-video", "artifacts", "recording.webm");
+    await writeFile(videoFile, "synthetic recording");
+    const artifact = await store.recordExistingFile(summary.runId, "recording.webm");
+    summary.recording = { status: "recorded", artifact };
+    summary.artifacts.push(artifact);
+    await store.writeSummary(summary);
+    expect(captureRunEvidence(summary, evidenceDir).find((ref) => ref.kind === "video")).toMatchObject({
+      path: resolve(videoFile), sha256: sha256("synthetic recording"),
+    });
+    await writeFile(videoFile, "modified recording");
+    expect(captureRunEvidence(summary, evidenceDir).some((ref) => ref.kind === "video")).toBe(false);
+  });
+
   it("anchors business facts to their creation event and rejects later file changes", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-run-evidence-")); roots.push(root);
     const evidenceDir = join(root, ".proofkit", "runs");

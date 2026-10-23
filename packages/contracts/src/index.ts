@@ -120,24 +120,78 @@ export const ResponsePointerSchema = z.string().min(1).max(256).refine((value) =
     && value.split("/").length <= 9
     && value.split("/").slice(1).every((part) => !["__proto__", "prototype", "constructor"].includes(part.replace(/~1/g, "/").replace(/~0/g, "~"))),
     "Use an RFC 6901 pointer with at most eight safe segments");
+export const ResponseIdentifierSchema = z.string().min(1).max(128).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/);
 export const ResponseProjectionSchema = z.record(ResponseFieldNameSchema, z.object({
   pointer: ResponsePointerSchema,
-  type: z.enum(["id", "string", "number", "boolean"]),
+  type: z.enum(["id", "identifier", "string", "number", "boolean"]),
 }).strict()).refine((value) => Object.keys(value).length >= 1 && Object.keys(value).length <= 16, "Select 1-16 scalar response fields");
+export const RequestQueryProjectionSchema = ResponseProjectionSchema.refine((fields) => {
+  const pointers = Object.values(fields).map((field) => field.pointer);
+  return pointers.every((pointer) => pointer.slice(1).split("/").length === 1)
+    && Object.values(fields).every((field) => ["string", "id", "identifier"].includes(field.type))
+    && new Set(pointers).size === pointers.length;
+}, "Select distinct single-segment string-like query parameters");
+export const SurfaceTargetIdentitySchema = z.object({
+  tag: z.string().min(1).max(64),
+  role: z.string().min(1).max(64),
+  name: z.string().max(120),
+  groupName: z.string().max(120),
+  inputType: z.string().max(64).optional(),
+}).strict();
+export type SurfaceTargetIdentity = z.infer<typeof SurfaceTargetIdentitySchema>;
+
+export const SurfaceTargetExpectationSchema = SurfaceTargetIdentitySchema.extend({
+  observedAt: z.string().min(1).max(64),
+  observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(),
+  origin: z.string().url().max(2048).refine((value) => {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) && url.origin === value;
+  }).optional(),
+}).strict();
+export type SurfaceTargetExpectation = z.infer<typeof SurfaceTargetExpectationSchema>;
+
+export function changedSurfaceTargetFields(expected: SurfaceTargetExpectation, actual: SurfaceTargetIdentity, actualOrigin?: string): Array<"tag" | "role" | "name" | "groupName" | "inputType" | "origin"> {
+  const changed: Array<"tag" | "role" | "name" | "groupName" | "inputType" | "origin"> = (["tag", "role", "name", "groupName", "inputType"] as const)
+    .filter((field) => expected[field] !== actual[field]);
+  if (expected.origin && expected.origin !== actualOrigin) changed.push("origin");
+  return changed;
+}
+
+export const SurfaceTargetCheckSchema = z.object({
+  selector: z.string().min(1).max(4096),
+  observedAt: z.string().datetime(),
+  expected: SurfaceTargetExpectationSchema,
+  actual: SurfaceTargetIdentitySchema,
+  actualOrigin: SurfaceTargetExpectationSchema.shape.origin,
+  status: z.enum(["matched", "changed"]),
+  changedFields: z.array(z.enum(["tag", "role", "name", "groupName", "inputType", "origin"])).max(6),
+}).strict().superRefine((check, context) => {
+  const changed = changedSurfaceTargetFields(check.expected, check.actual, check.actualOrigin);
+  if (check.status !== (changed.length ? "changed" : "matched") || JSON.stringify([...check.changedFields].sort()) !== JSON.stringify(changed.sort())) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Target check status must match the observed control identity differences" });
+  }
+});
+export type SurfaceTargetCheck = z.infer<typeof SurfaceTargetCheckSchema>;
+
 export const CaptureResponseActionSchema = z.object({
   kind: z.literal("captureResponse"),
   name: z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/),
   trigger: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("click"), selector: z.string().min(1) }).strict(),
-    z.object({ kind: z.literal("press"), selector: z.string().min(1), key: z.string().min(1) }).strict(),
+    z.object({ kind: z.literal("click"), selector: z.string().min(1), observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(), expectedTarget: SurfaceTargetExpectationSchema.optional() }).strict(),
+    z.object({ kind: z.literal("press"), selector: z.string().min(1), key: z.string().min(1), observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(), expectedTarget: SurfaceTargetExpectationSchema.optional() }).strict(),
   ]),
   /** One reviewed optional click while the same response listener remains active. */
-  followUp: z.object({ kind: z.literal("clickIfVisible"), selector: z.string().min(1).max(1024), waitMs: z.number().int().min(1).max(5000) }).strict().optional(),
+  followUp: z.object({ kind: z.literal("clickIfVisible"), selector: z.string().min(1).max(1024), waitMs: z.number().int().min(1).max(5000), observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(), expectedTarget: SurfaceTargetExpectationSchema.optional() }).strict().optional(),
   response: z.object({
     url: ResponseEndpointSchema,
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]),
     statuses: z.array(z.number().int().min(200).max(599)).min(1).max(10).default([200, 201]),
     fields: ResponseProjectionSchema,
+    /** Optional reviewed JSON or UTF-8 form request fields; raw request bodies never leave the adapter. */
+    requestFields: ResponseProjectionSchema.optional(),
+    /** Opt in to every request query key; only these reviewed scalar values may be retained. */
+    queryFields: RequestQueryProjectionSchema.optional(),
+    errorFields: ResponseProjectionSchema.optional(),
   }).strict(),
   /** In legacy mode, observe requests this long after the trigger. In delayed mode, guard against duplicates this long after the first request. */
   requestWindowMs: z.number().int().min(1).max(5000).default(500),
@@ -161,12 +215,50 @@ export const ResponseObservationSchema = z.object({
   bodyBytes: z.number().int().min(1).max(65536),
   bodySha256: z.string().regex(/^[a-f0-9]{64}$/),
   fields: z.record(ResponseFieldNameSchema, z.union([z.string().max(256), z.number().finite(), z.boolean()])),
+  requestBodyBytes: z.number().int().nonnegative().max(65536).optional(),
+  requestBodySha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  requestFields: z.record(ResponseFieldNameSchema, z.union([z.string().max(256), z.number().finite(), z.boolean()])).optional(),
+  queryFields: z.record(ResponseFieldNameSchema, z.string().max(256)).optional(),
 }).strict();
 export type ResponseObservation = z.infer<typeof ResponseObservationSchema>;
 
-const OracleResponseBindingSchema = z.object({ source: z.literal("response"),
+export const ResponseErrorObservationSchema = ResponseObservationSchema.omit({ bodyBytes: true, bodySha256: true }).extend({
+  kind: z.enum(["unexpected-status", "incomplete-fields"]), acceptance: z.literal("not-established"),
+  expectedStatuses: z.array(z.number().int().min(200).max(599)).min(1).max(10),
+  windowStartedAt: z.string().datetime(), windowEndedAt: z.string().datetime(), capturedAt: z.string().datetime(),
+  bodyBytes: ResponseObservationSchema.shape.bodyBytes.optional(), bodySha256: ResponseObservationSchema.shape.bodySha256.optional(),
+  bodyGap: z.enum(["not-requested", "content-type", "body-bound", "body-unavailable", "json-invalid"]).optional(),
+  fields: ResponseObservationSchema.shape.fields.refine((fields) => Object.keys(fields).length <= 16, "At most 16 selected diagnostic fields"),
+  fieldGaps: z.array(z.object({ name: ResponseFieldNameSchema, code: z.enum(["missing", "invalid"]) }).strict()).max(16),
+  requestGap: z.string().regex(/^[a-z][a-z0-9-]{1,63}$/).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.status >= 300 && value.status < 400 || (value.kind === "unexpected-status") === value.expectedStatuses.includes(value.status)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Diagnostic kind must match the declared status relation and cannot redirect" });
+  if (value.kind === "incomplete-fields" && (value.bodyGap || !value.fieldGaps.length && !value.requestGap)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Incomplete fields require a complete body and at least one projection gap" });
+  if ((value.bodyBytes === undefined) !== (value.bodySha256 === undefined)
+    || (value.requestBodyBytes === undefined) !== (value.requestBodySha256 === undefined)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Body size and digest must be retained together" });
+  if (!value.bodyGap && value.bodyBytes === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: "A complete diagnostic body or an explicit gap is required" });
+  if (value.bodyGap && (Object.keys(value.fields).length || value.fieldGaps.length)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Unobserved diagnostic bodies cannot contain selected fields" });
+  if (new Set(value.fieldGaps.map((gap) => gap.name)).size !== value.fieldGaps.length
+    || value.fieldGaps.some((gap) => Object.hasOwn(value.fields, gap.name))) context.addIssue({ code: z.ZodIssueCode.custom, message: "Diagnostic fields and missing-field gaps must be distinct" });
+  if (value.requestFields && (value.requestBodyBytes === undefined || value.requestGap)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Projected request facts require a complete request observation" });
+});
+export type ResponseErrorObservation = z.infer<typeof ResponseErrorObservationSchema>;
+
+export const OracleResponseBindingSchema = z.object({ source: z.literal("response"),
   stepId: z.string().regex(/^step-\d{3}$/), field: ResponseFieldNameSchema,
   matchPointer: ResponsePointerSchema }).strict();
+export const HttpFieldValueSchema = z.union([z.string().max(256).refine((value) => !/[\x00-\x1f]/.test(value)), z.number().finite(), z.boolean(), z.null()]);
+export const HttpFieldExpectationSchema = z.object({
+  name: ResponseFieldNameSchema, pointer: ResponsePointerSchema,
+  expected: HttpFieldValueSchema, retainValue: z.boolean().optional(),
+}).strict();
+export type HttpFieldExpectation = z.infer<typeof HttpFieldExpectationSchema>;
+export const HttpFieldCheckSchema = z.object({
+  name: ResponseFieldNameSchema, pointer: ResponsePointerSchema,
+  result: z.enum(["matched", "missing", "type-mismatch", "mismatch", "not-evaluated"]),
+  observed: HttpFieldValueSchema.optional(),
+}).strict();
+export type HttpFieldCheck = z.infer<typeof HttpFieldCheckSchema>;
 export const ConfiguredHttpOracleSchema = z.object({
   name: z.string().min(1),
   url: z.string().url(),
@@ -178,6 +270,9 @@ export const ConfiguredHttpOracleSchema = z.object({
   statusPointer: z.string().startsWith("/"),
   successValues: z.array(z.string().min(1)).min(1),
   failureValues: z.array(z.string().min(1)).default([]),
+  expectFields: z.array(HttpFieldExpectationSchema).min(1).max(16).refine((fields) =>
+    new Set(fields.map((field) => field.name)).size === fields.length && new Set(fields.map((field) => field.pointer)).size === fields.length,
+  "Use distinct independent field names and pointers").optional(),
   expectedStatus: z.number().int().min(100).max(599).default(200),
   intervalMs: z.number().int().positive().default(500),
   deadlineMs: z.number().int().positive().default(30_000),
@@ -206,36 +301,82 @@ export const NativeOptionSchema = z.union([
 ]).describe('An object with exactly one key: {"value":"exact option value"} or {"label":"exact visible label"}. A plain string or numeric index is invalid.');
 export const SelectOptionActionSchema = z.object({
   kind: z.literal("selectOption"), selector: z.string().min(1).max(512),
+  observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(),
+  expectedTarget: SurfaceTargetExpectationSchema.optional(),
   option: NativeOptionSchema,
 }).strict();
 /** Replace the complete native multiple-select set; an explicit empty set clears it. */
 export const SelectOptionsActionSchema = z.object({
   kind: z.literal("selectOptions"), selector: z.string().min(1).max(512),
+  observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(),
+  expectedTarget: SurfaceTargetExpectationSchema.optional(),
   options: z.array(NativeOptionSchema).max(32).refine((options) =>
     new Set(options.map((option) => "value" in option ? `value:${option.value}` : `label:${option.label}`)).size === options.length,
   "Requested options must be distinct").describe('The complete replacement selection, for example [{"label":"First"},{"value":"second"}]. Use [] to clear. Every item must be an object, never a string.'),
 }).strict();
 export const SetCheckedActionSchema = z.object({
   kind: z.literal("setChecked"), selector: z.string().min(1).max(512), checked: z.boolean(),
+  observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(),
+  expectedTarget: SurfaceTargetExpectationSchema.optional(),
 }).strict();
+
+export const WaitForValueActionSchema = z.object({
+  kind: z.literal("waitForValue"), selector: z.string().min(1).max(512), value: FillValueSchema.refine((value) => typeof value !== "string" || value.length <= 4096, "Expected value exceeds its bound"),
+  observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(), expectedTarget: SurfaceTargetExpectationSchema.optional(),
+  timeoutMs: z.number().int().min(100).max(30_000).default(5000),
+  stableForMs: z.number().int().min(100).max(5000).default(750),
+}).strict();
+
+export const FieldValueObservationSchema = z.object({
+  matched: z.literal(true), stableForMs: z.number().int().min(100).max(30_000), polls: z.number().int().min(2).max(10_000),
+  observedForMs: z.number().int().min(100).max(30_000), actualValueRetained: z.literal(false),
+  scope: z.literal("sampled-native-control-value"), businessAcceptance: z.literal(false),
+}).strict().refine((value) => value.stableForMs <= value.observedForMs && value.stableForMs <= (value.polls - 1) * 250,
+  "Matching window must fit the total observation time and a bounded sampling cadence");
+
+export const SwitchPageActionSchema = z.object({ kind: z.literal("switchPage"), title: z.string().trim().min(1).max(200),
+  timeoutMs: z.number().int().min(100).max(15000).default(5000) }).strict()
+  .describe("Owned Web contexts only: select one currently open same-origin page by its exact observed eligible title; duplicate titles stop without selecting a page. This action does not navigate or submit the page.");
 
 export const ActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("goto"), url: z.string().url() }),
-  z.object({ kind: z.literal("click"), selector: z.string().min(1) }),
-  z.object({ kind: z.literal("fill"), selector: z.string().min(1), value: FillValueSchema }),
-  z.object({ kind: z.literal("setInputFiles"), selector: z.string().min(1), files: z.array(FixturePathSchema).min(1).max(10) }).strict(),
-  z.object({ kind: z.literal("press"), selector: z.string().min(1), key: z.string().min(1) }),
+  SwitchPageActionSchema,
+  z.object({ kind: z.literal("click"), selector: z.string().min(1), observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(), expectedTarget: SurfaceTargetExpectationSchema.optional() }),
+  z.object({ kind: z.literal("fill"), selector: z.string().min(1), value: FillValueSchema, observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(), expectedTarget: SurfaceTargetExpectationSchema.optional() }),
+  z.object({ kind: z.literal("setInputFiles"), selector: z.string().min(1), files: z.array(FixturePathSchema).min(1).max(10), observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(), expectedTarget: SurfaceTargetExpectationSchema.optional() }).strict(),
+  z.object({ kind: z.literal("press"), selector: z.string().min(1), key: z.string().min(1), observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional(), expectedTarget: SurfaceTargetExpectationSchema.optional() }),
   SelectOptionActionSchema,
   SelectOptionsActionSchema,
   SetCheckedActionSchema,
+  WaitForValueActionSchema,
   z.object({ kind: z.literal("waitForText"), text: z.string().min(1), timeoutMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("screenshot"), name: z.string().min(1).optional() }),
   z.object({ kind: z.literal("capability"), name: z.string().min(1), input: z.record(z.string(), z.unknown()).default({}) }),
   z.object({ kind: z.literal("observe"), readText: SurfaceTextReadRequestSchema.optional(),
-    readTable: SurfaceTableReadRequestSchema.optional() }).strict(),
+    readTable: SurfaceTableReadRequestSchema.optional(), controlOffset: z.number().int().min(0).max(500).optional() }).strict(),
   CaptureResponseActionSchema,
 ]);
 export type Action = z.infer<typeof ActionSchema>;
+
+export const PlanningObservationRequestSchema = z.object({
+  status: z.literal("needs-observation"),
+  reason: z.string().trim().min(1).max(1000),
+  expectedObservation: z.string().trim().min(1).max(1000),
+  action: ActionSchema.refine((action) => ["goto", "switchPage", "click", "fill", "press", "selectOption", "selectOptions", "setChecked", "waitForText", "waitForValue"].includes(action.kind), "Request only one supported exploratory action")
+    .refine((action) => !("selector" in action) || action.selector.length <= 512, "Exploratory selectors are bounded")
+    .refine((action) => action.kind !== "fill" || (typeof action.value === "string" && action.value.length <= 4096), "Exploratory fill proposals require bounded literal input")
+    .refine((action) => action.kind !== "waitForValue" || typeof action.value === "string", "Exploratory value proposals require literal expected values")
+    .refine((action) => action.kind !== "press" || action.key.length <= 64, "Exploratory key is too long")
+    .refine((action) => action.kind !== "waitForText" || (action.text.length <= 512 && (action.timeoutMs === undefined || (action.timeoutMs >= 100 && action.timeoutMs <= 30_000))), "Exploratory wait exceeds its bounds")
+    .refine((action) => JSON.stringify(action).length <= 8192, "Exploratory proposal exceeds its context bound").optional(),
+}).strict();
+export type PlanningObservationRequest = z.infer<typeof PlanningObservationRequestSchema>;
+
+export function actionSurfaceTargets(action: Action): Array<{ selector: string; observationId?: string; expectedTarget?: SurfaceTargetExpectation }> {
+  if ("selector" in action) return [action];
+  if (action.kind === "captureResponse") return [action.trigger, ...(action.followUp ? [action.followUp] : [])];
+  return [];
+}
 
 export const AssertionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text-visible"), text: z.string().min(1) }),
@@ -299,6 +440,54 @@ export function normalizePlanningQuality(value?: PlanningQuality): PlanningQuali
   return PlanningQualitySchema.parse(value ?? {});
 }
 
+export const PlanReviewSchema = z.object({
+  schemaVersion: z.literal("1"), scope: z.literal("plan-structure"),
+  sessionId: z.string().uuid().optional(),
+  status: z.enum(["needs-input", "ready-for-review"]),
+  testVerdict: z.literal("not-asserted"), executionStarted: z.literal(false),
+  reason: z.string().min(1), plannerSource: z.enum(["deterministic", "model", "submitted", "catalog", "workflow-inventory", "unassessed"]),
+  level: TestLevelSchema,
+  counts: z.object({ actions: z.number().int().nonnegative(), surfaceChecks: z.number().int().nonnegative(),
+    independentChecks: z.number().int().nonnegative(), negativeScenarios: z.number().int().nonnegative() }).strict(),
+  gaps: z.array(z.string().min(1)), missingInputs: z.array(z.string().min(1)),
+  next: z.array(z.object({ action: z.enum(["author-workflow", "define-surface-outcome", "connect-business-check", "observe-target", "define-negative-scenario", "review-project-scope", "review-missing-inputs", "review-plan"]),
+    reason: z.string().min(1) }).strict()),
+  notEstablished: z.array(z.enum(["environment", "authentication", "test-data", "business-outcome", "requested-evidence", "intent-completeness"])),
+}).strict();
+export type PlanReview = z.infer<typeof PlanReviewSchema>;
+
+export const PlanningInspectionPinSchema = z.object({
+  runId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/),
+  manifestSha256: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export type PlanningInspectionPin = z.infer<typeof PlanningInspectionPinSchema>;
+export const PlanningContinuationPinSchema = z.object({
+  id: z.string().uuid(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export type PlanningContinuationPin = z.infer<typeof PlanningContinuationPinSchema>;
+export const PlanningObservationSourceSchema = PlanningInspectionPinSchema.extend({
+  snapshotPath: z.string().regex(/^[a-zA-Z0-9_-]{1,128}\/artifacts\/step-\d{3}-after\.json$/),
+  snapshotSha256: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export const PlanningObservedSourceSchema = z.object({
+  capturedAt: z.string().min(1).max(64), controlsTruncated: z.boolean(), source: PlanningObservationSourceSchema,
+}).strict();
+export const PlanningSurfaceObservationSchema = z.object({
+  capturedAt: z.string().min(1).max(64),
+  controlsTruncated: z.boolean(),
+  sessionId: z.string().uuid().optional(),
+  source: PlanningObservationSourceSchema.optional(),
+  sources: z.array(PlanningObservedSourceSchema).min(1).max(10).refine((sources) => new Set(sources.map((item) => item.source.runId)).size === sources.length).optional(),
+}).strict().refine((observation) => !observation.source || !observation.sources, "Use one source or a bounded list of observed sources")
+  .refine((observation) => !observation.sources || (observation.capturedAt === observation.sources[0]?.capturedAt
+    && observation.controlsTruncated === observation.sources.some((state) => state.controlsTruncated)), "Multi-state observation metadata must describe its original sources");
+export type PlanningSurfaceObservation = z.infer<typeof PlanningSurfaceObservationSchema>;
+
+export function planningObservationSources(observation: PlanningSurfaceObservation): Array<z.infer<typeof PlanningObservedSourceSchema>> {
+  return observation.sources ?? (observation.source ? [{ capturedAt: observation.capturedAt, controlsTruncated: observation.controlsTruncated, source: observation.source }] : []);
+}
+
 export const TestCharterSchema = z.object({
   intent: z.string().min(1),
   level: TestLevelSchema.default("core"),
@@ -306,6 +495,7 @@ export const TestCharterSchema = z.object({
   surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1).max(3).refine((items) => new Set(items).size === items.length).optional(),
   levelSelection: TestLevelSelectionSchema.optional(),
   planning: PlanningQualitySchema.optional(),
+  surfaceObservation: PlanningSurfaceObservationSchema.optional(),
   mode: RunModeSchema.default("guided"),
   preconditions: z.array(z.string()).default([]),
   actions: z.array(ActionSchema).default([]),
@@ -329,6 +519,7 @@ export const SurfaceControlSchema = z.object({
   groupName: z.string().max(120).optional(),
   selector: z.string().min(1).optional(),
   selectorKind: z.enum(["test-id", "id", "role", "css"]).optional(),
+  alternateSelectors: z.array(z.string().min(1).max(512)).max(2).optional(),
   inputType: z.string().optional(),
   visible: z.boolean().optional(),
   disabled: z.boolean(),
@@ -342,6 +533,14 @@ export const SurfaceControlSchema = z.object({
 });
 export type SurfaceControl = z.infer<typeof SurfaceControlSchema>;
 
+export const SurfaceControlWindowSchema = z.object({
+  scope: z.literal("rendered-main-frame-controls"), offset: z.number().int().min(0).max(500), limit: z.literal(60),
+  total: z.number().int().min(0).max(50_000), returned: z.number().int().min(0).max(60),
+  nextOffset: z.number().int().min(1).max(500).nullable(), allControlsObserved: z.boolean(),
+}).strict().refine((value) => value.offset <= value.total && value.returned === Math.min(60, value.total - value.offset)
+  && value.nextOffset === (value.offset + value.returned < value.total && value.offset + value.returned <= 500 ? value.offset + value.returned : null)
+  && value.allControlsObserved === (value.offset === 0 && value.total <= 60), "Control window counts and completeness must match the visible control list");
+
 export const SurfaceSnapshotSchema = z.object({
   capturedAt: z.string(),
   url: z.string().optional(),
@@ -351,10 +550,20 @@ export const SurfaceSnapshotSchema = z.object({
   tableRead: SurfaceTableReadObservationSchema.optional(),
   controls: z.array(SurfaceControlSchema).max(60).optional(),
   controlsTruncated: z.boolean().optional(),
+  controlWindow: SurfaceControlWindowSchema.optional(),
   frameCount: z.number().int().positive().optional(),
+  pages: z.array(z.object({ title: z.string().max(200), url: z.string(), active: z.boolean(), eligibleForSwitch: z.boolean() }).strict()).max(16).optional(),
+  pagesTruncated: z.boolean().optional(),
   metadata: z.record(z.string(), z.unknown()).default({}),
+}).superRefine((value, context) => {
+  if (value.controlWindow && (value.controls?.length !== value.controlWindow.returned || value.controlsTruncated !== !value.controlWindow.allControlsObserved)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Control window must describe the exact observed controls and omissions" });
+  }
 });
 export type SurfaceSnapshot = z.infer<typeof SurfaceSnapshotSchema>;
+
+export const SurfaceObservedStateSchema = z.object({ observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/), snapshot: SurfaceSnapshotSchema }).strict();
+export type SurfaceObservedState = z.infer<typeof SurfaceObservedStateSchema>;
 
 export const ActionReceiptSchema = z.object({
   actionId: z.string(),
@@ -385,6 +594,9 @@ export const OracleResultSchema = z.object({
   /** Status-only checks establish an HTTP contract, not an independent business outcome. */
   verificationKind: z.enum(["business", "http-contract"]).optional(),
   message: z.string(),
+  /** Connector-declared differing field names, never raw expected or observed values. */
+  fieldMismatches: z.array(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_.-]{0,79}$/)).min(1).max(8)
+    .refine((fields) => new Set(fields).size === fields.length).optional(),
   evidence: z.array(z.string()).default([]),
   /** Evidence supplied by the Oracle before ProofKit adds its own result artifact. */
   sourceEvidenceCount: z.number().int().nonnegative().optional(),
@@ -395,6 +607,10 @@ export const OracleResultSchema = z.object({
   observedAt: z.string().optional(),
   /** Runner-owned time when this Oracle result was received. */
   recordedAt: z.string().datetime().optional(),
+}).superRefine((result, context) => {
+  if (result.fieldMismatches && (result.passed !== false || result.verificationKind !== "business")) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Field mismatches require a failing independent business check" });
+  }
 });
 export type OracleResult = z.infer<typeof OracleResultSchema>;
 
@@ -422,11 +638,13 @@ export const StepResultSchema = z.object({
   receipt: ActionReceiptSchema.optional(),
   /** Selected facts from one request observed within this step's action window. */
   response: ResponseObservationSchema.optional(),
+  responseError: ResponseErrorObservationSchema.optional(),
   inputFiles: z.array(InputFileFactSchema).optional(),
   /** Present only when replay checks the selected bytes against its source Run. */
   replayInputMatched: z.boolean().optional(),
   beforeSnapshot: SurfaceSnapshotSchema.optional(),
   afterSnapshot: SurfaceSnapshotSchema.optional(),
+  targetChecks: z.array(SurfaceTargetCheckSchema).max(2).optional(),
   artifacts: z.array(z.string()).default([]),
   capabilityOutput: z.unknown().optional(),
   /** Stable non-sensitive failure category; older saved Runs may omit it. */
@@ -434,6 +652,45 @@ export const StepResultSchema = z.object({
   error: z.string().optional(),
 });
 export type StepResult = z.infer<typeof StepResultSchema>;
+
+export const SurfaceReplanProposalSchema = z.object({
+  schemaVersion: z.literal(1),
+  status: z.literal("needs-approval"),
+  requiresApproval: z.literal(true),
+  reason: z.literal("surface-selector-drift"),
+  sourceStepId: z.string().regex(/^step-\d{3}$/),
+  originalSelector: z.string().min(1).max(512),
+  observedAt: z.string(),
+  observedUrl: z.string().optional(),
+  candidates: z.array(z.object({
+    selector: z.string().min(1).max(512),
+    tag: z.string().min(1).max(64).optional(),
+    role: z.string().min(1).max(128),
+    inputType: z.string().max(64).optional(),
+    name: z.string().max(120).optional(),
+    groupName: z.string().max(120).optional(),
+  }).strict()).max(8),
+  next: z.literal("inspect_surface"),
+  message: z.string().min(1).max(512),
+}).strict();
+export type SurfaceReplanProposal = z.infer<typeof SurfaceReplanProposalSchema>;
+
+export const SurfaceReplanStabilityAnalysisSchema = z.object({
+  sourceRunId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  replacementRunIds: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/)).min(1).max(20),
+  approvedSelectors: z.array(z.string().min(1).max(512)),
+  total: z.number().int().positive(),
+  passed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  inconclusive: z.number().int().nonnegative(),
+  repeatedSelectorCount: z.number().int().nonnegative(),
+  meanApprovalLatencyMs: z.number().finite().nonnegative().optional(),
+  status: z.enum(["uniform-pass", "uniform-failure", "variable-outcome", "inconclusive"]),
+  gaps: z.array(z.string().min(1)).max(20),
+  omittedGaps: z.number().int().nonnegative(),
+  analyzedAt: z.string(),
+}).strict();
+export type SurfaceReplanStabilityAnalysis = z.infer<typeof SurfaceReplanStabilityAnalysisSchema>;
 
 /** A process-path association is useful evidence, but does not attest served bytes. */
 export const TargetBindingSchema = z.object({
@@ -581,11 +838,42 @@ export function hasIncompleteIntegrationCleanup(cleanup: unknown): boolean {
   return !parsed.success || parsed.data.status === "failed" || parsed.data.status === "unverified";
 }
 
+export const VideoRecordingBudgetSchema = z.object({
+  maxDurationMs: z.number().int().min(1000).max(3_600_000).default(600_000),
+  maxBytes: z.number().int().min(1024 * 1024).max(64 * 1024 * 1024).default(64 * 1024 * 1024),
+}).strict();
+export type VideoRecordingBudget = z.infer<typeof VideoRecordingBudgetSchema>;
+
+export const VideoRecordingStopReasonSchema = z.enum(["duration-limit", "size-limit", "page-limit", "inspection-failed"]);
+export type VideoRecordingStopReason = z.infer<typeof VideoRecordingStopReasonSchema>;
+
+export const RunRecordingSchema = z.object({
+  status: z.enum(["recorded", "partial", "unavailable"]),
+  artifact: z.string().max(512).optional(),
+  stopReason: VideoRecordingStopReasonSchema.optional(),
+  budget: VideoRecordingBudgetSchema.optional(),
+  selectedPages: z.object({ observed: z.number().int().min(1).max(16), artifacts: z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,128}\/artifacts\/selected-page-0(?:0[1-9]|1[0-6])\.webm$/)).max(16),
+    omitted: z.number().int().nonnegative().max(16) }).strict()
+    .refine((value) => value.artifacts.length + value.omitted === value.observed && new Set(value.artifacts).size === value.artifacts.length
+      && value.artifacts.every((path) => Number(path.match(/selected-page-(\d+)\.webm$/)?.[1]) <= value.observed),
+    "Selected page coverage must account for every distinct selected window").optional(),
+}).strict().refine((recording) => !recording.stopReason || recording.status !== "recorded", "A stopped recording cannot be complete")
+  .refine((recording) => recording.status !== "partial" || Boolean(recording.artifact && recording.stopReason && recording.stopReason !== "inspection-failed"), "Partial footage needs a saved artifact and a verified budget stop")
+  .refine((recording) => !recording.selectedPages?.artifacts.length || (recording.status !== "unavailable" && Boolean(recording.artifact)), "Selected-page video requires a saved primary recording");
+
 export const RunSummarySchema = z.object({
   runId: z.string(),
   /** Saved by the Runner; optional only so pre-provenance Runs remain readable. */
   execution: z.object({
     adapter: z.string().min(1).max(64),
+    kind: z.enum(["test", "session-network-capture", "session-resource-preparation"]).optional(),
+    /** headful/headless are owned browser contexts; external is an attached or borrowed surface. */
+    visibility: z.enum(["headful", "headless", "external"]).optional(),
+    sessionId: z.string().uuid().optional(),
+
+    sessionCaptureRunId: z.string().regex(/^session-network-[a-f0-9-]{36}$/).optional(),
+    sessionNetworkEnabled: z.boolean().optional(),
+    sessionRecordingRequested: z.boolean().optional(),
     replayOfRunId: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional(),
   }).strict().optional(),
   projectRoot: z.string().min(1).optional(),
@@ -594,6 +882,11 @@ export const RunSummarySchema = z.object({
   endedAt: z.string().optional(),
   status: z.enum(["running", "completed"]),
   verdict: VerdictSchema.optional(),
+  eventLog: z.object({ status: z.enum(["sealed", "unavailable"]), bytes: z.number().int().nonnegative().max(64 * 1024 * 1024).optional(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict()
+    .refine((value) => value.status === "sealed" ? value.bytes !== undefined && value.sha256 !== undefined
+      : value.bytes === undefined && value.sha256 === undefined, "Only a sealed event log can claim pinned bytes").optional(),
+  recording: RunRecordingSchema.optional(),
   charter: TestCharterSchema,
   steps: z.array(StepResultSchema).default([]),
   assertions: z.array(AssertionResultSchema).default([]),
@@ -772,7 +1065,6 @@ export const SuiteCatalogEntrySchema = z.object({
 }).superRefine((suite, ctx) => {
   if (new Set(suite.charterIds).size !== suite.charterIds.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charterIds"], message: "Suite Charter IDs must be unique" });
   if (new Set(suite.surfaces).size !== suite.surfaces.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "Suite surfaces must be unique" });
-  if ((suite.surfaces.includes("web") || suite.surfaces.includes("electron")) && !(suite.surfaces.includes("web") && suite.surfaces.includes("electron"))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "A release suite with Web or Electron must include both surfaces" });
 });
 export type SuiteCatalogEntry = z.infer<typeof SuiteCatalogEntrySchema>;
 
@@ -982,7 +1274,6 @@ export const TestSuiteSchema = z.object({
   if (new Set(suite.surfaces).size !== suite.surfaces.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "Suite surfaces must be unique" });
   if (suite.origin === "catalog" && suite.level !== "release") ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["level"], message: "Catalog suites require release level" });
   if (suite.origin === "catalog" && suite.charters.length < 2) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["charters"], message: "Catalog suites require at least two Charters" });
-  if (suite.origin === "catalog" && (suite.surfaces.includes("web") || suite.surfaces.includes("electron")) && !(suite.surfaces.includes("web") && suite.surfaces.includes("electron"))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["surfaces"], message: "A release suite with Web or Electron must include both surfaces" });
   if (new Set(suite.uncoveredCharterIds).size !== suite.uncoveredCharterIds.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["uncoveredCharterIds"], message: "Uncovered Charter IDs must be unique" });
   if (suite.uncoveredCharterIds.some((id) => suite.charters.some((item) => item.charterId === id))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["uncoveredCharterIds"], message: "Included Charters cannot be uncovered" });
   for (const [index, item] of suite.charters.entries()) {
@@ -1120,11 +1411,16 @@ export const IntegrationReadinessInputSchema = z.object({
   charterId: CatalogIdSchema.optional(),
   charterPath: z.string().min(1).max(512).optional(),
   charterSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  charter: TestCharterSchema.optional(),
 }).strict().superRefine((value, context) => {
   const catalog = value.charterId !== undefined;
-  const candidate = value.charterPath !== undefined && value.charterSha256 !== undefined;
-  if (catalog ? value.charterPath !== undefined || value.charterSha256 !== undefined : !candidate) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Select either charterId or a candidate charterPath with charterSha256" });
+  const candidate = value.charterPath !== undefined || value.charterSha256 !== undefined;
+  const draft = value.charter !== undefined;
+  if (Number(catalog) + Number(candidate) + Number(draft) !== 1 || candidate && (value.charterPath === undefined || value.charterSha256 === undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Select either charterId, charterPath with charterSha256, or a submitted draft charter; use exactly one selection form" });
+  }
+  if (draft && !value.charter!.surfaces) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["charter", "surfaces"], message: "Draft readiness requires declared surfaces" });
   }
 });
 export type IntegrationReadinessInput = z.input<typeof IntegrationReadinessInputSchema>;
@@ -1144,6 +1440,7 @@ export const IntegrationReadinessSchema = z.object({
   charterId: CatalogIdSchema.optional(),
   charterPath: z.string().min(1).max(512).optional(),
   charterSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  draftSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   level: TestLevelSchema,
   surfaces: z.array(z.enum(["web", "electron", "mobile"])).min(1).max(3),
   environment: z.enum(["test", "staging", "local"]),
@@ -1153,9 +1450,9 @@ export const IntegrationReadinessSchema = z.object({
   next: z.array(z.string().min(1).max(240)).max(8),
   checkedAt: z.string().datetime(),
 }).strict().superRefine((value, context) => {
-  if (!IntegrationReadinessInputSchema.safeParse({ charterId: value.charterId,
-    charterPath: value.charterPath, charterSha256: value.charterSha256 }).success) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Readiness must identify one catalog Charter or one digest-pinned candidate" });
+  if (value.draftSha256 !== undefined ? value.charterId !== undefined || value.charterPath !== undefined || value.charterSha256 !== undefined
+    : !IntegrationReadinessInputSchema.safeParse({ charterId: value.charterId, charterPath: value.charterPath, charterSha256: value.charterSha256 }).success) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Readiness must identify one catalog Charter, digest-pinned candidate or normalized draft digest" });
   }
   if (value.status === "ready" && value.check?.passed !== true) context.addIssue({ code: z.ZodIssueCode.custom, path: ["check"], message: "Ready status requires a passing connector check" });
   if (value.status === "blocked" && value.check?.passed !== false) context.addIssue({ code: z.ZodIssueCode.custom, path: ["check"], message: "Blocked status requires a failing connector check" });
@@ -1178,10 +1475,18 @@ export const ProofkitConfigSchema = z.object({
   surfaces: z.object({
     web: z.object({
       baseUrl: z.string().url().optional(),
+      apiOrigins: z.array(z.string().url().max(2048).refine((value) => {
+        try {
+          const parsed = new URL(value);
+          return ["http:", "https:"].includes(parsed.protocol) && !parsed.username && !parsed.password && !parsed.hostname.includes("*") && parsed.origin === value;
+        } catch { return false; }
+      }, "Use an exact HTTP(S) origin without credentials, path, query or fragment")).max(8)
+        .refine((origins) => new Set(origins).size === origins.length, "API origins must be unique").optional(),
       cdpUrl: z.string().url().optional(),
       targetUrlPrefix: z.string().min(1).optional(),
       targetTitleContains: z.string().min(1).optional(),
       executablePath: z.string().min(1).optional(),
+      screenshotMaskSelectors: z.array(z.string().trim().min(1).max(256)).max(16).optional(),
       readyWhen: SurfaceReadinessSchema.optional(),
     }).optional(),
     electron: z.object({
@@ -1218,7 +1523,17 @@ export const ProofkitConfigSchema = z.object({
   suites: z.array(SuiteCatalogEntrySchema).default([]),
   run: z.object({
     timeoutMs: z.number().int().positive().max(3_600_000).default(300_000),
+    recordVideo: z.boolean().optional(),
+    videoBudget: VideoRecordingBudgetSchema.optional(),
   }).default({}),
+  sessions: z.object({
+    recordNetwork: z.boolean().optional(),
+    recordVideo: z.boolean().optional(),
+    videoBudget: VideoRecordingBudgetSchema.optional(),
+    /** Disabled by default because browser storage state contains credentials and cookies. */
+    persistence: z.enum(["disabled", "encrypted"]).default("disabled"),
+    keyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/).optional(),
+  }).optional(),
   oracles: z.array(ConfiguredHttpOracleSchema).default([]),
   policies: z.object({
     environment: z.enum(["test", "staging", "local"]).default("test"),
@@ -1228,6 +1543,14 @@ export const ProofkitConfigSchema = z.object({
     /** Block only an evidenced different Git checkout; keep unknown targets explicit. */
     targetBinding: z.enum(["record", "block-different"]).default("block-different"),
   }).default({}),
+}).superRefine((config, context) => {
+  const sessions = config.sessions;
+  if (sessions?.persistence === "encrypted" && !sessions.keyEnv) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["sessions", "keyEnv"], message: "Encrypted session persistence requires keyEnv" });
+  }
+  if (sessions?.persistence !== "encrypted" && sessions?.keyEnv !== undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["sessions", "keyEnv"], message: "keyEnv is only valid when session persistence is encrypted" });
+  }
 });
 export type ProofkitConfig = z.infer<typeof ProofkitConfigSchema>;
 
@@ -1236,9 +1559,14 @@ export type ProofkitConfig = z.infer<typeof ProofkitConfigSchema>;
 export const MissionSurfaceSchema = z.enum(["web", "electron", "mobile", "api"]);
 export type MissionSurface = z.infer<typeof MissionSurfaceSchema>;
 
+/** Browser visibility is a reviewable Mission choice; Electron visibility is controlled by its external app process. */
+export const MissionWebVisibilitySchema = z.enum(["headless", "headful"]);
+export type MissionWebVisibility = z.infer<typeof MissionWebVisibilitySchema>;
+
 /** The execution obligations selected by the test level. */
 export const MissionExecutionProfileSchema = z.object({
   surfaceMatrix: z.array(MissionSurfaceSchema).min(1).default(["web"]),
+  webVisibility: MissionWebVisibilitySchema.default("headless"),
   suiteId: CatalogIdSchema.optional(),
   charterIds: z.array(CatalogIdSchema).default([]),
   collectAllResults: z.boolean().default(false),
@@ -1249,7 +1577,10 @@ export const MissionExecutionProfileSchema = z.object({
   requireNegativeCases: z.boolean().default(false),
   minimumEvidence: z.number().int().positive().default(1),
 });
-export type MissionExecutionProfile = z.infer<typeof MissionExecutionProfileSchema>;
+/** Optional in the TypeScript view so legacy in-memory fixtures can still be read; schema parsing supplies headless. */
+export type MissionExecutionProfile = Omit<z.infer<typeof MissionExecutionProfileSchema>, "webVisibility"> & {
+  webVisibility?: MissionWebVisibility;
+};
 
 export const MissionStatusSchema = z.enum([
   "draft",
@@ -1299,7 +1630,7 @@ export type MissionPolicy = z.infer<typeof MissionPolicySchema>;
 
 export const EvidenceRefSchema = z.object({
   evidenceId: z.string().min(1),
-  kind: z.enum(["screenshot", "snapshot", "network", "console", "process", "api", "business", "runtime", "log", "report", "other"]),
+  kind: z.enum(["screenshot", "video", "snapshot", "network", "console", "process", "api", "business", "runtime", "log", "report", "other"]),
   path: z.string().min(1),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   description: z.string().min(1).optional(),
@@ -1596,6 +1927,71 @@ export const MissionPlanSchema = z.object({
 /** Existing persisted plans may omit planning metadata. New plans populate it explicitly. */
 export type MissionPlan = z.infer<typeof MissionPlanSchema>;
 
+/** Bounded, presentation-safe Mission plan facts for reports and MCP consumers. */
+export const MissionPlanSummarySchema = z.object({
+  planId: z.string().min(1),
+  generatedBy: z.string().min(1),
+  successCriteria: z.array(z.string().min(1)).max(50),
+  assumptions: z.array(z.string().min(1)).max(50),
+  tasks: z.array(z.object({
+    taskId: z.string().min(1),
+    title: z.string().min(1),
+    objective: z.string().min(1),
+    tool: z.string().min(1),
+    dependsOn: z.array(z.string()).max(100),
+    status: MissionTaskStatusSchema,
+    error: z.string().optional(),
+  }).strict()).max(100),
+}).strict();
+export type MissionPlanSummary = z.infer<typeof MissionPlanSummarySchema>;
+
+export const MissionSessionContextSchema = z.object({
+  sessionId: z.string().uuid(),
+  captureRunId: z.string().regex(/^session-network-[a-f0-9-]{36}$/).optional(),
+  capturedAt: z.string().datetime(),
+  runs: z.array(z.object({
+    runId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/),
+    startedAt: z.string(),
+    evidence: z.array(EvidenceRefSchema).max(4),
+  }).strict()).max(20),
+  omittedRuns: z.number().int().nonnegative(),
+}).strict();
+export type MissionSessionContext = z.infer<typeof MissionSessionContextSchema>;
+
+export const SessionCaptureSummarySchema = z.object({
+  runId: z.string().regex(/^session-network-[a-f0-9-]{36}$/),
+  status: z.enum(["sealed", "partial", "unavailable"]),
+  closed: z.literal(true),
+  events: z.number().int().nonnegative(),
+  omittedEvents: z.number().int().nonnegative(),
+  unresolvedRequests: z.number().int().nonnegative(),
+  networkEnabled: z.boolean(),
+  recording: RunRecordingSchema.optional(),
+}).strict().refine((capture) => capture.status !== "sealed" || !capture.recording || (capture.recording.status === "recorded"
+  && !capture.recording.selectedPages?.omitted), "A sealed capture cannot have an incomplete recording");
+export type SessionCaptureSummary = z.infer<typeof SessionCaptureSummarySchema>;
+
+export const SessionCaptureSealSchema = z.object({
+  schemaVersion: z.literal(1),
+  runId: z.string().regex(/^session-network-[a-f0-9-]{36}$/),
+  sessionId: z.string().uuid(),
+  projectRoot: z.string().min(1).max(4096),
+  workspaceRoot: z.string().min(1).max(4096),
+  manifestSha256: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+
+export const MissionSessionCapturesSchema = z.object({
+  segments: z.array(z.object({
+    runId: z.string().regex(/^session-network-[a-f0-9-]{36}$/),
+    sessionId: z.string().uuid(),
+    integrity: z.enum(["intact", "changed", "missing", "unverified", "not-sealed"]),
+    reason: z.string().min(1).max(1024),
+    capture: SessionCaptureSummarySchema.optional(),
+    evidence: z.array(EvidenceRefSchema).max(22),
+  }).strict()).max(10),
+  omittedSegments: z.number().int().nonnegative(),
+}).strict();
+
 export const TestMissionSchema = z.object({
   missionId: z.string().min(1),
   /** The direct source Mission when this Mission was created by replay. */
@@ -1618,6 +2014,9 @@ export const TestMissionSchema = z.object({
   workflowInventoryInspection: WorkflowInventoryInspectionSchema.optional(),
   workflowReview: WorkflowReviewSnapshotSchema.optional(),
   workflowReviewAdmission: WorkflowReviewAdmissionSchema.optional(),
+  /** Process-local retained Web session selected for this Mission; missing after restart must block, not fall back. */
+  surfaceSessionId: z.string().uuid().optional(),
+  sessionContext: MissionSessionContextSchema.optional(),
   plan: MissionPlanSchema,
   agentSteps: z.array(AgentStepSchema).default([]),
   toolCalls: z.array(ToolCallSchema).default([]),
@@ -1722,6 +2121,8 @@ export const MissionRunResultSchema = z.object({
   verdict: VerdictSchema.optional(),
   expectedVerdict: VerdictSchema.optional(),
   outcomeMatched: z.boolean().optional(),
+  executionVisibility: z.enum(["headful", "headless", "external"]).optional(),
+  executionSessionId: z.string().uuid().optional(),
   assertions: z.object({ passed: z.number().int().nonnegative(), total: z.number().int().nonnegative() }).optional(),
   oracles: z.object({ passed: z.number().int().nonnegative(), total: z.number().int().nonnegative() }).optional(),
   businessFacts: z.number().int().nonnegative().optional(),
@@ -1733,7 +2134,7 @@ export const MissionRunResultSchema = z.object({
   applicationContinuity: TargetContinuitySchema.optional(),
   integrationPostRunCheck: IntegrationCheckResultSchema.optional(),
   integrationCleanup: IntegrationCleanupSchema.optional(),
-  evidence: z.array(EvidenceRefSchema).max(6),
+  evidence: z.array(EvidenceRefSchema).max(8),
   omittedEvidence: z.number().int().nonnegative(),
   issue: z.string().optional(),
 });
@@ -1900,6 +2301,27 @@ export const MissionAgentTraceAuditSchema = z.object({
 });
 export type MissionAgentTraceAudit = z.infer<typeof MissionAgentTraceAuditSchema>;
 
+export const MissionCheckOverviewSchema = z.object({
+  scope: z.literal("saved-run-checks"),
+  inspectedRuns: z.number().int().nonnegative(),
+  unavailableRuns: z.array(z.object({ runId: z.string().optional(), title: z.string().max(256) }).strict()).max(200),
+  omittedRuns: z.number().int().nonnegative(),
+  counts: z.object({ passed: z.number().int().nonnegative(), failed: z.number().int().nonnegative(),
+    inconclusive: z.number().int().nonnegative(), "not-recorded": z.number().int().nonnegative(), unverified: z.number().int().nonnegative() }).strict(),
+  items: z.array(z.object({
+    runId: z.string(), title: z.string().max(256), runKind: z.enum(["primary", "replay", "negative", "unknown"]),
+    kind: z.enum(["surface", "business", "http-contract", "unclassified"]),
+    status: z.enum(["passed", "failed", "inconclusive", "not-recorded", "unverified"]),
+    expected: z.string().max(256), observed: z.string().max(256),
+    fieldMismatches: z.array(z.string().max(80)).max(8).optional(),
+    summary: EvidenceRefSchema, report: EvidenceRefSchema.optional(),
+    evidence: z.array(EvidenceRefSchema).max(3).default([]),
+    unlinkedEvidence: z.number().int().nonnegative().default(0),
+  }).strict()).max(100),
+  omittedChecks: z.number().int().nonnegative(),
+}).strict();
+export type MissionCheckOverview = z.infer<typeof MissionCheckOverviewSchema>;
+
 export const MissionResultSchema = z.object({
   schemaVersion: z.literal("1"),
   missionId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
@@ -1915,9 +2337,19 @@ export const MissionResultSchema = z.object({
   testVerdictReason: z.string().optional(),
   level: TestLevelSchema,
   levelSelection: TestLevelSelectionSchema.optional(),
+  executionProfile: MissionExecutionProfileSchema.optional(),
+  planSummary: MissionPlanSummarySchema.optional(),
+  planningObservation: z.object({
+    observation: PlanningSurfaceObservationSchema,
+    status: z.enum(["verified", "unverified", "caller-supplied"]),
+    reason: z.string().min(1),
+    evidence: z.array(EvidenceRefSchema).max(30),
+  }).strict().optional(),
+  sessionContext: MissionSessionContextSchema.optional(),
   revision: z.number().int().nonnegative(),
   updatedAt: z.string(),
   generatedAt: z.string(),
+  sessionCaptures: MissionSessionCapturesSchema.optional(),
   planning: PlanningQualitySchema.optional(),
   scope: z.object({
     surfaces: z.array(MissionSurfaceSchema),
@@ -1950,6 +2382,7 @@ export const MissionResultSchema = z.object({
   }),
   expectedRuns: z.number().int().nonnegative(),
   observedRuns: z.number().int().nonnegative(),
+  checkOverview: MissionCheckOverviewSchema.optional(),
   executionAudit: MissionExecutionAuditSchema.optional(),
   agentTraceAudit: MissionAgentTraceAuditSchema.optional(),
   runs: z.array(MissionRunResultSchema).max(200),

@@ -5,8 +5,9 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import type { MissionComparison, RunMode, SideEffectPolicy, TestCoverage, TestLevel } from "@proofkit/contracts";
-import { IntentPlanner, loadCharter } from "@proofkit/planner";
-import { inspectEvidenceRetention, LocalRunnerService, type LocalAdapterName } from "@proofkit/local-runner";
+import { IntentPlanner, loadCharter, PlannerConfigurationError, summarizePlanReview } from "@proofkit/planner";
+import { inspectEvidenceRetention, LocalRunnerService, PlanningObservationError, readWorkspaceCharterFile, type LocalAdapterName } from "@proofkit/local-runner";
+import { PlanningRequirementsError } from "@proofkit/planner";
 import { captureSourceState, collectWorkflowReviewMaterials, initProject, inspectWorkflowInventory, loadConfig, resolveProjectContext,
   resolveWithinWorkspace, scanProject, signWorkflowReview } from "@proofkit/project";
 import { setupAgent, type AgentHarness } from "./agent-setup.js";
@@ -14,6 +15,7 @@ import { checkAgentConnection } from "./agent-connection.js";
 import { registerAgentHost } from "./agent-registration.js";
 import { installAihrTemplate } from "./template-install.js";
 import { RepairHypothesisInputSchema } from "@proofkit/contracts";
+import { exportMissionArchive, verifyMissionArchive } from "@proofkit/evidence";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -137,16 +139,19 @@ export function createProgram(): Command {
     .option("--devtools-port-file <path>", "Electron DevToolsActivePort path")
     .option("--mobile-server <url>", "mobile WebDriver server URL")
     .option("--headful", "launch a visible Web browser")
+    .option("--control-offset <offset>", "read a later Web/Electron control window (integer 0-500)")
     .option("--ready-text <text>", "wait for visible text before observing (overrides configured readyWhen)")
     .option("--ready-timeout-ms <milliseconds>", "readiness timeout (100-15000, default 5000)")
-    .action(async (options: RootOptions & { adapter: string; url?: string; cdp?: string; devtoolsPortFile?: string; mobileServer?: string; headful?: boolean; readyText?: string; readyTimeoutMs?: string }) => {
+    .action(async (options: RootOptions & { adapter: string; url?: string; cdp?: string; devtoolsPortFile?: string; mobileServer?: string; headful?: boolean; controlOffset?: string; readyText?: string; readyTimeoutMs?: string }) => {
       if (options.adapter !== "web" && options.adapter !== "electron" && options.adapter !== "mobile") throw new Error("Inspection adapter must be web, electron or mobile");
       if (options.adapter !== "web" && options.url) throw new Error("Only Web inspection accepts --url");
       if (options.adapter !== "mobile" && options.mobileServer) throw new Error("--mobile-server requires --adapter mobile");
       if (options.readyTimeoutMs !== undefined && options.readyText === undefined) throw new Error("--ready-timeout-ms requires --ready-text");
+      const controlOffset = options.controlOffset === undefined ? undefined : Number(options.controlOffset);
+      if (controlOffset !== undefined && (!Number.isInteger(controlOffset) || controlOffset < 0 || controlOffset > 500 || options.adapter === "mobile")) throw new Error("Control windows require Web/Electron and an integer offset from 0 to 500");
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
       const inspection = await runner.inspectSurface({ adapter: options.adapter, url: options.url, cdp: options.cdp,
-        devtoolsPortFile: options.devtoolsPortFile, mobileServer: options.mobileServer, headful: options.headful,
+        devtoolsPortFile: options.devtoolsPortFile, mobileServer: options.mobileServer, headful: options.headful, controlOffset,
         readyWhen: options.readyText === undefined ? undefined : { text: options.readyText, timeoutMs: options.readyTimeoutMs === undefined ? undefined : Number(options.readyTimeoutMs) } });
       console.log(JSON.stringify(inspection, null, 2));
       if (inspection.status !== "observed") process.exitCode = 1;
@@ -167,14 +172,17 @@ export function createProgram(): Command {
     });
 
   program.command("readiness [charterId]")
-    .description("Check a catalog Charter or a digest-pinned candidate's connector prerequisites without starting a Run")
+    .description("Check a catalog Charter, digest-pinned candidate or draft's connector prerequisites without starting a Run")
     .option("--root <path>", "project root", ".")
     .option("--candidate <path>", "unregistered external workspace Charter path from scope inspection")
     .option("--candidate-sha256 <digest>", "candidate digest from the same scope inspection")
-    .action(async (charterId: string | undefined, options: RootOptions & { candidate?: string; candidateSha256?: string }) => {
+    .option("--draft <path>", "draft YAML under .proofkit/charters/ in the test workspace; declares supported surfaces")
+    .action(async (charterId: string | undefined, options: RootOptions & { candidate?: string; candidateSha256?: string; draft?: string }) => {
+      if (options.draft && (charterId !== undefined || options.candidate !== undefined || options.candidateSha256 !== undefined)) throw new Error("Select exactly one readiness source");
       const runner = await LocalRunnerService.create({ root: resolve(options.root), workspaceRoot: options.workspace });
+      const draft = options.draft ? (await readWorkspaceCharterFile(runner.workspaceRoot, options.draft)).charter : undefined;
       const readiness = await runner.inspectIntegrationReadiness({ charterId,
-        charterPath: options.candidate, charterSha256: options.candidateSha256 });
+        charterPath: options.candidate, charterSha256: options.candidateSha256, charter: draft });
       console.log(JSON.stringify(readiness, null, 2));
       process.exitCode = readiness.status === "ready" ? 0 : readiness.status === "blocked" ? 1 : 2;
     });
@@ -244,36 +252,76 @@ export function createProgram(): Command {
       console.log(JSON.stringify({ suites: config.suites }, null, 2));
     });
 
-  program.command("plan <intent>")
+  program.command("plan [intent]")
     .description("Turn a business intent into a reviewable Test Charter")
+    .option("--charter <path>", "validate a draft YAML from the workspace charters directory without a model call")
     .option("--root <path>", "project root", ".")
     .option("--url <url>", "entry URL")
+    .option("--adapter <name>", "surface to observe before model planning; defaults to web for a new plan")
+    .option("--headful", "show the Web planning observation")
+    .option("--session <id>", "observe an existing retained Web session")
+    .option("--inspection <run-id:sha256>", "use an original observed-state manifest pin; repeat for multiple states", collect, [])
+    .option("--continuation <id:sha256>", "resume saved planning requirements and add only new inspection pins")
+    .option("--format <format>", "yaml draft or json with planning status and next steps", "yaml")
     .option("--expect <text>", "visible text assertion", collect, [])
     .option("--oracle <name>", "configured business oracle", collect, [])
     .option("--level <level>", "quick, core or release")
     .option("--coverage <scope>", "declared scenarios or project workflow coverage")
-    .option("--mode <mode>", "deterministic, guided or explore", "guided")
+    .option("--mode <mode>", "deterministic, guided or explore; generated plans default to guided")
     .option("--side-effects <policy>", "deny, confirm or allow")
     .option("--out <path>", "write YAML output")
-    .action(async (intent: string, options: PlanCommandOptions) => {
+    .action(async (intent: string | undefined, options: PlanCommandOptions) => {
+      if (options.format !== "yaml" && options.format !== "json") throw new Error("Plan output format must be yaml or json");
       const root = resolve(options.root);
       const runner = await LocalRunnerService.create({ root, workspaceRoot: options.workspace });
       const planner = new IntentPlanner();
+      const submitted = options.charter ? (await readWorkspaceCharterFile(runner.workspaceRoot, options.charter)).charter : undefined;
       const charter = await runner.plan(intent, {
+        charter: submitted,
+        continuation: options.continuation ? (() => {
+          const [id, sha256, extra] = options.continuation.split(":");
+          if (!id || !sha256 || extra !== undefined) throw new Error("Use --continuation id:original-sha256");
+          return { id, sha256 };
+        })() : undefined,
         url: options.url,
-        expect: options.expect,
+        adapter: options.adapter as LocalAdapterName,
+        headful: options.headful,
+        sessionId: options.session,
+        inspections: options.inspection?.length ? options.inspection.map((value) => {
+          const [runId, manifestSha256, extra] = value.split(":");
+          if (!runId || !manifestSha256 || extra !== undefined) throw new Error("Use --inspection run-id:original-manifest-sha256");
+          return { runId, manifestSha256 };
+        }) : undefined,
+        expect: options.expect.length || !options.continuation ? options.expect : undefined,
         oracleNames: options.oracle.length ? options.oracle : undefined,
         level: options.level as TestLevel,
         coverage: options.coverage as TestCoverage | undefined,
-        mode: options.mode as RunMode,
+        mode: (options.mode ?? (submitted || options.continuation ? undefined : "guided")) as RunMode | undefined,
         sideEffectPolicy: options.sideEffects as SideEffectPolicy | undefined,
+      }).catch((error: unknown) => {
+        if (error instanceof PlannerConfigurationError) {
+          console.log(JSON.stringify(error.receipt(), null, 2));
+          process.exitCode = 2;
+          return undefined;
+        }
+        if (!(error instanceof PlanningObservationError)) throw error;
+        console.log(JSON.stringify(error.receipt(), null, 2));
+        process.exitCode = 2;
+        return undefined;
       });
+      if (!charter) return;
+      const review = summarizePlanReview(charter);
       const output = planner.toYaml(charter);
       if (options.out) {
         await initProject(root, { workspaceRoot: runner.workspaceRoot });
         await writeWorkspaceOutput(runner.workspaceRoot, options.out, output);
       }
-      process.stdout.write(output);
+      if (options.format === "json") process.stdout.write(`${JSON.stringify({ ...review, charter }, null, 2)}\n`);
+      else {
+        process.stdout.write(output);
+        process.stderr.write(`Plan: ${review.status} · test verdict: ${review.testVerdict} · execution started: false\n${review.reason}\n${review.gaps.length ? `Gaps: ${review.gaps.join(", ")}\n` : ""}${review.missingInputs.map((item) => `Required: ${item}\n`).join("")}${review.next.map((item) => `${item.action}: ${item.reason}`).join("\n")}\n`);
+      }
+      if (review.status === "needs-input") process.exitCode = 2;
     });
 
   program.command("run <intent>")
@@ -303,24 +351,46 @@ export function createProgram(): Command {
         evidenceDir: options.evidenceDir,
         allowCapabilityWrites: options.allowCapabilityWrites,
       });
-      const started = await runner.start({
-        intent,
-        charterPath: options.charter,
-        adapter: options.adapter as LocalAdapterName,
-        url: options.url,
-        cdp: options.cdp,
-        devtoolsPortFile: options.devtoolsPortFile,
-        mobileServer: options.mobileServer,
-        headful: options.headful,
-        start: options.start,
-        expect: options.expect,
-        oracleNames: options.oracle.length ? options.oracle : undefined,
-        mode: options.mode as RunMode,
-        level: options.level as TestLevel,
-        sideEffectPolicy: runner.config.policies.sideEffects,
-        oracleUrl: options.oracleUrl,
-        oracleName: options.oracleName,
-      });
+      let started;
+      try {
+        started = await runner.start({
+          intent,
+          charterPath: options.charter,
+          adapter: options.adapter as LocalAdapterName,
+          url: options.url,
+          cdp: options.cdp,
+          devtoolsPortFile: options.devtoolsPortFile,
+          mobileServer: options.mobileServer,
+          headful: options.headful,
+          start: options.start,
+          expect: options.expect,
+          oracleNames: options.oracle.length ? options.oracle : undefined,
+          mode: options.mode as RunMode,
+          level: options.level as TestLevel,
+          sideEffectPolicy: runner.config.policies.sideEffects,
+          oracleUrl: options.oracleUrl,
+          oracleName: options.oracleName,
+        });
+      } catch (error) {
+        if (error instanceof PlannerConfigurationError) {
+          console.log(JSON.stringify(error.receipt(), null, 2));
+          process.exitCode = 2;
+          return;
+        }
+        if (error instanceof PlanningObservationError) {
+          console.log(JSON.stringify(error.receipt(), null, 2));
+          process.exitCode = 2;
+          return;
+        }
+        if (!(error instanceof PlanningRequirementsError)) throw error;
+        const review = summarizePlanReview(error.charter);
+        const payload = { status: "needs-input", testVerdict: "not-asserted", executionStarted: false,
+          reason: "The requested intent produced a draft with unresolved planning requirements. No Run was started.",
+          gaps: review.gaps, missingInputs: review.missingInputs, next: review.next, charter: error.charter };
+        console.log(JSON.stringify(payload, null, 2));
+        process.exitCode = 2;
+        return;
+      }
       const onSigint = () => { void runner.cancel(started.runId, "CLI interrupted the run"); };
       process.once("SIGINT", onSigint);
       let summary;
@@ -358,22 +428,30 @@ export function createProgram(): Command {
     .action(async (intent: string, options: MissionCreateCommandOptions) => {
       const root = resolve(options.root);
       const runner = await LocalRunnerService.create({ root, workspaceRoot: options.workspace });
-      const created = await runner.createMission({
-        intent,
-        charter: options.charter ? await loadCharter(resolveWithinWorkspace(runner.workspaceRoot, options.charter)) : undefined,
-        charterPath: options.candidate,
-        charterSha256: options.candidateSha256,
-        charterId: options.charterId,
-        suiteId: options.suiteId,
-        coverage: options.coverage as TestCoverage | undefined,
-        surface: options.surface as LocalAdapterName | undefined,
-        url: options.url,
-        expect: options.expect,
-        oracleNames: options.oracle.length ? options.oracle : undefined,
-        level: options.level as TestLevel,
-        mode: options.mode as RunMode,
-        sideEffectPolicy: options.sideEffects as SideEffectPolicy | undefined,
-      });
+      let created;
+      try {
+        created = await runner.createMission({
+          intent,
+          charter: options.charter ? await loadCharter(resolveWithinWorkspace(runner.workspaceRoot, options.charter)) : undefined,
+          charterPath: options.candidate,
+          charterSha256: options.candidateSha256,
+          charterId: options.charterId,
+          suiteId: options.suiteId,
+          coverage: options.coverage as TestCoverage | undefined,
+          surface: options.surface as LocalAdapterName | undefined,
+          url: options.url,
+          expect: options.expect,
+          oracleNames: options.oracle.length ? options.oracle : undefined,
+          level: options.level as TestLevel,
+          mode: options.mode as RunMode,
+          sideEffectPolicy: options.sideEffects as SideEffectPolicy | undefined,
+        });
+      } catch (error) {
+        if (!(error instanceof PlannerConfigurationError)) throw error;
+        console.log(JSON.stringify(error.receipt(), null, 2));
+        process.exitCode = 2;
+        return;
+      }
       console.log(JSON.stringify(created, null, 2));
     });
 
@@ -459,6 +537,28 @@ export function createProgram(): Command {
       if (!evidence.report) process.exitCode = 1;
     });
 
+  mission.command("export <missionId>")
+    .description("Copy a saved terminal Mission and its original evidence into a new offline archive")
+    .option("--root <path>", "project root", ".")
+    .requiredOption("--out <path>", "new archive directory outside the source workspace; parent must exist")
+    .option("--summary-sha256 <sha256>", "require the separately retained original saved summary digest")
+    .action(async (missionId: string, options: RootOptions & { out: string; summarySha256?: string }) => {
+      const context = resolveProjectContext(resolve(options.root), { workspaceRoot: options.workspace });
+      const controller = new AbortController(); const stop = () => controller.abort(new Error("Evidence export interrupted")); process.once("SIGINT", stop);
+      try {
+        console.log(JSON.stringify(await exportMissionArchive({ workspaceRoot: options.workspace === undefined ? context.workspaceRoot : resolve(options.workspace), missionId, destination: options.out,
+          expectedSummarySha256: options.summarySha256, signal: controller.signal }), null, 2));
+      } finally { process.off("SIGINT", stop); }
+    });
+
+  program.command("verify-archive <directory>")
+    .description("Verify an offline Mission archive without loading project code or contacting the application")
+    .option("--archive-sha256 <sha256>", "require the separately retained original archive descriptor digest")
+    .action(async (directory: string, options: { archiveSha256?: string }) => {
+      const result = await verifyMissionArchive(resolve(directory), options.archiveSha256); console.log(JSON.stringify(result, null, 2));
+      process.exitCode = result.status === "intact" ? 0 : result.status === "unverified" ? 2 : 1;
+    });
+
   mission.command("replay <missionId>")
     .description("Create a replay Mission; use --approve to authorize its execution when approval is required")
     .option("--root <path>", "project root", ".")
@@ -541,6 +641,27 @@ export function createProgram(): Command {
       console.log(await runner.savedRunReport(runId));
     });
 
+  program.command("manifest <runId>")
+    .description("Create and return a bounded SHA-256 manifest for the saved Run evidence")
+    .option("--root <path>", "project root", ".")
+    .option("--evidence-dir <path>", "run artifact directory", ".proofkit/runs")
+    .action(async (runId: string, options: RootOptions & { evidenceDir: string }) => {
+      const runner = new LocalRunnerService({ root: options.root, workspaceRoot: options.workspace, evidenceDir: options.evidenceDir });
+      console.log(JSON.stringify(await runner.evidenceManifest(runId), null, 2));
+    });
+
+  program.command("verify-manifest <runId>")
+    .description("Verify a saved Run manifest, its evidence files and unexpected additions")
+    .option("--root <path>", "project root", ".")
+    .option("--evidence-dir <path>", "run artifact directory", ".proofkit/runs")
+    .option("--manifest-sha256 <digest>", "expected SHA-256 of manifest.json")
+    .action(async (runId: string, options: RootOptions & { evidenceDir: string; manifestSha256?: string }) => {
+      const runner = new LocalRunnerService({ root: options.root, workspaceRoot: options.workspace, evidenceDir: options.evidenceDir });
+      const result = await runner.verifyEvidenceManifest(runId, options.manifestSha256);
+      console.log(JSON.stringify(result, null, 2));
+      process.exitCode = result.status === "intact" ? 0 : result.status === "unverified" ? 2 : 1;
+    });
+
   program.command("replay <runId>")
     .description("Inspect a previous run and optionally execute its charter again")
     .option("--root <path>", "project root", ".")
@@ -621,7 +742,14 @@ type RootOptions = {
 };
 
 type PlanCommandOptions = RootOptions & {
+  charter?: string;
+  format?: string;
+  continuation?: string;
   url?: string;
+  adapter?: string;
+  headful?: boolean;
+  session?: string;
+  inspection?: string[];
   expect: string[];
   oracle: string[];
   mode?: string;

@@ -6,6 +6,18 @@ import { briefMissionEvidence } from "./mission-evidence-brief.js";
 type MissionEvidence = Awaited<ReturnType<LocalRunnerService["missionEvidence"]>>;
 
 describe("brief Mission evidence", () => {
+  it("exposes bounded session sealing state without treating active footage as playable", () => {
+    const evidence = { missionId: "mission-capture", status: "completed", running: false, testVerdict: "passed", evidence: [], findings: [],
+      summary: { schemaVersion: "1", missionId: "mission-capture", sessionCaptures: { omittedSegments: 0, segments: [{
+        runId: "session-network-pending", sessionId: "00000000-0000-4000-8000-000000000001", integrity: "not-sealed",
+        reason: "No durable original seal is available", evidence: [],
+      }] } } } as unknown as MissionEvidence;
+    const brief = briefMissionEvidence(evidence);
+    expect(brief.summary.sessionCaptures?.segments).toEqual([{ runId: "session-network-pending", sessionId: "00000000-0000-4000-8000-000000000001",
+      integrity: "not-sealed", captureStatus: undefined, recordingStatus: undefined, reason: "No durable original seal is available" }]);
+    expect(brief.testVerdict).toBe("passed");
+    expect(JSON.stringify(brief)).not.toContain("recording.webm");
+  });
   it("keeps the audited verdict and defect source while bounding duplicate traces", () => {
     const refs: EvidenceRef[] = Array.from({ length: 30 }, (_, index) => ({
       evidenceId: `snapshot-${index}`, kind: "snapshot", path: `runs/run-1/snapshot-${index}.json`,

@@ -197,11 +197,24 @@ process.exit(3);
   assert.equal(focusedScope.inventory.retentionFocus, "resumes");
   assert.equal(focusedScope.routes.matched, 1);
   assert.equal(focusedScope.routes.items[0].path, "/resumes");
-  const cliPlan = parseYaml((await command(process.execPath, [cli, "plan", "check one page", "--root", source, "--workspace", workspace, "--level", "quick", "--expect", "ready", "--coverage", "project"], scratch)).stdout);
+  const blockedDraft = await command(process.execPath, [cli, "plan", "check one page", "--root", source, "--workspace", workspace, "--level", "quick", "--expect", "ready", "--coverage", "project"], scratch, [2]);
+  assert.match(blockedDraft.stderr, /Plan: needs-input/);
+  const cliPlan = parseYaml(blockedDraft.stdout);
   assert.equal(cliPlan.planning.coverage.requested, "project");
   assert.equal(cliPlan.planning.coverage.source, "explicit");
   assert.equal(cliPlan.planning.coverage.inventory, "bounded");
   assert.ok(cliPlan.planning.evidenceGaps.includes("project-workflow-coverage"));
+  const jsonDraft = await command(process.execPath, [cli, "plan", "Create a note and verify persistence", "--root", source, "--workspace", workspace,
+    "--level", "core", "--format", "json"], scratch, [2]);
+  const draftReview = JSON.parse(jsonDraft.stdout);
+  assert.equal(draftReview.status, "needs-input"); assert.equal(draftReview.testVerdict, "not-asserted"); assert.equal(draftReview.executionStarted, false);
+  assert.ok(draftReview.gaps.includes("surface-assertion") && draftReview.gaps.includes("business-oracle"));
+  assert.ok(draftReview.next.some((item) => item.action === "author-workflow"));
+  const jsonReady = await command(process.execPath, [cli, "plan", "Observe the Ready page", "--root", source, "--workspace", workspace,
+    "--level", "quick", "--expect", "Ready", "--format", "json"], scratch);
+  const readyReview = JSON.parse(jsonReady.stdout);
+  assert.equal(readyReview.status, "ready-for-review"); assert.equal(readyReview.testVerdict, "not-asserted"); assert.equal(readyReview.executionStarted, false);
+  assert.ok(readyReview.notEstablished.includes("authentication") && readyReview.notEstablished.includes("business-outcome"));
 
   environmentServer = createServer((_req, response) => {
     response.writeHead(200, { "Set-Cookie": "private-session" });
@@ -251,6 +264,9 @@ process.exit(3);
     const listed = await withDeadline(client.listTools(), 10_000, "MCP tool listing");
     assert.ok(listed.tools.some((tool) => tool.name === "inspect_surface"));
     const surfaceInspection = listed.tools.find((tool) => tool.name === "inspect_surface");
+    assert.equal(surfaceInspection.inputSchema.properties.keepSession.type, "boolean");
+    assert.equal(surfaceInspection.inputSchema.properties.controlOffset.maximum, 500);
+    assert.equal(listed.tools.find((tool) => tool.name === "plan_test").inputSchema.properties.keepSession.type, "boolean");
     assert.equal(surfaceInspection.inputSchema.properties.readyWhen.properties.timeoutMs.maximum, 15000);
     const invalidReadiness = await client.callTool({ name: "inspect_surface", arguments: { readyWhen: { text: "ready", timeoutMs: 15001 } } });
     assert.equal(invalidReadiness.isError, true);
@@ -270,6 +286,13 @@ process.exit(3);
     assert.ok(runTest);
     assert.ok(runTest.inputSchema.properties?.charter);
     assert.ok(runTest.inputSchema.properties?.coverage);
+    assert.ok(listed.tools.find((tool) => tool.name === "prepare_surface_session")?.inputSchema.properties?.charter);
+    const deniedPreparation = await withDeadline(client.callTool({ name: "prepare_surface_session", arguments: {
+      sessionId: "00000000-0000-4000-8000-000000000001",
+      charter: { intent: "Prepare isolated Web state", level: "core", surfaces: ["web"], sideEffectPolicy: "allow", actions: [], assertions: [] },
+    } }), 10_000, "Installed MCP preparation policy");
+    assert.equal(deniedPreparation.isError, true);
+    assert.match(deniedPreparation.content.find((content) => content.type === "text")?.text ?? "", /Explicit write permission/);
     const deniedUpload = await withDeadline(client.callTool({ name: "run_test", arguments: {
       intent: "Verify prepared resume upload", surface: "web",
       charter: { intent: "Verify prepared resume upload", level: "quick", sideEffectPolicy: "deny",
@@ -283,6 +306,7 @@ process.exit(3);
       charter: { intent: "Verify this submission identity", level: "quick", sideEffectPolicy: "deny",
         actions: [{ kind: "captureResponse", name: "current-intake", trigger: { kind: "click", selector: "#submit" },
           response: { url: "http://127.0.0.1:8080/api/v1/intakes", method: "POST", statuses: [201],
+            queryFields: { tenant: { pointer: "/tenant", type: "identifier" } },
             fields: { fileId: { pointer: "/data/file_id", type: "id" } } } }],
         assertions: [{ kind: "text-visible", text: "ready" }] },
     } }), 10_000, "Installed MCP response-capture policy");
@@ -310,7 +334,9 @@ process.exit(3);
     assert.equal(planned.isError, undefined);
     const planItem = planned.content.find((content) => content.type === "text");
     assert.ok(planItem);
-    const plan = JSON.parse(planItem.text).charter;
+    const planReview = JSON.parse(planItem.text);
+    assert.equal(planReview.status, "needs-input"); assert.equal(planReview.testVerdict, "not-asserted"); assert.equal(planReview.executionStarted, false);
+    const plan = planReview.charter;
     assert.equal(plan.planning.coverage.requested, "project");
     assert.equal(plan.planning.coverage.source, "inferred");
     assert.equal(plan.planning.coverage.workflowCoverage, "unmeasured");

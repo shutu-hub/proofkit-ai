@@ -2,10 +2,12 @@ import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TestCharter, TestMission } from "@proofkit/contracts";
-import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, SelectOptionActionSchema, SelectOptionsActionSchema, SetCheckedActionSchema, SurfaceReadinessSchema, SurfaceTableReadRequestSchema, SurfaceTextReadRequestSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
-import { LocalRunnerService } from "@proofkit/local-runner";
+import { EnvironmentInspectionInputSchema, hasPositiveSurfaceAssertion, IntegrationReadinessInputSchema, SelectOptionActionSchema, SelectOptionsActionSchema, SetCheckedActionSchema, SurfaceReadinessSchema, SurfaceSnapshotSchema, SurfaceTableReadRequestSchema, SurfaceTextReadRequestSchema, TestCharterSchema, TestCoverageSchema, TestScopeInputSchema } from "@proofkit/contracts";
+import { LocalRunnerService, PlannerConfigurationError, PlanningObservationError, summarizePlanReview } from "@proofkit/local-runner";
 import { briefMissionEvidence } from "./mission-evidence-brief.js";
 import { RepairHypothesisInputSchema } from "@proofkit/contracts";
+import { PlanningInspectionPinSchema, PlanningContinuationPinSchema } from "@proofkit/contracts";
+import { SwitchPageActionSchema, WaitForValueActionSchema } from "@proofkit/contracts";
 
 // MCP annotations are host scheduling hints, not authorization. Only operations
 // that read existing source/config/Mission state receive a read-only hint.
@@ -30,7 +32,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "inspect_integration_readiness",
-    "Call only a connector-declared read-only readiness check. Select either charterId or an unregistered workspace charterPath with the exact charterSha256 returned by scope inspection; changed files or endpoint bindings are rejected. This runs no Run, setup, capability, or business Oracle, and does not prove product correctness or plan admission. Resolve prerequisites and preserve the requested level, surface and coverage at Mission creation.",
+    "Call only a connector-declared read-only readiness check before product writes. Select exactly one charterId, an unregistered workspace charterPath plus exact charterSha256, or a submitted charter draft declaring its surfaces. Draft output identifies the normalized checked content by draftSha256; changes require a new check. Saved candidates reject changed bytes or endpoint bindings. This starts no Run, setup, capability or business Oracle and proves neither product correctness nor plan admission. Preserve required business fields, level, surface and coverage; unavailable observations must not be silently removed to obtain a ready result.",
     IntegrationReadinessInputSchema.innerType().shape,
     READ_ONLY_TOOL,
     async (input, extra) => result(await runner.inspectIntegrationReadiness(IntegrationReadinessInputSchema.parse(input), extra.signal)),
@@ -49,35 +51,69 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "inspect_surface",
-    "Observe a Web, Electron or mobile surface without asserting product success. Overview text is capped at 2000 chars. Web/Electron controls include a nearest fieldset groupName when available; use it with a unique selector to distinguish repeated field labels. Web/Electron readText returns a hash-bound text window; readTable={selector,offset,limit,columns} returns rows from one visible HTML table page. Continue with snapshot.tableRead.nextOffset and expectedSourceSha256. The table's allPagesVerified=false remains false even at the last rendered row: inspect pagination, filters, virtualized rows and independent business facts separately. Both reads are sanitized and reject changed sources; choose only one read. Mobile supports neither scoped read.",
-    { surface: z.enum(["web", "electron", "mobile"]).default("web"), url: z.string().url().optional(), readyWhen: SurfaceReadinessSchema.optional(), readText: SurfaceTextReadRequestSchema.optional(), readTable: SurfaceTableReadRequestSchema.optional() },
-    async ({ surface, url, readyWhen, readText, readTable }, extra) => {
-      if (surface !== "web" && url) throw new Error("Only Web inspection accepts a URL override; Electron uses CDP and mobile uses its configured WebDriver server");
+    "Observe a Web, Electron or mobile surface without asserting product success. Overview text is capped at 2000 chars. Web/Electron controls include a nearest fieldset groupName when available; use it with a unique selector to distinguish repeated field labels. On dense pages use controlOffset=60 then snapshot.controlWindow.nextOffset to inspect later windows of at most 60 visible main-frame controls. Each window is separately pinned, not proof of whole-page coverage; actions still recheck unique targets. Web/Electron readText returns a hash-bound text window; readTable={selector,offset,limit,columns} returns rows from one visible HTML table page. Continue with snapshot.tableRead.nextOffset and expectedSourceSha256. The table's allPagesVerified=false remains false even at the last rendered row: inspect pagination, filters, virtualized rows and independent business facts separately. Both reads are sanitized and reject changed sources; choose only one read. Mobile supports neither scoped read.",
+    { surface: z.enum(["web", "electron", "mobile"]).default("web"), url: z.string().url().optional(), sessionId: z.string().uuid().optional(),
+      keepSession: z.boolean().optional().describe("Web only: create an owned retained context using read-only observation; returns sessionId for subsequent inspection, planning and reviewed actions. Does not require an exploratory click."),
+      controlOffset: z.number().int().min(0).max(500).optional().describe("Web/Electron only: later window of visible main-frame controls; follow controlWindow.nextOffset"),
+      sessionLabel: z.string().trim().min(1).max(80).regex(/^[^\r\n]+$/).optional(),
+      headful: z.boolean().optional().describe("Web only: open a visible browser; Electron visibility is controlled by the attached app process"), readyWhen: SurfaceReadinessSchema.optional(), readText: SurfaceTextReadRequestSchema.optional(), readTable: SurfaceTableReadRequestSchema.optional() },
+    async ({ surface, url, sessionId, keepSession, sessionLabel, controlOffset, headful, readyWhen, readText, readTable }, extra) => {
+      if (surface !== "web" && (url || sessionId || keepSession || sessionLabel)) throw new Error("Only Web inspection accepts a URL override or retained session; Electron uses CDP and mobile uses its configured WebDriver server");
       if (readText && readTable) throw new Error("Choose one scoped read per inspection");
+      if (controlOffset !== undefined && (readText || readTable || surface === "mobile")) throw new Error("Targeted controls require Web/Electron and no other scoped read");
       if (surface === "mobile" && (readText || readTable)) throw new Error("Targeted rendered inspection currently supports Web and Electron only");
-      return result(await runner.inspectSurface({ adapter: surface, url: surfaceUrl(url, runner), readyWhen, readText, readTable, signal: extra.signal }));
+      return result(await runner.inspectSurface({ adapter: surface, url: surfaceUrl(url, runner), sessionId, keepSession, sessionLabel, controlOffset, headful, readyWhen, readText, readTable, signal: extra.signal }));
     },
   );
 
   server.tool(
     "interact_surface",
     'Perform exactly one exploratory Web/Electron action, then observe the resulting page in the same owned browser context. Prefer a unique control.selector returned by inspect_surface; after a click that reveals controls, follow next=inspect_surface when the compact observation is truncated. For repeated from/to or similar labels, use the full observation groupName and unique selector instead of guessing an nth position. If action.failureCode is surface-target-ambiguous or runner-action-timeout, inspect again and choose a new unique target instead of repeating the failed selector. selectOption targets a native single-select: action={"kind":"selectOption","selector":"#status","option":{"label":"Ready"}}. selectOptions replaces the entire native multiple-select set: action={"kind":"selectOptions","selector":"#statuses","options":[{"label":"Ready"},{"value":"pending"}]}; options=[] clears it. Read actual labels/values from the inspected page. Each option is an object with either label or value; string arrays and numeric indices are invalid. Use selectOptions when the inspected control has multiple=true; selectOption cannot operate that control. It saves a Run and evidence but always returns testVerdict=not-asserted; a click or form action needs sideEffects=allow in the test workspace. For product acceptance use run_test with a positive assertion and independent business Oracle when required.',
-    { surface: z.enum(["web", "electron"]).default("web"), url: z.string().url().optional(),
+    { surface: z.enum(["web", "electron"]).default("web"), url: z.string().url().optional(), headful: z.boolean().optional().describe("Web only: keep the exploratory browser visible"),
+      keepSession: z.boolean().optional().describe("Web only: keep this owned browser context for another action; returns sessionId"),
+      sessionId: z.string().uuid().optional().describe("Web only: reuse the sessionId returned by a previous interact_surface call"),
+      inspection: PlanningInspectionPinSchema.optional().describe("Guard this exploratory action with an original inspect_surface manifest pin from the same retained Web session"),
+      sessionLabel: z.string().trim().min(1).max(80).regex(/^[^\n]+$/).optional().describe("Human-readable session label only; not an account or credential assertion"),
       action: z.discriminatedUnion("kind", [
         z.object({ kind: z.literal("goto"), url: z.string().url() }),
-        z.object({ kind: z.literal("click"), selector: z.string().min(1).max(512) }),
-        z.object({ kind: z.literal("fill"), selector: z.string().min(1).max(512), value: z.string().max(4096) }),
-        z.object({ kind: z.literal("press"), selector: z.string().min(1).max(512), key: z.string().min(1).max(64) }),
+        SwitchPageActionSchema,
+        z.object({ kind: z.literal("click"), selector: z.string().min(1).max(512), observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional() }),
+        z.object({ kind: z.literal("fill"), selector: z.string().min(1).max(512), value: z.string().max(4096), observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional() }),
+        z.object({ kind: z.literal("press"), selector: z.string().min(1).max(512), key: z.string().min(1).max(64), observationId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional() }),
         SelectOptionActionSchema,
         SelectOptionsActionSchema,
         SetCheckedActionSchema,
+        WaitForValueActionSchema.extend({ value: z.string().max(4096) }),
         z.object({ kind: z.literal("waitForText"), text: z.string().min(1).max(512), timeoutMs: z.number().int().min(100).max(30_000).optional() }),
       ]) },
-    async ({ surface, url, action }, extra) => {
+    async ({ surface, url, headful, action, keepSession, sessionId, sessionLabel, inspection }, extra) => {
       if (surface === "electron" && (url || action.kind === "goto")) throw new Error("Electron interaction uses its configured application UI");
       const mapped = action.kind === "goto" ? { ...action, url: surfaceUrl(action.url, runner)! } : action;
-      return result(await runner.interactSurface({ adapter: surface, url: surfaceUrl(url, runner), action: mapped, signal: extra.signal }));
+      return result(await runner.interactSurface({ adapter: surface, url: surfaceUrl(url, runner), headful, action: mapped, signal: extra.signal, inspection,
+        ...(keepSession !== undefined ? { keepSession } : {}), ...(sessionId ? { sessionId } : {}), ...(sessionLabel ? { sessionLabel } : {}) }));
     },
+  );
+
+  server.tool(
+    "close_surface_session",
+    "Close an explicitly retained Web exploratory session and its browser context. Returns networkCapture with its metadata report, initial primary-page recording, optional first explicitly selected popup clip, bounded omission counts and pinned manifest. Session recording is enabled through sessions.recordVideo and finalized only on close. partial/unavailable means the capture cannot establish completeness. An idle session also expires automatically. If prepare_surface_session owns resources, close verifies their cleanup and returns the preparation Run ID and cleanup receipt; a failed close requires inspect_run_resources/recover_run_resources. Closing does not assert product correctness.",
+    { sessionId: z.string().uuid() },
+    async ({ sessionId }) => result(await runner.closeSurfaceSession(sessionId)),
+  );
+
+  server.tool(
+    "prepare_surface_session",
+    "Explicitly prepare connector-owned resources for an existing idle retained Web session. This is a write operation requiring operator opt-in, policies.sideEffects=allow, a versioned integration with a recovery hook, and a reviewed Web Charter permitting writes. The connector must register exact resource ownership before its first external write. Returns a preparation Run ID and not-asserted; it never proves a business outcome. Keep the session open while exploring; close_surface_session verifies cleanup. After interruption use inspect_run_resources and recover_run_resources on the preparation Run ID, never replay the write to guess whether it succeeded.",
+    { sessionId: z.string().uuid(), charter: TestCharterSchema },
+    async ({ sessionId, charter }, extra) => result(await runner.prepareSurfaceSession({ sessionId, charter, signal: extra.signal })),
+  );
+
+  server.tool(
+    "list_surface_sessions",
+    "List retained owned Web sessions and their live networkCapture segment IDs/status, including requested recording state, without exposing cookies, storage state or credentials. Labels are operator metadata only; reusable=false means the context is no longer safe to adopt. Network and optional primary/selected-page clips span calls but do not cover process downtime or establish action causality.",
+    {},
+    READ_ONLY_TOOL,
+    async () => result(await runner.listSurfaceSessions()),
   );
 
   server.tool(
@@ -114,8 +150,10 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       level: z.enum(["quick", "core", "release"]).optional(),
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
+      headful: z.boolean().optional().describe("Freeze visible Web execution into the Mission plan"),
+      sessionId: z.string().uuid().optional().describe("Web only: adopt a retained exploratory session for this Mission"),
     },
-    async ({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, surface, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result(await runner.createMission({ intent: missionIntent(intent, charter), charter, charterPath, charterSha256, charterId, suiteId, coverage, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy })),
+    async ({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, surface, url, expect, oracleNames, level, mode, sideEffectPolicy, headful, sessionId }, extra) => planningResult(() => runner.createMission({ intent: missionIntent(intent, charter), charter, charterPath, charterSha256, charterId, suiteId, coverage, surface, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy, headful, sessionId, signal: extra.signal })),
   );
 
   server.tool(
@@ -136,16 +174,19 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       oracleNames: z.array(z.string().min(1)).optional(),
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
+      headful: z.boolean().optional().describe("Freeze visible Web execution into the Mission plan"),
+      sessionId: z.string().uuid().optional().describe("Web only: adopt a retained exploratory session for this Mission"),
       autoApprove: z.boolean().default(true),
     },
-    async ({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, autoApprove }) => {
-      const mission = await runner.createMission({ intent: missionIntent(intent, charter), charter, charterPath, charterSha256, charterId, suiteId, coverage, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy });
+    async ({ intent, charter, charterPath, charterSha256, charterId, suiteId, coverage, level, surface, url, expect, oracleNames, mode, sideEffectPolicy, headful, sessionId, autoApprove }, extra) => planningResult(async () => {
+      const mission = await runner.createMission({ intent: missionIntent(intent, charter), charter, charterPath, charterSha256, charterId, suiteId, coverage, level, surface, url: surfaceUrl(url, runner), expect, oracleNames, mode, sideEffectPolicy, headful, sessionId, signal: extra.signal });
+      extra.signal.throwIfAborted();
       const readiness = missionReadiness(mission);
       const started = autoApprove && readiness.ready
         ? await runner.startMission(mission.missionId, { approve: true })
         : { mission, running: false };
-      return result(missionStartResponse(started, readiness));
-    },
+      return missionStartResponse(started, readiness);
+    }),
   );
 
   server.tool(
@@ -190,7 +231,7 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "get_mission_evidence",
-    "Read the current audited verdict, key findings and evidence links, and local HTML report. The default brief view includes omission counts; use detail=full for all saved traces and references. testVerdict can be inconclusive even when the historical verdict passed.",
+    "Read the current audited verdict, key findings and evidence links, and local HTML report. The default brief view includes omission counts and a bounded retained-session capture status. A Mission can finish before its retained session recording is sealed: if capture integrity is not-sealed, explicitly close_surface_session with the returned sessionId when no further interaction is needed, then call get_mission_evidence again and deliver the refreshed report. Do not claim the provisional report includes playable footage. use detail=full for all saved traces and references. testVerdict can be inconclusive even when the historical verdict passed.",
     { missionId: z.string().min(1), detail: z.enum(["brief", "full"]).default("brief") },
     async ({ missionId, detail }) => {
       const evidence = await runner.missionEvidence(missionId);
@@ -258,9 +299,10 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
 
   server.tool(
     "plan_test",
-    "Turn a natural-language intent into a validated, reviewable ProofKit Test Charter. Planning does not execute the project.",
+    "Return a Charter plus needs-input or ready-for-review status, structural gaps and action/reason next steps. Both statuses are not-asserted with executionStarted=false; ready-for-review does not establish environment, authentication, data readiness, evidence availability or business correctness. Planning observes the configured surface read-only when no snapshot or pinned inspections are supplied and never executes proposed interactions. A model may return needs-observation with an observationRequest instead of a Charter. Review its single-step proposal under the workspace action policy; with a retained Web session, pass its original source pin as interact_surface.inspection, inspect the resulting state, and retry plan_test with the returned observationRequest.continuation and only the additional inspection pins. The saved reference restores the original requirements and earlier pins; conflicting requirements, changed bytes and foreign workspaces are refused. Continuations are bounded to ten saved observation requests and ten states. Reused selectors require the correct observationId. Inspection pins use inspect_surface inspectionId and original manifest.sha256. The formal Charter must replay the whole workflow and independently verify its outcome.",
     {
-      intent: z.string().min(1),
+      intent: z.string().min(1).optional().describe("Required for a new plan; omit when resuming a saved continuation"),
+      charter: TestCharterSchema.optional().describe("Host-authored draft: validate and bind it to observed sources without invoking a second model provider"),
       coverage: TestCoverageSchema.optional(),
       url: z.string().url().optional(),
       expect: z.array(z.string().min(1)).optional(),
@@ -268,10 +310,23 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       level: z.enum(["quick", "core", "release"]).optional(),
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
       sideEffectPolicy: z.enum(["deny", "confirm", "allow"]).optional(),
+      surfaceSnapshot: SurfaceSnapshotSchema.optional().describe("Optional exact inspect_surface result; planned selectors are checked against it"),
+      inspections: PlanningInspectionPinSchema.array().min(1).max(10).optional().describe("Previously observed states: use each inspect_surface inspectionId as runId and its original manifest.sha256 as manifestSha256"),
+      continuation: PlanningContinuationPinSchema.optional().describe("Saved needs-observation continuation: restore original requirements and earlier inspection pins; supply only additional observations. Conflicting requirements are rejected."),
+      surface: z.enum(["web", "electron", "mobile"]).optional(),
+      sessionId: z.string().uuid().optional(),
+      keepSession: z.boolean().optional().describe("Web only: start a new retained read-only planning observation. Do not combine with sessionId, continuation, inspections or caller snapshot. Successful drafts and observation continuations return the sessionId; unexpected planning failure closes the newly owned context."),
+      sessionLabel: z.string().trim().min(1).max(80).regex(/^[^\r\n]+$/).optional().describe("Label for a newly retained planning context; requires keepSession=true"),
+      headful: z.boolean().optional(),
     },
-    async ({ intent, coverage, url, expect, oracleNames, level, mode, sideEffectPolicy }) => result({
-      charter: await runner.plan(intent, { coverage, url: surfaceUrl(url, runner), expect, oracleNames, level, mode, sideEffectPolicy }),
-    }),
+    async ({ intent, charter, coverage, url, expect, oracleNames, level, mode, sideEffectPolicy, surfaceSnapshot, inspections, continuation, surface, sessionId, keepSession, sessionLabel, headful }, extra) => {
+      if (surface && surface !== "web" && (url || sessionId || keepSession || sessionLabel)) throw new Error("Only Web planning accepts an entry URL or retained session");
+      return planningResult(async () => {
+        const planned = await runner.plan(intent, { charter, coverage, url: url ? surfaceUrl(url, runner) : undefined, expect, oracleNames, level, mode,
+          sideEffectPolicy, surfaceSnapshot, inspections, continuation, adapter: surface ?? (continuation ? undefined : "web"), sessionId, keepSession, sessionLabel, headful, signal: extra.signal });
+        return { ...summarizePlanReview(planned), charter: planned };
+      });
+    },
   );
 
   server.tool(
@@ -287,11 +342,13 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       oracleNames: z.array(z.string().min(1)).optional(),
       level: z.enum(["quick", "core", "release"]).optional(),
       mode: z.enum(["deterministic", "guided", "explore"]).optional(),
+      headful: z.boolean().optional().describe("Web only: launch the browser visibly for this Run"),
+      sessionId: z.string().uuid().optional().describe("Web only: reuse a retained exploratory session for this formal Run"),
       startProject: z.boolean().default(false),
       oracleUrl: z.string().url().optional(),
       oracleName: z.string().min(1).optional(),
     },
-    async ({ intent, charter, adapter, mobileServer, url, expect, oracleNames, level, mode, startProject, oracleUrl, oracleName }) => result(await runner.start({
+    async ({ intent, charter, adapter, mobileServer, url, expect, oracleNames, level, mode, headful, sessionId, startProject, oracleUrl, oracleName }) => result(await runner.start({
       intent,
       charter,
       adapter,
@@ -301,6 +358,8 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
       oracleNames,
       level,
       mode,
+      headful,
+      sessionId,
       start: startProject,
       oracleUrl: localOnlyUrl(oracleUrl),
       oracleName,
@@ -329,6 +388,13 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
   );
 
   server.tool(
+    "recover_session_capture",
+    "Finalize an orphaned retained-Web session evidence segment after its process owner disappeared. Requires the exact session ID and only closes a non-active capture owner. Network/event evidence may be sealed as partial; an interrupted recording is explicitly unavailable and is never promoted to playable complete footage. This returns context evidence with no product verdict and does not clean connector resources.",
+    { runId: z.string().regex(/^session-network-[a-f0-9-]{36}$/), sessionId: z.string().uuid() },
+    async ({ runId, sessionId }) => result(await runner.recoverSessionCapture(runId, sessionId)),
+  );
+
+  server.tool(
     "cancel_run",
     "Cancel a running ProofKit test. The run keeps its evidence and finishes with a cancelled verdict.",
     {
@@ -343,10 +409,35 @@ export function registerTools(server: McpServer, runner: LocalRunnerService): vo
     "Read bounded evidence from a completed or running ProofKit run. Use events for the timeline and summary for the verdict.",
     {
       runId: z.string().min(1),
-      section: z.enum(["summary", "events", "report"]).default("summary"),
+      section: z.enum(["summary", "events", "report", "manifest"]).default("summary"),
       maxChars: z.number().int().positive().max(100_000).default(20_000),
     },
-    async ({ runId, section, maxChars }) => result(await runner.evidenceFor(runId, section, maxChars)),
+    async ({ runId, section, maxChars }) => {
+      if (section === "manifest") await runner.evidenceManifest(runId);
+      return result(await runner.evidenceFor(runId, section, maxChars));
+    },
+  );
+
+  server.tool(
+    "verify_evidence_manifest",
+    "Verify a previously generated Run manifest, every listed evidence file and the current file inventory. Empty, malformed or oversized manifests remain unverified; unexpected files are reported separately. Without an expected manifest digest this checks local file consistency; provide the digest from the original handoff for stronger bundle verification.",
+    { runId: z.string().min(1), manifestSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional() },
+    READ_ONLY_TOOL,
+    async ({ runId, manifestSha256 }) => result(await runner.verifyEvidenceManifest(runId, manifestSha256)),
+  );
+
+  server.tool(
+    "approve_surface_replan",
+    "Review and optionally approve a selector-drift proposal. Without approve=true this only returns the verified proposal. With approve=true, selector must exactly match an observed candidate; ProofKit creates a replacement Charter linked to the source Run and starts a new replay Run.",
+    { runId: z.string().min(1), stepId: z.string().regex(/^step-\d{3}$/), selector: z.string().min(1).max(512), approve: z.boolean().default(false) },
+    async ({ runId, stepId, selector, approve }) => result(await runner.approveSurfaceReplan({ runId, stepId, selector, approve })),
+  );
+
+  server.tool(
+    "analyze_surface_replan_stability",
+    "Analyze approved selector replacements for one source Run. Requires replacement Run IDs that were explicitly replay-linked to that source; reports outcome distribution, selector repetition, approval latency and integrity gaps without inferring causality.",
+    { sourceRunId: z.string().min(1), replacementRunIds: z.array(z.string().min(1)).min(1).max(20) },
+    async ({ sourceRunId, replacementRunIds }) => result(await runner.analyzeSurfaceReplanStability(sourceRunId, replacementRunIds)),
   );
 
   server.tool(
@@ -412,6 +503,15 @@ async function awaitTestResult(runner: LocalRunnerService, missionId: string, ti
 
 function result(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
+}
+
+async function planningResult(operation: () => Promise<unknown>) {
+  try { return result(await operation()); }
+  catch (error) {
+    if (error instanceof PlannerConfigurationError) return result(error.receipt());
+    if (!(error instanceof PlanningObservationError)) throw error;
+    return result(error.receipt());
+  }
 }
 
 function missionReadiness(mission: TestMission): { ready: boolean; missing: string[]; acceptanceGaps: string[] } {

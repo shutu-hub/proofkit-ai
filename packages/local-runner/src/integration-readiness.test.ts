@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProofkitConfigSchema } from "@proofkit/contracts";
+import { ProofkitConfigSchema, TestCharterSchema } from "@proofkit/contracts";
+import { sha256 } from "@proofkit/evidence";
 import type { ProjectIntegration } from "@proofkit/runner";
 import { LocalRunnerService } from "./index.js";
 import { readWorkspaceCharterFile } from "./workspace-charter-file.js";
@@ -50,6 +51,49 @@ async function candidateFixture(readiness: ProjectIntegration["readiness"], over
 }
 
 describe("connector readiness trust boundary", () => {
+  it("checks a full submitted draft without saving or executing it and fingerprints the normalized content", async () => {
+    const readiness = vi.fn(async () => ({ passed: false, message: "Independent contact fields are not observable", evidence: { independentFieldsAvailable: false },
+      issues: [{ code: "independent-fields-unavailable", guidance: "Keep email and contactNumber required; provide an independent reader before creating bookings." }] }));
+    const { service, root, workspaceRoot, integration } = await fixture(readiness);
+    const charter = { intent: "Verify the full booking", level: "core" as const, surfaces: ["web" as const],
+      actions: [{ kind: "click" as const, selector: "#submit" }], oracles: ["full-booking"],
+      planning: { source: "submitted" as const, confidence: 0.8, missingInputs: ["Independent contacts"], evidenceGaps: ["booking-contact-fields"], assumptions: [] },
+      metadata: { requiredFields: ["roomId", "email", "contactNumber"] } };
+    const before = await readdir(join(workspaceRoot, ".proofkit"));
+    const result = await service.inspectIntegrationReadiness({ charter });
+    expect(result).toMatchObject({ status: "blocked", testVerdict: "not-asserted", level: "core", surfaces: ["web"],
+      draftSha256: sha256(JSON.stringify(TestCharterSchema.parse(charter))), check: { issues: [{ code: "independent-fields-unavailable" }] } });
+    expect(result.charterId).toBeUndefined(); expect(result.charterPath).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain('"requiredFields"');
+    expect(readiness).toHaveBeenCalledWith(expect.objectContaining({ charter: expect.objectContaining({
+      metadata: charter.metadata, planning: expect.objectContaining({ evidenceGaps: ["booking-contact-fields"] }) }) }));
+    expect(integration.preflight).not.toHaveBeenCalled(); expect(integration.setup).not.toHaveBeenCalled();
+    expect(await readdir(join(workspaceRoot, ".proofkit"))).toEqual(before);
+    expect(await readdir(root)).toEqual(["package.json"]);
+    const changed = await service.inspectIntegrationReadiness({ charter: { ...charter, metadata: { requiredFields: ["roomId"] } } });
+    expect(changed.draftSha256).not.toBe(result.draftSha256);
+  });
+
+  it("rejects oversized or unsurfaced drafts before calling the connector", async () => {
+    const readiness = vi.fn(async () => ({ passed: true, message: "ready" }));
+    const { service } = await fixture(readiness);
+    await expect(service.inspectIntegrationReadiness({ charter: { intent: "Draft without surface" } })).rejects.toThrow("surfaces");
+    await expect(service.inspectIntegrationReadiness({ charter: { intent: "Bounded draft", surfaces: ["web"], metadata: { large: "x".repeat(128 * 1024) } } })).rejects.toThrow("128 KiB");
+    expect(readiness).not.toHaveBeenCalled();
+  });
+
+  it("isolates a draft from caller mutation and refuses a connector-modified draft", async () => {
+    const source = { intent: "Immutable draft", surfaces: ["web" as const], metadata: { expected: { contact: "original" } } };
+    const readiness = vi.fn(async ({ charter }: Parameters<NonNullable<ProjectIntegration["readiness"]>>[0]) => {
+      source.metadata.expected.contact = "changed by caller";
+      expect(charter.metadata).toEqual({ expected: { contact: "original" } });
+      charter.intent = "Changed by connector";
+      charter.surfaces![0] = "electron";
+      return { passed: true, message: "ready" };
+    });
+    const { service } = await fixture(readiness);
+    expect(await service.inspectIntegrationReadiness({ charter: source })).toMatchObject({ status: "unavailable", testVerdict: "not-asserted", surfaces: ["web"] });
+  });
   it("checks the scope-pinned candidate and retains its platform and digest without creating execution records", async () => {
     const readiness = vi.fn(async () => ({ passed: true, message: "prerequisites met", evidence: {} }));
     const { service, root, workspaceRoot, integration, path, file } = await candidateFixture(readiness);

@@ -15,6 +15,7 @@ describe("MobileAdapter", () => {
     await expect(adapter.act({ kind: "selectOption", selector: "#status", option: { label: "Complete" } })).rejects.toThrow("not supported");
     await expect(adapter.act({ kind: "selectOptions", selector: "#statuses", options: [] })).rejects.toThrow("not supported");
     await expect(adapter.act({ kind: "setChecked", selector: "#enabled", checked: true })).rejects.toThrow("not supported");
+    await expect(adapter.act({ kind: "waitForValue", selector: "#street", value: "expected", timeoutMs: 1000, stableForMs: 200 })).rejects.toThrow("not supported");
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
   it("explicitly blocks browser file selection without calling the mobile driver", async () => {

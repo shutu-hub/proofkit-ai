@@ -17,7 +17,7 @@ describe("test catalog selection", () => {
     expect(selectCatalogCharter(entries, { intent: "测试简历重复上传", level: "core", surface: "web" }))
       .toMatchObject({ entry: { id: "resume-duplicate" }, matchedAlias: "简历重复上传" });
     expect(selectCatalogCharter(entries, { intent: "测试未知功能", level: "core", surface: "web" })).toBeUndefined();
-    expect(selectCatalogCharter(entries, { intent: "上线检查", level: "release", surface: "web" })).toBeUndefined();
+    expect(selectCatalogCharter(entries, { intent: "上线检查", level: "release", surface: "web" })).toMatchObject({ entry: { id: "release-web-only" } });
   });
 
   it("accepts an explicit ID only within its declared level and surface", () => {
@@ -32,7 +32,7 @@ describe("test catalog selection", () => {
     expect(() => selectCatalogCharter(tied, { intent: "简历获取", level: "core", surface: "web" })).toThrow("Ambiguous test catalog match");
     expect(() => selectCatalogCharter([...entries, entries[0]!], { intent: "简历获取", level: "core", surface: "web" })).toThrow("Duplicate test catalog ID");
     expect(() => selectCatalogCharter(entries, { intent: "先登录再测试简历获取", level: "core", surface: "web" })).toThrow("Ambiguous test catalog match");
-    expect(() => selectCatalogCharter(entries, { intent: "上线检查", level: "release", surface: "web", charterId: "release-web-only" })).toThrow("does not support");
+    expect(() => selectCatalogCharter(entries, { intent: "上线检查", level: "release", surface: "electron", charterId: "release-web-only" })).toThrow("does not support");
   });
 });
 

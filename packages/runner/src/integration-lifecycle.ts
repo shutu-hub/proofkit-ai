@@ -12,12 +12,14 @@ export type IntegrationSetupHandle = {
 };
 export type IntegrationSetupContext = IntegrationCleanupContext & {
   charter: TestCharter;
+  preparedSession?: { sessionId: string; preparationRunId: string };
   environment: "test" | "staging" | "local";
   projectRoot?: string;
   workspaceRoot?: string;
   emit: (event: Omit<RunEvent, "runId">) => Promise<void>;
+  registerResources?: (handle: IntegrationSetupHandle) => Promise<void>;
 };
-export type IntegrationSetup = (context: IntegrationSetupContext) => Promise<IntegrationSetupHandle | (() => void | Promise<void>) | undefined>;
+export type IntegrationSetup = (context: IntegrationSetupContext) => Promise<IntegrationSetupHandle | (() => void | Promise<void>) | void>;
 export type IntegrationSetupEntry = { setup: IntegrationSetup; policy?: IntegrationSetupPolicy };
 export type IntegrationRecoveryContext = IntegrationCleanupContext & {
   projectRoot: string;

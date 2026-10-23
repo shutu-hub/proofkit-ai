@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve } from "node:path";
-import { FixturePathSchema, type InputFileFact } from "@proofkit/contracts";
+import { FixturePathSchema, type InputFileFact, type SurfaceTargetCheck } from "@proofkit/contracts";
 export type { InputFileFact } from "@proofkit/contracts";
 
 /** One action may select at most 20 MiB in total, including all selected files. */
@@ -10,7 +10,7 @@ export const MAX_INPUT_FILE_BYTES = 20 * 1024 * 1024;
 
 /** Transient bytes never belong in a Charter, receipt, event or persisted Run. */
 export type ResolvedInputFile = InputFileFact & { buffer: Buffer };
-export type SurfaceActionContext = { inputFiles?: readonly ResolvedInputFile[]; signal?: AbortSignal };
+export type SurfaceActionContext = { inputFiles?: readonly ResolvedInputFile[]; signal?: AbortSignal; recordTargetCheck?: (check: SurfaceTargetCheck) => Promise<void> };
 
 export class InputFileError extends Error {}
 

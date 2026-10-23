@@ -35,6 +35,25 @@ async function fixture(body: (calls: number, id: string | null) => unknown) {
 }
 
 describe("configured response-bound business observation", () => {
+  it.each(["request-1", "550e8400-e29b-41d4-a716-446655440000", "CaseSensitive_ID:42"])("binds a declared string identifier %s without changing it", async (id) => {
+    const f = await fixture((_calls, supplied) => ({ data: { file_id: supplied, state: "complete" } }));
+    const saved = step(id);
+    if (saved.action.kind !== "captureResponse") throw new Error("Expected capture fixture");
+    saved.action.response.fields.fileId!.type = "identifier";
+    const result = await f.oracle.check(context([saved]));
+    expect(result.passed).toBe(true); expect(f.reads).toEqual([id]);
+    expect(result.evidence[0]).toContain('"scopeMatches":true');
+  });
+
+  it("does not coerce a number into a declared string identity", async () => {
+    const f = await fixture(() => ({ data: { file_id: "1", state: "complete" } }));
+    const saved = step();
+    if (saved.action.kind !== "captureResponse") throw new Error("Expected capture fixture");
+    saved.action.response.fields.fileId!.type = "identifier"; saved.response!.fields.fileId = 42;
+    await expect(Promise.resolve().then(() => f.oracle.check(context([saved])))).rejects.toBeInstanceOf(InconclusiveError);
+    expect(f.reads).toEqual([]);
+  });
+
   it.each(["9007199254740993", "42"])("queries only the captured ID %s and persists selected independent facts", async (id) => {
     const f = await fixture((_calls, requested) => ({ data: { file_id: id === "42" ? 42 : requested, state: "complete" }, private: "PRIVATE_RESPONSE_BODY" }));
     const result = await f.oracle.check(context([step(id)]));

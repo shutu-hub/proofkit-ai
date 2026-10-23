@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import type { Browser, BrowserContext, Locator, Page, Request, Response } from "playwright-core";
-import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceControl, SurfaceSnapshot } from "@proofkit/contracts";
+import type { Browser, BrowserContext, ElementHandle, Locator, Page, Request, Response } from "playwright-core";
+import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceControl, SurfaceSnapshot, VideoRecordingBudget, VideoRecordingStopReason } from "@proofkit/contracts";
 import { SurfaceTableReadRequestSchema, SurfaceTextReadRequestSchema, type SurfaceTableReadRequest, type SurfaceTextReadRequest } from "@proofkit/contracts";
 import type { AdapterEvent, SurfaceAdapter, SurfaceActionContext } from "@proofkit/runner";
 import { AmbiguousSurfaceTargetError, InconclusiveError, InvalidFileInputControlError } from "@proofkit/runner";
@@ -8,9 +8,15 @@ import { captureActionResponse } from "./response-capture.js";
 import { projectSurfaceUrl, sanitizeSurfaceText } from "./surface-sanitize.js";
 import { BenchmarkHarRecorder, type BenchmarkHarManifest, type BenchmarkHarOptions } from "./benchmark-har.js";
 import type { WebTaskSession } from "./web-task-session.js";
+import { WebVideoRecording, type WebVideoRecordingOptions } from "./web-video-recording.js";
+import { withWebActionTarget } from "./web-target.js";
+import { inspectWebPages, pageOrigin, selectWebPage } from "./web-pages.js";
+import { landmarkControlSelectors, nativeClassSelectors, observedRowName, rowControlSelectors, scopedControlSelectors, WEB_CONTROL_SELECTOR } from "./web-control-selectors.js";
+import { waitForWebFieldValue } from "./web-field-value.js";
 
 /** Process-local key keeps a saved source fingerprint from becoming a PII guessing oracle. */
 const TABLE_READ_FINGERPRINT_KEY = randomBytes(32);
+const SENSITIVE_SCREENSHOT_SELECTOR = 'input[type="password"], input[autocomplete~="one-time-code" i], input[autocomplete~="cc-number" i], input[autocomplete~="cc-csc" i], textarea[autocomplete~="one-time-code" i], [data-proofkit-mask]';
 
 export type WebAdapterOptions = {
   baseUrl?: string;
@@ -28,16 +34,26 @@ export type WebAdapterOptions = {
    * default 30 second timeout.
    */
   screenshotTimeoutMs?: number;
+  screenshotMaskSelectors?: string[];
   /** Raw, unsanitized HAR in a new external benchmark directory. No CDP attach. */
   benchmarkHar?: BenchmarkHarOptions;
   /** Trusted task owner only; a Run must not close or reset its borrowed context. */
   taskSession?: { session: WebTaskSession; runId: string };
+  recordVideo?: WebVideoRecordingOptions;
 };
 
 export class WebAdapter implements SurfaceAdapter {
+  readonly supportsControlWindows = true;
   readonly name: string = "web";
+  get executionVisibility(): "headful" | "headless" | "external" {
+    if (this.name === "electron" || this.options.cdpUrl) return "external";
+    if (this.options.taskSession) return this.options.taskSession.session.headless ? "headless" : "headful";
+    return this.options.headless === false ? "headful" : "headless";
+  }
   readonly supportsFileInputs = true;
   readonly supportsResponseCapture = true;
+  readonly supportsTargetExpectations = true;
+  get supportsPageSwitch(): boolean { return this.name === "web" && !this.options.cdpUrl; }
   protected browser?: Browser;
   protected context?: BrowserContext;
   protected activePage?: Page;
@@ -45,7 +61,9 @@ export class WebAdapter implements SurfaceAdapter {
   private eventSink?: (event: AdapterEvent) => void;
   private pendingEvents: AdapterEvent[] = [];
   private droppedPendingEvents = 0;
-  private detachPageEvents?: () => void;
+  private readonly requestIds = new WeakMap<Request, string>();
+  private nextRequestId = 0;
+  private readonly pageEventCleanups = new Map<Page, () => void>();
   private ownedContext = false;
   private harRecorder?: BenchmarkHarRecorder;
   private harManifest?: BenchmarkHarManifest;
@@ -55,12 +73,22 @@ export class WebAdapter implements SurfaceAdapter {
   private benchmarkCaptureStarted = false;
   private harCloseFailure?: "context-close-failed" | "browser-close-failed";
   private releaseTask?: () => void;
+  private selectTaskPage?: (page: Page) => void;
+  private recordingPage?: Page;
+  private videoStatus?: "recorded" | "partial" | "unavailable";
+  private videoRecording?: WebVideoRecording;
+  private contextClosing?: Promise<void>;
+  private captureNavigationRecovered = false;
 
   constructor(options: WebAdapterOptions = {}) {
     this.options = options;
+    this.videoStatus = options.recordVideo ? "unavailable" : undefined;
   }
 
   async connect(): Promise<void> {
+    if (this.options.recordVideo && (this.options.cdpUrl || this.options.taskSession || this.options.benchmarkHar || this.name !== "web")) {
+      throw new InconclusiveError("video-unsupported", "Video recording requires a new owned Web context without CDP or benchmark capture.");
+    }
     if (this.options.taskSession && (this.options.cdpUrl || this.options.benchmarkHar || this.name !== "web")) {
       throw new Error("Task sessions require Web without CDP or per-Run HAR");
     }
@@ -81,12 +109,15 @@ export class WebAdapter implements SurfaceAdapter {
   }
 
   private async connectBrowser(): Promise<void> {
+    this.contextClosing = undefined;
     this.pendingEvents = [];
     this.droppedPendingEvents = 0;
+    this.videoStatus = this.options.recordVideo ? "unavailable" : undefined;
     if (this.options.taskSession) {
       const borrowed = await this.options.taskSession.session.acquire(this.options.taskSession.runId);
       this.browser = borrowed.browser; this.context = borrowed.context; this.activePage = borrowed.page;
       this.releaseTask = borrowed.release;
+      this.selectTaskPage = borrowed.selectPage;
       this.checkConnectOpen();
       this.attachPageEvents(borrowed.page);
       return;
@@ -130,10 +161,20 @@ export class WebAdapter implements SurfaceAdapter {
     this.context = await this.browser.newContext(this.harRecorder ? {
       recordHar: { path: this.harRecorder.path, mode: "full", content: "embed" },
       serviceWorkers: "block",
-    } : {});
+    } : this.options.recordVideo ? { recordVideo: { dir: this.options.recordVideo.directory } } : {});
     this.ownedContext = true;
+    if (this.options.recordVideo) {
+      this.videoRecording = new WebVideoRecording(this.options.recordVideo, () => {
+        const context = this.context;
+        const browser = this.browser;
+        void this.closeOwnedContext(context).catch(() => browser?.close().catch(() => {}));
+        void this.close().catch(() => {});
+      });
+      this.videoRecording.attach(this.context);
+    }
     this.checkConnectOpen();
     this.activePage = this.context.pages()[0] ?? await this.context.newPage();
+    this.recordingPage = this.activePage;
     this.checkConnectOpen();
     this.attachPageEvents(this.activePage);
     if (this.options.baseUrl && (await this.activePage.url()) === "about:blank") {
@@ -151,20 +192,23 @@ export class WebAdapter implements SurfaceAdapter {
     await this.close();
   }
 
-  async discover(): Promise<SurfaceSnapshot> {
+  async discover(input?: { controlOffset?: number }): Promise<SurfaceSnapshot> {
     const snapshot = await this.snapshot();
     const page = this.page();
-    const { candidates, total } = await page.locator("button, input:not([type=hidden]), textarea, select, a[href], [role=button], [role=link], [role=textbox], [role=combobox], [role=checkbox], [role=radio]").evaluateAll((nodes) => {
+    const offset = input?.controlOffset ?? 0;
+    if (!Number.isInteger(offset) || offset < 0 || offset > 500) throw new Error("Invalid control window offset");
+    const { candidates, total } = await page.locator(WEB_CONTROL_SELECTOR).evaluateAll((nodes, start) => {
       const visible = nodes.filter((element) => element instanceof HTMLElement
+        && (element.tagName !== "TR" || element.hasAttribute("role") || element.tabIndex >= 0)
         && ((element instanceof HTMLInputElement && element.type === "file")
           || (element.getClientRects().length > 0
             && getComputedStyle(element).visibility !== "hidden"
             && element.getAttribute("aria-hidden") !== "true")));
-      const candidates = visible.slice(0, 60).map((element) => {
+      const candidates = visible.slice(start, start + 60).map((element) => {
         const html = element as HTMLElement;
         const tag = html.tagName.toLowerCase();
         const type = html.getAttribute("type")?.toLowerCase();
-        const role = type === "file" ? "file-input" : html.getAttribute("role") ?? (tag === "a" ? "link" : tag === "button" || type === "button" || type === "submit" ? "button"
+        const role = type === "file" ? "file-input" : html.getAttribute("role") ?? (tag === "tr" ? "row" : tag === "a" ? "link" : tag === "button" || type === "button" || type === "submit" ? "button"
           : type === "checkbox" ? "checkbox" : type === "radio" ? "radio" : tag === "select"
             ? html instanceof HTMLSelectElement && (html.multiple || html.size > 1) ? "listbox" : "combobox" : "textbox");
         const labelled = html instanceof HTMLInputElement || html instanceof HTMLTextAreaElement || html instanceof HTMLSelectElement
@@ -173,16 +217,45 @@ export class WebAdapter implements SurfaceAdapter {
           ? html.closest("fieldset")?.querySelector(":scope > legend") : undefined;
         const legendText = legend instanceof HTMLElement ? legend.innerText.trim() : undefined;
         const fieldsetLegend = legendText && legendText.length <= 512 ? legendText : undefined;
-        const name = [html.getAttribute("aria-label"), labelled, html.getAttribute("placeholder"), html.innerText, html.getAttribute("title")]
+        const rowText = tag === "tr" ? html.innerText.replace(/\s+/g, " ").trim() : undefined;
+        const tableRow = html instanceof HTMLTableRowElement ? html : undefined;
+        const tableHead = tableRow?.closest("table")?.tHead;
+        const headerCells = tableHead?.rows.length === 1 ? Array.from(tableHead.rows[0]!.cells) : [];
+        const simpleColumns = tableRow && headerCells.length === tableRow.cells.length
+          && [...headerCells, ...Array.from(tableRow.cells)].every((cell) => cell.colSpan === 1 && cell.rowSpan === 1);
+        const cellText = (cell: HTMLTableCellElement) => cell.getClientRects().length > 0
+          && getComputedStyle(cell).visibility !== "hidden" && cell.getAttribute("aria-hidden") !== "true" ? cell.innerText.replace(/\s+/g, " ").trim() : "";
+        const name = [html.getAttribute("aria-label"), labelled, html.getAttribute("placeholder"), rowText ?? html.innerText, html.getAttribute("title")]
           .find((value) => typeof value === "string" && value.trim().length > 0) ?? "";
         const testIdAttribute = html.hasAttribute("data-testid") ? "data-testid" : html.hasAttribute("data-test") ? "data-test" : undefined;
         const testId = testIdAttribute ? html.getAttribute(testIdAttribute) ?? undefined : undefined;
         const id = html.id || undefined;
+        const scopes: Array<{ tag: string; path: string[]; text: string }> = [];
+        const ancestorTags: string[] = [];
+        let ancestor = html.parentElement;
+        for (let depth = 0; ancestor && depth < 4; depth++, ancestor = ancestor.parentElement) {
+          ancestorTags.push(ancestor.tagName.toLowerCase());
+          if (scopes.length >= 3) continue;
+          const headings = [...ancestor.querySelectorAll("label, legend, h1, h2, h3, h4, h5, h6")].filter((node) => node instanceof HTMLElement
+            && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== "hidden" && node.getAttribute("aria-hidden") !== "true");
+          if (headings.length !== 1) continue;
+          const heading = headings[0] as HTMLElement;
+          const text = heading.innerText.trim();
+          if (!text || text.length > 120) continue;
+          const path: string[] = [];
+          let part: Element | null = heading;
+          while (part && part !== ancestor && path.length < 5) { path.unshift(part.tagName.toLowerCase()); part = part.parentElement; }
+          if (part === ancestor && path.length <= 4) scopes.push({ tag: ancestor.tagName.toLowerCase(), path, text });
+        }
         return { tag, role, inputType: tag === "input" ? type ?? "text" : undefined,
+          domIndex: nodes.indexOf(element),
           visible: html.getClientRects().length > 0 && getComputedStyle(html).visibility !== "hidden" && html.getAttribute("aria-hidden") !== "true",
           name: name.trim(), fieldsetLegend,
           domText: ["a", "button"].includes(tag) ? html.textContent?.trim() : undefined,
-          id, idSelector: id ? `#${CSS.escape(id)}` : undefined,
+          rowCells: tableRow ? Array.from(tableRow.cells).slice(0, 4).map(cellText) : undefined,
+          rowHeaders: simpleColumns ? headerCells.slice(0, 4).map(cellText) : undefined,
+          id, idSelector: id ? `#${CSS.escape(id)}` : undefined, ancestorTags,
+          classTokens: Array.from(html.classList).slice(0, 12), scopes,
           testId, testIdAttribute, disabled: html.matches(":disabled") || html.getAttribute("aria-disabled") === "true",
           nativeForm: html instanceof HTMLSelectElement ? { kind: "select" as const, multiple: html.multiple,
             optionCount: html.options.length, selectedCount: html.selectedOptions.length }
@@ -190,10 +263,12 @@ export class WebAdapter implements SurfaceAdapter {
               ? { kind: "checkable" as const, checked: html.checked } : undefined };
       });
       return { candidates, total: visible.length };
-    });
+    }, offset);
+    if (offset > total || total > 50_000) throw new InconclusiveError("surface-control-read-range", "Requested control window is outside the bounded visible control list.");
     const controls: SurfaceControl[] = [];
+    const usedSelectors = new Set<string>();
     for (const candidate of candidates) {
-      const rawName = candidate.name.slice(0, 120);
+      const rawName = observedRowName(candidate.name, candidate.rowHeaders, candidate.rowCells).slice(0, 120);
       const name = sanitizeSurfaceText(rawName, 120);
       const groupName = candidate.fieldsetLegend
         ? sanitizeSurfaceText(candidate.fieldsetLegend, candidate.fieldsetLegend.length).slice(0, 120) : "";
@@ -208,7 +283,7 @@ export class WebAdapter implements SurfaceAdapter {
       if (candidate.idSelector && candidate.id && sanitizeSurfaceText(candidate.id, 120) === candidate.id) {
         selectors.push({ value: candidate.idSelector, kind: "id" });
       }
-      if (rawName && name === rawName && ["button", "link", "textbox", "combobox", "listbox", "checkbox", "radio"].includes(candidate.role)) {
+      if (rawName && name === rawName && ["button", "link", "textbox", "combobox", "listbox", "checkbox", "radio", "row"].includes(candidate.role)) {
         selectors.push({ value: `role=${candidate.role}[name=${JSON.stringify(rawName)}]`, kind: "role" });
       }
       // CSS text-transform can change innerText without changing DOM text or the
@@ -223,11 +298,23 @@ export class WebAdapter implements SurfaceAdapter {
         selectors.push({ value: `${candidate.tag}:has(:text-is(${JSON.stringify(domText)})):visible`, kind: "css" });
       }
       if (candidate.inputType === "file") selectors.push({ value: 'input[type="file"]', kind: "css" });
+      selectors.push(...rowControlSelectors(candidate.tag, candidate.rowCells).map((value) => ({ value, kind: "css" as const })));
+      selectors.push(...nativeClassSelectors(candidate.tag, candidate.classTokens).map((value) => ({ value, kind: "css" as const })));
+      selectors.push(...scopedControlSelectors(candidate.tag, candidate.scopes, selectors.map((selector) => selector.value))
+        .map((value) => ({ value, kind: "css" as const })));
+      selectors.push(...landmarkControlSelectors(candidate.ancestorTags, selectors.map((selector) => selector.value))
+        .map((value) => ({ value, kind: "css" as const })));
       for (const selector of selectors) {
+        if (usedSelectors.has(selector.value)) continue;
         if (await page.locator(selector.value).count().catch(() => 0) !== 1) continue;
-        control.selector = selector.value;
-        control.selectorKind = selector.kind;
-        break;
+        const original = await page.locator(WEB_CONTROL_SELECTOR).nth(candidate.domIndex).elementHandle({ timeout: 250 }).catch(() => null);
+        const matchesOriginal = original ? await page.locator(selector.value).evaluate((element, expected) => element === expected, original, { timeout: 500 }).catch(() => false) : false;
+        await original?.dispose();
+        if (!matchesOriginal) continue;
+        usedSelectors.add(selector.value);
+        if (!control.selector) { control.selector = selector.value; control.selectorKind = selector.kind; }
+        else control.alternateSelectors = [...(control.alternateSelectors ?? []), selector.value];
+        if (control.alternateSelectors?.length === 2) break;
       }
       if (control.nativeForm) {
         control.nativeActions = control.selector && control.visible && !control.disabled
@@ -235,7 +322,9 @@ export class WebAdapter implements SurfaceAdapter {
       }
       controls.push(control);
     }
-    return { ...snapshot, controls, controlsTruncated: total > candidates.length,
+    return { ...snapshot, controls, controlsTruncated: offset > 0 || offset + candidates.length < total,
+      ...(input?.controlOffset !== undefined ? { controlWindow: { scope: "rendered-main-frame-controls" as const, offset, limit: 60 as const, total,
+        returned: candidates.length, nextOffset: offset + candidates.length < total && offset + candidates.length <= 500 ? offset + candidates.length : null, allControlsObserved: offset === 0 && total <= 60 } } : {}),
       frameCount: page.frames().length, metadata: { ...snapshot.metadata, controlScope: "main-frame", includesHiddenFileInputs: true } };
   }
 
@@ -349,6 +438,8 @@ export class WebAdapter implements SurfaceAdapter {
       url: projected.value,
       title: sanitizeSurfaceText(title, 200),
       text: sanitizeSurfaceText(text, 20_000),
+      ...(this.name === "web" && this.context && (this.ownedContext || this.options.taskSession)
+        ? await inspectWebPages(this.context, page, this.options.taskSession?.session.origin ?? pageOrigin(this.options.baseUrl ?? url), this.options.routePatterns) : {}),
       metadata: { adapter: this.name, urlPathEvidence: projected.pathEvidence,
         matchedRoutePaths: matchDeclaredRoutePaths(url, this.options.routePatterns ?? []),
         ...(fileDocumentSha256 ? { fileDocumentSha256 } : {}) },
@@ -360,34 +451,52 @@ export class WebAdapter implements SurfaceAdapter {
     const startedAt = new Date().toISOString();
     const started = Date.now();
     const urlBefore = page.url();
+    const titleBefore = action.kind === "switchPage" ? sanitizeSurfaceText(await page.title().catch(() => ""), 200) : undefined;
     let response;
     let nativeForm;
+    let formValue;
     switch (action.kind) {
+      case "switchPage": {
+        if (this.name !== "web" || !this.context || (!this.ownedContext && !this.options.taskSession)) throw new InconclusiveError("surface-page-unsupported", "Page switching requires an owned Web context or retained Web session.");
+        const origin = this.options.taskSession?.session.origin ?? pageOrigin(this.options.baseUrl ?? page.url());
+        const selected = await selectWebPage(this.context, action.title, origin, action.timeoutMs, context?.signal);
+        await selected.bringToFront();
+        context?.signal?.throwIfAborted();
+        if (selected.isClosed() || pageOrigin(selected.url()) !== origin || await selected.title().catch(() => "") !== action.title) throw new InconclusiveError("surface-page-changed", "Selected page changed while being focused.");
+        this.selectTaskPage?.(selected);
+        this.activePage = selected;
+        this.attachPageEvents(selected);
+        break;
+      }
       case "goto":
         await page.goto(action.url, { waitUntil: "domcontentloaded" });
         break;
       case "click":
-        await (await uniqueActionLocator(page, action.selector)).click();
+        await withWebActionTarget(page, action.selector, action.expectedTarget, context, (target) => target.click({ timeout: 10_000 }));
         break;
       case "fill":
         if (typeof action.value !== "string") throw new Error("Fill environment reference must be resolved by the runner");
-        await (await uniqueActionLocator(page, action.selector)).fill(action.value);
+        await withWebActionTarget(page, action.selector, action.expectedTarget, context, (target) => target.fill(action.value as string, { timeout: 10_000 }));
         break;
       case "press":
-        await (await uniqueActionLocator(page, action.selector)).press(action.key);
+        await withWebActionTarget(page, action.selector, action.expectedTarget, context, (target) => target.press(action.key, { timeout: 10_000 }));
         break;
       case "selectOption":
       case "selectOptions":
       case "setChecked":
-        nativeForm = await actNativeForm(page, action, context?.signal);
+        nativeForm = await withWebActionTarget(page, action.selector, action.expectedTarget, context, (target) => actNativeForm(target, action, context?.signal));
+        break;
+      case "waitForValue":
+        formValue = await waitForWebFieldValue(page, action, context);
         break;
       case "captureResponse": {
         response = await captureActionResponse(page, action, async ({ signal, remainingTimeoutMs }) => {
-          const locator = await uniqueActionLocator(page, action.trigger.selector, "visible", remainingTimeoutMs());
-          signal.throwIfAborted();
-          const timeout = remainingTimeoutMs();
-          if (action.trigger.kind === "click") await locator.click({ timeout });
-          else await locator.press(action.trigger.key, { timeout });
+          await withWebActionTarget(page, action.trigger.selector, action.trigger.expectedTarget, context, async (target) => {
+            signal.throwIfAborted();
+            const timeout = remainingTimeoutMs();
+            if (action.trigger.kind === "click") await target.click({ timeout });
+            else await target.press(action.trigger.key, { timeout });
+          }, "visible", remainingTimeoutMs());
           if (action.followUp) {
             const followUp = page.locator(action.followUp.selector).filter({ visible: true });
             try {
@@ -401,7 +510,8 @@ export class WebAdapter implements SurfaceAdapter {
             const count = await followUp.count();
             if (count !== 1) throw new InconclusiveError("follow-up-ambiguous", `Follow-up selector matched ${count} elements`);
             signal.throwIfAborted();
-            await followUp.click({ timeout: remainingTimeoutMs() });
+            await withWebActionTarget(page, action.followUp.selector, action.followUp.expectedTarget, context,
+              (target) => target.click({ timeout: remainingTimeoutMs() }), "visible", remainingTimeoutMs());
             return "clicked";
           }
         }, context?.signal);
@@ -413,10 +523,11 @@ export class WebAdapter implements SurfaceAdapter {
           throw new Error("File fixtures must be resolved by the runner");
         }
         // Upload libraries commonly hide the native input behind a styled button.
-        const input = await uniqueActionLocator(page, action.selector, "attached");
-        const isFileInput = await input.evaluate((element) => element instanceof HTMLInputElement && element.type === "file");
-        if (!isFileInput) throw new InvalidFileInputControlError();
-        await input.setInputFiles(files.map(({ name, mimeType, buffer }) => ({ name, mimeType, buffer })));
+        await withWebActionTarget(page, action.selector, action.expectedTarget, context, async (input) => {
+          const isFileInput = await input.evaluate((element) => element instanceof HTMLInputElement && element.type === "file");
+          if (!isFileInput) throw new InvalidFileInputControlError();
+          await input.setInputFiles(files.map(({ name, mimeType, buffer }) => ({ name, mimeType, buffer })));
+        }, "attached");
         break;
       }
       case "waitForText":
@@ -430,7 +541,8 @@ export class WebAdapter implements SurfaceAdapter {
         throw new Error("Capability actions are executed by the runner");
     }
     const projectedBefore = projectSurfaceUrl(urlBefore, this.options.routePatterns);
-    const projectedAfter = projectSurfaceUrl(page.url(), this.options.routePatterns);
+    const afterPage = this.page();
+    const projectedAfter = projectSurfaceUrl(afterPage.url(), this.options.routePatterns);
     return {
       actionId: `${action.kind}-${started}`,
       kind: action.kind,
@@ -439,9 +551,10 @@ export class WebAdapter implements SurfaceAdapter {
       durationMs: Date.now() - started,
       urlBefore: projectedBefore.value,
       urlAfter: projectedAfter.value,
-      titleAfter: sanitizeSurfaceText(await page.title().catch(() => ""), 200),
+      titleAfter: sanitizeSurfaceText(await afterPage.title().catch(() => ""), 200),
       metadata: { adapter: this.name, urlBeforePathEvidence: projectedBefore.pathEvidence,
-        urlAfterPathEvidence: projectedAfter.pathEvidence, ...(response ? { response } : {}), ...(nativeForm ? { nativeForm } : {}) },
+        ...(action.kind === "switchPage" ? { pageSelection: { method: "exact-title-same-origin", titleBefore, titleAfter: sanitizeSurfaceText(await afterPage.title().catch(() => ""), 200) } } : {}),
+        urlAfterPathEvidence: projectedAfter.pathEvidence, ...(response ? { response } : {}), ...(nativeForm ? { nativeForm } : {}), ...(formValue ? { formValue } : {}) },
     };
   }
 
@@ -469,11 +582,34 @@ export class WebAdapter implements SurfaceAdapter {
   }
 
   async capture(_label: string): Promise<Uint8Array | undefined> {
-    return this.page().screenshot({
-      type: "png",
-      timeout: this.options.screenshotTimeoutMs ?? 5_000,
-      animations: "disabled",
+    const page = this.page();
+    this.captureNavigationRecovered = false;
+    const timeoutMs = this.options.screenshotTimeoutMs ?? 5_000;
+    const deadline = Date.now() + timeoutMs;
+    const originalUrl = page.url();
+    const originalOrigin = new URL(originalUrl).origin;
+    const maskedScreenshot = (budget: number) => page.screenshot({
+      type: "png", timeout: Math.max(1, Math.min(budget, deadline - Date.now())), animations: "disabled",
+      mask: [page.locator(SENSITIVE_SCREENSHOT_SELECTOR), ...(this.options.screenshotMaskSelectors ?? []).map((selector) => page.locator(selector))],
+      maskColor: "#1D2330",
     });
+    try { return await maskedScreenshot(Math.max(1, timeoutMs - 1_000)); }
+    catch (error) {
+      if (!(error instanceof Error) || !/(?:Execution context was destroyed, most likely because of a navigation|Page\.captureScreenshot\): Not attached to an active page)/i.test(error.message)
+        && !(error.name === "TimeoutError" && page.url() !== originalUrl)
+        || deadline - Date.now() < 100 || page.isClosed() || new URL(page.url()).origin !== originalOrigin) throw error;
+      await page.waitForLoadState("domcontentloaded", { timeout: deadline - Date.now() });
+      if (deadline - Date.now() < 100 || page.isClosed() || new URL(page.url()).origin !== originalOrigin) throw error;
+      const screenshot = await maskedScreenshot(deadline - Date.now());
+      this.captureNavigationRecovered = true;
+      return screenshot;
+    }
+  }
+
+  takeCaptureNavigationRecovery(): boolean {
+    const recovered = this.captureNavigationRecovered;
+    this.captureNavigationRecovered = false;
+    return recovered;
   }
 
   async subscribeEvents(listener: (event: AdapterEvent) => void): Promise<() => void> {
@@ -488,8 +624,7 @@ export class WebAdapter implements SurfaceAdapter {
     }
     return () => {
       if (this.eventSink === listener) this.eventSink = undefined;
-      this.detachPageEvents?.();
-      this.detachPageEvents = undefined;
+      this.detachAllPageEvents();
     };
   }
 
@@ -505,16 +640,25 @@ export class WebAdapter implements SurfaceAdapter {
     return closing;
   }
 
+  private closeOwnedContext(context: BrowserContext | undefined): Promise<void> {
+    if (!context) return this.contextClosing ?? Promise.resolve();
+    this.contextClosing ??= context.close();
+    return this.contextClosing;
+  }
+
   private async closeBrowser(): Promise<void> {
     const browser = this.browser;
     const context = this.context;
+    const video = this.options.recordVideo ? (this.recordingPage ?? this.activePage)?.video() : undefined;
     const ownedContext = this.ownedContext;
+    await this.videoRecording?.stop();
     this.browser = undefined;
     this.context = undefined;
     this.activePage = undefined;
+    this.recordingPage = undefined;
+    this.selectTaskPage = undefined;
     this.ownedContext = false;
-    this.detachPageEvents?.();
-    this.detachPageEvents = undefined;
+    this.detachAllPageEvents();
     this.eventSink = undefined;
     this.pendingEvents = [];
     this.droppedPendingEvents = 0;
@@ -525,8 +669,13 @@ export class WebAdapter implements SurfaceAdapter {
     let closeError: unknown;
     let closeFailure: "context-close-failed" | "browser-close-failed" | undefined;
     try {
-      if (ownedContext) await context?.close();
+      if (ownedContext) await this.closeOwnedContext(context);
     } catch (error) { closeError = error; closeFailure = "context-close-failed"; }
+    if (this.options.recordVideo && closeFailure) await browser?.close().catch(() => {});
+    if (this.options.recordVideo && ownedContext) {
+      await this.videoRecording?.finish(video, !closeFailure);
+      this.videoStatus = this.videoRecording?.status ?? "unavailable";
+    }
     try { await browser?.close(); }
     catch (error) { closeError ??= error; closeFailure ??= "browser-close-failed"; }
     this.harCloseFailure ??= closeFailure;
@@ -545,16 +694,41 @@ export class WebAdapter implements SurfaceAdapter {
     return this.harManifest ? { ...this.harManifest, recording: { ...this.harManifest.recording } } : undefined;
   }
 
+  recordingStatus(): "recorded" | "partial" | "unavailable" | undefined {
+    return this.videoStatus;
+  }
+
+  recordingStopReason(): VideoRecordingStopReason | undefined {
+    return this.videoRecording?.stopReason ?? this.options.taskSession?.session.recordingStopReason();
+  }
+
+  recordingBudget(): VideoRecordingBudget | undefined {
+    return this.videoRecording?.budget ?? this.options.taskSession?.session.recordingBudget();
+  }
+
   protected page(): Page {
+    if (this.recordingStopReason()) throw new InconclusiveError("video-recording-budget", `Recording stopped: ${this.recordingStopReason()}.`);
     if (!this.activePage) throw new Error("Web adapter is not connected");
     return this.activePage;
   }
 
   private attachPageEvents(page: Page): void {
-    this.detachPageEvents?.();
-    const onRequest = (request: Request) => this.recordPageEvent({ type: "request", payload: { method: request.method(), url: request.url() } });
-    const onResponse = (response: Response) => this.recordPageEvent({ type: "response", payload: { method: response.request().method(), status: response.status(), url: response.url() } });
+    for (const [attached, cleanup] of this.pageEventCleanups) {
+      if (attached.isClosed()) { cleanup(); this.pageEventCleanups.delete(attached); }
+    }
+    if (this.pageEventCleanups.has(page)) return;
+    const requestId = (request: Request) => {
+      let id = this.requestIds.get(request);
+      if (!id) {
+        id = `request-${++this.nextRequestId}`;
+        this.requestIds.set(request, id);
+      }
+      return id;
+    };
+    const onRequest = (request: Request) => this.recordPageEvent({ type: "request", payload: { requestId: requestId(request), method: request.method(), url: request.url() } });
+    const onResponse = (response: Response) => this.recordPageEvent({ type: "response", payload: { requestId: requestId(response.request()), method: response.request().method(), status: response.status(), url: response.url() } });
     const onRequestFailed = (request: Request) => this.recordPageEvent({ type: "requestfailed", payload: {
+      requestId: requestId(request),
       method: request.method(),
       url: request.url(),
       errorText: request.failure()?.errorText,
@@ -566,13 +740,18 @@ export class WebAdapter implements SurfaceAdapter {
     page.on("response", onResponse);
     page.on("console", onConsole);
     page.on("pageerror", onPageError);
-    this.detachPageEvents = () => {
+    this.pageEventCleanups.set(page, () => {
       page.off("request", onRequest);
       page.off("requestfailed", onRequestFailed);
       page.off("response", onResponse);
       page.off("console", onConsole);
       page.off("pageerror", onPageError);
-    };
+    });
+  }
+
+  private detachAllPageEvents(): void {
+    for (const cleanup of this.pageEventCleanups.values()) cleanup();
+    this.pageEventCleanups.clear();
   }
 
   private recordPageEvent(event: AdapterEvent): void {
@@ -601,9 +780,8 @@ async function uniqueActionLocator(page: Page, selector: string, state: "visible
 }
 
 /** Native controls only. Never guess an option, force a click, or persist option contents. */
-async function actNativeForm(page: Page, action: Extract<Action, { kind: "selectOption" | "selectOptions" | "setChecked" }>, signal?: AbortSignal) {
+async function actNativeForm(control: ElementHandle<HTMLElement | SVGElement>, action: Extract<Action, { kind: "selectOption" | "selectOptions" | "setChecked" }>, signal?: AbortSignal) {
   signal?.throwIfAborted();
-  const control = await uniqueActionLocator(page, action.selector);
   signal?.throwIfAborted();
   if (!await control.isEnabled()) throw new InconclusiveError("native-control-disabled", "Native form control is disabled; no action was performed.");
   if (action.kind === "setChecked") {
@@ -626,17 +804,13 @@ async function actNativeForm(page: Page, action: Extract<Action, { kind: "select
       try {
         const label = activation.asElement();
         if (label) {
-          const input = await control.elementHandle();
-          try {
-            signal?.throwIfAborted();
-            if (!input || !await label.evaluate((element, input) => element instanceof HTMLLabelElement
-              && element.control === input, input)) {
-              throw new InconclusiveError("native-state-unverified", "Native label association changed before activation.");
-            }
-            if (!await control.isEnabled()) throw new InconclusiveError("native-control-disabled", "Native form control is disabled; no action was performed.");
+          signal?.throwIfAborted();
+          if (!await label.evaluate((element, input) => element instanceof HTMLLabelElement && element.control === input, control)) {
+            throw new InconclusiveError("native-state-unverified", "Native label association changed before activation.");
+          }
+          if (!await control.isEnabled()) throw new InconclusiveError("native-control-disabled", "Native form control is disabled; no action was performed.");
             // Another UI event may already have achieved the requested state while scrolling.
-            if (await control.isChecked() !== action.checked) await label.click({ timeout: 10_000 });
-          } finally { await input?.dispose(); }
+          if (await control.isChecked() !== action.checked) await label.click({ timeout: 10_000 });
         } else {
           if (await activation.jsonValue() === "ambiguous") {
             throw new InconclusiveError("native-label-match", "Multiple native labels cover the control; no action was performed.");

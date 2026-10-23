@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -261,35 +261,58 @@ describe("LocalRunnerService", () => {
     expect(completed.findings.some((finding) => finding.message.includes("独立业务 Oracle"))).toBe(true);
   });
 
-  it("keeps a surface and business pass inconclusive when planning evidence is incomplete", async () => {
+  it("blocks before execution when planning evidence is incomplete", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-planning-gate-"));
     roots.push(root);
     const service = new LocalRunnerService({ workspaceRoot: root, root });
     const assertion = { kind: "text-visible" as const, text: "ready" };
     const charter: TestCharter = {
       intent: "verify fixture", level: "core", mode: "deterministic", preconditions: [], actions: [],
-      assertions: [assertion], oracles: ["fixture-terminal"], sideEffectPolicy: "deny", metadata: {},
-      planning: { source: "deterministic", confidence: 0.25, assumptions: [], missingInputs: ["完整项目地图"], evidenceGaps: ["project-map-truncated"] },
+      assertions: [assertion], oracles: [], sideEffectPolicy: "deny", metadata: {},
+      planning: { source: "deterministic", confidence: 0.25, assumptions: [], missingInputs: ["独立业务 Oracle"], evidenceGaps: ["business-oracle"] },
     };
     const now = new Date().toISOString();
-    const summary: RunSummary = {
-      runId: "planning-gate-run", startedAt: now, endedAt: now, status: "completed", verdict: "passed", charter,
-      steps: [], assertions: [{ assertion, passed: true, message: "ready", evidence: ["planning-gate-run/after.json"] }],
-      oracles: [{ name: "fixture-terminal", passed: true, message: "complete", evidence: ["planning-gate-run/source.json"], sourceEvidenceCount: 1, sourceEvidenceArtifacts: ["planning-gate-run/source.json"], observedAt: now }],
-      artifacts: ["planning-gate-run/after.json", "planning-gate-run/source.json"], findings: [],
-    };
-    service.start = async () => ({ runId: summary.runId, status: "completed", verdict: summary.verdict, summary });
-    service.wait = async () => summary;
-    installMockRunEvidence(service);
-
     const created = await service.createMission({ intent: charter.intent, surface: "web", charter });
     await service.startMission(created.missionId, { approve: true });
     const completed = await service.waitMission(created.missionId);
 
-    expect(completed.verdict).toBe("inconclusive");
+    expect(completed.status).toBe("blocked");
+    expect(completed.verdict).toBe("blocked");
     expect(completed.firstFailure?.kind).toBe("evidence");
-    expect(completed.findings.some((finding) => finding.message.includes("project-map-truncated"))).toBe(true);
-    expect((await service.missionEvidence(created.missionId)).planning?.evidenceGaps).toEqual(["project-map-truncated"]);
+    expect(completed.findings.some((finding) => finding.message.includes("business-oracle"))).toBe(true);
+    expect((await service.missionEvidence(created.missionId)).planning?.evidenceGaps).toEqual(["business-oracle"]);
+  });
+
+  it("rejects direct intent execution before creating a Run when deterministic planning lacks acceptance", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-direct-intent-gate-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ root, workspaceRoot: root });
+    await expect(service.start({ intent: "测试新增一条记录，刷新后验证内容仍然存在", adapter: "web", url: "http://127.0.0.1:1", start: false }))
+      .rejects.toMatchObject({ name: "PlanningRequirementsError", issues: expect.arrayContaining([expect.stringContaining("surface-assertion"), expect.stringContaining("business-oracle")]) });
+    expect(await readdir(join(root, ".proofkit"))).toEqual(expect.arrayContaining(["config.yaml"]));
+    expect((await readdir(join(root, ".proofkit"))).filter((name) => name === "runs")).toHaveLength(0);
+    await expect(readdir(join(root, ".proofkit", "runs"))).rejects.toThrow();
+  });
+
+  it("returns planner configuration readiness before creating a Run", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-planner-not-ready-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ root, workspaceRoot: root,
+      config: ProofkitConfigSchema.parse({ planning: { provider: "openai-compatible", timeoutMs: 1000 } }) });
+    await expect(service.start({ intent: "快速查看准备页", level: "quick", adapter: "web", url: "http://127.0.0.1:1", start: false, expect: ["Ready"] }))
+      .rejects.toMatchObject({ name: "PlannerConfigurationError" });
+    await expect(readdir(join(root, ".proofkit", "runs"))).rejects.toThrow();
+  });
+
+  it("executes the exact preflight Charter without replanning the direct intent", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-direct-intent-reuse-"));
+    roots.push(root);
+    const service = new LocalRunnerService({ root, workspaceRoot: root });
+    const started = await service.start({ intent: "快速查看准备页", level: "quick", adapter: "web", url: "http://127.0.0.1:1", start: false, expect: ["Ready"] });
+    const summary = await service.wait(started.runId);
+    expect(summary.charter.assertions).toEqual([{ kind: "text-visible", text: "Ready" }]);
+    expect(summary.status).toBe("completed");
+    expect(summary.verdict).not.toBe("passed");
   });
 
   it("does not let a negative case supply the primary run's missing business oracle", async () => {
@@ -1082,7 +1105,7 @@ describe("LocalRunnerService", () => {
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("No model server port");
     const config = ProofkitConfigSchema.parse({ planning: { provider: "openai-compatible", baseUrl: `http://127.0.0.1:${address.port}/v1`, model: "test-model" }, surfaces: { web: { baseUrl: "http://127.0.0.1:5173" } } });
-    const charter = await new LocalRunnerService({ workspaceRoot: root, root, config }).plan("check resume");
+    const charter = await new LocalRunnerService({ workspaceRoot: root, root, config }).plan("check resume", { surfaceSnapshot: { capturedAt: new Date().toISOString(), controls: [], metadata: {} } });
     expect(modelCalled).toBe(true);
     expect(charter.assertions).toEqual([{ kind: "text-visible", text: "Resume ready" }]);
     expect(charter.metadata.planner).toBe("openai-compatible");
@@ -1094,13 +1117,14 @@ describe("LocalRunnerService", () => {
     const config = ProofkitConfigSchema.parse({ surfaces: { web: { baseUrl: "http://127.0.0.1:5173" } }, oracles: [{ name: "resume", url: "http://127.0.0.1:8080/status", statusPointer: "/data/status", successValues: ["done"] }] });
     let actions: unknown[] = [{ kind: "goto", url: "http://127.0.0.1:5173/resumes" }, { kind: "observe" }];
     const service = new LocalRunnerService({ workspaceRoot: root, root, config, plannerProvider: { name: "fake-model", async plan() { return { intent: "test resume", actions, assertions: [{ kind: "text-visible", text: "Resume ready" }], oracles: ["resume"], sideEffectPolicy: "confirm" }; } } });
-    const valid = await service.plan("test resume");
+    const planningOptions = { surfaceSnapshot: { capturedAt: new Date().toISOString(), controls: [], metadata: {} } };
+    const valid = await service.plan("test resume", planningOptions);
     expect(valid.oracles).toEqual(["resume"]);
     expect(valid.metadata.planner).toBe("fake-model");
     actions = [{ kind: "click", selector: "#delete" }];
-    await expect(service.plan("test resume")).rejects.toThrow("outside the allowed action kinds");
+    await expect(service.plan("test resume", planningOptions)).rejects.toThrow("outside the allowed action kinds");
     actions = [{ kind: "goto", url: "https://example.com" }];
-    await expect(service.plan("test resume")).rejects.toThrow("outside the approved origin");
+    await expect(service.plan("test resume", planningOptions)).rejects.toThrow("outside the approved origin");
   });
 
   it("rejects an unregistered charter oracle before browser execution", async () => {
@@ -1139,9 +1163,8 @@ describe("LocalRunnerService", () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-local-"));
     roots.push(root);
     const service = new LocalRunnerService({ workspaceRoot: root, root, restrictWebOrigins: true });
-    const started = await service.start({ intent: "open external", url: "https://example.com" });
-    await expect(service.wait(started.runId)).rejects.toThrow("outside the configured origin");
-    await expect(readFile(join(root, ".proofkit", "runs", started.runId, "run.json"), "utf8")).rejects.toThrow();
+    await expect(service.start({ intent: "open external", url: "https://example.com" })).rejects.toThrow("outside the configured origin");
+    await expect(readdir(join(root, ".proofkit", "runs"))).rejects.toThrow();
   });
 
   it("does not start a configured shell command from MCP mode", async () => {
@@ -1178,7 +1201,7 @@ describe("LocalRunnerService", () => {
         },
       },
     });
-    const started = await service.start({ intent: "observe" });
-    await expect(service.wait(started.runId)).rejects.toThrow("cannot execute project.start");
+    await expect(service.start({ intent: "observe" })).rejects.toMatchObject({ name: "PlanningRequirementsError" });
+    await expect(readdir(join(root, ".proofkit", "runs"))).rejects.toThrow();
   });
 });

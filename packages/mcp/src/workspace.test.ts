@@ -63,6 +63,9 @@ describe("MCP external workspace", () => {
       const readinessSelection = { charterPath: candidatePath, charterSha256: candidate.sha256 };
       const readiness = payload(await client.callTool({ name: "inspect_integration_readiness", arguments: readinessSelection }));
       expect(readiness).toMatchObject({ ...readinessSelection, status: "ready", testVerdict: "not-asserted", surfaces: ["web"] });
+      const draftReadiness = payload(await client.callTool({ name: "inspect_integration_readiness", arguments: { charter } }));
+      expect(draftReadiness).toMatchObject({ status: "ready", testVerdict: "not-asserted", surfaces: ["web"], draftSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+      expect(draftReadiness.charterId).toBeUndefined(); expect(draftReadiness.charterPath).toBeUndefined();
       expect(vi.mocked(WebAdapter.prototype.connect)).not.toHaveBeenCalled();
       expect(await readdir(join(workspaceRoot, ".proofkit"))).toEqual(["charters", "config.yaml", "integration.mjs"]);
       for (const argumentsValue of [{}, { charterPath: candidatePath }, { ...readinessSelection, charterId: "other" }]) {

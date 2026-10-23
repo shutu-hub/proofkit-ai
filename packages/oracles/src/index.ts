@@ -1,8 +1,11 @@
 import { request } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { sha256 } from "@proofkit/evidence";
-import type { CaptureResponseAction, OracleResult, ProofkitConfig, StepResult } from "@proofkit/contracts";
+import type { CaptureResponseAction, HttpFieldCheck, HttpFieldExpectation, OracleResult, ProofkitConfig, StepResult } from "@proofkit/contracts";
+import { HttpFieldValueSchema, ResponseIdentifierSchema } from "@proofkit/contracts";
 import { InconclusiveError, type BusinessOracle } from "@proofkit/runner";
+
+export type HttpOracleFacts = Record<string, string | number | boolean | null | HttpFieldCheck[]>;
 
 export type HttpOracleOptions = {
   name: string;
@@ -12,7 +15,7 @@ export type HttpOracleOptions = {
   headers?: Record<string, string>;
   check?: (body: unknown, response: { status: number; headers: Record<string, string> }) => boolean | Promise<boolean>;
   describe?: (body: unknown) => string;
-  facts?: (body: unknown) => Record<string, string | number | boolean | null>;
+  facts?: (body: unknown, response: { status: number; headers: Record<string, string> }) => HttpOracleFacts;
   signal?: AbortSignal;
 };
 
@@ -20,7 +23,7 @@ export type PollHttpOracleOptions = Omit<HttpOracleOptions, "check" | "describe"
   intervalMs?: number;
   deadlineMs: number;
   evaluate: (body: unknown, response: { status: number; headers: Record<string, string> }) => "pending" | "passed" | "failed" | Promise<"pending" | "passed" | "failed">;
-  facts?: (body: unknown) => Record<string, string | number | boolean | null>;
+  facts?: HttpOracleOptions["facts"];
 };
 
 export function configuredHttpOracle(config: ProofkitConfig["oracles"][number]): BusinessOracle {
@@ -31,7 +34,7 @@ export function configuredHttpOracle(config: ProofkitConfig["oracles"][number]):
   }
   return {
     name: config.name,
-    check(context) {
+    async check(context) {
       const url = new URL(config.url);
       const matches: Array<{ parameter: string; value: string; pointer: string; type: CaptureResponseAction["response"]["fields"][string]["type"] }> = [];
       for (const [parameter, binding] of Object.entries(config.query)) {
@@ -50,7 +53,7 @@ export function configuredHttpOracle(config: ProofkitConfig["oracles"][number]):
         if (values.some((value) => value === undefined)) return null;
         return values.every((value, index) => value === matches[index]?.value);
       };
-      return pollHttpOracle({
+      const result = await pollHttpOracle({
         name: config.name,
         url: url.toString(),
         expectedStatus: config.expectedStatus,
@@ -62,13 +65,18 @@ export function configuredHttpOracle(config: ProofkitConfig["oracles"][number]):
           if (!scoped) return "failed";
           const value = jsonPointer(body, config.statusPointer);
           if (typeof value !== "string") return "pending";
-          if (success.has(value)) return "passed";
+          if (success.has(value)) {
+            const fields = checkHttpFields(body, config.expectFields ?? []);
+            if (fields.some((field) => field.result === "mismatch")) return "failed";
+            if (fields.some((field) => field.result !== "matched")) return "pending";
+            return "passed";
+          }
           if (failure.has(value)) return "failed";
           return "pending";
         },
-        facts: (body) => {
+        facts: (body, response) => {
           const value = jsonPointer(body, config.statusPointer);
-          const facts: Record<string, string | number | boolean | null> = {
+          const facts: HttpOracleFacts = {
             state: typeof value === "string" && (success.has(value) || failure.has(value)) ? value : "pending",
           };
           if (matches.length) facts.scopeMatches = scopeMatches(body);
@@ -76,12 +84,31 @@ export function configuredHttpOracle(config: ProofkitConfig["oracles"][number]):
             facts[`expected_${match.parameter}`] = match.value;
             facts[`observed_${match.parameter}`] = normalizeResponseScalar(jsonPointer(body, match.pointer), match.type) ?? null;
           }
+          if (config.expectFields) facts.fieldChecks = response.status === config.expectedStatus && (!matches.length || scopeMatches(body) === true)
+            ? checkHttpFields(body, config.expectFields)
+            : config.expectFields.map((field) => ({ name: field.name, pointer: field.pointer, result: "not-evaluated" }));
           return facts;
         },
         signal: context.signal,
       }).check(context);
+      return config.expectFields && result.passed === null ? { ...result,
+        message: config.name + ": identity, terminal state or required field observations were not established within " + config.deadlineMs + "ms" } : result;
     },
   };
+}
+
+export function checkHttpFields(body: unknown, fields: HttpFieldExpectation[]): HttpFieldCheck[] {
+  return fields.map(({ name, pointer, expected, retainValue }) => {
+    const observed = jsonPointer(body, pointer);
+    let result: HttpFieldCheck["result"];
+    if (observed === undefined) result = "missing";
+    else if ((expected === null ? observed !== null : observed === null || typeof observed !== typeof expected)
+      || typeof observed === "string" && (observed.length > 256 || /[\x00-\x1f]/.test(observed))
+      || typeof observed === "number" && !Number.isFinite(observed)) result = "type-mismatch";
+    else result = observed === expected ? "matched" : "mismatch";
+    const retained = retainValue ? HttpFieldValueSchema.safeParse(observed) : undefined;
+    return { name, pointer, result, ...(retained?.success ? { observed: retained.data } : {}) };
+  });
 }
 
 function readResponseField(steps: StepResult[], stepId: string, field: string): {
@@ -100,6 +127,10 @@ function readResponseField(steps: StepResult[], stepId: string, field: string): 
 }
 
 function normalizeResponseScalar(value: unknown, type: CaptureResponseAction["response"]["fields"][string]["type"]): string | undefined {
+  if (type === "identifier") {
+    const parsed = ResponseIdentifierSchema.safeParse(value);
+    return parsed.success ? parsed.data : undefined;
+  }
   if (type === "id") {
     if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) value = String(value);
     return typeof value === "string" && /^[1-9]\d{0,127}$/.test(value) ? value : undefined;
@@ -183,7 +214,7 @@ export function httpOracle(options: HttpOracleOptions): BusinessOracle {
           : isExplicitNegativeStatusCheck && !hasBusinessPredicate
           ? `HTTP oracle ${options.name} expected status ${expectedStatus}, observed ${response.status}.`
           : `HTTP oracle failed: ${options.name} (status ${response.status}, predicate ${contentPassed ? "passed" : "failed"})`,
-        evidence: [JSON.stringify({ status: response.status, bodySha256: sha256(JSON.stringify(response.body)), ...(!accessUnavailable && options.facts ? { facts: options.facts(response.body) } : {}) })],
+        evidence: [JSON.stringify({ status: response.status, bodySha256: sha256(JSON.stringify(response.body)), ...(!accessUnavailable && options.facts ? { facts: options.facts(response.body, response) } : {}) })],
         observedAt: new Date().toISOString(),
       };
     },
@@ -205,10 +236,17 @@ export function pollHttpOracle(options: PollHttpOracleOptions): BusinessOracle {
     async check(context): Promise<OracleResult> {
       const deadline = Date.now() + options.deadlineMs;
       let attempts = 0;
+      let omittedObservations = 0;
       const observations: Array<Record<string, unknown>> = [];
+      const traceBytes = (items: Array<Record<string, unknown>>) => Buffer.byteLength(JSON.stringify({ oracle: options.name,
+        facts: [{ attempts, omittedObservations, observations: items }] }, null, 2));
       const record = (observation: Record<string, unknown>) => {
-        observations.push({ at: new Date().toISOString(), ...observation });
-        if (observations.length > 100) observations.shift();
+        const next = { at: new Date().toISOString(), ...observation };
+        if (traceBytes([next]) > 60 * 1024) throw new Error("HTTP oracle source observation exceeds its evidence bound");
+        observations.push(next);
+        while (observations.length > 1 && (observations.length > 100 || traceBytes(observations) > 60 * 1024)) {
+          observations.shift(); omittedObservations++;
+        }
       };
       while (Date.now() < deadline) {
         throwIfAborted(context.signal);
@@ -219,17 +257,17 @@ export function pollHttpOracle(options: PollHttpOracleOptions): BusinessOracle {
           const state = response.status === (options.expectedStatus ?? 200)
             ? await options.evaluate(response.body, response)
             : "pending";
-          const facts = options.facts?.(response.body);
+          const facts = options.facts?.(response.body, response);
           record({ status: response.status, state, bodySha256: sha256(JSON.stringify(response.body)), ...(facts ? { facts } : {}) });
           if (state === "passed" || state === "failed") {
-            return { name: options.name, passed: state === "passed", message: `${options.name}: ${state} after ${attempts} observation(s)`, evidence: [JSON.stringify({ attempts, observations })], observedAt: new Date().toISOString() };
+            return { name: options.name, passed: state === "passed", message: `${options.name}: ${state} after ${attempts} observation(s)`, evidence: [JSON.stringify({ attempts, omittedObservations, observations })], observedAt: new Date().toISOString() };
           }
         } catch (error) {
           record({ observationError: error instanceof Error ? error.name : "Error" });
         }
         await waitOrAbort(Math.min(intervalMs, Math.max(0, deadline - Date.now())), context.signal);
       }
-      return { name: options.name, passed: null, message: `${options.name}: terminal state not observed within ${options.deadlineMs}ms`, evidence: [JSON.stringify({ attempts, observations })], observedAt: new Date().toISOString() };
+      return { name: options.name, passed: null, message: `${options.name}: terminal state not observed within ${options.deadlineMs}ms`, evidence: [JSON.stringify({ attempts, omittedObservations, observations })], observedAt: new Date().toISOString() };
     },
   };
 }
@@ -284,12 +322,20 @@ async function waitOrAbort(delayMs: number, signal: AbortSignal | undefined): Pr
     await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
     return;
   }
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, delayMs);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason instanceof Error ? signal.reason : new Error("HTTP oracle cancelled"));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      timer = setTimeout(resolve, delayMs);
+      onAbort = () => {
+        if (timer) clearTimeout(timer);
+        reject(signal.reason instanceof Error ? signal.reason : new Error("HTTP oracle cancelled"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
 }

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { MissionResultSchema, type EvidenceRef, type MissionProofClassification, type MissionResult } from "@proofkit/contracts";
+import { MissionResultSchema, RunSummarySchema, type EvidenceRef, type MissionProofClassification, type MissionResult } from "@proofkit/contracts";
 import { MissionReportStore } from "./mission-report.js";
 
 const roots: string[] = [];
@@ -46,6 +46,246 @@ async function file(path: string, content = "fact"): Promise<string> {
 }
 
 describe("Mission report", () => {
+  it.each([34, 205])("shows late planned operations without exceeding the action bound for %i actions", async (count) => {
+    const workspace = await root();
+    const actions = Array.from({ length: count }, () => ({ kind: "observe" as const }));
+    const summary = RunSummarySchema.parse({ runId: "run-1", workspaceRoot: workspace, projectRoot: "/source", startedAt: now,
+      status: "completed", verdict: "inconclusive", charter: { intent: "Checkout with late independent evidence", actions },
+      steps: actions.slice(0, 33).map((action, index) => ({ stepId: "step-" + String(index + 1).padStart(3, "0"), action, status: "passed" })) });
+    summary.charter.actions[32] = { kind: "captureResponse", name: "invoice-created", trigger: { kind: "click", selector: "#private-confirm",
+      expectedTarget: { observedAt: now, tag: "button", role: "button", name: "Confirm order", groupName: "" } },
+      response: { url: "http://localhost/invoices", method: "POST", statuses: [201], fields: { invoiceId: { pointer: "/id", type: "identifier" } } },
+      requestWindowMs: 500, timeoutMs: 10000 };
+    summary.charter.actions[20] = { kind: "fill", selector: "#private-field", value: "PRIVATE_LATE_INPUT_VALUE" };
+    const bytes = JSON.stringify(summary);
+    const source = await file(join(workspace, ".proofkit/runs/run-1/run.json"), bytes);
+    const report = await file(join(workspace, ".proofkit/runs/run-1/report.html"), "original detailed report");
+    const input = result(workspace, [{ ...ref(source, createHash("sha256").update(bytes).digest("hex")), kind: "snapshot" },
+      { ...ref(report, createHash("sha256").update("original detailed report").digest("hex")), kind: "report" }]);
+    const store = new MissionReportStore(workspace);
+    const markup = await readFile(await store.writeReport(input), "utf8");
+    expect(markup).toContain("#step-033"); expect(markup).toContain("Submit and capture selected API facts · Confirm order");
+    expect(markup).toContain("#step-034"); expect(markup).toContain("status-not-run");
+    expect(markup).not.toContain("PRIVATE_LATE_INPUT_VALUE"); expect(markup).not.toContain("#private-confirm");
+    if (count > 200) {
+      expect(markup).toContain("#step-200"); expect(markup).not.toContain("#step-201");
+      expect(markup).toContain("5 later planned action(s) omitted from this overview.");
+    } else expect(markup).not.toContain("later planned action(s) omitted from this overview.");
+    await writeFile(source, bytes.replace("Confirm order", "Forged late operation"));
+    const changed = await readFile(await store.writeReport(input), "utf8");
+    expect(changed).toContain("Workflow details are withheld"); expect(changed).not.toContain("Confirm order"); expect(changed).not.toContain("Forged late operation");
+  });
+  it("shows original workflow actions and checks while withholding altered source details and images", async () => {
+    const workspace = await root();
+    const runPath = join(workspace, ".proofkit", "runs", "run-1");
+    const summary = RunSummarySchema.parse({ runId: "run-1", workspaceRoot: workspace, projectRoot: "/source", startedAt: now, endedAt: now,
+      status: "completed", verdict: "passed", charter: { intent: "Save note", actions: [
+        { kind: "fill", selector: "#private", value: "DO_NOT_DISPLAY_THIS_VALUE", expectedTarget: { observedAt: now, tag: "input", role: "textbox", name: "Note", groupName: "" } },
+        { kind: "click", selector: "#save", expectedTarget: { observedAt: now, tag: "button", role: "button", name: "Save note", groupName: "" } },
+        { kind: "waitForText", text: "Later expected text" }], assertions: [] },
+      steps: [{ stepId: "step-001", action: { kind: "fill", selector: "#private", value: "DO_NOT_DISPLAY_THIS_VALUE" }, status: "passed", artifacts: ["run-1/artifacts/step-001.png"] },
+        { stepId: "step-002", action: { kind: "click", selector: "#save" }, status: "passed" }],
+      assertions: [{ assertion: { kind: "text-visible", text: "Note saved" }, passed: true, message: "Visible", evidence: [] }],
+      oracles: [{ name: "current-note", passed: true, verificationKind: "business", message: "Stored", evidence: [] }] });
+    const source = JSON.stringify(summary);
+    const sourcePath = await file(join(runPath, "run.json"), source);
+    const image = await file(join(runPath, "artifacts", "step-001.png"), "original pixels");
+    const report = await file(join(runPath, "report.html"), "original report");
+    const input = result(workspace, [{ ...ref(sourcePath, createHash("sha256").update(source).digest("hex")), kind: "snapshot" },
+      { ...ref(image, createHash("sha256").update("original pixels").digest("hex")), kind: "screenshot" },
+      { ...ref(report, createHash("sha256").update("original report").digest("hex")), kind: "report" }]);
+    const store = new MissionReportStore(workspace);
+    const intact = await readFile(await store.writeReport(input), "utf8");
+    expect(intact).toContain("Workflow actions and checks");
+    expect(intact).toContain("Fill input · Note");
+    expect(intact).toContain("Click · Save note");
+    expect(intact).toContain("Expected visible text: Note saved");
+    expect(intact).toContain("current-note · Business: <strong>passed");
+    expect(intact).toContain("not-run");
+    expect(intact).toContain("#step-001");
+    expect(intact).toContain('class="workflow-image"');
+    expect(intact).toContain("img-src 'self' file:");
+    expect(intact).not.toContain("DO_NOT_DISPLAY_THIS_VALUE");
+    await writeFile(image, "changed pixels");
+    const changedImage = await readFile(await store.writeReport(input), "utf8");
+    expect(changedImage).toContain("Click · Save note");
+    expect(changedImage).not.toContain('class="workflow-image"');
+    await writeFile(sourcePath, source.replaceAll("Save note", "Forged operation"));
+    const changedSource = await readFile(await store.writeReport(input), "utf8");
+    expect(changedSource).toContain("Workflow details are withheld");
+    expect(changedSource).not.toContain("Click · Save note");
+    expect(changedSource).not.toContain("Forged operation");
+  });
+
+  it("does not turn a workflow presentation byte limit into an acceptance integrity failure", async () => {
+    const workspace = await root();
+    const summary = RunSummarySchema.parse({ runId: "run-1", workspaceRoot: workspace, projectRoot: "/source", startedAt: now, status: "completed",
+      charter: { intent: "Large source", metadata: { context: "x".repeat(4 * 1024 * 1024) } } });
+    const source = JSON.stringify(summary);
+    const sourcePath = await file(join(workspace, ".proofkit", "runs", "run-1", "run.json"), source);
+    const input = result(workspace, [{ ...ref(sourcePath, createHash("sha256").update(source).digest("hex")), kind: "snapshot" }]);
+    const saved = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(saved.integrity.references.unavailable).toBe(0);
+    expect(await readFile(saved.path, "utf8")).toContain("outside the bounded detail view");
+  });
+
+  it.each([1, 2])("rechecks %i planning-state sources independently of business acceptance references", async (sourceCount) => {
+    const workspace = await root();
+    const inspectionId = "inspection-1";
+    const paths = ["artifacts/step-001-after.json", "report.html", "manifest.json"];
+    const sources = await Promise.all(Array.from({ length: sourceCount }, async (_, index) => {
+      const runId = index === 0 ? inspectionId : `inspection-${index + 1}`;
+      const evidence = await Promise.all(paths.map(async (path) => {
+        const target = await file(join(workspace, ".proofkit", "runs", runId, path), path);
+        return { ...ref(target, createHash("sha256").update(path).digest("hex")), kind: "snapshot" as const };
+      }));
+      return { evidence, state: { capturedAt: now, controlsTruncated: false, source: { runId,
+        manifestSha256: evidence[2]!.sha256!, snapshotPath: `${runId}/artifacts/step-001-after.json`, snapshotSha256: evidence[0]!.sha256! } } };
+    }));
+    const evidence = sources.flatMap((source) => source.evidence);
+    const input = result(workspace);
+    input.planningObservation = { status: "verified", reason: "Original planning source verified", evidence,
+      observation: sourceCount === 1 ? sources[0]!.state : { capturedAt: now, controlsTruncated: false, sources: sources.map((source) => source.state) } };
+    const store = new MissionReportStore(workspace);
+    const intact = await store.writeReportSnapshot(input);
+    expect(intact.integrity.references.total).toBe(0);
+    expect(await readFile(intact.path, "utf8")).toContain(`../../runs/${inspectionId}/report.html`);
+    for (const source of sources) expect(await readFile(intact.path, "utf8")).toContain(`../../runs/${source.state.source.runId}/report.html`);
+    for (const ref of evidence) {
+      const saved = await readFile(ref.path); await writeFile(ref.path, "changed planning context");
+      const changed = await store.writeReportSnapshot(input);
+      expect(changed.result.planningObservation).toMatchObject({ status: "unverified", evidence: [] });
+      expect(changed.result.testVerdict).toBe(intact.result.testVerdict);
+      expect(changed.integrity.references).toEqual(intact.integrity.references);
+      expect(await readFile(changed.path, "utf8")).not.toContain(`href="../../runs/${inspectionId}/`);
+      for (const source of sources) expect(await readFile(changed.path, "utf8")).not.toContain(`href="../../runs/${source.state.source.runId}/`);
+      await writeFile(ref.path, saved);
+    }
+    input.planningObservation.evidence = [];
+    expect((await store.writeReportSnapshot(input)).result.planningObservation?.status).toBe("unverified");
+  });
+
+  it.each(["recorded", "partial"] as const)("presents verified %s session video separately and withdraws links after evidence changes", async (status) => {
+    const workspace = await root();
+    const captureId = "session-network-00000000-0000-4000-8000-000000000001";
+    const paths = ["run.json", "report.html", "events.jsonl", "artifacts/recording.webm", "manifest.json"];
+    const evidence = await Promise.all(paths.map(async (path): Promise<EvidenceRef> => {
+      const target = await file(join(workspace, ".proofkit", "runs", captureId, path), path);
+      return { ...ref(target, createHash("sha256").update(path).digest("hex")), kind: path.endsWith(".webm") ? "video" : "other" };
+    }));
+    const input = result(workspace);
+    input.sessionCaptures = { omittedSegments: 1, segments: [{ runId: captureId, sessionId: "00000000-0000-4000-8000-000000000001", integrity: "intact", reason: "Original local seal verified",
+      capture: { runId: captureId, status: "partial", closed: true, events: 10, omittedEvents: 2, unresolvedRequests: 1, networkEnabled: true,
+        recording: { status, artifact: `${captureId}/artifacts/recording.webm`, ...(status === "partial" ? { stopReason: "duration-limit" as const } : {}) } }, evidence }] };
+    const store = new MissionReportStore(workspace);
+    const intact = await store.writeReportSnapshot(input);
+    const markup = await readFile(intact.path, "utf8");
+    expect(markup).toContain("Session evidence");
+    expect(markup).toContain("Capture completeness: partial");
+    if (status === "partial") expect(markup).toContain("Recording stopped: duration-limit. Requested evidence is incomplete.");
+    expect(markup).toContain("10 event(s) · 2 omitted · 1 unresolved");
+    expect(markup).toContain(`<video controls preload="metadata"`);
+    expect(markup).toContain(`../../runs/${captureId}/artifacts/recording.webm`);
+    expect(markup).toContain("media-src 'self' file:");
+    expect(intact.integrity.references.total).toBe(0);
+    for (const artifact of evidence) {
+      const original = await readFile(artifact.path);
+      await writeFile(artifact.path, "changed");
+      const changed = await store.writeReportSnapshot(input);
+      const rendered = await readFile(changed.path, "utf8");
+      expect(changed.result.sessionCaptures?.segments[0]).toMatchObject({ integrity: "unverified", evidence: [] });
+      expect(rendered).not.toContain("<video");
+      expect(rendered).not.toContain(`href="../../runs/${captureId}/`);
+      expect(changed.result.testVerdict).toBe(intact.result.testVerdict);
+      expect(changed.integrity).toEqual({ ...intact.integrity, checkedAt: changed.integrity.checkedAt });
+      await writeFile(artifact.path, original);
+    }
+  });
+
+  it("presents every verified selected clip without treating footage as business acceptance", async () => {
+    const workspace = await root();
+    const runId = "session-network-00000000-0000-4000-8000-000000000001";
+    const paths = ["run.json", "report.html", "events.jsonl", "artifacts/recording.webm", "artifacts/selected-page-001.webm", "artifacts/selected-page-002.webm", "manifest.json"];
+    const evidence = await Promise.all(paths.map(async (item): Promise<EvidenceRef> => {
+      const target = await file(join(workspace, ".proofkit", "runs", runId, item), item);
+      return { ...ref(target, createHash("sha256").update(item).digest("hex")), kind: item.endsWith(".webm") ? "video" : "other" };
+    }));
+    const input = result(workspace);
+    input.sessionCaptures = { omittedSegments: 0, segments: [{ runId, sessionId: "00000000-0000-4000-8000-000000000001", integrity: "intact", reason: "Original capture verified",
+      capture: { runId, status: "sealed", closed: true, events: 0, omittedEvents: 0, unresolvedRequests: 0, networkEnabled: false,
+        recording: { status: "recorded", artifact: `${runId}/artifacts/recording.webm`, selectedPages: { observed: 2, artifacts: [`${runId}/artifacts/selected-page-001.webm`, `${runId}/artifacts/selected-page-002.webm`], omitted: 0 } } }, evidence }] };
+    const store = new MissionReportStore(workspace);
+    const intact = await store.writeReportSnapshot(input);
+    expect(intact.integrity.references.total).toBe(0);
+    expect((await readFile(intact.path, "utf8")).match(/<video /g)).toHaveLength(3);
+    expect(await readFile(intact.path, "utf8")).toContain("Video pixels are not redacted and may contain sensitive data");
+    const selectedPath = evidence.find((entry) => entry.path.endsWith("selected-page-002.webm"))!.path;
+    await writeFile(selectedPath, "tampered window");
+    const changed = await store.writeReportSnapshot(input);
+    expect(changed.result.sessionCaptures!.segments[0]).toMatchObject({ evidence: [], integrity: "unverified" });
+    expect(changed.result.testVerdict).toBe(intact.result.testVerdict);
+    expect(await readFile(changed.path, "utf8")).not.toContain("<video");
+  });
+
+  it("rechecks frozen prior-session evidence without counting it as Mission acceptance proof", async () => {
+    const workspace = await root();
+    const current = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "fact.json"));
+    const previous = await file(join(workspace, ".proofkit", "runs", "prior-run", "artifacts", "step-001.png"), "prior pixels");
+    const digest = (content: string) => createHash("sha256").update(content).digest("hex");
+    const input = result(workspace, [ref(current, digest("fact"))]);
+    input.sessionContext = { sessionId: "00000000-0000-4000-8000-000000000001", capturedAt: now, omittedRuns: 1,
+      runs: [{ runId: "prior-run", startedAt: now, evidence: [{ ...ref(previous, digest("prior pixels")), kind: "screenshot" }] }] };
+    const store = new MissionReportStore(workspace);
+    const intact = await store.writeReportSnapshot(input);
+    const markup = await readFile(intact.path, "utf8");
+    expect(markup).toContain("Prior session context");
+    expect(markup).toContain("they are not execution or business proof for this Mission");
+    expect(markup).toContain("../../runs/prior-run/artifacts/step-001.png");
+    expect(markup).toContain("1 prior Run(s) omitted or unavailable");
+    expect(intact.integrity.references).toMatchObject({ total: 1, intact: 1 });
+    await writeFile(previous, "changed pixels");
+    const changed = await store.writeReportSnapshot(input);
+    expect(await readFile(changed.path, "utf8")).toContain("Screenshot unavailable or changed");
+    expect(changed.integrity.references).toMatchObject({ total: 1, intact: 1 });
+    expect(changed.result.testVerdict).toBe(intact.result.testVerdict);
+    expect(changed.result.sessionContext).toEqual(input.sessionContext);
+    await rm(previous);
+    expect(await readFile(await store.writeReport(input), "utf8")).toContain("Screenshot unavailable or changed");
+  });
+
+  it("rejects a context artifact belonging to another Run even when that artifact is valid Mission evidence", async () => {
+    const workspace = await root();
+    const current = await file(join(workspace, ".proofkit", "runs", "run-1", "artifacts", "fact.json"));
+    const evidence = ref(current, createHash("sha256").update("fact").digest("hex"));
+    const input = result(workspace, [evidence]);
+    input.sessionContext = { sessionId: "00000000-0000-4000-8000-000000000001", capturedAt: now, omittedRuns: 0,
+      runs: [{ runId: "prior-run", startedAt: now, evidence: [evidence] }] };
+    const snapshot = await new MissionReportStore(workspace).writeReportSnapshot(input);
+    expect(snapshot.integrity.references).toMatchObject({ total: 1, intact: 1 });
+    expect(await readFile(snapshot.path, "utf8")).toContain("Business fact unavailable or changed");
+  });
+
+  it("renders the bounded plan narrative alongside execution evidence", async () => {
+    const workspace = await root();
+    const input = result(workspace);
+    input.planSummary = {
+      planId: "plan-report",
+      generatedBy: "deterministic-planner-v1",
+      successCriteria: ["页面显示登录成功"],
+      assumptions: ["使用隔离测试账号"],
+      tasks: [{ taskId: "execute-login", title: "执行登录主流程", objective: "确认登录后的页面状态", tool: "surface.run-charter", dependsOn: ["reconnaissance"], status: "passed" }],
+    };
+    input.planning = { source: "model", confidence: 0.8, assumptions: [], missingInputs: [], evidenceGaps: [] };
+    const markup = await readFile(await new MissionReportStore(workspace).writeReport(input), "utf8");
+    expect(markup).toContain("Test plan");
+    expect(markup).toContain("页面显示登录成功");
+    expect(markup).toContain("执行登录主流程");
+    expect(markup).toContain("确认登录后的页面状态");
+    expect(markup).toContain("Planning source: model");
+    expect(markup).toContain("confidence: 0.8");
+    expect(markup).toContain("no evidence gaps recorded");
+  });
+
   it("withdraws a saved result when Agent trace ownership cannot be verified", async () => {
     const workspace = await root();
     const input = result(workspace);
@@ -251,6 +491,8 @@ describe("Mission report", () => {
     const intact = await store.writeReportSnapshot(input);
     expect(intact.result).toMatchObject({ verdict: "passed", testVerdict: "passed", evidenceIntegrity: { status: "intact" } });
     expect(await readFile(intact.path, "utf8")).toContain('data-verdict="passed"');
+    expect(await readFile(intact.path, "utf8")).toContain("saved confirmed product finding occurrence(s)");
+    expect(await readFile(intact.path, "utf8")).toContain("Acceptance evidence intact");
 
     input.repairSuggestions = [{ suggestionId: "advisory-only", title: "Investigate an unrelated observation",
       rationale: "This proposal has no acceptance role", changes: ["Inspect the source"], confidence: 0.2,
@@ -269,6 +511,9 @@ describe("Mission report", () => {
     expect(JSON.parse(await readFile(join(dirname(partial.path), "summary.json"), "utf8")))
       .toMatchObject({ verdict: "passed", testVerdict: "passed" });
     expect(await readFile(partial.path, "utf8")).toContain('data-verdict="passed"');
+    expect(await readFile(partial.path, "utf8")).toContain("Acceptance evidence intact");
+    expect(await readFile(partial.path, "utf8")).toContain("1 detail reference(s) omitted from overview");
+    expect(await readFile(partial.path, "utf8")).not.toContain("Evidence partial");
 
     input.runs[0]!.omittedEvidence = 0;
     await writeFile(factPath, "changed");
@@ -277,6 +522,7 @@ describe("Mission report", () => {
     expect(degraded.result).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
       acceptanceEvidenceIntegrity: { status: "degraded" }, evidenceIntegrity: { status: "degraded" } });
     expect(await readFile(degraded.path, "utf8")).toContain("Saved pass · current evidence unverified");
+    expect(await readFile(degraded.path, "utf8")).toContain("Acceptance evidence degraded");
 
     await writeFile(factPath, "accepted");
     input.acceptanceEvidenceIntegrity = { status: "partial", scope: "mission-evidence", checkedAt: now,
@@ -284,6 +530,7 @@ describe("Mission report", () => {
     const exceeded = await store.writeReportSnapshot(input);
     expect(exceeded.result).toMatchObject({ verdict: "passed", testVerdict: "inconclusive",
       testVerdictReason: expect.stringContaining("within its limits"), acceptanceEvidenceIntegrity: { status: "partial" } });
+    expect(await readFile(exceeded.path, "utf8")).toContain("Acceptance evidence partial");
   });
 
   it("encodes valid evidence paths and rejects missing, external, remote and unrelated files", async () => {

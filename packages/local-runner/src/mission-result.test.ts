@@ -24,6 +24,39 @@ function observed(data: Record<string, unknown> = {}, charterId?: string): Obser
 }
 
 describe("Mission result projection", () => {
+  it("retains an original Run summary in the bounded presentation references", async () => {
+    const mission = await fixture();
+    const observation = observed();
+    observation.evidence = Array.from({ length: 9 }, (_, index) => ({ evidenceId: `report-${index}`, kind: "report", path: `/tests/.proofkit/runs/primary/artifacts/report-${index}.html`, capturedAt: now }));
+    observation.evidence.push({ evidenceId: "original-summary", kind: "snapshot", path: "/tests/.proofkit/runs/primary/run.json", capturedAt: now });
+    mission.observations = [observation];
+    const projected = projectMissionResult(mission, options).runs[0]!;
+    expect(projected.evidence).toHaveLength(8);
+    expect(projected.evidence.some((item) => item.evidenceId === "original-summary")).toBe(true);
+    expect(projected.omittedEvidence).toBe(2);
+  });
+
+  it("prefers assertion-time proof over unrelated step screenshots without hiding omissions", async () => {
+    const mission = await fixture();
+    const observation = observed();
+    observation.evidence = [
+      ...Array.from({ length: 8 }, (_, index) => ({ evidenceId: "step-" + index, kind: "screenshot" as const,
+        path: "/tests/.proofkit/runs/primary/artifacts/step-" + String(index).padStart(3, "0") + ".png", capturedAt: now })),
+      { evidenceId: "assertion-snapshot", kind: "snapshot", path: "/tests/.proofkit/runs/primary/artifacts/assertion-001-snapshot.json", capturedAt: now },
+      { evidenceId: "assertion-screenshot", kind: "screenshot", path: "/tests/.proofkit/runs/primary/artifacts/assertion-001.png", capturedAt: now },
+      { evidenceId: "oracle-source", kind: "business", path: "/tests/.proofkit/runs/primary/artifacts/oracle-1-source.json", capturedAt: now },
+      { evidenceId: "recording", kind: "video", path: "/tests/.proofkit/runs/primary/artifacts/recording.webm", capturedAt: now },
+      { evidenceId: "run-report", kind: "report", path: "/tests/.proofkit/runs/primary/report.html", capturedAt: now },
+      { evidenceId: "run-summary", kind: "snapshot", path: "/tests/.proofkit/runs/primary/run.json", capturedAt: now },
+    ];
+    mission.observations = [observation];
+    const projected = projectMissionResult(mission, options).runs[0]!;
+    expect(projected.evidence.map((ref) => ref.evidenceId)).toEqual([
+      "run-summary", "run-report", "oracle-source", "assertion-snapshot", "assertion-screenshot", "recording", "step-0", "step-1",
+    ]);
+    expect(projected.omittedEvidence).toBe(6);
+  });
+
   it("distinguishes a changed checkout from a failed current-source recheck", () => {
     const final = { method: "git" as const, complete: true, headSha: "a".repeat(40), worktreeSha256: "b".repeat(64),
       trackedDiffBytes: 0, untrackedFiles: 0, capturedAt: now };
@@ -169,7 +202,7 @@ describe("Mission result projection", () => {
     expect(result.runs).toHaveLength(200);
     expect(result.omittedRunResults).toBe(6); // 205 observations and the missing negative slot
     expect(result.runs[0]?.evidence[0]?.kind).toBe("report");
-    expect(result.runs[0]?.omittedEvidence).toBe(4);
+    expect(result.runs[0]?.omittedEvidence).toBe(2);
     expect(result.findings[0]?.category).toBe("product");
     expect(result.omittedFindings).toBe(2);
     expect(result.confirmedProductFindings).toBe(1);

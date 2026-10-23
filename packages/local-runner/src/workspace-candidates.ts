@@ -2,7 +2,7 @@ import { lstat, opendir } from "node:fs/promises";
 import { join } from "node:path";
 import { hasPositiveSurfaceAssertion, type ProofkitConfig, type TestScope } from "@proofkit/contracts";
 import { resolveWithinWorkspace } from "@proofkit/project";
-import { firstInlineOracleIssue, isAllowedMcpWebUrl, isLoopbackHost } from "./inline-oracle-validation.js";
+import { firstInlineOracleIssue, isAllowedMcpApiUrl, isAllowedMcpWebUrl } from "./inline-oracle-validation.js";
 import { candidateFocusText, readWorkspaceCharterFile, WorkspaceCharterFileError } from "./workspace-charter-file.js";
 
 type Candidates = NonNullable<TestScope["workspaceCandidates"]>;
@@ -98,15 +98,16 @@ export async function inspectWorkspaceCandidates(context: CandidateContext, focu
         const oracleNames = [...(charter.oracles ?? []), ...(charter.negativeCases ?? []).flatMap((negative) => negative.oracles)];
         const availableOracles = new Set([...knownOracles, ...(charter.httpOracles ?? []).map((oracle) => oracle.name)]);
         if (oracleNames.some((oracle) => !availableOracles.has(oracle))) item.issues.push("unregistered-oracle");
-        const inlineIssue = firstInlineOracleIssue(charter, knownOracles, context.restrictWebOrigins);
+        const inlineIssue = firstInlineOracleIssue(charter, knownOracles, context.restrictWebOrigins, context.config.surfaces.web?.apiOrigins);
         if (inlineIssue?.code === "duplicate-name" || inlineIssue?.code === "registered-name-conflict") item.issues.push("inline-oracle-name-conflict");
         if (inlineIssue?.code === "binding-invalid") item.issues.push("inline-oracle-binding-invalid");
         if (inlineIssue?.code === "current-id-missing") item.issues.push("inline-oracle-current-id-missing");
         if (inlineIssue?.code === "origin-disallowed" || context.restrictWebOrigins && context.config.oracles.some((oracle) =>
-          oracleNames.includes(oracle.name) && !isLoopbackHost(new URL(oracle.url).hostname))) item.issues.push("oracle-origin-disallowed");
+          oracleNames.includes(oracle.name) && !isAllowedMcpApiUrl(oracle.url, context.config.surfaces.web?.apiOrigins))) item.issues.push("oracle-origin-disallowed");
         if (context.restrictWebOrigins && actions.some((action) =>
           (action.kind === "goto" && !isAllowedMcpWebUrl(action.url, context.config.surfaces.web?.baseUrl))
-          || (action.kind === "captureResponse" && !isAllowedMcpWebUrl(action.response.url, context.config.surfaces.web?.baseUrl)))) {
+          || (action.kind === "captureResponse" && !isAllowedMcpWebUrl(action.response.url, context.config.surfaces.web?.baseUrl)
+            && !isAllowedMcpApiUrl(action.response.url, context.config.surfaces.web?.apiOrigins)))) {
           item.issues.push("web-origin-disallowed");
         }
         searchable = [relativePath, candidateFocusText(charter), ...actions.filter((action) => action.kind === "capability").map((action) => action.name), ...oracleNames].join(" ");

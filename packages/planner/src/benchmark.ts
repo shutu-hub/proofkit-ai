@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { hasPositiveSurfaceAssertion, ProjectMapSchema, TestLevelSchema, type TestCharter } from "@proofkit/contracts";
-import { PlannerConstraintsSchema, StructuredPlanner, type PlannerProvider } from "./core.js";
+import { hasPositiveSurfaceAssertion, ProjectMapSchema, SurfaceSnapshotSchema, TestLevelSchema, type TestCharter, type SurfaceSnapshot } from "@proofkit/contracts";
+import { PlannerConstraintsSchema, PlanningRequirementsError, StructuredPlanner, type PlannerProvider } from "./core.js";
 
 export const PlannerBenchmarkExpectationSchema = z.object({
   level: TestLevelSchema.optional(),
@@ -9,6 +9,8 @@ export const PlannerBenchmarkExpectationSchema = z.object({
   requiredOracleNames: z.array(z.string().min(1)).default([]),
   requireAssertions: z.boolean().default(false),
   requireNegativeCases: z.boolean().default(false),
+  requiredSelectors: z.array(z.string().min(1)).default([]),
+  requireObservedSelectors: z.boolean().default(false),
 });
 export type PlannerBenchmarkExpectation = z.infer<typeof PlannerBenchmarkExpectationSchema>;
 
@@ -17,6 +19,7 @@ export const PlannerBenchmarkCaseSchema = z.object({
   intent: z.string().min(1),
   projectMap: ProjectMapSchema,
   constraints: PlannerConstraintsSchema,
+  surfaceSnapshot: SurfaceSnapshotSchema.optional(),
   expect: PlannerBenchmarkExpectationSchema,
 });
 export type PlannerBenchmarkCase = z.infer<typeof PlannerBenchmarkCaseSchema>;
@@ -33,8 +36,11 @@ export type PlannerBenchmarkResult = {
     requiredOracles: boolean;
     assertions: boolean;
     negativeCases: boolean;
+    requiredSelectors: boolean;
+    observedSelectors: boolean;
   };
   failures: string[];
+  admissionIssues?: string[];
   charter?: TestCharter;
   error?: string;
 };
@@ -52,7 +58,10 @@ export type PlannerBenchmarkReport = {
     requiredOracles: number;
     assertions: number;
     negativeCases: number;
+    requiredSelectors: number;
+    observedSelectors: number;
     providerErrors: number;
+    requirements: number;
   };
   results: PlannerBenchmarkResult[];
 };
@@ -74,13 +83,22 @@ export async function evaluatePlannerBenchmark(provider: PlannerProvider, cases:
       requiredOracles: expectation.requiredOracleNames.length === 0,
       assertions: !expectation.requireAssertions,
       negativeCases: !expectation.requireNegativeCases,
+      requiredSelectors: expectation.requiredSelectors.length === 0,
+      observedSelectors: expectation.requireObservedSelectors === false,
     };
     const failures: string[] = [];
+    const admissionIssues: string[] = [];
     try {
       const charter = await planner.plan({
         intent: benchmarkCase.intent,
         projectMap: benchmarkCase.projectMap,
         constraints: benchmarkCase.constraints,
+        surfaceSnapshot: benchmarkCase.surfaceSnapshot,
+      }).catch((error: unknown) => {
+        if (!(error instanceof PlanningRequirementsError)) throw error;
+        failures.push(...error.issues);
+        admissionIssues.push(...error.issues);
+        return error.charter;
       });
       const actionKinds = new Set<string>(charter.actions.map((action) => action.kind));
       const oracleNames = new Set<string>(charter.oracles ?? []);
@@ -90,14 +108,24 @@ export async function evaluatePlannerBenchmark(provider: PlannerProvider, cases:
       checks.requiredOracles = expectation.requiredOracleNames.every((name) => oracleNames.has(name));
       checks.assertions = !expectation.requireAssertions || hasPositiveSurfaceAssertion(charter.assertions);
       checks.negativeCases = !expectation.requireNegativeCases || (charter.negativeCases?.length ?? 0) > 0;
+      const plannedSelectors = selectorsInCharter(charter);
+      checks.requiredSelectors = expectation.requiredSelectors.every((selector) => plannedSelectors.includes(selector));
+      const surfaceSnapshot = benchmarkCase.surfaceSnapshot;
+      const observedSelectors = surfaceSnapshot === undefined
+        ? expectation.requireObservedSelectors === false
+        : expectation.requireObservedSelectors && selectorsInCharter(charter).every((selector) => snapshotSelectors(surfaceSnapshot).has(selector));
+      checks.observedSelectors = observedSelectors;
       if (!checks.level) failures.push(`expected level ${expectation.level}, received ${charter.level}`);
       if (!checks.requiredActions) failures.push(`missing required action kind(s): ${expectation.requiredActionKinds.filter((kind) => !actionKinds.has(kind)).join(", ")}`);
       if (!checks.forbiddenActions) failures.push(`contains forbidden action kind(s): ${expectation.forbiddenActionKinds.filter((kind) => actionKinds.has(kind)).join(", ")}`);
       if (!checks.requiredOracles) failures.push(`missing required Oracle(s): ${expectation.requiredOracleNames.filter((name) => !oracleNames.has(name)).join(", ")}`);
       if (!checks.assertions) failures.push("no positive surface assertion was generated");
       if (!checks.negativeCases) failures.push("no negative case was generated");
-      const score = scoreChecks(checks);
-      results.push({ caseId: benchmarkCase.caseId, planner: provider.name, valid: failures.length === 0, score, checks, failures, charter });
+      if (!checks.requiredSelectors) failures.push(`missing required selector(s): ${expectation.requiredSelectors.filter((selector) => !plannedSelectors.includes(selector)).join(", ")}`);
+      if (!checks.observedSelectors) failures.push("planned selector is absent from the supplied observed surface snapshot");
+      const score = admissionIssues.length ? 0 : scoreChecks(checks);
+      results.push({ caseId: benchmarkCase.caseId, planner: provider.name, valid: failures.length === 0, score, checks, failures,
+        ...(admissionIssues.length ? { admissionIssues } : {}), charter });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       results.push({
@@ -120,7 +148,10 @@ export async function evaluatePlannerBenchmark(provider: PlannerProvider, cases:
     requiredOracles: results.filter((result) => !result.checks.requiredOracles).length,
     assertions: results.filter((result) => !result.checks.assertions).length,
     negativeCases: results.filter((result) => !result.checks.negativeCases).length,
+    requiredSelectors: results.filter((result) => !result.checks.requiredSelectors).length,
+    observedSelectors: results.filter((result) => !result.checks.observedSelectors).length,
     providerErrors: results.filter((result) => result.error !== undefined).length,
+    requirements: results.filter((result) => result.admissionIssues?.length).length,
   };
   return {
     planner: provider.name,
@@ -133,8 +164,19 @@ export async function evaluatePlannerBenchmark(provider: PlannerProvider, cases:
   };
 }
 
+function selectorsInCharter(charter: TestCharter): string[] {
+  return charter.actions.flatMap((action) => {
+    if (action.kind === "click" || action.kind === "fill" || action.kind === "press" || action.kind === "selectOption" || action.kind === "selectOptions" || action.kind === "setChecked" || action.kind === "setInputFiles") return [action.selector];
+    if (action.kind === "captureResponse") return [action.trigger.selector, ...(action.followUp ? [action.followUp.selector] : [])];
+    return [];
+  });
+}
+
+function snapshotSelectors(snapshot: SurfaceSnapshot): Set<string> {
+  return new Set((snapshot.controls ?? []).flatMap((control) => control.selector ? [control.selector] : []));
+}
+
 function scoreChecks(checks: PlannerBenchmarkResult["checks"]): number {
   const values = Object.values(checks);
   return values.length === 0 ? 1 : values.filter(Boolean).length / values.length;
 }
-

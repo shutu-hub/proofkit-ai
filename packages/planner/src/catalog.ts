@@ -10,16 +10,17 @@ export type SuiteSelection = {
   matchedAlias?: string;
 };
 
-export function requiredCatalogSurfaces(level: TestLevel, surface: "web" | "electron" | "mobile"): Array<"web" | "electron" | "mobile"> {
+export function requiredCatalogSurfaces(level: TestLevel, surface: "web" | "electron" | "mobile", declared?: readonly ("web" | "electron" | "mobile")[]): Array<"web" | "electron" | "mobile"> {
+  if (level === "release" && declared) return [...new Set([surface, ...declared])];
   return level === "release" && surface !== "mobile" ? ["web", "electron"] : [surface];
 }
 
 export function supportsCatalogCharter(entry: CharterCatalogEntry, level: TestLevel, surface: "web" | "electron" | "mobile"): boolean {
-  return entry.level === level && requiredCatalogSurfaces(level, surface).every((required) => entry.surfaces.includes(required));
+  return entry.level === level && requiredCatalogSurfaces(level, surface, entry.surfaces).every((required) => entry.surfaces.includes(required));
 }
 
 export function supportsCatalogSuite(entry: SuiteCatalogEntry, level: TestLevel, surface: "web" | "electron" | "mobile"): boolean {
-  return level === "release" && requiredCatalogSurfaces(level, surface).every((required) => entry.surfaces.includes(required));
+  return level === "release" && requiredCatalogSurfaces(level, surface, entry.surfaces).every((required) => entry.surfaces.includes(required));
 }
 
 export function selectCatalogSuite(

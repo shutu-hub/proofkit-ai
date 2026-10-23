@@ -181,10 +181,11 @@ describe("read-only test scope", () => {
     const releasePath = "charters/release-web-candidate.yml";
     await writeFile(join(runner.workspaceRoot, releasePath), JSON.stringify({ ...desktop, intent: "release candidate", level: "release", surfaces: ["web"] }));
     const release = await runner.inspectTestScope({ level: "release", surface: "web", focus: "release-web-candidate" });
-    expect(release.selection.requiredSurfaces).toEqual(["web", "electron"]);
-    expect(release.workspaceCandidates?.items[0]?.issues).toEqual(["surface-mismatch"]);
-    await expect(runner.createMission({ intent: "release candidate", level: "release", surface: "web",
-      charterPath: releasePath, charterSha256: release.workspaceCandidates!.items[0]!.sha256 })).rejects.toThrow("web + electron");
+    expect(release.selection.requiredSurfaces).toEqual(["web"]);
+    expect(release.workspaceCandidates?.items[0]?.issues).toEqual([]);
+    const webRelease = await runner.createMission({ intent: "release candidate", level: "release", surface: "web",
+      charterPath: releasePath, charterSha256: release.workspaceCandidates!.items[0]!.sha256 });
+    expect(webRelease.plan.executionProfile.surfaceMatrix).toEqual(["web"]);
   });
 
   it("caps candidate reads and enumeration and excludes links and registered files", async () => {
@@ -290,16 +291,16 @@ func helper(api *gin.RouterGroup) { api.GET("/unknown", handler) }
     expect(quick.catalog.items.find((item) => item.id === "quick-check")?.check.planReady).toBe(true);
     const release = await runner.inspectTestScope({ level: "release", surface: "web" });
     expect(release.selection.requiredSurfaces).toEqual(["web", "electron"]);
-    expect(release.catalog.eligible).toBe(2);
-    expect(release.catalog.items.find((item) => item.id === "release-web-only")?.check).toMatchObject({ eligible: false, planReady: false });
+    expect(release.catalog.eligible).toBe(3);
+    expect(release.catalog.items.find((item) => item.id === "release-web-only")?.check).toMatchObject({ eligible: true, planReady: true });
     expect(release.suites.items[0]?.check.planReady).toBe(true);
     const suiteOnlyFocus = await runner.inspectTestScope({ level: "release", surface: "web", focus: "上线" });
     expect(suiteOnlyFocus.catalog.matched).toBe(0);
     expect(suiteOnlyFocus.planningReadiness).toMatchObject({ status: "catalog-ready", compatibleReady: 1 });
     expect(suiteOnlyFocus.next.at(-1)).toBe("run_test");
     const missingSurface = await runner.inspectTestScope({ level: "release", surface: "web", focus: "release-web-only" });
-    expect(missingSurface.planningReadiness).toMatchObject({ status: "authoring-needed",
-      gaps: expect.arrayContaining([expect.objectContaining({ code: "surface-mismatch", relatedIds: ["release-web-only"] })]) });
+    expect(missingSurface.planningReadiness).toMatchObject({ status: "catalog-ready", compatibleReady: 1 });
+    expect(missingSurface.selection.requiredSurfaces).toEqual(["web"]);
     const mobile = await runner.inspectTestScope({ level: "release", surface: "mobile" });
     expect(mobile.selection.requiredSurfaces).toEqual(["mobile"]);
     expect(mobile.next[0]).toBe("inspect_test_environment");

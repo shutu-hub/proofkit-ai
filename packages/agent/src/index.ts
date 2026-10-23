@@ -26,6 +26,7 @@ import {
   type FailureBoundary,
   type MissionPlan,
   type MissionExecutionProfile,
+  type MissionWebVisibility,
   type MissionPolicy,
   type MissionRecoveryInspection,
   MissionRecoveryInspectionSchema,
@@ -34,6 +35,7 @@ import {
   type Observation,
   type RepairSuggestion,
   type TaskNode,
+  type TestCharter,
   type TestMission,
   type TestSuite,
   type TestLevelSelection,
@@ -87,18 +89,26 @@ export type MissionPlanInput = {
   workflowReview?: TestMission["workflowReview"];
   workflowReviewAdmission?: TestMission["workflowReviewAdmission"];
   levelSelection?: TestLevelSelection;
+  /** Frozen browser visibility preference for all Web runs in this Mission. */
+  webVisibility?: MissionWebVisibility;
+  /** Process-local retained Web session to adopt for Web execution. */
+  surfaceSessionId?: string;
+  sessionContext?: TestMission["sessionContext"];
 };
 
 export interface MissionPlanner {
   plan(input: MissionPlanInput): Promise<MissionPlan>;
 }
 
-function executionProfile(level: MissionPolicy["level"], surface: TestMission["surface"]): MissionExecutionProfile {
-  const surfaceMatrix = level === "release" && (surface === "web" || surface === "electron")
+function executionProfile(level: MissionPolicy["level"], surface: TestMission["surface"], webVisibility: MissionWebVisibility = "headless", declared?: TestCharter["surfaces"]): MissionExecutionProfile {
+  if (level === "release" && declared && !declared.includes(surface as "web" | "electron" | "mobile")) throw new Error("The selected surface is absent from the declared release matrix");
+  const surfaceMatrix = level === "release" && declared ? [surface, ...declared.filter((item) => item !== surface)]
+    : level === "release" && (surface === "web" || surface === "electron")
     ? [surface, surface === "web" ? "electron" : "web"] as TestMission["surface"][]
     : [surface];
   return MissionExecutionProfileSchema.parse({
     surfaceMatrix,
+    webVisibility,
     collectAllResults: level === "release",
     negativeCases: level === "quick"
       ? []
@@ -144,7 +154,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
     if (input.suite) return this.planSuite(input, input.suite);
     const now = new Date().toISOString();
     const planId = `plan-${randomUUID().slice(0, 12)}`;
-    const profile = executionProfile(input.policy.level, input.surface);
+    const profile = executionProfile(input.policy.level, input.surface, input.webVisibility, input.charter?.surfaces);
     const negativeCases = input.charter?.negativeCases ?? [];
     const negativeCaseIds = negativeCases.map((negativeCase) => negativeCase.caseId);
     if (new Set(negativeCaseIds).size !== negativeCaseIds.length) {
@@ -212,8 +222,8 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       ...negativeTasks,
       TaskNodeSchema.parse({
         taskId: "verify-result",
-        title: "验证业务终态和证据完整性",
-        objective: "确认测试结果有独立验证和可追溯证据。",
+        title: profile.requireBusinessOracle ? "验证业务终态和证据完整性" : "核验页面结果和证据范围",
+        objective: profile.requireBusinessOracle ? "确认测试结果有独立验证和可追溯证据。" : "核对页面断言和可追溯证据，明确业务终态未验证的范围。",
         tool: "mission.verify",
         input: {},
         dependsOn: verificationDependencies,
@@ -226,7 +236,9 @@ export class DeterministicMissionPlanner implements MissionPlanner {
       version: "1",
       generatedBy: "deterministic-mission-planner-v1",
       graph: { tasks, terminalTaskIds: ["verify-result"] },
-      successCriteria: ["所有任务完成", "业务结果有独立证据", "未发现已确认的高严重度缺陷"],
+      successCriteria: profile.requireBusinessOracle
+        ? ["所有任务完成", "业务结果有独立证据", "未发现已确认的高严重度缺陷"]
+        : ["所有任务完成", "页面断言有可追溯证据", "明确报告业务终态和全项目覆盖未验证"],
       planning: planningQuality(input),
       level: input.policy.level,
       executionProfile: profile,
@@ -248,6 +260,7 @@ export class DeterministicMissionPlanner implements MissionPlanner {
     const negativeCases = checks.flatMap(({ charter }) => charter.negativeCases ?? []);
     const profile = MissionExecutionProfileSchema.parse({
       surfaceMatrix: suite.surfaces,
+      webVisibility: input.webVisibility,
       suiteId: suite.suiteId,
       charterIds: suite.charters.map((item) => item.charterId),
       collectAllResults: true,
@@ -446,6 +459,22 @@ export class MissionAlreadyRunningError extends Error {
   }
 }
 
+function planningAdmissionFailure(mission: TestMission): { message: string; missing: string[] } | undefined {
+  const planning = mission.plan.planning;
+  // `missingInputs` contains compatibility notes for older deterministic
+  // plans (for example, the absence of a submitted Charter). Only explicit
+  // evidence gaps are authoritative execution blockers; a plan without a
+  // planning assessment remains governed by the existing tool/runtime gates.
+  const executableGaps = new Set(["business-oracle", "surface-assertion", "surface-selector", "surface-page"]);
+  const blockingGaps = planning?.evidenceGaps.filter((gap) => executableGaps.has(gap)) ?? [];
+  if (blockingGaps.length === 0) return undefined;
+  const missing = [...new Set([...(planning?.missingInputs ?? []).filter((_, index) => index < blockingGaps.length), ...blockingGaps.map((gap) => `evidence gap: ${gap}`)])];
+  return {
+    missing,
+    message: `Mission cannot execute before planning gaps are resolved: ${missing.join("; ")}`,
+  };
+}
+
 export class MissionAgent {
   private readonly store: MissionStore;
   private readonly tools: MissionToolRegistry;
@@ -488,6 +517,8 @@ export class MissionAgent {
       workflowInventoryInspection: input.workflowInventoryInspection,
       workflowReview: input.workflowReview,
       workflowReviewAdmission: input.workflowReviewAdmission,
+      surfaceSessionId: input.surfaceSessionId,
+      sessionContext: input.sessionContext,
       plan,
       createdAt: now,
       updatedAt: now,
@@ -584,6 +615,17 @@ export class MissionAgent {
     if (mission.status === "awaiting-approval" && options.approve) mission = await this.save({ ...mission, status: "approved" });
     if (mission.status !== "approved" && mission.status !== "paused" && mission.status !== "running") {
       throw new Error(`Mission cannot run from status ${mission.status}`);
+    }
+    const planningFailure = planningAdmissionFailure(mission);
+    if (planningFailure) {
+      const observedAt = new Date().toISOString();
+      return this.save({
+        ...mission,
+        status: "blocked",
+        verdict: "blocked",
+        firstFailure: mission.firstFailure ?? FailureBoundarySchema.parse({ kind: "evidence", message: planningFailure.message, evidence: mission.evidence.slice(0, 4), observedAt }),
+        findings: [...mission.findings, finding("planning-incomplete", "high", "test", "Mission planning is incomplete", `${planningFailure.message}. No product action was executed; resolve the plan review gaps and create or approve a new revision.`)],
+      });
     }
     const executionStartedAt = mission.executionStartedAt ?? inferExecutionStart(mission);
     const executionDeadlineAt = mission.executionDeadlineAt

@@ -1,8 +1,9 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { EvidenceStore, sha256 } from "@proofkit/evidence";
 import type { Action, ActionReceipt, Assertion, AssertionResult, SurfaceSnapshot } from "@proofkit/contracts";
 import { AmbiguousSurfaceTargetError, CancelledError, ExecutionRunner, type AdapterEvent, type SurfaceAdapter } from "./index.js";
 
@@ -10,7 +11,7 @@ class FakeAdapter implements SurfaceAdapter {
   readonly name = "fake";
   private ready = false;
   async connect(): Promise<void> {}
-  async discover(): Promise<SurfaceSnapshot> { return this.snapshot(); }
+  async discover(_input?: { controlOffset?: number }): Promise<SurfaceSnapshot> { return this.snapshot(); }
   async snapshot(): Promise<SurfaceSnapshot> { return { capturedAt: new Date().toISOString(), url: "http://fixture", text: this.ready ? "Ready" : "Idle", metadata: {} }; }
   async act(action: Action): Promise<ActionReceipt> {
     if (action.kind === "click") this.ready = true;
@@ -42,6 +43,68 @@ class SlowAdapter extends FakeAdapter {
 }
 
 describe("ExecutionRunner", () => {
+  it("does not silently fall back to an overview for unsupported or inconsistent control windows", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-control-window-"));
+    for (const variant of ["unsupported", "wrong-offset", "valid"] as const) {
+      const adapter = Object.assign(new FakeAdapter(), { supportsControlWindows: variant !== "unsupported" });
+      const seen: number[] = [];
+      adapter.discover = async (request?: { controlOffset?: number }) => {
+        seen.push(request?.controlOffset ?? -1);
+        return { capturedAt: new Date().toISOString(), metadata: {}, controls: [{ tag: "button", role: "button", name: "New field", selector: "#new-field", disabled: false }],
+          controlsTruncated: true, controlWindow: { scope: "rendered-main-frame-controls" as const, offset: variant === "wrong-offset" ? 0 : 60, limit: 60 as const, total: 61, returned: 1, nextOffset: null, allControlsObserved: false } };
+      };
+      const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({ intent: "inspect later controls", level: "quick", mode: "deterministic",
+        preconditions: [], actions: [{ kind: "observe", controlOffset: 60 }], assertions: [], sideEffectPolicy: "deny", metadata: {} });
+      expect(summary.steps[0]?.status).toBe(variant === "valid" ? "passed" : "failed");
+      if (variant === "valid") expect(seen).toEqual([60]);
+      else expect(seen).toEqual(variant === "unsupported" ? [-1] : [60, -1]);
+    }
+  });
+
+  it("preserves the immediate snapshot and binds a recovered navigation screenshot to the later state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-navigation-capture-"));
+    const adapter = Object.assign(new FakeAdapter(), { takeCaptureNavigationRecovery: () => true });
+    let snapshots = 0;
+    adapter.snapshot = async () => ({ capturedAt: new Date().toISOString(), url: snapshots++ < 2 ? "http://fixture/login" : "http://fixture/workspace",
+      text: snapshots < 3 ? "Sign in" : "Workspace", metadata: {} });
+    adapter.capture = async () => new Uint8Array([1, 2, 3]);
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({ intent: "follow sign-in navigation", level: "quick", mode: "deterministic",
+      preconditions: [], actions: [{ kind: "click", selector: "#signin" }], assertions: [], sideEffectPolicy: "allow", metadata: {} }, "navigation-capture-run");
+    const step = summary.steps[0]!;
+    expect(step.status).toBe("passed");
+    expect(step.afterSnapshot?.url).toBe("http://fixture/workspace");
+    expect(JSON.parse(await readFile(join(root, "navigation-capture-run", "artifacts", "step-001-after.json"), "utf8")).url).toBe("http://fixture/login");
+    expect(JSON.parse(await readFile(join(root, "navigation-capture-run", "artifacts", "step-001-after-navigation.json"), "utf8")).url).toBe("http://fixture/workspace");
+    expect(step.artifacts).toContain("navigation-capture-run/artifacts/step-001.png");
+    const store = new EvidenceStore(root);
+    const manifest = await store.writeManifest(summary.runId);
+    expect((await store.verifyManifest(summary.runId, manifest.sha256)).status).toBe("intact");
+  });
+
+  it("keeps a recovered screenshot when the follow-up page snapshot is unavailable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-navigation-snapshot-gap-"));
+    const adapter = Object.assign(new FakeAdapter(), { takeCaptureNavigationRecovery: () => true });
+    let observations = 0;
+    adapter.snapshot = async () => { if (++observations > 2) throw new Error("Private navigation detail"); return { capturedAt: new Date().toISOString(), url: "http://fixture/login", metadata: {} }; };
+    adapter.capture = async () => new Uint8Array([1, 2, 3]);
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({ intent: "save screenshot during navigation", level: "quick", mode: "deterministic",
+      preconditions: [], actions: [{ kind: "click", selector: "#signin" }], assertions: [], sideEffectPolicy: "allow", metadata: {} }, "navigation-snapshot-gap-run");
+    expect(summary.steps[0]?.status).toBe("passed");
+    expect(summary.steps[0]?.artifacts).toContain("navigation-snapshot-gap-run/artifacts/step-001.png");
+    expect(summary.findings).toContain("step-001: post-navigation snapshot unavailable; the saved screenshot does not establish the final page state.");
+    expect(JSON.stringify(summary)).not.toContain("Private navigation detail");
+  });
+
+  it("blocks unsupported page switching before connecting or running setup", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-page-support-"));
+    const adapter = new FakeAdapter(); const connect = vi.spyOn(adapter, "connect");
+    const preflight = vi.fn(async () => ({ passed: true, message: "Ready" }));
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root, preflight }).run({ intent: "Select the review window", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "switchPage", title: "Review", timeoutMs: 1000 }], assertions: [], sideEffectPolicy: "deny", metadata: {} });
+    expect(summary.verdict).toBe("blocked"); expect(summary.steps).toEqual([]);
+    expect(connect).not.toHaveBeenCalled(); expect(preflight).not.toHaveBeenCalled();
+  });
+
   it("does not substitute a page overview for an unsupported or invalid targeted read", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-text-read-"));
     for (const variant of ["unsupported", "invalid", "wrong-source", "wrong-window"] as const) {
@@ -212,10 +275,101 @@ describe("ExecutionRunner", () => {
     adapter.act = async () => { throw new AmbiguousSurfaceTargetError(4); };
     const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
       intent: "inspect target", level: "quick", mode: "deterministic", preconditions: [],
-      actions: [{ kind: "click", selector: ".item" }], assertions: [], sideEffectPolicy: "allow", metadata: {},
+      actions: [{ kind: "click", selector: ".item" }, { kind: "observe" }], assertions: [], sideEffectPolicy: "allow", metadata: {},
     }, "target-ambiguous");
     expect(summary.steps[0]?.failureCode).toBe("surface-target-ambiguous");
     expect(summary.steps[0]?.status).toBe("failed");
+  });
+
+  it("saves failure-time evidence and shows the failed action screenshot in the Run report", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-failure-image-"));
+    const adapter = new FakeAdapter();
+    adapter.act = async () => { throw new AmbiguousSurfaceTargetError(2); };
+    adapter.capture = async () => Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==", "base64"));
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
+      intent: "inspect ambiguous action", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: ".item" }, { kind: "observe" }], assertions: [], sideEffectPolicy: "allow", metadata: {},
+    }, "failure-image-run");
+    const step = summary.steps[0]!;
+    expect(step.status).toBe("failed");
+    expect(step.afterSnapshot).toBeUndefined();
+    expect(step.artifacts).toContain("failure-image-run/artifacts/step-001-failure-snapshot.json");
+    expect(step.artifacts).toContain("failure-image-run/artifacts/step-001-failure.png");
+    expect(await readFile(join(root, "failure-image-run", "artifacts", "step-001-failure.png"))).toHaveLength(70);
+    const report = await readFile(join(root, "failure-image-run", "report.html"), "utf8");
+    expect(report).toContain('src="artifacts/step-001-failure.png"');
+    expect(report).toContain("At failure");
+    expect(report).toContain("step-002");
+    expect(report).toContain("Not reached because an earlier step did not complete");
+  });
+
+  it("classifies a timed-out absent selector as plan drift without changing the action", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-selector-drift-"));
+    const adapter = new FakeAdapter();
+    adapter.snapshot = async () => ({ capturedAt: new Date().toISOString(), url: "http://fixture", controls: [], metadata: {} });
+    adapter.act = async () => { const error = new Error("selector timeout"); error.name = "TimeoutError"; throw error; };
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
+      intent: "detect stale selector", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#removed" }], assertions: [], sideEffectPolicy: "allow", metadata: {},
+    }, "selector-drift-run");
+    expect(summary.steps[0]?.failureCode).toBe("surface-selector-drift");
+    const diagnosisPath = summary.steps[0]!.artifacts.find((path) => path.endsWith("target-diagnosis.json"))!;
+    expect(JSON.parse(await readFile(join(root, diagnosisPath), "utf8"))).toMatchObject({ selector: "#removed", status: "absent" });
+    const proposalPath = summary.steps[0]!.artifacts.find((path) => path.endsWith("replan-proposal.json"))!;
+    expect(JSON.parse(await readFile(join(root, proposalPath), "utf8"))).toMatchObject({ status: "needs-approval", requiresApproval: true, next: "inspect_surface" });
+    expect(summary.findings).toContain("step-001: planned selector was absent from the contemporaneous surface observation; re-inspect before revising the plan.");
+    expect(summary.steps[0]!.action).toEqual({ kind: "click", selector: "#removed" });
+    expect(await readFile(join(root, "selector-drift-run", "report.html"), "utf8")).toContain("replan-proposal.json");
+  });
+
+  it("does not call a pinned alternate selector absent when it remains in the failure snapshot", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-alternate-diagnosis-"));
+    const adapter = new FakeAdapter();
+    adapter.snapshot = async () => ({ capturedAt: new Date().toISOString(), url: "http://fixture", metadata: {}, controls: [
+      { tag: "input", role: "textbox", name: "Title", selector: "#generated-title", alternateSelectors: ['role=textbox[name="Title"]'], disabled: false }], controlsTruncated: false });
+    adapter.act = async () => { const error = new Error("selector timeout"); error.name = "TimeoutError"; throw error; };
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({ intent: "diagnose retained alternate", level: "quick", mode: "deterministic",
+      preconditions: [], actions: [{ kind: "fill", selector: 'role=textbox[name="Title"]', value: "Reviewed" }], assertions: [], sideEffectPolicy: "allow", metadata: {} }, "alternate-diagnosis-run");
+    expect(summary.steps[0]?.failureCode).toBe("runner-action-timeout");
+    const path = summary.steps[0]!.artifacts.find((file) => file.endsWith("target-diagnosis.json"))!;
+    expect(JSON.parse(await readFile(join(root, path), "utf8"))).toMatchObject({ status: "present" });
+    expect(summary.steps[0]?.artifacts.some((file) => file.endsWith("replan-proposal.json"))).toBe(false);
+  });
+
+  it("associates a late response with the request's initiating step", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-step-network-"));
+    const adapter = new FakeAdapter();
+    let emitEvent: (event: AdapterEvent) => void = () => {};
+    adapter.subscribeEvents = async (listener) => {
+      emitEvent = listener;
+      listener({ type: "request", payload: { requestId: "request-before", method: "GET", url: "http://fixture/preflight" } });
+      return () => {};
+    };
+    const originalAct = adapter.act.bind(adapter);
+    adapter.act = async (action) => {
+      if (action.kind === "click") {
+        emitEvent({ type: "response", payload: { requestId: "request-before", method: "GET", status: 200, url: "http://fixture/preflight" } });
+        emitEvent({ type: "request", payload: { requestId: "request-late", method: "POST", url: "http://fixture/save?token=private" } });
+      }
+      if (action.kind === "observe") {
+        emitEvent({ type: "response", payload: { requestId: "request-late", method: "POST", status: 201, url: "http://fixture/save?token=private" } });
+      }
+      return originalAct(action);
+    };
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root, webEvidenceOrigin: "http://fixture" }).run({
+      intent: "save then observe", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#save" }, { kind: "observe" }],
+      assertions: [{ kind: "text-visible", text: "Ready" }], sideEffectPolicy: "allow", metadata: {},
+    }, "network-step-run");
+    expect(summary.verdict).toBe("passed");
+    const events = (await readFile(join(root, "network-step-run", "events.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const network = events.filter((event) => event.type === "adapter.event" && ["request", "response"].includes(event.payload.eventType));
+    expect(network.filter((event) => event.payload.requestId === "request-before").every((event) => event.stepId === undefined)).toBe(true);
+    expect(network.filter((event) => event.payload.requestId === "request-late").map((event) => event.stepId)).toEqual(["step-001", "step-001"]);
+    const report = await readFile(join(root, "network-step-run", "report.html"), "utf8");
+    expect(report).toContain("Network requests (1)");
+    expect(report).toContain("request-late · POST http://fixture/__redacted__ · response 201 at ");
+    expect(report).not.toContain("token=private");
   });
 
   it("keeps preflight exception text out of Run evidence", async () => {
@@ -256,6 +410,80 @@ describe("ExecutionRunner", () => {
       + await readFile(join(root, "adapter-error-run", "run.json"), "utf8")
       + await readFile(join(root, "adapter-error-run", "report.html"), "utf8");
     expect(persisted).not.toContain(privateErrorText);
+  });
+
+  it("does not certify a passing Run when requested video is unavailable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-video-gap-"));
+    const unsealedPath = join(root, "video-gap-run", "artifacts", "recording.webm");
+    const adapter = Object.assign(new FakeAdapter(), { recordingStatus: () => "unavailable" as const, connect: async () => {
+      await mkdir(join(root, "video-gap-run", "artifacts"), { recursive: true });
+      await writeFile(unsealedPath, "unsealed video after a failed browser close");
+    } });
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({
+      intent: "verify video proof", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }],
+      sideEffectPolicy: "allow", metadata: {},
+    }, "video-gap-run");
+    expect(summary.verdict).toBe("inconclusive");
+    expect(summary.recording).toEqual({ status: "unavailable" });
+    await expect(stat(unsealedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(summary.findings).toContain("Requested Web recording is unavailable; the Run cannot claim complete requested evidence.");
+    expect(await readFile(join(root, "video-gap-run", "report.html"), "utf8")).toContain("Requested recording unavailable");
+  });
+
+  it.each(["owned", "borrowed", "cancelled"])("records the budget interruption without attributing it to the product: %s", async (mode) => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-video-budget-run-"));
+    const controller = new AbortController();
+    const adapter = Object.assign(new FakeAdapter(), {
+      ...(mode !== "borrowed" ? { recordingStatus: () => "unavailable" as const } : {}),
+      recordingStopReason: () => "duration-limit" as const,
+      recordingBudget: () => ({ maxDurationMs: 1000, maxBytes: 1024 * 1024 }),
+      act: async (): Promise<never> => {
+        await Promise.resolve();
+        if (mode === "cancelled") controller.abort(new CancelledError("operator cancelled"));
+        throw new Error("private browser diagnostic");
+      },
+    });
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root, signal: controller.signal }).run({ intent: "Verify observed state", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }], sideEffectPolicy: "allow", metadata: {} });
+    expect(summary.verdict).toBe(mode === "cancelled" ? "cancelled" : "inconclusive");
+    expect(summary.recording).toMatchObject({ status: "unavailable", stopReason: "duration-limit", budget: { maxDurationMs: 1000 } });
+    const report = await readFile(join(root, summary.runId, "report.html"), "utf8");
+    expect(report).toContain("Recording stopped: duration-limit");
+    expect(report).not.toContain("private browser diagnostic");
+    expect(report).not.toContain("<video");
+  });
+
+  it("preserves an evidenced failing assertion when recording later reaches its budget", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-video-budget-defect-"));
+    const adapter = Object.assign(new FakeAdapter(), { recordingStopReason: () => "size-limit" as const });
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root }).run({ intent: "Verify observed state", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [], assertions: [{ kind: "text-visible", text: "Ready" }], sideEffectPolicy: "deny", metadata: {} });
+    expect(summary.assertions[0]).toMatchObject({ passed: false });
+    expect(summary.assertions[0]?.evidence.length).toBeGreaterThan(0);
+    expect(summary.verdict).toBe("failed");
+    expect(summary.recording).toMatchObject({ status: "unavailable", stopReason: "size-limit" });
+  });
+
+  it.each(["passed", "failed", "cancelled"])("retains partial video while preserving the independent execution outcome: %s", async (mode) => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-partial-video-"));
+    const runId = "partial-video-run";
+    const controller = new AbortController();
+    const adapter = Object.assign(new FakeAdapter(), {
+      recordingStatus: () => "partial" as const, recordingStopReason: () => "duration-limit" as const,
+      recordingBudget: () => ({ maxDurationMs: 1000, maxBytes: 1024 * 1024 }),
+      close: async () => {
+        await writeFile(join(root, runId, "artifacts", "recording.webm"), "partial recording bytes");
+        if (mode === "cancelled") controller.abort(new CancelledError("operator cancelled"));
+      },
+    });
+    const summary = await new ExecutionRunner(adapter, { evidenceDir: root, signal: controller.signal }).run({ intent: "Verify partial footage", level: "quick", mode: "deterministic", preconditions: [],
+      actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: mode === "failed" ? "Wrong expected state" : "Ready" }], sideEffectPolicy: "allow", metadata: {} }, runId);
+    expect(summary.verdict).toBe(mode === "passed" ? "inconclusive" : mode);
+    expect(summary.recording).toMatchObject({ status: "partial", artifact: `${runId}/artifacts/recording.webm`, stopReason: "duration-limit" });
+    expect(summary.artifacts).toContain(summary.recording!.artifact);
+    const report = await readFile(join(root, runId, "report.html"), "utf8");
+    expect(report).toContain("<video"); expect(report).toContain("Partial footage only");
   });
 
   it("preserves cancellation while a fill action uses a runtime environment value", async () => {
@@ -811,6 +1039,21 @@ describe("ExecutionRunner", () => {
     expect(await readFile(join(root, "run-test", "artifacts", "assertion-001-snapshot.json"), "utf8")).toContain("Ready");
     expect(await readFile(join(root, "run-test", "report.html"), "utf8")).toContain('href="artifacts/assertion-001-snapshot.json"');
     expect(await readFile(join(root, "run-test", "events.jsonl"), "utf8")).toContain("run.completed");
+    const eventBytes = await readFile(join(root, "run-test", "events.jsonl"));
+    expect(summary.eventLog).toEqual({ status: "sealed", bytes: eventBytes.length, sha256: sha256(eventBytes) });
+  });
+
+  it("does not pass when its completed event log cannot be pinned", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-log-pin-gap-"));
+    const pin = vi.spyOn(EvidenceStore.prototype, "pinEventLog").mockRejectedValue(new Error("unavailable"));
+    try {
+      const summary = await new ExecutionRunner(new FakeAdapter(), { evidenceDir: root }).run({ intent: "verify ready", level: "quick",
+        mode: "deterministic", preconditions: [], metadata: {},
+        actions: [{ kind: "click", selector: "#ready" }], assertions: [{ kind: "text-visible", text: "Ready" }], sideEffectPolicy: "allow" }, "pin-gap");
+      expect(summary.verdict).toBe("inconclusive");
+      expect(summary.eventLog).toEqual({ status: "unavailable" });
+      expect(await readFile(join(root, "pin-gap", "report.html"), "utf8")).toContain("Event log: unavailable");
+    } finally { pin.mockRestore(); }
   });
 
   it("keeps a failed assertion inconclusive when only an earlier step has evidence", async () => {

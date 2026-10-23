@@ -6,6 +6,18 @@ const base = { schemaVersion: 1, testVerdict: "not-asserted", projectRoot: "/sou
   level: "core", surfaces: ["web"], environment: "test", status: "unavailable", next: [], checkedAt: new Date().toISOString() };
 
 describe("readiness selection provenance", () => {
+  it("accepts an explicitly surfaced draft and identifies only its digest in the result", () => {
+    const charter = { intent: "Verify the full booking", surfaces: ["web"], metadata: { requiredFields: ["email", "contactNumber"] } };
+    expect(IntegrationReadinessInputSchema.parse({ charter }).charter).toMatchObject(charter);
+    expect(IntegrationReadinessSchema.parse({ ...base, draftSha256: "b".repeat(64) }).draftSha256).toBe("b".repeat(64));
+    for (const selection of [{ charter, charterId: "core" }, { charter, ...candidate }, { charter: { intent: "No declared surface" } }]) {
+      expect(IntegrationReadinessInputSchema.safeParse(selection).success).toBe(false);
+    }
+    for (const selection of [{ draftSha256: "b".repeat(64), charterId: "core" }, { draftSha256: "b".repeat(64), ...candidate },
+      { draftSha256: "bad" }, { draftSha256: "b".repeat(64), charter }]) {
+      expect(IntegrationReadinessSchema.safeParse({ ...base, ...selection }).success).toBe(false);
+    }
+  });
   it.each([{ charterId: "core" }, candidate])("retains exactly one catalog or candidate identity (%j)", (selection) => {
     expect(IntegrationReadinessInputSchema.parse(selection)).toEqual(selection);
     expect(IntegrationReadinessSchema.parse({ ...base, ...selection })).toMatchObject(selection);

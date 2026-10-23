@@ -27,6 +27,7 @@ export async function createProofkitMcp(options: McpServerOptions = {}): Promise
   });
   const server = new McpServer({ name: "proofkit", version: "0.1.0" });
   registerTools(server, runner);
+  server.server.onclose = () => { void runner.closeAllSurfaceSessions().catch(() => {}); };
   return server;
 }
 

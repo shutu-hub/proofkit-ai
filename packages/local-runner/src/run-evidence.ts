@@ -53,7 +53,7 @@ export function captureRunEvidence(summary: RunSummary, evidenceDir: string): Ev
     if (isArtifact && (!created || created.sha256 !== digest.sha256 || created.bytes !== digest.bytes)) continue;
     refs.push(EvidenceRefSchema.parse({
       ...base,
-      kind: path.endsWith("events.jsonl") ? "network" : path.endsWith(".png") ? "screenshot" : oracleSourceArtifacts.has(path) ? "business"
+      kind: path.endsWith("events.jsonl") ? "network" : path.endsWith(".png") ? "screenshot" : path.endsWith(".webm") ? "video" : oracleSourceArtifacts.has(path) ? "business"
         : httpContractArtifacts.has(path) ? "other"
         : path.endsWith("report.html") || oracleReports.has(path) ? "report"
           : path.endsWith("runtime-findings.json") || path.endsWith("integration-cleanup.json") || path.endsWith("integration-setup.json") ? "runtime" : path.includes("/artifacts/target-binding") ? "process" : "snapshot",

@@ -73,6 +73,41 @@ describe("MissionAgent", () => {
     expect(completed.agentSteps.every((step) => step.toolCallIds.length === 1)).toBe(true);
   });
 
+  it("blocks an approved mission before tools when planning has explicit evidence gaps", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-mission-planning-gate-"));
+    const store = new JsonMissionStore(root);
+    const calls: string[] = [];
+    const tools = new InMemoryMissionToolRegistry([
+      { name: "project.discover", description: "discover", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => { calls.push("discover"); return {}; } },
+      { name: "surface.run-charter", description: "run", sideEffect: "read", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => { calls.push("run"); return { verdict: "passed" as const }; } },
+      { name: "mission.verify", description: "verify", sideEffect: "none", environments: ["test"], timeoutMs: 1000, inputSchema: z.object({}), execute: async () => { calls.push("verify"); return { verdict: "passed" as const }; } },
+    ]);
+    const agent = new MissionAgent({ store, tools });
+    const created = await agent.create({
+      intent: "save a record and verify persistence",
+      projectRoot: root,
+      surface: "web",
+      policy: { requireApproval: true },
+      charter: {
+        intent: "save a record and verify persistence",
+        level: "core",
+        mode: "guided",
+        preconditions: [],
+        actions: [{ kind: "observe" }],
+        assertions: [{ kind: "text-visible", text: "Saved" }],
+        sideEffectPolicy: "deny",
+        metadata: {},
+        planning: { source: "submitted", confidence: 0.2, assumptions: [], missingInputs: ["独立业务 Oracle"], evidenceGaps: ["business-oracle"] },
+      },
+    });
+    await agent.approve(created.missionId);
+    const result = await agent.run(created.missionId);
+    expect(result).toMatchObject({ status: "blocked", verdict: "blocked", firstFailure: { kind: "evidence" } });
+    expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Mission planning is incomplete" })]));
+    expect(result.firstFailure?.message).toContain("business-oracle");
+    expect(calls).toEqual([]);
+  });
+
   it("does not pass a mission whose remaining tasks cannot run", async () => {
     const root = await mkdtemp(join(tmpdir(), "proofkit-stalled-graph-"));
     const store = new JsonMissionStore(root);
@@ -715,6 +750,15 @@ describe("MissionAgent", () => {
     expect(plan.executionProfile.requireReplay).toBe(requiresReplay);
     expect(plan.executionProfile.collectAllResults).toBe(requiresReplay);
     const verify = plan.graph.tasks.find((task) => task.taskId === "verify-result");
+    expect(plan.executionProfile.requireBusinessOracle).toBe(level !== "quick");
+    if (level === "quick") {
+      expect(plan.successCriteria).not.toContain("业务结果有独立证据");
+      expect(plan.successCriteria).toContain("明确报告业务终态和全项目覆盖未验证");
+      expect(verify?.title).toBe("核验页面结果和证据范围");
+    } else {
+      expect(plan.successCriteria).toContain("业务结果有独立证据");
+      expect(verify?.title).toBe("验证业务终态和证据完整性");
+    }
     expect(verify?.dependsOn).toEqual(requiresReplay
       ? ["replay-charter", "replay-charter-electron"]
       : ["execute-charter"]);

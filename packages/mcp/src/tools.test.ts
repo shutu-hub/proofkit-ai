@@ -1,12 +1,205 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { TestMission } from "@proofkit/contracts";
-import { LocalRunnerService } from "@proofkit/local-runner";
+import { LocalRunnerService, PlanningObservationError } from "@proofkit/local-runner";
+import { PlannerConfigurationError } from "@proofkit/local-runner";
 import { registerTools } from "./tools.js";
 
 describe("ProofKit MCP tools", () => {
+  it("returns planner-not-ready instead of throwing when plan_test lacks a model provider", async () => {
+    const runner = { config: { surfaces: {} }, plan: vi.fn(async () => { throw new PlannerConfigurationError("Configure planner provider"); }) } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "plan_test", arguments: { intent: "Review checkout" } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ status: "planner-not-ready", testVerdict: "not-asserted", executionStarted: false, next: ["configure_planner", "plan_test", "run_test"] });
+    } finally { await client.close(); await server.close(); }
+  });
+  it("blocks a real direct-intent run before creating a Run", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proofkit-mcp-direct-intent-"));
+    try {
+      await writeFile(join(root, "package.json"), '{"name":"mcp-direct-intent"}');
+      const runner = new LocalRunnerService({ root, workspaceRoot: root });
+      const { client, server } = await connectedClient(runner);
+      try {
+        const response = await client.callTool({ name: "run_test", arguments: { intent: "测试新增一条记录并刷新验证持久化", level: "core" } });
+        const payload = JSON.parse(textContent(response));
+        expect(payload).toMatchObject({ running: false, readiness: { ready: false }, testVerdict: "not-asserted" });
+        expect(payload.readiness.missing.join(" ")).toContain("Oracle");
+        expect(payload.next).toContain("plan_test");
+      } finally { await client.close(); await server.close(); }
+      const metadata = await readdir(join(root, ".proofkit"));
+      expect(metadata).not.toContain("runs");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+  it("forwards a bounded later control window and rejects incompatible scoped reads", async () => {
+    const inspectSurface = vi.fn(async () => ({ status: "observed", testVerdict: "not-asserted", snapshot: { controlWindow: { offset: 60, returned: 1, nextOffset: null } } }));
+    const runner = { config: { surfaces: {} }, inspectSurface } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const output = JSON.parse(textContent(await client.callTool({ name: "inspect_surface", arguments: { controlOffset: 60 } })));
+      expect(output.snapshot.controlWindow).toMatchObject({ offset: 60, nextOffset: null });
+      expect(inspectSurface).toHaveBeenCalledWith(expect.objectContaining({ controlOffset: 60, adapter: "web" }));
+      for (const input of [{ surface: "mobile", controlOffset: 60 }, { controlOffset: 60, readText: { selector: "#area", offset: 0, limit: 10 } }, { controlOffset: 501 }]) {
+        expect((await client.callTool({ name: "inspect_surface", arguments: input })).isError).toBe(true);
+      }
+      expect(inspectSurface).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("forwards read-only retained observation and planning options without an interaction call", async () => {
+    const inspectSurface = vi.fn(async () => ({ status: "observed", testVerdict: "not-asserted", sessionId: "00000000-0000-4000-8000-000000000001" }));
+    const plan = vi.fn(async () => ({ intent: "Review", actions: [{ kind: "observe" }] }));
+    const runner = { config: { surfaces: {} }, inspectSurface, plan } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "inspect_surface", arguments: { keepSession: true, sessionLabel: "Reviewer", headful: true } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ sessionId: "00000000-0000-4000-8000-000000000001", testVerdict: "not-asserted" });
+      expect(inspectSurface).toHaveBeenCalledWith(expect.objectContaining({ keepSession: true, sessionLabel: "Reviewer", headful: true }));
+      await client.callTool({ name: "plan_test", arguments: { intent: "Review", keepSession: true, sessionLabel: "Planner", headful: true } });
+      expect(plan).toHaveBeenCalledWith("Review", expect.objectContaining({ keepSession: true, sessionLabel: "Planner", headful: true }));
+      for (const name of ["inspect_surface", "plan_test"]) {
+        const invalid = await client.callTool({ name, arguments: { intent: "Review", surface: "electron", keepSession: true } });
+        expect(invalid.isError).toBe(true);
+      }
+      expect(inspectSurface).toHaveBeenCalledTimes(1); expect(plan).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("forwards one explicit bounded page switch without requiring a selector", async () => {
+    const interactSurface = vi.fn(async () => ({ status: "observed", testVerdict: "not-asserted" }));
+    const runner = { config: { surfaces: {} }, interactSurface } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      await client.callTool({ name: "interact_surface", arguments: { surface: "web", sessionId: "00000000-0000-4000-8000-000000000001", action: { kind: "switchPage", title: "Review" } } });
+      expect(interactSurface).toHaveBeenCalledWith(expect.objectContaining({ action: { kind: "switchPage", title: "Review", timeoutMs: 5000 } }));
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it.each([false, true])("returns plan structure status separately from any test verdict (complete=%s)", async (complete) => {
+    const plan = vi.fn(async () => ({ intent: "Read page", level: "quick", actions: [{ kind: "observe" }],
+      assertions: complete ? [{ kind: "text-visible", text: "Ready" }] : [], planning: { source: "submitted", evidenceGaps: [], missingInputs: [] } }));
+    const runner = { config: { surfaces: {} }, plan } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "plan_test", arguments: { intent: "Read page" } });
+      const output = JSON.parse(textContent(response));
+      expect(output).toMatchObject({ status: complete ? "ready-for-review" : "needs-input", scope: "plan-structure", testVerdict: "not-asserted", executionStarted: false,
+        charter: { intent: "Read page" } });
+      expect(output.notEstablished).toContain("business-outcome");
+      expect(output.missionId).toBeUndefined();
+      if (!complete) expect(output.next).toContainEqual(expect.objectContaining({ action: "define-surface-outcome" }));
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("forwards a saved planning continuation without imposing new default requirements", async () => {
+    const plan = vi.fn(async () => ({ intent: "Original request" }));
+    const runner = { config: { surfaces: {} }, plan } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const continuation = { id: "00000000-0000-4000-8000-000000000001", sha256: "a".repeat(64) };
+      await client.callTool({ name: "plan_test", arguments: { continuation, inspections: [{ runId: "next", manifestSha256: "b".repeat(64) }] } });
+      expect(plan).toHaveBeenCalledWith(undefined, expect.objectContaining({ continuation, adapter: undefined, mode: undefined, expect: undefined }));
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("forwards a host-authored planning draft with its original inspection pins", async () => {
+    const plan = vi.fn(async () => ({ intent: "Reviewed host draft" }));
+    const runner = { config: { surfaces: {} }, plan } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const charter = { intent: "Host draft", level: "quick", mode: "deterministic", actions: [{ kind: "observe" }], assertions: [{ kind: "text-visible", text: "Ready" }], sideEffectPolicy: "deny" };
+      const inspections = [{ runId: "inspection", manifestSha256: "a".repeat(64) }];
+      await client.callTool({ name: "plan_test", arguments: { intent: "Original request", charter, inspections } });
+      expect(plan).toHaveBeenCalledWith("Original request", expect.objectContaining({ charter: expect.objectContaining(charter), inspections }));
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it.each(["plan_test", "create_test_mission", "run_test"])("returns the reviewed observation proposal from %s without returning a Charter", async (tool) => {
+    const continuation = { request: { status: "needs-observation" as const, reason: "Need checkout", expectedObservation: "Checkout form controls", action: { kind: "click" as const, selector: "#next", observationId: "cart" } },
+      inspections: [{ runId: "cart", manifestSha256: "a".repeat(64) }], sessionId: "00000000-0000-4000-8000-000000000001" };
+    const fail = vi.fn(async () => { throw new PlanningObservationError(undefined, continuation); });
+    const runner = { config: { surfaces: {} }, plan: fail, createMission: fail } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: tool, arguments: { intent: "Place order" } });
+      const output = JSON.parse(textContent(response));
+      expect(output).toMatchObject({ status: "needs-observation", testVerdict: "not-asserted", observationRequest: { requiresApproval: true, inspections: continuation.inspections,
+        action: continuation.request.action, sessionId: continuation.sessionId }, next: ["interact_surface", "inspect_surface", "plan_test"] });
+      expect(output.charter).toBeUndefined(); expect(output.missionId).toBeUndefined();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("forwards an original inspection and its qualified action to guarded exploration", async () => {
+    const interactSurface = vi.fn(async () => ({ status: "observed", testVerdict: "not-asserted" }));
+    const runner = { config: { surfaces: {} }, interactSurface } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const inspection = { runId: "cart", manifestSha256: "a".repeat(64) };
+      const action = { kind: "click", selector: "#next", observationId: "cart" };
+      await client.callTool({ name: "interact_surface", arguments: { surface: "web", sessionId: "00000000-0000-4000-8000-000000000001", inspection, action } });
+      expect(interactSurface).toHaveBeenCalledWith(expect.objectContaining({ inspection, action }));
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("forwards the planning surface, retained session and cancellation signal", async () => {
+    const plan = vi.fn(async () => ({ intent: "Observe" }));
+    const runner = { config: { surfaces: {} }, plan } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const inspections = [{ runId: "cart", manifestSha256: "a".repeat(64) }, { runId: "checkout", manifestSha256: "b".repeat(64) }];
+      await client.callTool({ name: "plan_test", arguments: { intent: "Observe", level: "quick", surface: "web", headful: true, inspections,
+        sessionId: "00000000-0000-4000-8000-000000000001" } });
+      expect(plan).toHaveBeenCalledWith("Observe", expect.objectContaining({ adapter: "web", headful: true, inspections,
+        sessionId: "00000000-0000-4000-8000-000000000001", signal: expect.any(AbortSignal) }));
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("inspects the retained session and preserves its original manifest receipt", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000001";
+    const manifest = { path: "inspection/manifest.json", sha256: "a".repeat(64) };
+    const inspectSurface = vi.fn(async () => ({ inspectionId: "inspection", manifest }));
+    const runner = { config: { surfaces: {} }, inspectSurface } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "inspect_surface", arguments: { surface: "web", sessionId, headful: true } });
+      expect(inspectSurface).toHaveBeenCalledWith(expect.objectContaining({ adapter: "web", sessionId, headful: true, signal: expect.any(AbortSignal) }));
+      expect(JSON.parse(textContent(response))).toMatchObject({ inspectionId: "inspection", manifest });
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("routes explicit resource preparation without claiming a product verdict", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000001";
+    const charter = { intent: "Prepare isolated Web state", surfaces: ["web"], level: "core", sideEffectPolicy: "allow", actions: [], assertions: [] };
+    const prepareSurfaceSession = vi.fn(async () => ({ sessionId, runId: "prep-run", registrationSha256: "a".repeat(64),
+      status: "prepared", testVerdict: "not-asserted" }));
+    const runner = { config: { surfaces: {} }, prepareSurfaceSession } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: "prepare_surface_session", arguments: { sessionId, charter } });
+      expect(JSON.parse(textContent(response))).toMatchObject({ status: "prepared", runId: "prep-run", testVerdict: "not-asserted" });
+      expect(prepareSurfaceSession).toHaveBeenCalledWith({ sessionId, charter: expect.objectContaining(charter), signal: expect.any(AbortSignal) });
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it.each(["plan_test", "create_test_mission", "run_test"])("returns observation failure evidence from %s without a Charter or product verdict", async (tool) => {
+    const inspection = { inspectionId: "inspection-1", surface: "web" as const, status: "failed" as const, testVerdict: "not-asserted" as const,
+      readiness: { status: "not-requested" as const }, runtimeFindings: [], runtimeFindingsOmitted: 0, findings: ["Target not ready"], evidence: [] };
+    const fail = vi.fn(async () => { throw new PlanningObservationError(inspection); });
+    const runner = { config: { surfaces: {} }, plan: fail, createMission: fail } as unknown as LocalRunnerService;
+    const { client, server } = await connectedClient(runner);
+    try {
+      const response = await client.callTool({ name: tool, arguments: { intent: "Observe", url: "http://127.0.0.1:1" } });
+      const output = JSON.parse(textContent(response));
+      expect(output).toMatchObject({ status: "needs-observation", testVerdict: "not-asserted", inspection: { inspectionId: "inspection-1", status: "failed" } });
+      expect(output.charter).toBeUndefined(); expect(output.next).toContain("inspect_surface");
+    } finally { await client.close(); await server.close(); }
+  });
+
   it("exposes only the high-level local runner surface", async () => {
     const runner = new LocalRunnerService({ root: process.cwd() });
     const server = new McpServer({ name: "proofkit-test", version: "0.1.0" });
@@ -23,6 +216,9 @@ describe("ProofKit MCP tools", () => {
       "inspect_test_environment",
       "inspect_surface",
       "interact_surface",
+      "close_surface_session",
+      "prepare_surface_session",
+      "list_surface_sessions",
       "list_test_charters",
       "list_test_suites",
       "create_test_mission",
@@ -46,8 +242,12 @@ describe("ProofKit MCP tools", () => {
       "get_run_status",
       "inspect_run_resources",
       "recover_run_resources",
+      "recover_session_capture",
       "cancel_run",
       "get_evidence",
+      "verify_evidence_manifest",
+      "approve_surface_replan",
+      "analyze_surface_replan_stability",
       "replay_run",
     ]);
     expect(listed.tools.some((tool) => tool.name.includes("shell"))).toBe(false);
@@ -59,7 +259,7 @@ describe("ProofKit MCP tools", () => {
     for (const name of ["discover_project", "inspect_test_scope", "inspect_integration_readiness", "list_test_charters", "list_test_suites", "get_mission_status", "inspect_mission_recovery"]) {
       expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).toBe(true);
     }
-    for (const name of ["inspect_test_environment", "inspect_surface", "interact_surface", "create_test_mission", "run_test", "get_mission_evidence", "analyze_mission_stability", "create_mission_repeat", "get_mission_repeat_status", "advance_mission_repeat"]) {
+    for (const name of ["inspect_test_environment", "inspect_surface", "interact_surface", "close_surface_session", "create_test_mission", "run_test", "get_mission_evidence", "analyze_mission_stability", "create_mission_repeat", "get_mission_repeat_status", "advance_mission_repeat"]) {
       expect(listed.tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint).not.toBe(true);
     }
 
@@ -71,7 +271,7 @@ describe("ProofKit MCP tools", () => {
     const runner = { config: { surfaces: { web: { baseUrl: "http://127.0.0.1:7780/admin" } } },
       interactSurface: vi.fn(async () => ({ interactionId: "run-1", surface: "web", status: "observed",
         testVerdict: "not-asserted", action: { kind: "click", status: "passed" }, evidence: [], evidenceOmitted: 0,
-        findings: [] })) } as unknown as LocalRunnerService;
+        findings: [] })), closeSurfaceSession: vi.fn(async (sessionId: string) => ({ sessionId, status: "closed" })) } as unknown as LocalRunnerService;
     const { client, server } = await connectedClient(runner);
     try {
       const response = await client.callTool({ name: "interact_surface", arguments: {
@@ -79,6 +279,17 @@ describe("ProofKit MCP tools", () => {
       expect(JSON.parse(textContent(response))).toMatchObject({ status: "observed", testVerdict: "not-asserted" });
       expect(runner.interactSurface).toHaveBeenCalledWith({ adapter: "web", url: undefined,
         action: { kind: "click", selector: "#orders" }, signal: expect.any(AbortSignal) });
+      const sessionId = "452f1671-f341-464c-8d0e-9c905e89382a";
+      await client.callTool({ name: "interact_surface", arguments: {
+        surface: "web", keepSession: true, action: { kind: "click", selector: "#orders" } } });
+      expect(runner.interactSurface).toHaveBeenLastCalledWith({ adapter: "web", url: undefined,
+        keepSession: true, action: { kind: "click", selector: "#orders" }, signal: expect.any(AbortSignal) });
+      await client.callTool({ name: "interact_surface", arguments: {
+        surface: "web", sessionId, action: { kind: "click", selector: "#orders" } } });
+      expect(runner.interactSurface).toHaveBeenLastCalledWith({ adapter: "web", url: undefined,
+        sessionId, action: { kind: "click", selector: "#orders" }, signal: expect.any(AbortSignal) });
+      expect(JSON.parse(textContent(await client.callTool({ name: "close_surface_session", arguments: { sessionId } })))).toMatchObject({ status: "closed" });
+      expect(runner.closeSurfaceSession).toHaveBeenCalledWith(sessionId);
       for (const action of [{ kind: "selectOption", selector: "#status", option: { label: "Complete" } },
         { kind: "selectOptions", selector: "#statuses", options: [{ label: "Complete" }, { value: "pending" }] },
         { kind: "setChecked", selector: "#enabled", checked: false }]) {
@@ -89,6 +300,7 @@ describe("ProofKit MCP tools", () => {
         action: { kind: "selectOption", selector: "#status", option: { label: "Complete", value: "complete" } } } })).isError).toBe(true);
       expect((await client.callTool({ name: "interact_surface", arguments: {
         action: { kind: "click", selector: "" } } })).isError).toBe(true);
+      expect((await client.callTool({ name: "close_surface_session", arguments: { sessionId: "not-a-uuid" } })).isError).toBe(true);
     } finally { await client.close(); await server.close(); }
   });
 
@@ -106,6 +318,10 @@ describe("ProofKit MCP tools", () => {
       expect(JSON.parse(textContent(response))).toMatchObject({ status: "blocked", testVerdict: "not-asserted", charterId: "resume-core" });
       expect(runner.inspectIntegrationReadiness).toHaveBeenCalledWith({ charterId: "resume-core" }, expect.any(AbortSignal));
       expect((await client.callTool({ name: "inspect_integration_readiness", arguments: { charterId: "../secret" } })).isError).toBe(true);
+      const draft = { intent: "Check draft before writes", surfaces: ["web"], metadata: { requiredFields: ["email"] } };
+      expect((await client.callTool({ name: "inspect_integration_readiness", arguments: { charter: draft } })).isError).not.toBe(true);
+      expect(runner.inspectIntegrationReadiness).toHaveBeenLastCalledWith(expect.objectContaining({ charter: expect.objectContaining(draft) }), expect.any(AbortSignal));
+      expect((await client.callTool({ name: "inspect_integration_readiness", arguments: { charter: draft, charterId: "resume-core" } })).isError).toBe(true);
     } finally { await client.close(); await server.close(); }
   });
 
@@ -782,7 +998,7 @@ function fixtureMission(status: TestMission["status"]): TestMission {
       successCriteria: [],
       assumptions: [],
       level: "core",
-      executionProfile: { surfaceMatrix: ["web"], charterIds: [], collectAllResults: false, negativeCases: ["关键权限或输入边界"], declaredNegativeCases: [], requireBusinessOracle: true, requireReplay: false, requireNegativeCases: false, minimumEvidence: 2 },
+      executionProfile: { surfaceMatrix: ["web"], webVisibility: "headless", charterIds: [], collectAllResults: false, negativeCases: ["关键权限或输入边界"], declaredNegativeCases: [], requireBusinessOracle: true, requireReplay: false, requireNegativeCases: false, minimumEvidence: 2 },
       createdAt: new Date().toISOString(),
     },
     agentSteps: [],

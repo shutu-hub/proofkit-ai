@@ -1,9 +1,11 @@
 import { createRunId, EvidenceStore, LocalExecutionOwnership, type LocalExecutionLease } from "@proofkit/evidence";
-import { hasIncompleteIntegrationCleanup, IntegrationCheckResultSchema, OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, SurfaceTableReadObservationSchema, SurfaceTextReadObservationSchema, TargetBindingSchema, type IntegrationSetupPolicy, type RuntimeFinding, type SurfaceTableReadRequest, type SurfaceTextReadRequest } from "@proofkit/contracts";
+import { hasIncompleteIntegrationCleanup, IntegrationCheckResultSchema, OracleResultSchema, ResponseObservationSchema, RuntimeFindingSchema, RuntimeQualityPolicySchema, SurfaceReplanProposalSchema, SurfaceTableReadObservationSchema, SurfaceTextReadObservationSchema, TargetBindingSchema, type IntegrationSetupPolicy, type RuntimeFinding, type SurfaceTableReadRequest, type SurfaceTextReadRequest } from "@proofkit/contracts";
 import { z } from "zod";
+import { actionSurfaceTargets, FieldValueObservationSchema, ResponseErrorObservationSchema, ResponseIdentifierSchema, SurfaceControlWindowSchema, SurfaceTargetCheckSchema, type ResponseErrorObservation } from "@proofkit/contracts";
+import { auditPlanningObservation } from "@proofkit/evidence";
 import { InputFileError, inputFileFacts, resolveInputFiles, sameInputFileFacts, type InputFileFact, type SurfaceActionContext } from "./input-files.js";
-import { IntegrationLifecycle, releaseLateIntegration, validateSetupPolicy, type IntegrationRecoveryContext, type IntegrationSetup, type IntegrationSetupEntry } from "./integration-lifecycle.js";
-export { IntegrationLifecycle } from "./integration-lifecycle.js";
+import { IntegrationLifecycle, releaseLateIntegration, validateSetupPolicy, type IntegrationRecoveryContext, type IntegrationSetup, type IntegrationSetupEntry, type IntegrationSetupHandle, type IntegrationSetupContext } from "./integration-lifecycle.js";
+export { IntegrationLifecycle, releaseLateIntegration } from "./integration-lifecycle.js";
 export type { IntegrationRecoveryContext } from "./integration-lifecycle.js";
 export type { IntegrationSetup, IntegrationSetupEntry, IntegrationSetupHandle, IntegrationSetupContext, IntegrationCleanupContext } from "./integration-lifecycle.js";
 export type { SurfaceActionContext, ResolvedInputFile, InputFileFact } from "./input-files.js";
@@ -26,6 +28,8 @@ import type {
   SurfaceSnapshot,
   TargetBinding,
   TestCharter,
+  VideoRecordingBudget,
+  VideoRecordingStopReason,
 } from "@proofkit/contracts";
 
 export type AdapterEvent = {
@@ -37,10 +41,15 @@ export type AdapterEvent = {
 
 export interface SurfaceAdapter {
   readonly name: string;
+  /** Records whether this adapter owns a visible browser or attaches to an external surface. */
+  readonly executionVisibility?: "headful" | "headless" | "external";
   readonly supportsFileInputs?: boolean;
   readonly supportsResponseCapture?: boolean;
+  readonly supportsTargetExpectations?: boolean;
+  readonly supportsPageSwitch?: boolean;
+  readonly supportsControlWindows?: boolean;
   connect(): Promise<void>;
-  discover(): Promise<SurfaceSnapshot>;
+  discover(input?: { controlOffset?: number }): Promise<SurfaceSnapshot>;
   /** Optional targeted reader; absence must never silently fall back to a page overview. */
   readText?(request: SurfaceTextReadRequest): Promise<SurfaceSnapshot>;
   readTable?(request: SurfaceTableReadRequest): Promise<SurfaceSnapshot>;
@@ -48,6 +57,10 @@ export interface SurfaceAdapter {
   act(action: Action, context?: SurfaceActionContext): Promise<ActionReceipt>;
   assert(assertion: Assertion): Promise<AssertionResult>;
   capture(label: string): Promise<Uint8Array | undefined>;
+  takeCaptureNavigationRecovery?(): boolean;
+  recordingStatus?(): "recorded" | "partial" | "unavailable" | undefined;
+  recordingStopReason?(): VideoRecordingStopReason | undefined;
+  recordingBudget?(): VideoRecordingBudget | undefined;
   subscribeEvents(listener: (event: AdapterEvent) => void): Promise<() => void>;
   close(): Promise<void>;
 }
@@ -155,11 +168,34 @@ export class InconclusiveError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 
+export class ResponseCaptureError extends InconclusiveError {
+  readonly observation: ResponseErrorObservation;
+  constructor(input: ResponseErrorObservation) {
+    const observation = ResponseErrorObservationSchema.parse(input);
+    const code = observation.kind === "unexpected-status" ? "response-status" : observation.fieldGaps[0]
+      ? "response-field-" + observation.fieldGaps[0].code : observation.requestGap!;
+    super(code, observation.kind === "unexpected-status"
+      ? "Response status " + observation.status + " is outside the declared statuses; selected diagnostics do not establish business acceptance"
+      : "Declared response or request fields were incomplete; retained selected diagnostics do not establish business acceptance");
+    this.observation = observation;
+  }
+}
+
+export class ResponseStatusError extends ResponseCaptureError {
+  constructor(input: ResponseErrorObservation) {
+    if (input.kind !== "unexpected-status") throw new Error("ResponseStatusError requires an unexpected status");
+    super(input);
+  }
+}
+
 export type ExecutionOptions = {
   projectRoot?: string;
   workspaceRoot?: string;
   evidenceDir?: string;
   runId?: string;
+  sessionId?: string;
+  preparedSession?: { sessionId: string; preparationRunId: string };
+  sessionCaptureRunId?: string;
   replayOfRunId?: string;
   oracles?: BusinessOracle[];
   capabilities?: CapabilityDefinition<any, any>[];
@@ -207,6 +243,9 @@ export class ExecutionRunner {
   private readonly allowFileUploads: boolean;
   private readonly expectedInputFiles?: Record<string, InputFileFact[]>;
   private readonly replayOfRunId?: string;
+  private readonly sessionId?: string;
+  private readonly preparedSession?: ExecutionOptions["preparedSession"];
+  private readonly sessionCaptureRunId?: string;
   private readonly setups: IntegrationSetupEntry[];
   private readonly targetBinding?: ExecutionOptions["targetBinding"];
   private readonly applicationBinding?: ExecutionOptions["applicationBinding"];
@@ -242,6 +281,9 @@ export class ExecutionRunner {
     this.allowFileUploads = options.allowFileUploads ?? false;
     this.expectedInputFiles = options.expectedInputFiles;
     this.replayOfRunId = options.replayOfRunId;
+    this.sessionId = options.sessionId;
+    this.preparedSession = options.preparedSession;
+    this.sessionCaptureRunId = options.sessionCaptureRunId;
     const setups = options.setup ? Array.isArray(options.setup) ? options.setup : [{ setup: options.setup, policy: options.setupPolicy }] : [];
     this.setups = setups.map((entry) => {
       const value = typeof entry === "function" ? { setup: entry } : entry;
@@ -304,7 +346,7 @@ export class ExecutionRunner {
     const startedAt = new Date().toISOString();
     const summary: RunSummary = {
       runId,
-      execution: { adapter: this.adapter.name, ...(this.replayOfRunId ? { replayOfRunId: this.replayOfRunId } : {}) },
+      execution: { adapter: this.adapter.name, ...(this.adapter.executionVisibility ? { visibility: this.adapter.executionVisibility } : {}), ...(this.sessionId ? { sessionId: this.sessionId } : {}), ...(this.sessionCaptureRunId ? { sessionCaptureRunId: this.sessionCaptureRunId } : {}), ...(this.replayOfRunId ? { replayOfRunId: this.replayOfRunId } : {}) },
       projectRoot: this.projectRoot,
       workspaceRoot: this.workspaceRoot,
       startedAt,
@@ -328,6 +370,7 @@ export class ExecutionRunner {
     }, this.timeoutMs);
     const signal = controller.signal;
     let executionError: Error | undefined;
+    let recordingEvidenceFailed = false;
     let surfaceAttached = false;
     let unsubscribe: () => void | Promise<void> = () => {};
     let pendingEvents = Promise.resolve();
@@ -374,12 +417,24 @@ export class ExecutionRunner {
         }
       }
       assertFillEnvironment(charter.actions);
+      if (charter.surfaceObservation) {
+        const audit = await auditPlanningObservation(this.store, charter.surfaceObservation, { projectRoot: this.projectRoot, workspaceRoot: this.workspaceRoot,
+          adapter: this.adapter.name, sessionId: this.sessionId, actions: [...charter.actions, ...(charter.negativeCases ?? []).flatMap((negative) => negative.actions)] });
+        if (audit.status === "unverified") throw new InconclusiveError("planning-observation-unverified", audit.reason);
+      }
+      if (charter.surfaceObservation && [...charter.actions, ...(charter.negativeCases ?? []).flatMap((negative) => negative.actions)]
+        .flatMap(actionSurfaceTargets).some((target) => !target.expectedTarget)) {
+        throw new InconclusiveError("surface-plan-unbound", "The observed plan contains a control without a unique observed identity. Inspect the required surface state and review a bound plan before execution.");
+      }
       if (charter.actions.some((action) => action.kind === "selectOption" || action.kind === "selectOptions" || action.kind === "setChecked") && charter.sideEffectPolicy !== "allow") {
         throw new BlockedError("Native form actions require sideEffectPolicy=allow");
       }
       if (charter.actions.some((action) => action.kind === "captureResponse")) {
         if (charter.sideEffectPolicy !== "allow") throw new BlockedError("Response capture triggers require sideEffectPolicy=allow");
         if (!this.adapter.supportsResponseCapture) throw new BlockedError(`Response capture is not supported by the ${this.adapter.name} adapter`);
+      }
+      if (charter.actions.some((action) => action.kind === "switchPage") && !this.adapter.supportsPageSwitch) {
+        throw new BlockedError(`Page switching is not supported by the ${this.adapter.name} adapter`);
       }
       if (charter.actions.some((action) => action.kind === "setInputFiles")) {
         if (charter.sideEffectPolicy !== "allow" || !this.allowFileUploads) throw new BlockedError("File selection requires sideEffectPolicy=allow and runner allowFileUploads");
@@ -424,13 +479,46 @@ export class ExecutionRunner {
         throwIfAborted(signal);
         integrationLifecycle.begin(policy);
         let handle: Awaited<ReturnType<IntegrationSetup>>;
+        let registrationOpen = true;
+        let setupSettled = false;
+        let setupRetired = false;
+        let registration: { handle: IntegrationSetupHandle; pending: Promise<void> } | undefined;
+        const registerResources: NonNullable<IntegrationSetupContext["registerResources"]> = async (resourceHandle) => {
+          if (!registrationOpen) throw new Error("Setup resource registration is closed");
+          throwIfAborted(signal);
+          if (policy?.sideEffect !== "write" || charter.sideEffectPolicy !== "allow" || !this.allowSetupWrites) {
+            throw new Error("Early resource registration requires a permitted write setup policy");
+          }
+          if (registration) throw new Error("Register the complete resource handle once per setup");
+          const pending = Promise.resolve().then(async () => {
+            const artifact = await integrationLifecycle.register(resourceHandle, policy);
+            if (artifact && !summary.artifacts.includes(artifact)) summary.artifacts.push(artifact);
+            await this.store.writeSummary(summary);
+          });
+          registration = { handle: resourceHandle, pending };
+          await pending;
+        };
         try {
-          handle = await withResourceAbort(Promise.resolve().then(() => setup({
+          const pendingSetup = Promise.resolve().then(() => setup({
             runId, charter, environment: this.environment, projectRoot: this.projectRoot, workspaceRoot: this.workspaceRoot,
-            signal, emit: (event) => this.emit({ ...event, runId }),
-          })), signal, "Project setup", (lateHandle) => releaseLateIntegration(lateHandle, runId), trackAcquisition);
-        } catch (error) { integrationLifecycle.acquisitionFailed(); throw error; }
-        const setupArtifact = await integrationLifecycle.register(handle, policy);
+            signal, emit: (event) => this.emit({ ...event, runId }), registerResources, preparedSession: this.preparedSession,
+          })).then(async (value) => { registrationOpen = false; await registration?.pending; return value; },
+            async (error: unknown) => { registrationOpen = false; await registration?.pending.catch(() => {}); throw error; })
+            .finally(async () => {
+              registrationOpen = false;
+              if (setupRetired && registration) await releaseLateIntegration(registration.handle, runId);
+              setupSettled = true;
+            });
+          handle = await withResourceAbort(pendingSetup, signal, "Project setup",
+            (lateHandle) => lateHandle === registration?.handle ? Promise.resolve() : releaseLateIntegration(lateHandle, runId), trackAcquisition);
+        } catch (error) {
+          registrationOpen = false;
+          setupRetired = !setupSettled;
+          integrationLifecycle.acquisitionFailed();
+          throw error;
+        }
+        const setupArtifact = registration && (handle === undefined || handle === registration.handle)
+          ? undefined : await integrationLifecycle.register(handle, policy);
         if (setupArtifact) {
           summary.artifacts.push(setupArtifact);
           await this.store.writeSummary(summary);
@@ -477,8 +565,21 @@ export class ExecutionRunner {
       await withResourceAbort(this.adapter.connect(), signal, "Adapter connect", () => this.adapter.close(), trackAcquisition);
       surfaceAttached = true;
       throwIfAborted(signal);
+      let activeStepId: string | undefined;
+      const requestSteps = new Map<string, string>();
       unsubscribe = await withResourceAbort(this.adapter.subscribeEvents((event) => {
-        pendingEvents = pendingEvents.then(() => this.recordAdapterEvent(runId, event, summary)).catch(() => {
+        const requestId = typeof event.payload.requestId === "string" ? event.payload.requestId : undefined;
+        let stepId = activeStepId;
+        if (event.type === "request") {
+          if (requestId && stepId) {
+            if (requestSteps.size >= 2_000) requestSteps.delete(requestSteps.keys().next().value!);
+            requestSteps.set(requestId, stepId);
+          }
+        } else if (event.type === "response" || event.type === "requestfailed") {
+          stepId = requestId ? requestSteps.get(requestId) : undefined;
+          if (requestId) requestSteps.delete(requestId);
+        }
+        pendingEvents = pendingEvents.then(() => this.recordAdapterEvent(runId, event, summary, stepId)).catch(() => {
           eventEvidenceFailed = true;
         });
       }), signal, "Adapter event subscription", async (release) => { await release(); }, trackAcquisition);
@@ -486,6 +587,7 @@ export class ExecutionRunner {
       for (const [index, action] of charter.actions.entries()) {
         throwIfAborted(signal);
         const stepId = `step-${String(index + 1).padStart(3, "0")}`;
+        activeStepId = stepId;
         await this.emit({ runId, timestamp: new Date().toISOString(), type: "step.started", stepId, payload: { action } });
         const step: RunSummary["steps"][number] = { stepId, action, status: "passed", artifacts: [] };
         try {
@@ -499,7 +601,21 @@ export class ExecutionRunner {
             step.beforeSnapshot = beforeSnapshot;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-before`, beforeSnapshot));
             const runtimeAction = resolveRuntimeAction(action);
-            let actionContext: SurfaceActionContext = { signal };
+            const expectedTargets = actionSurfaceTargets(runtimeAction).filter((target) => target.expectedTarget);
+            if (expectedTargets.length && !this.adapter.supportsTargetExpectations) {
+              throw new InconclusiveError("surface-target-check-unsupported", "This adapter cannot verify the planned control identity; no action was performed.");
+            }
+            let actionContext: SurfaceActionContext = { signal, recordTargetCheck: async (input) => {
+              const check = SurfaceTargetCheckSchema.parse(input);
+              const target = expectedTargets[step.targetChecks?.length ?? 0];
+              if (!target || target.selector !== check.selector || JSON.stringify(target.expectedTarget) !== JSON.stringify(check.expected) || (step.targetChecks?.length ?? 0) >= 2) {
+                throw new InconclusiveError("surface-target-check-unverified", "The adapter target check does not match the planned action.");
+              }
+              step.targetChecks ??= [];
+              step.targetChecks.push(check);
+              const name = step.targetChecks.length === 1 ? `${stepId}-target-check` : `${stepId}-follow-up-target-check`;
+              step.artifacts.push(await this.store.writeJson(runId, name, check));
+            } };
             if (action.kind === "setInputFiles") {
               if (this.expectedInputFiles) step.replayInputMatched = false;
               try {
@@ -523,6 +639,12 @@ export class ExecutionRunner {
               }
             }
             const receipt = await withAbort(this.adapter.act(runtimeAction, actionContext), signal, `${stepId} action`);
+            const receiptResponse = runtimeAction.kind === "captureResponse" ? ResponseObservationSchema.safeParse(receipt.metadata.response) : undefined;
+            const requiredTargets = runtimeAction.kind === "captureResponse" && (!receiptResponse?.success || receiptResponse.data.followUp !== "clicked")
+              ? [runtimeAction.trigger].filter((target) => target.expectedTarget) : expectedTargets;
+            if (requiredTargets.some((target, index) => step.targetChecks?.[index]?.selector !== target.selector || step.targetChecks[index]?.status !== "matched")) {
+              throw new InconclusiveError("surface-target-check-unverified", "The adapter did not return a matching pre-action identity check for a planned control.");
+            }
             if (action.kind === "captureResponse") {
               const result = ResponseObservationSchema.safeParse(receipt.metadata.response);
               if (!result.success || result.data.name !== action.name || result.data.url !== new URL(action.response.url).href
@@ -531,20 +653,28 @@ export class ExecutionRunner {
                 || Object.keys(result.data.fields).length !== Object.keys(action.response.fields).length
                 || Object.entries(action.response.fields).some(([name, field]) => {
                   const value = result.data.fields[name];
-                  return field.type === "id" ? typeof value !== "string" || !/^[1-9]\d{0,127}$/.test(value) : typeof value !== field.type;
+                  return field.type === "id" ? typeof value !== "string" || !/^[1-9]\d{0,127}$/.test(value)
+                    : field.type === "identifier" ? !ResponseIdentifierSchema.safeParse(value).success : typeof value !== field.type;
                 })) throw new InconclusiveError("missing-response-facts", "Adapter did not return valid facts for this response capture");
               step.response = result.data;
               step.receipt = { ...receipt, metadata: { adapter: this.adapter.name, response: result.data } };
               const artifact = await this.store.writeJson(runId, `${stepId}-response`, result.data);
               step.artifacts.push(artifact);
               await this.emit({ runId, timestamp: result.data.capturedAt, type: "artifact.created", stepId, payload: { path: artifact, kind: "response-observation" } });
+            } else if (runtimeAction.kind === "waitForValue") {
+              const observation = FieldValueObservationSchema.safeParse(receipt.metadata.formValue);
+              if (!observation.success || observation.data.stableForMs < runtimeAction.stableForMs) {
+                throw new InconclusiveError("surface-value-unverified", "The adapter did not return a bounded matching observation for the declared value checkpoint");
+              }
+              step.receipt = { ...receipt, metadata: { adapter: this.adapter.name, formValue: observation.data } };
+              step.artifacts.push(await this.store.writeJson(runId, stepId + "-form-value", observation.data));
             } else {
               step.receipt = actionContext.inputFiles
                 ? { ...receipt, metadata: { ...receipt.metadata, inputFiles: inputFileFacts(actionContext.inputFiles) } }
                 : receipt;
             }
             let afterSnapshot: SurfaceSnapshot;
-            if (action.kind === "observe" && action.readText && action.readTable) {
+            if (action.kind === "observe" && Number(Boolean(action.readText)) + Number(Boolean(action.readTable)) + Number(action.controlOffset !== undefined) > 1) {
               throw new InconclusiveError("surface-read-conflict", "Choose one scoped read per observation.");
             }
             if (action.kind === "observe" && action.readText) {
@@ -566,13 +696,32 @@ export class ExecutionRunner {
                 throw new InconclusiveError("surface-table-read-unverified", "Adapter did not return a consistent targeted table observation.");
               }
             } else {
-              afterSnapshot = await withAbort(action.kind === "observe" ? this.adapter.discover() : this.adapter.snapshot(), signal, `${stepId} snapshot`);
+              if (action.kind === "observe" && action.controlOffset !== undefined) {
+                if (!this.adapter.supportsControlWindows) throw new InconclusiveError("surface-control-read-unsupported", "This adapter does not support targeted control windows.");
+                afterSnapshot = await withAbort(this.adapter.discover({ controlOffset: action.controlOffset }), signal, `${stepId} control window`);
+                if (!SurfaceControlWindowSchema.safeParse(afterSnapshot.controlWindow).success || afterSnapshot.controlWindow?.offset !== action.controlOffset || afterSnapshot.controlWindow.returned !== afterSnapshot.controls?.length
+                  || afterSnapshot.controlsTruncated !== !afterSnapshot.controlWindow.allControlsObserved) {
+                  throw new InconclusiveError("surface-control-read-unverified", "Adapter did not return a consistent targeted control window.");
+                }
+              } else {
+                afterSnapshot = await withAbort(action.kind === "observe" ? this.adapter.discover() : this.adapter.snapshot(), signal, `${stepId} snapshot`);
+              }
             }
             step.afterSnapshot = afterSnapshot;
             step.artifacts.push(await this.store.writeJson(runId, `${stepId}-after`, afterSnapshot));
             try {
               const screenshot = await withAbort(this.adapter.capture(`${stepId}.png`), signal, `${stepId} capture`);
               if (screenshot) step.artifacts.push(await this.store.writeBuffer(runId, `${stepId}.png`, screenshot));
+              if (screenshot && this.adapter.takeCaptureNavigationRecovery?.()) {
+                try {
+                  const navigated = await withAbort(this.adapter.snapshot(), signal, `${stepId} post-navigation snapshot`);
+                  step.afterSnapshot = navigated;
+                  step.artifacts.push(await this.store.writeJson(runId, `${stepId}-after-navigation`, navigated));
+                } catch {
+                  if (signal.aborted) throw abortReason(signal);
+                  summary.findings.push(`${stepId}: post-navigation snapshot unavailable; the saved screenshot does not establish the final page state.`);
+                }
+              }
             } catch (error) {
               if (signal.aborted) throw abortReason(signal);
               summary.findings.push(`${stepId}: screenshot unavailable; inspect trusted local diagnostics.`);
@@ -584,7 +733,56 @@ export class ExecutionRunner {
           step.error = cause.message;
           if (cause instanceof InconclusiveError) step.failureCode = cause.code;
           else if (cause instanceof AmbiguousSurfaceTargetError) step.failureCode = "surface-target-ambiguous";
-          if (cause instanceof InconclusiveError) step.artifacts.push(await this.store.writeJson(runId, `${stepId}-response-gap`, { code: cause.code, message: cause.message }));
+          if (cause instanceof ResponseCaptureError) {
+            const observation = validatedResponseError(action, cause.observation);
+            if (observation) {
+              step.responseError = observation;
+              step.artifacts.push(await this.store.writeJson(runId, stepId + "-response-error", observation));
+            } else {
+              step.failureCode = cause.observation.kind === "unexpected-status" ? "response-status-unverified" : "response-fields-unverified";
+              step.error = "The unexpected-response diagnostics do not match the declared action and were not retained";
+            }
+          }
+          if (cause instanceof InconclusiveError) step.artifacts.push(await this.store.writeJson(runId, `${stepId}-response-gap`, { code: step.failureCode ?? cause.code, message: step.error ?? cause.message }));
+          let failureSnapshot: SurfaceSnapshot | undefined;
+          if (action.kind !== "capability" && !signal.aborted) {
+            try {
+              const snapshot = await withAbort(this.adapter.discover(), signal, `${stepId} failure snapshot`);
+              failureSnapshot = snapshot;
+              step.artifacts.push(await this.store.writeJson(runId, `${stepId}-failure-snapshot`, snapshot));
+            } catch {
+              if (!signal.aborted) summary.findings.push(`${stepId}: failure snapshot unavailable; inspect trusted local diagnostics.`);
+            }
+            if (!signal.aborted) {
+              try {
+                const screenshot = await withAbort(this.adapter.capture(`${stepId}-failure.png`), signal, `${stepId} failure capture`);
+                if (screenshot) step.artifacts.push(await this.store.writeBuffer(runId, `${stepId}-failure.png`, screenshot));
+              } catch {
+                if (!signal.aborted) summary.findings.push(`${stepId}: failure screenshot unavailable; inspect trusted local diagnostics.`);
+              }
+            }
+          }
+          const selector = actionTargetSelector(action);
+          if (selector && failureSnapshot) {
+            const controls = failureSnapshot.controls;
+            const targetStatus = controls === undefined || failureSnapshot.controlsTruncated ? "unknown" : controls.some((control) => control.selector === selector || control.alternateSelectors?.includes(selector)) ? "present" : "absent";
+            const diagnosis = { selector, status: targetStatus, observedAt: failureSnapshot.capturedAt, url: failureSnapshot.url,
+                controlsObserved: controls?.filter((control) => control.selector).slice(0, 20).map((control) => ({ selector: control.selector, tag: control.tag, role: control.role, name: control.name })) ?? [] };
+            step.artifacts.push(await this.store.writeJson(runId, `${stepId}-target-diagnosis`, diagnosis));
+            if (targetStatus === "absent" && cause instanceof InconclusiveError && cause.code === "runner-action-timeout") {
+              step.failureCode = "surface-selector-drift";
+              summary.findings.push(`${stepId}: planned selector was absent from the contemporaneous surface observation; re-inspect before revising the plan.`);
+              const proposal = SurfaceReplanProposalSchema.parse({
+                schemaVersion: 1, status: "needs-approval", requiresApproval: true, reason: "surface-selector-drift",
+                sourceStepId: stepId, originalSelector: selector, observedAt: failureSnapshot.capturedAt, observedUrl: failureSnapshot.url,
+                candidates: (failureSnapshot.controls ?? []).filter((control) => typeof control.selector === "string").slice(0, 8).map((control) => ({
+                  selector: control.selector!, tag: control.tag, role: control.role, ...(control.inputType ? { inputType: control.inputType } : {}), ...(control.name ? { name: control.name } : {}), ...(control.groupName ? { groupName: control.groupName } : {}),
+                })), next: "inspect_surface",
+                message: "Candidate controls are evidence for review only. Inspect the current surface and approve a revised Charter before executing a replacement action.",
+              });
+              step.artifacts.push(await this.store.writeJson(runId, `${stepId}-replan-proposal`, proposal));
+            }
+          }
           executionError = cause;
           summary.findings.push(`${stepId}: ${cause.message}`);
         }
@@ -592,6 +790,7 @@ export class ExecutionRunner {
         summary.steps.push(step);
         await this.store.writeSummary(summary);
         await this.emit({ runId, timestamp: new Date().toISOString(), type: "step.completed", stepId, payload: { status: step.status, error: step.error } });
+        activeStepId = undefined;
         if (step.status !== "passed") break;
       }
 
@@ -735,6 +934,38 @@ export class ExecutionRunner {
       try { await unsubscribe(); } catch (error) { executionError ??= safeRunError(error); summary.findings.push("Adapter event subscription cleanup failed; inspect trusted local diagnostics."); }
       try { await this.adapter.close(); } catch (error) { executionError ??= safeRunError(error); summary.findings.push("Adapter close failed; inspect trusted local diagnostics."); }
       await pendingEvents;
+      const recordingStatus = this.adapter.recordingStatus?.();
+      const recordingStopReason = this.adapter.recordingStopReason?.();
+      const recordingBudget = this.adapter.recordingBudget?.();
+      if (recordingStatus) {
+        if ((recordingStatus === "recorded" && !recordingStopReason)
+          || (recordingStatus === "partial" && recordingStopReason && recordingStopReason !== "inspection-failed")) {
+          try {
+            const artifact = await this.store.recordExistingFile(runId, "recording.webm", recordingBudget?.maxBytes);
+            summary.recording = { status: recordingStatus, artifact, ...(recordingStopReason ? { stopReason: recordingStopReason } : {}), ...(recordingBudget ? { budget: recordingBudget } : {}) };
+            summary.artifacts.push(artifact);
+          } catch {
+            recordingEvidenceFailed = true;
+            await this.store.discardUnsealedFile(runId, "recording.webm").catch(() => {});
+          }
+        } else recordingEvidenceFailed = true;
+        if (recordingEvidenceFailed) {
+          await this.store.discardUnsealedFile(runId, "recording.webm").catch(() => {});
+          summary.recording = { status: "unavailable", ...(recordingBudget ? { budget: recordingBudget } : {}) };
+          summary.findings.push("Requested Web recording could not be sealed as Run evidence; inspect trusted local diagnostics.");
+        }
+      }
+      if (recordingStopReason) {
+        recordingEvidenceFailed = true;
+        if (summary.recording?.status !== "partial") summary.recording = { status: "unavailable", stopReason: recordingStopReason, ...(recordingBudget ? { budget: recordingBudget } : {}) };
+        summary.findings.push(`Requested recording stopped: ${recordingStopReason}; requested evidence is incomplete.`);
+        const observedFailure = summary.assertions.some((result) => !result.passed && result.evidence.length > 0)
+          || summary.oracles.some((result) => result.passed === false && (result.sourceEvidenceCount ?? 0) > 0);
+        if (executionError && !(executionError instanceof BlockedError) && !(executionError instanceof CancelledError)
+          && !(executionError instanceof RunTimeoutError) && !observedFailure) {
+          executionError = new InconclusiveError("video-recording-budget", `Recording stopped: ${recordingStopReason}; browser execution was interrupted.`);
+        }
+      }
       if (eventEvidenceFailed) {
         summary.findings.push("Adapter runtime event evidence could not be saved; inspect trusted local diagnostics.");
         executionError ??= new InconclusiveError("runtime-evidence-unavailable", "Adapter runtime event evidence is incomplete.");
@@ -786,9 +1017,13 @@ export class ExecutionRunner {
       ? "failed"
       : baseVerdict;
     if (hasIncompleteIntegrationCleanup(summary.integrationCleanup) && summary.verdict === "passed") summary.verdict = "blocked";
+    if (recordingEvidenceFailed && summary.verdict === "passed") summary.verdict = "inconclusive";
     if (summary.verdict === "blocked" && environmentBlocked) summary.findings.push("Configured runtime environment blocker was observed; inspect runtime-findings.json.");
     if (summary.verdict === "inconclusive") {
-      const reason = executionError instanceof InconclusiveError ? executionError.message : charter.assertions.length === 0 && this.oracles.length === 0
+      const reason = executionError instanceof InconclusiveError ? executionError.message : recordingEvidenceFailed
+        ? summary.recording?.status === "partial" ? "Requested Web recording is incomplete; the Run cannot claim complete requested evidence."
+          : "Requested Web recording is unavailable; the Run cannot claim complete requested evidence."
+        : charter.assertions.length === 0 && this.oracles.length === 0
         ? "No executable assertion or business oracle was declared."
         : summary.assertions.some((result) => result.evidence.length === 0)
           ? "A surface assertion has no contemporaneous saved observation; its result cannot establish product correctness."
@@ -797,8 +1032,14 @@ export class ExecutionRunner {
     }
     summary.status = "completed";
     summary.endedAt = new Date().toISOString();
-    await this.store.writeSummary(summary);
     await this.emit({ runId, timestamp: summary.endedAt, type: "run.completed", payload: { verdict: summary.verdict } });
+    try { summary.eventLog = await this.store.pinEventLog(runId); }
+    catch {
+      summary.eventLog = { status: "unavailable" };
+      summary.findings.push("Run event log could not be pinned; step timing, network timeline and artifact previews are unavailable.");
+      if (summary.verdict === "passed") summary.verdict = "inconclusive";
+    }
+    await this.store.writeSummary(summary);
     await this.store.writeReport(summary);
     return summary;
   }
@@ -807,11 +1048,11 @@ export class ExecutionRunner {
     await this.store.appendEvent(event);
   }
 
-  private async recordAdapterEvent(runId: string, event: AdapterEvent, summary: RunSummary): Promise<void> {
+  private async recordAdapterEvent(runId: string, event: AdapterEvent, summary: RunSummary, stepId?: string): Promise<void> {
     const timestamp = event.timestamp ?? new Date().toISOString();
     const safeEvent = { ...event, payload: sanitizeAdapterEventPayload(event.payload, this.urlEvidenceTargets, this.webEvidenceOrigin) };
     const payload = { adapter: this.adapter.name, eventType: safeEvent.type, ...safeEvent.payload };
-    await this.emit({ runId, timestamp, type: "adapter.event", payload });
+    await this.emit({ runId, timestamp, type: "adapter.event", ...(stepId ? { stepId } : {}), payload });
     const finding = this.runtimeFinding(runId, event, safeEvent, timestamp);
     if (!finding) return;
     (summary.runtimeFindings ??= []).push(finding);
@@ -1004,14 +1245,47 @@ function safeRunError(error: unknown): Error {
     "Run operation failed without a verified result; inspect trusted local diagnostics.");
 }
 
+function validatedResponseError(action: Action, input: unknown): ResponseErrorObservation | undefined {
+  if (action.kind !== "captureResponse") return;
+  const parsed = ResponseErrorObservationSchema.safeParse(input);
+  if (!parsed.success) return;
+  const observation = parsed.data;
+  if (observation.kind === "unexpected-status" && !action.response.errorFields && !action.response.requestFields) return;
+  if (observation.name !== action.name || observation.url !== action.response.url || observation.method !== action.response.method
+    || JSON.stringify(observation.expectedStatuses) !== JSON.stringify(action.response.statuses)
+    || Boolean(action.followUp) !== (observation.followUp !== undefined)) return;
+  const matches = (fields: ResponseErrorObservation["fields"], projection: typeof action.response.fields) => Object.entries(fields).every(([name, value]) => {
+    if (!Object.hasOwn(projection, name)) return false;
+    const field = projection[name]!;
+    if (field.type === "id") return typeof value === "string" && /^[1-9]\d{0,127}$/.test(value);
+    if (field.type === "identifier") return ResponseIdentifierSchema.safeParse(value).success;
+    return typeof value === field.type;
+  });
+  const errorFields = observation.kind === "incomplete-fields" ? action.response.fields : action.response.errorFields ?? {};
+  if (!matches(observation.fields, errorFields) || observation.fieldGaps.some((gap) => !Object.hasOwn(errorFields, gap.name))) return;
+  if (observation.kind === "unexpected-status" && (!action.response.errorFields && observation.bodyGap !== "not-requested" || action.response.errorFields && observation.bodyGap === "not-requested")) return;
+  if (!observation.bodyGap && Object.keys(observation.fields).length + observation.fieldGaps.length !== Object.keys(errorFields).length) return;
+  if (observation.requestFields && (!action.response.requestFields || !matches(observation.requestFields, action.response.requestFields))) return;
+  if (action.response.requestFields && !observation.requestGap
+    && Object.keys(observation.requestFields ?? {}).length !== Object.keys(action.response.requestFields).length) return;
+  return observation;
+}
+
+function actionTargetSelector(action: Action): string | undefined {
+  if (action.kind === "click" || action.kind === "fill" || action.kind === "press" || action.kind === "selectOption"
+    || action.kind === "selectOptions" || action.kind === "setChecked" || action.kind === "setInputFiles" || action.kind === "waitForValue") return action.selector;
+  if (action.kind === "captureResponse") return action.trigger.selector;
+  return undefined;
+}
+
 function assertFillEnvironment(actions: readonly Action[]): void {
-  const names = actions.flatMap((action) => action.kind === "fill" && typeof action.value !== "string" ? [action.value.env] : []);
+  const names = actions.flatMap((action) => (action.kind === "fill" || action.kind === "waitForValue") && typeof action.value !== "string" ? [action.value.env] : []);
   const missing = names.filter((name) => !process.env[name]);
   if (missing.length > 0) throw new BlockedError(`Required fill environment variables are unset or empty: ${[...new Set(missing)].join(", ")}`);
 }
 
 function resolveRuntimeAction(action: Action): Action {
-  if (action.kind !== "fill" || typeof action.value === "string") return action;
+  if (action.kind !== "fill" && action.kind !== "waitForValue" || typeof action.value === "string") return action;
   const value = process.env[action.value.env];
   if (!value) throw new BlockedError(`Required fill environment variable is unset or empty: ${action.value.env}`);
   return { ...action, value };

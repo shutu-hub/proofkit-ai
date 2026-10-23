@@ -24,8 +24,21 @@ const regionText = `${"Row content ".repeat(341)} qa@example.com password=synthe
 const expectedRegionText = regionText.replace(/\s+/g, " ").trim()
   .replace("qa@example.com", "[REDACTED_EMAIL]").replace("password=synthetic-secret", "password=[REDACTED]");
 const web = createServer((request, response) => {
-  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   const path = new URL(request.url, "http://127.0.0.1").pathname;
+  if (path === "/session-auth" && request.method === "POST") {
+    response.writeHead(204, { "set-cookie": "proofkit-session=fixture; HttpOnly; SameSite=Lax; Path=/" });
+    response.end(); return;
+  }
+  if (path === "/session-private") {
+    const signedIn = request.headers.cookie?.includes("proofkit-session=fixture");
+    response.writeHead(signedIn ? 200 : 401, { "content-type": "text/html; charset=utf-8" });
+    response.end(`<h1>${signedIn ? "Private session ready" : "Unauthorized"}</h1>`); return;
+  }
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  if (path === "/session-login") {
+    response.end('<h1>Session login</h1><button id="session-login" onclick="fetch(\'/session-auth\',{method:\'POST\'}).then(()=>document.querySelector(\'#state\').textContent=\'Signed in\')">Sign in</button><p id="state"></p>');
+    return;
+  }
   if (path === "/long-read" || path === "/long-read-other") {
     response.end(`<!doctype html><title>Long text fixture</title><h1>Long reading ready</h1>
       <p>${"Overview prefix ".repeat(180)}</p><div id="region">${regionText}${textRevision ? " Revised" : ""}</div>
@@ -282,6 +295,49 @@ try {
   assert.equal(exploratory.testVerdict, "not-asserted");
   assert.ok(exploratory.snapshot.text.includes("Resume ready"));
   assert.ok(!JSON.stringify(exploratory).includes("qa@example.com"));
+  const retainedResponse = await client.callTool({ name: "interact_surface", arguments: {
+    surface: "web", keepSession: true, action: { kind: "click", selector: "#fetch" } } });
+  assert.equal(retainedResponse.isError, undefined);
+  const retained = JSON.parse(retainedResponse.content.find((item) => item.type === "text")?.text ?? "null");
+  assert.equal(retained.status, "observed");
+  assert.ok(typeof retained.sessionId === "string");
+  const continuedResponse = await client.callTool({ name: "interact_surface", arguments: {
+    surface: "web", sessionId: retained.sessionId, action: { kind: "waitForText", text: "Resume ready", timeoutMs: 1000 } } });
+  assert.equal(continuedResponse.isError, undefined);
+  const continued = JSON.parse(continuedResponse.content.find((item) => item.type === "text")?.text ?? "null");
+  assert.equal(continued.status, "observed");
+  assert.equal(continued.sessionId, retained.sessionId);
+  assert.equal((await client.callTool({ name: "interact_surface", arguments: {
+    surface: "web", sessionId: retained.sessionId, url: new URL("/long-read", baseUrl).href,
+    action: { kind: "waitForText", text: "Resume ready", timeoutMs: 1000 } } })).isError, true);
+  const freshResponse = await client.callTool({ name: "interact_surface", arguments: {
+    surface: "web", action: { kind: "waitForText", text: "Resume ready", timeoutMs: 1000 } } });
+  assert.equal(JSON.parse(freshResponse.content.find((item) => item.type === "text")?.text ?? "null").status, "failed");
+  const closeResponse = await client.callTool({ name: "close_surface_session", arguments: { sessionId: retained.sessionId } });
+  assert.equal(JSON.parse(closeResponse.content.find((item) => item.type === "text")?.text ?? "null").status, "closed");
+  assert.equal((await client.callTool({ name: "interact_surface", arguments: {
+    surface: "web", sessionId: retained.sessionId, action: { kind: "waitForText", text: "Resume ready", timeoutMs: 1000 } } })).isError, true);
+  const loginUrl = new URL("/session-login", baseUrl).href;
+  const privateUrl = new URL("/session-private", baseUrl).href;
+  const loginResponse = await client.callTool({ name: "interact_surface", arguments: {
+    surface: "web", url: loginUrl, keepSession: true, action: { kind: "click", selector: "#session-login" } } });
+  assert.equal(loginResponse.isError, undefined);
+  const login = JSON.parse(loginResponse.content.find((item) => item.type === "text")?.text ?? "null");
+  assert.equal(login.status, "observed");
+  const signedInResponse = await client.callTool({ name: "interact_surface", arguments: {
+    surface: "web", sessionId: login.sessionId, action: { kind: "waitForText", text: "Signed in", timeoutMs: 3000 } } });
+  assert.equal(JSON.parse(signedInResponse.content.find((item) => item.type === "text")?.text ?? "null").status, "observed");
+  const privateResponse = await client.callTool({ name: "interact_surface", arguments: {
+    surface: "web", sessionId: login.sessionId, action: { kind: "goto", url: privateUrl } } });
+  const privateResult = JSON.parse(privateResponse.content.find((item) => item.type === "text")?.text ?? "null");
+  assert.equal(privateResult.status, "observed");
+  assert.ok(privateResult.snapshot.text.includes("Private session ready"));
+  const isolatedResponse = await client.callTool({ name: "interact_surface", arguments: {
+    surface: "web", action: { kind: "goto", url: privateUrl } } });
+  const isolated = JSON.parse(isolatedResponse.content.find((item) => item.type === "text")?.text ?? "null");
+  assert.equal(isolated.status, "observed");
+  assert.ok(isolated.snapshot.text.includes("Unauthorized"));
+  assert.equal((await client.callTool({ name: "close_surface_session", arguments: { sessionId: login.sessionId } })).isError, undefined);
   const fetchControl = inspection.snapshot.controls.find((item) => item.name === "Fetch resume");
   const details = inspection.snapshot.controls.find((item) => item.name === "Show details");
   const candidate = inspection.snapshot.controls.find((item) => item.name === "Candidate");
